@@ -943,7 +943,16 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
     </div>
 
     <!-- ═══ MÓDULO PRESUPUESTOS ═══ -->
-    <div class="page" id="pg-inv">
+    <div class="page" id="pg-precios-lista">
+  <div id="precios-lista-content"></div>
+</div>
+
+<!-- ═══ PRESUPUESTO DE VENTAS ANUAL ═══ -->
+<div class="page" id="pg-presupuesto-ventas">
+  <div id="pv-content"></div>
+</div>
+
+<div class="page" id="pg-inv">
   <div id="inv-content"></div>
 </div>
 
@@ -1279,11 +1288,20 @@ const sb = {
 
 // ── Función api() — compatible con el código existente ────
 async function api(action, data = {}) {
+  // Acciones que siempre van a Supabase (nunca al cache local)
+  const SIEMPRE_SUPA = ['login','getUsuarios','guardarUsuario','crearUsuario',
+    'rrhhGet','rrhhGuardar','rrhhEliminar','getSolicitudes','getConfig'];
+
   if(MODO_OFFLINE) return apiLocal(action, data);
+
   try {
     return await apiSupabase(action, data);
   } catch(e) {
     console.warn('Supabase error, fallback local:', e.message);
+    // Para acciones críticas no usar fallback
+    if(SIEMPRE_SUPA.includes(action)) {
+      return { ok: false, error: 'Sin conexión: ' + e.message };
+    }
     return apiLocal(action, data);
   }
 }
@@ -1300,7 +1318,7 @@ async function apiSupabase(action, data) {
     if(!rows.length) return { ok: false, error: 'Correo no registrado' };
     const u = rows[0];
     if(u.pass_hash !== data.pass) return { ok: false, error: 'Contraseña incorrecta' };
-    if(u.pin) {
+    if(u.pin && u.pin.trim()) {
       const pinIn = (data.pin || '').trim();
       if(!pinIn) return { ok: false, error: 'Ingresa tu PIN de 4 dígitos' };
       if(u.pin !== pinIn) return { ok: false, error: 'PIN incorrecto' };
@@ -1309,7 +1327,7 @@ async function apiSupabase(action, data) {
       email:      u.email,
       nombre:     u.nombre,
       rol:        u.rol,
-      rolPres:    u.rol_pres,
+      rolPres:    u.rol_pres || 'lider',
       area:       u.area,
       color:      u.color || '#2563eb',
       aprueba:    u.aprueba || [],
@@ -1564,17 +1582,24 @@ function sincronizarSolicitudLocal(s) {
 async function sincronizarConSupabase() {
   if(MODO_OFFLINE) return;
   try {
-    // Cargar solicitudes
+    // Cargar solicitudes SIEMPRE desde Supabase (ignorar cache)
     const rSol = await apiSupabase('getSolicitudes');
-    if(rSol.ok) SOLIC = rSol.solicitudes;
+    if(rSol.ok) {
+      SOLIC = rSol.solicitudes;
+      try { localStorage.setItem('ilx_solic_cache', JSON.stringify(SOLIC)); } catch(e){}
+    }
 
     // Cargar presupuestos
     const rPres = await apiSupabase('getPresupuestos');
     if(rPres.ok) savePresupuestos(rPres.presupuestos);
 
-    // Cargar tareas del usuario
+    // Cargar tareas SIEMPRE desde Supabase (ignorar cache local)
     const rTar = await apiSupabase('rrhhGet');
-    if(rTar.ok) { RRHH = rTar.tareas; saveRrhh(); }
+    if(rTar.ok) {
+      RRHH = rTar.tareas;
+      saveRrhh(); // Actualizar cache local con datos frescos
+      renderRrhh(); // Re-renderizar si está en la página de tareas
+    }
 
     console.log('✅ Sincronizado con Supabase');
     var dot = document.getElementById('conn-dot');
@@ -1851,13 +1876,14 @@ function getDefaultUsers(){
   return [
     // rolPres: 'contabilidad' | 'gerencia' | 'lider' | 'admin'
     // PIN solo para Cartera y Gerencia (aprobadores financieros)
-    {email:'admin@ilumax.com.co',     pass:'admin2026',   pin:'0000', nombre:'Administrador',    rol:'admin',      rolPres:'admin',        area:'Admin',     aprueba:['todos'], color:'#1e293b',activo:true},
-    {email:'cartera@ilumax.com.co',   pass:'cartera2026', pin:'1234', nombre:'Cartera ILUMAX',   rol:'aprobador',  rolPres:'contabilidad', area:'Cartera',   aprueba:['todos'], color:'#2563eb',activo:true},
-    {email:'gerencia@ilumax.com.co',  pass:'gerencia2026',pin:'5678', nombre:'Gerencia ILUMAX',  rol:'aprobador',  rolPres:'gerencia',     area:'Gerencia',  aprueba:['adelanto','rendicion'], color:'#7c3aed',activo:true},
-    {email:'rrhh@ilumax.com.co',      pass:'rrhh2026',    pin:'',     nombre:'RRHH ILUMAX',      rol:'aprobador',  rolPres:'lider',        area:'RRHH',      aprueba:['descuento','adelanto'], color:'#16a34a',activo:true},
-    {email:'mercadeo@ilumax.com.co',  pass:'ilumax123',   pin:'',     nombre:'Mercadeo ILUMAX',  rol:'empleado',   rolPres:'lider',        area:'Mercadeo',  aprueba:[], color:'#64748b',activo:true},
-    {email:'ventas@ilumax.com.co',    pass:'ilumax123',   pin:'',     nombre:'Ventas ILUMAX',    rol:'empleado',   rolPres:'lider',        area:'Ventas',    aprueba:[], color:'#ea580c',activo:true},
-    {email:'bodega@ilumax.com.co',    pass:'ilumax123',   pin:'',     nombre:'Bodega ILUMAX',    rol:'empleado',   rolPres:'lider',        area:'Bodega',    aprueba:[], color:'#0891b2',activo:true},
+    {email:'admin@ilumax.com.co',     pass:'admin2026',   pin:'0000', nombre:'Administrador',          rol:'admin',     rolPres:'admin',        area:'Admin',                  aprueba:['todos'], color:'#1e293b',activo:true},
+    {email:'cartera@ilumax.com.co',   pass:'cartera2026', pin:'1234', nombre:'Cartera ILUMAX',         rol:'aprobador', rolPres:'contabilidad', area:'Cartera',                aprueba:['todos'], color:'#2563eb',activo:true},
+    {email:'gerencia@ilumax.com.co',  pass:'gerencia2026',pin:'5678', nombre:'Gerencia ILUMAX',        rol:'aprobador', rolPres:'gerencia',     area:'Gerencia',               aprueba:['adelanto','rendicion'], color:'#7c3aed',activo:true},
+    {email:'rrhh@ilumax.com.co',      pass:'rrhh2026',    pin:'',     nombre:'RRHH ILUMAX',            rol:'aprobador', rolPres:'lider',        area:'RRHH',                   aprueba:['descuento','adelanto'], color:'#16a34a',activo:true},
+    {email:'mercadeo@ilumax.com.co',  pass:'ilumax123',   pin:'',     nombre:'Mercadeo ILUMAX',        rol:'empleado',  rolPres:'lider',        area:'Mercadeo',               aprueba:[], color:'#64748b',activo:true},
+    {email:'ventas@ilumax.com.co',    pass:'ilumax123',   pin:'',     nombre:'Ventas ILUMAX',          rol:'empleado',  rolPres:'lider',        area:'Ventas',                 aprueba:[], color:'#ea580c',activo:true},
+    {email:'bodega@ilumax.com.co',    pass:'ilumax123',   pin:'',     nombre:'Bodega ILUMAX',          rol:'empleado',  rolPres:'lider',        area:'Bodega',                 aprueba:[], color:'#0891b2',activo:true},
+    {email:'ilu@ilumax.com.co',       pass:'ilumax2026',  pin:'',     nombre:'Duvier Trujillo',        rol:'empleado',  rolPres:'lider',        area:'Automatización y Datos', aprueba:[], color:'#0f766e',activo:true},
   ];
 }
 
@@ -2048,6 +2074,8 @@ function buildNav(){
   if(CU.rol==='admin'||CU.area==='RRHH'||CU.email==='rrhh@ilumax.com.co') tabs.push({id:'rrhh',lbl:'📋 Mis Actividades'});
   tabs.push({id:'pres',lbl:'📊 Presupuesto'});
   tabs.push({id:'inv',lbl:'📦 Inventario'});
+  tabs.push({id:'precios-lista',lbl:'💰 Lista de Precios'});
+  tabs.push({id:'presupuesto-ventas',lbl:'🎯 Ppto. Ventas'});
 
   qs('#nav').innerHTML=tabs.map(t=>`
     <div class="nt" onclick="goPage('${t.id}',this)" id="tab-${t.id}">
@@ -2062,7 +2090,7 @@ function buildNav(){
   updBadges();
 }
 
-const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod};
+const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas};
 function goPage(id,el){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
   document.querySelectorAll('.nt').forEach(t=>t.classList.remove('on'));
@@ -6418,6 +6446,7 @@ function renderInvVista() {
               <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Costo prom.</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Valor total</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Bodega</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Valor total</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">U.M.</th>
             </tr>
           </thead>
@@ -6631,6 +6660,903 @@ async function subirExcelInventario(inputEl) {
     toast('Error procesando Excel: ' + e.message, 'er');
     console.error(e);
   }
+}
+
+
+// ══════════════════════════════════════════════════════════
+// MÓDULO LISTA DE PRECIOS — Vista pivote + catálogo de nombres reales
+// ══════════════════════════════════════════════════════════════════════
+var PRECIOS_DATA    = [];
+var PRECIOS_LOADED  = false;
+var LISTAS_CATALOGO = []; // [{lista_id, codigo, nombre, descripcion, canal, activa, orden}]
+var LISTAS_COLS     = ['001','002','003','004','005','006','007','008','009','010','011','013','014','015','016','017','019','020','021','022','023','024','026','027'];
+
+// Mapa rápido: codigo ('001') → objeto catálogo
+function getCatMap() {
+  const m = {};
+  LISTAS_CATALOGO.forEach(c => { m[c.codigo] = c; });
+  return m;
+}
+
+// Etiqueta del botón de toggle: "P1" o "001" si no hay catálogo
+function lblToggle(codigo) {
+  const cat = LISTAS_CATALOGO.find(c => c.codigo === codigo);
+  return cat ? cat.nombre : codigo;
+}
+
+// Tooltip del encabezado de columna
+function lblColHeader(codigo) {
+  const cat = LISTAS_CATALOGO.find(c => c.codigo === codigo);
+  if(!cat) return 'Lista ' + codigo;
+  return cat.nombre;
+}
+function lblColTooltip(codigo) {
+  const cat = LISTAS_CATALOGO.find(c => c.codigo === codigo);
+  if(!cat) return codigo;
+  return cat.canal || cat.descripcion || codigo;
+}
+
+async function renderPreciosLista() {
+  const el = document.getElementById('precios-lista-content');
+  if(!el) return;
+  el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--mu);">⏳ Cargando precios...</div>';
+  if(!PRECIOS_LOADED) {
+    await Promise.all([cargarCatalogo(), cargarPreciosPivote()]);
+  }
+  renderPreciosVista();
+}
+
+async function cargarCatalogo() {
+  if(MODO_OFFLINE) return;
+  try {
+    const rows = await sb.get('listas_catalogo', 'order=orden.asc');
+    if(rows && rows.length > 0) LISTAS_CATALOGO = rows;
+  } catch(e) { console.warn('Error cargando catálogo de listas:', e.message); }
+}
+
+async function cargarPreciosPivote() {
+  if(MODO_OFFLINE) return;
+  try {
+    const rows = await sb.get('precios_pivote', 'order=referencia.asc&limit=2000');
+    if(rows && rows.length > 0) {
+      PRECIOS_DATA   = rows;
+      PRECIOS_LOADED = true;
+    }
+  } catch(e) { console.warn('Error cargando precios:', e.message); }
+}
+
+function renderPreciosVista() {
+  const el = document.getElementById('precios-lista-content');
+  if(!el) return;
+
+  const total = PRECIOS_DATA.length;
+
+  // Listas que realmente tienen datos en la vista
+  const listasConDatos = LISTAS_COLS.filter(l => {
+    const col = 'l' + l;
+    return PRECIOS_DATA.some(r => r[col] && parseFloat(r[col]) > 0);
+  });
+
+  // Listas más usadas para destacar
+  const MAS_USADAS = ['001','011'];
+
+  el.innerHTML = `
+  <div style="padding:14px;">
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:14px;padding:16px 18px;margin-bottom:14px;color:#fff;">
+      <div style="font-size:10px;color:rgba(255,255,255,.5);font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px;">
+        💰 Lista de Precios ILUMAX — ${total} referencias · ${listasConDatos.length} listas activas
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;">
+        <div><div style="font-size:20px;font-weight:800;color:#f5c518;">${total}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Referencias</div></div>
+        <div><div style="font-size:20px;font-weight:800;color:#f5c518;">${listasConDatos.length}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Listas activas</div></div>
+        <div><div style="font-size:20px;font-weight:800;color:#f5c518;">P1 · 7</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Más usadas</div></div>
+      </div>
+    </div>
+
+    <!-- Filtros -->
+    <div style="background:var(--w);border-radius:10px;padding:10px 12px;margin-bottom:10px;box-shadow:var(--sh);display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <div style="position:relative;flex:1;min-width:180px;">
+        <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;">🔍</span>
+        <input class="inp" id="srch-prc" placeholder="Buscar referencia o descripción..." 
+          style="padding-left:32px;border-radius:22px;" oninput="filtrarPrecios()">
+      </div>
+      <div style="font-size:11px;color:var(--mu);flex-shrink:0;" id="prc-cnt"></div>
+    </div>
+
+    <!-- Selector de listas visibles -->
+    <div style="background:var(--w);border-radius:10px;padding:10px 14px;margin-bottom:10px;box-shadow:var(--sh);">
+      <div style="font-size:11px;font-weight:700;color:var(--mu);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;">Mostrar listas:</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;" id="listas-toggle">
+        ${listasConDatos.map(l => {
+          const esMasUsada = MAS_USADAS.includes(l);
+          const etiqueta   = lblToggle(l);
+          const tooltip    = lblColTooltip(l);
+          return `<button class="flt on" data-lista="${l}" onclick="toggleLista('${l}',this)"
+            title="${tooltip}"
+            style="font-size:10px;padding:4px 10px;${esMasUsada ? 'border-color:var(--acc);color:var(--acc);font-weight:800;' : ''}"
+          >${etiqueta}${esMasUsada ? ' ⭐' : ''}</button>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <!-- Tabla pivote -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
+      <div style="overflow-x:auto;max-height:60vh;overflow-y:auto;" id="prc-scroll">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;" id="tbl-precios">
+          <thead id="thead-precios"></thead>
+          <tbody id="tbody-precios"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+
+  renderPreciosTabla(listasConDatos);
+}
+
+var LISTAS_ACTIVAS = null;
+
+function toggleLista(lista, btn) {
+  btn.classList.toggle('on');
+  const activas = [...document.querySelectorAll('#listas-toggle .flt.on')].map(b => b.getAttribute('data-lista'));
+  LISTAS_ACTIVAS = activas.length > 0 ? activas : null;
+  renderPreciosTabla(LISTAS_ACTIVAS || LISTAS_COLS.filter(l => {
+    const col = 'l' + l;
+    return PRECIOS_DATA.some(r => r[col] && parseFloat(r[col]) > 0);
+  }));
+}
+
+function renderPreciosTabla(listas) {
+  const thead = document.getElementById('thead-precios');
+  const tbody  = document.getElementById('tbody-precios');
+  if(!thead || !tbody) return;
+
+  const fmtCOP = n => n ? '$' + Math.round(parseFloat(n)).toLocaleString('es-CO') : '';
+  const MAS_USADAS = ['001','011'];
+
+  // Header con nombre real y tooltip de canal
+  thead.innerHTML = `<tr>
+    <th style="background:#0f172a;color:#fff;padding:9px 12px;text-align:left;font-size:10px;font-weight:700;position:sticky;top:0;z-index:10;min-width:80px;">Ref.</th>
+    <th style="background:#0f172a;color:#fff;padding:9px 12px;text-align:left;font-size:10px;font-weight:700;position:sticky;top:0;z-index:10;min-width:200px;">Descripción</th>
+    ${listas.map(l => {
+      const esMasUsada = MAS_USADAS.includes(l);
+      const nombre     = lblColHeader(l);
+      const tooltip    = lblColTooltip(l);
+      return `<th style="background:#0f172a;color:${esMasUsada ? '#f5c518' : '#94a3b8'};padding:9px 10px;text-align:right;font-size:10px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;cursor:help;" title="${tooltip}">${nombre}${esMasUsada ? ' ⭐' : ''}</th>`;
+    }).join('')}
+  </tr>`;
+
+  // Filtrar
+  const q = (document.getElementById('srch-prc')||{value:''}).value.trim().toLowerCase();
+  let items = PRECIOS_DATA.filter(r => {
+    if(!q) return true;
+    return (r.referencia + ' ' + (r.descripcion||'')).toLowerCase().includes(q);
+  });
+
+  const cnt = document.getElementById('prc-cnt');
+  if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' referencias' + (items.length > 500 ? ' (mostrando 500)' : '');
+
+  // Filas
+  tbody.innerHTML = items.slice(0, 500).map(r => {
+    const celdas = listas.map(l => {
+      const col = 'l' + l;
+      const val  = r[col] ? parseFloat(r[col]) : null;
+      const esMU = MAS_USADAS.includes(l);
+      return `<td style="padding:8px 10px;text-align:right;color:${val ? (esMU ? 'var(--bl)' : 'var(--tx)') : 'var(--b2)'};font-weight:${val ? '600' : '400'};">${val ? fmtCOP(val) : '—'}</td>`;
+    }).join('');
+
+    return `<tr style="border-bottom:1px solid var(--b1);" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+      <td style="padding:8px 12px;font-family:monospace;font-size:10px;color:var(--mu);white-space:nowrap;">${r.referencia||''}</td>
+      <td style="padding:8px 12px;font-size:11px;font-weight:600;max-width:240px;" title="${r.descripcion||''}">${(r.descripcion||'').trim().substring(0,45)}</td>
+      ${celdas}
+    </tr>`;
+  }).join('');
+}
+
+function filtrarPrecios() {
+  const listas = [...(document.querySelectorAll('#listas-toggle .flt.on')||[])].map(b => b.getAttribute('data-lista'));
+  renderPreciosTabla(listas.length > 0 ? listas : LISTAS_COLS.filter(l => {
+    const col = 'l' + l;
+    return PRECIOS_DATA.some(r => r[col] && parseFloat(r[col]) > 0);
+  }));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// MÓDULO PRESUPUESTO DE VENTAS ANUAL
+// ══════════════════════════════════════════════════════════════════════
+var PV = {
+  anio: new Date().getFullYear(),
+  anioComp: null,          // año de comparación (null = ninguno)
+  listaId: '1',            // lista seleccionada por defecto (P1)
+  canal: '',
+  presId: null,            // uuid del presupuesto activo
+  detalle: [],             // filas editadas en memoria
+  catalogo: [],            // listas_catalogo
+  histLocal: {},           // {anio:{ref:{mes:und}}} histórico cargado
+  catFiltro: '',           // categoría seleccionada
+  busq: '',
+  mesActual: new Date().getMonth() + 1,
+  MESES: ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'],
+  guardando: false
+};
+
+const CANALES_DEFAULT = ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara'];
+
+async function renderPresupuestoVentas() {
+  const el = document.getElementById('pv-content');
+  if(!el) return;
+  el.innerHTML = '<div style="padding:30px;text-align:center;color:var(--mu);">⏳ Cargando módulo...</div>';
+
+  // Cargar catálogo si no está
+  if(!PV.catalogo.length && LISTAS_CATALOGO.length) PV.catalogo = LISTAS_CATALOGO;
+  if(!PV.catalogo.length) {
+    try { PV.catalogo = await sb.get('listas_catalogo','order=orden.asc'); } catch(e){}
+  }
+
+  // Cargar canales desde config
+  let canales = [...CANALES_DEFAULT];
+  try {
+    const cfg = await sb.get('configuracion','clave=eq.canales_comerciales');
+    if(cfg && cfg[0]) canales = cfg[0].valor.split(',').map(s=>s.trim());
+  } catch(e){}
+
+  PV.canal = PV.canal || canales[0];
+
+  renderPVShell(el, canales);
+  await cargarPresupuestoActivo();
+}
+
+function renderPVShell(el, canales) {
+  const listasOpts = PV.catalogo.filter(c=>c.activa).map(c =>
+    `<option value="${c.lista_id}" ${c.lista_id===PV.listaId?'selected':''}>${c.nombre} — ${c.descripcion}</option>`
+  ).join('');
+
+  const anioOpts = [2024,2025,2026,2027].map(a =>
+    `<option value="${a}" ${a===PV.anio?'selected':''}>${a}</option>`).join('');
+
+  const anioCompOpts = `<option value="">— Sin comparar —</option>` +
+    [2024,2025,2026].filter(a=>a!==PV.anio).map(a=>
+      `<option value="${a}" ${a===PV.anioComp?'selected':''}>${a}</option>`).join('');
+
+  const canalesOpts = canales.map(c=>
+    `<option value="${c}" ${c===PV.canal?'selected':''}>${c}</option>`).join('');
+
+  el.innerHTML = `
+  <div style="padding:14px;">
+
+    <!-- HEADER -->
+    <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:14px;padding:16px 18px;margin-bottom:14px;color:#fff;">
+      <div style="font-size:10px;color:rgba(255,255,255,.5);font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px;">
+        🎯 Presupuesto de Ventas Anual — ILUMAX
+      </div>
+
+      <!-- Controles principales -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">
+        <div>
+          <div style="font-size:10px;color:rgba(255,255,255,.5);margin-bottom:4px;">Año presupuesto</div>
+          <select id="pv-anio" class="inp" style="background:#1e3a5f;color:#fff;border-color:rgba(255,255,255,.2);"
+            onchange="pvCambiarAnio(this.value)">
+            ${anioOpts}
+          </select>
+        </div>
+        <div>
+          <div style="font-size:10px;color:rgba(255,255,255,.5);margin-bottom:4px;">Comparar con año</div>
+          <select id="pv-anio-comp" class="inp" style="background:#1e3a5f;color:#fff;border-color:rgba(255,255,255,.2);"
+            onchange="pvCambiarAnioComp(this.value)">
+            ${anioCompOpts}
+          </select>
+        </div>
+        <div>
+          <div style="font-size:10px;color:rgba(255,255,255,.5);margin-bottom:4px;">Lista de precios</div>
+          <select id="pv-lista" class="inp" style="background:#1e3a5f;color:#fff;border-color:rgba(255,255,255,.2);"
+            onchange="pvCambiarLista(this.value)">
+            ${listasOpts}
+          </select>
+        </div>
+        <div>
+          <div style="font-size:10px;color:rgba(255,255,255,.5);margin-bottom:4px;">Canal / Jefe de zona</div>
+          <select id="pv-canal" class="inp" style="background:#1e3a5f;color:#fff;border-color:rgba(255,255,255,.2);"
+            onchange="pvCambiarCanal(this.value)">
+            ${canalesOpts}
+          </select>
+        </div>
+      </div>
+
+      <!-- KPIs rápidos -->
+      <div id="pv-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-top:14px;"></div>
+    </div>
+
+    <!-- BARRA DE ACCIONES -->
+    <div style="background:var(--w);border-radius:10px;padding:10px 14px;margin-bottom:10px;box-shadow:var(--sh);display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <div style="position:relative;flex:1;min-width:160px;">
+        <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);">🔍</span>
+        <input class="inp" id="pv-busq" placeholder="Buscar SKU o descripción..."
+          style="padding-left:28px;border-radius:22px;font-size:12px;" oninput="pvFiltrar()">
+      </div>
+      <select class="inp" id="pv-cat-filtro" style="width:auto;font-size:12px;" onchange="pvFiltrar()">
+        <option value="">Todas las categorías</option>
+      </select>
+      <div style="display:flex;gap:6px;margin-left:auto;">
+        <button class="btn btn-gr btn-sm" onclick="pvGuardar()">💾 Guardar</button>
+        <button class="btn btn-bl btn-sm" onclick="pvAgregarSKU()">➕ SKU</button>
+        <button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>
+        <button class="btn btn-g btn-sm" onclick="pvExportar()">📊 Excel</button>
+      </div>
+    </div>
+
+    <!-- ESTADO -->
+    <div id="pv-estado-bar" style="display:none;background:var(--grd);border:1px solid rgba(22,163,74,.2);border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:var(--gr);"></div>
+
+    <!-- TABLA PRINCIPAL -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
+      <div style="overflow-x:auto;max-height:65vh;overflow-y:auto;" id="pv-scroll">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;" id="tbl-pv">
+          <thead id="pv-thead"></thead>
+          <tbody id="pv-tbody"></tbody>
+          <tfoot id="pv-tfoot"></tfoot>
+        </table>
+      </div>
+    </div>
+
+    <!-- MODAL subir histórico -->
+    <div id="pv-modal-hist" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;display:none;align-items:center;justify-content:center;">
+      <div style="background:var(--w);border-radius:16px;padding:24px;width:92%;max-width:480px;box-shadow:0 24px 64px rgba(0,0,0,.3);">
+        <div style="font-size:14px;font-weight:700;margin-bottom:12px;">📤 Subir Histórico de Ventas</div>
+        <p style="font-size:12px;color:var(--mu);margin-bottom:14px;">Sube un CSV con columnas: <code>anio,mes,referencia,descripcion,categoria,canal,unidades,valor_cop,lista_id</code></p>
+        <div class="fg">
+          <label class="fl">Año del histórico</label>
+          <select id="hist-anio" class="inp">
+            <option value="2024">2024</option>
+            <option value="2025">2025</option>
+          </select>
+        </div>
+        <div class="fg">
+          <label class="fl">Canal</label>
+          <input id="hist-canal" class="inp" placeholder="Ej: Mixto, Ferroeléctrico...">
+        </div>
+        <div class="fg">
+          <label class="fl">Archivo CSV</label>
+          <input type="file" id="hist-file" accept=".csv" class="inp" style="padding:6px;">
+        </div>
+        <div id="hist-preview" style="font-size:11px;color:var(--mu);margin-bottom:10px;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn btn-g btn-sm" onclick="cerrarModalHist()">Cancelar</button>
+          <button class="btn btn-gr btn-sm" onclick="confirmarSubirHist()">✅ Subir</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL agregar SKU -->
+    <div id="pv-modal-sku" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center;">
+      <div style="background:var(--w);border-radius:16px;padding:24px;width:92%;max-width:440px;box-shadow:0 24px 64px rgba(0,0,0,.3);">
+        <div style="font-size:14px;font-weight:700;margin-bottom:12px;">➕ Agregar SKU al presupuesto</div>
+        <div class="fg">
+          <label class="fl">Referencia (SKU)</label>
+          <input id="sku-ref" class="inp" placeholder="Ej: 1222" oninput="pvBuscarRef(this.value)">
+        </div>
+        <div id="sku-sugerencias" style="max-height:140px;overflow-y:auto;margin-bottom:10px;"></div>
+        <div class="fg">
+          <label class="fl">Descripción</label>
+          <input id="sku-desc" class="inp" placeholder="Se autocompleta al seleccionar">
+        </div>
+        <div class="fg">
+          <label class="fl">Categoría</label>
+          <input id="sku-cat" class="inp" placeholder="Ej: LED, Paneles, Tubos...">
+        </div>
+        <div class="fg">
+          <label class="fl">Precio lista (auto)</label>
+          <input id="sku-precio" class="inp" type="number" placeholder="0" readonly style="background:var(--s1);">
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn btn-g btn-sm" onclick="cerrarModalSKU()">Cancelar</button>
+          <button class="btn btn-bl btn-sm" onclick="confirmarAgregarSKU()">Agregar</button>
+        </div>
+      </div>
+    </div>
+
+  </div>`;
+}
+
+// ── Cargar o crear presupuesto activo ──────────────────────────────────
+async function cargarPresupuestoActivo() {
+  pvEstado('⏳ Cargando presupuesto...');
+  try {
+    // Buscar presupuesto existente para este año+canal
+    const rows = await sb.get('presupuesto_ventas',
+      `anio=eq.${PV.anio}&canal=eq.${encodeURIComponent(PV.canal)}&order=creado_en.desc&limit=1`);
+
+    if(rows && rows.length > 0) {
+      PV.presId   = rows[0].id;
+      PV.listaId  = rows[0].lista_id;
+      // Sincronizar selector de lista
+      const selLista = document.getElementById('pv-lista');
+      if(selLista) selLista.value = PV.listaId;
+    } else {
+      PV.presId = null;
+    }
+
+    // Cargar detalle
+    await cargarDetallePV();
+
+    // Cargar histórico si hay año de comparación
+    if(PV.anioComp) await cargarHistorico(PV.anioComp);
+
+    pvRenderTabla();
+    pvEstado('');
+  } catch(e) {
+    pvEstado('❌ Error: ' + e.message, true);
+  }
+}
+
+async function cargarDetallePV() {
+  PV.detalle = [];
+  if(!PV.presId) return;
+  try {
+    const rows = await sb.get('presupuesto_detalle',
+      `presupuesto_id=eq.${PV.presId}&order=categoria.asc,referencia.asc`);
+    PV.detalle = rows || [];
+    // Poblar filtro de categorías
+    const cats = [...new Set(PV.detalle.map(r=>r.categoria))].filter(Boolean).sort();
+    const sel  = document.getElementById('pv-cat-filtro');
+    if(sel) {
+      sel.innerHTML = '<option value="">Todas las categorías</option>' +
+        cats.map(c=>`<option value="${c}">${c}</option>`).join('');
+    }
+  } catch(e) { console.warn('Error detalle:', e); }
+}
+
+async function cargarHistorico(anio) {
+  if(!anio) return;
+  try {
+    const rows = await sb.get('ventas_historico',
+      `anio=eq.${anio}&canal=eq.${encodeURIComponent(PV.canal)}&select=referencia,mes,unidades`);
+    PV.histLocal[anio] = {};
+    (rows||[]).forEach(r => {
+      if(!PV.histLocal[anio][r.referencia]) PV.histLocal[anio][r.referencia] = {};
+      PV.histLocal[anio][r.referencia][r.mes] = parseFloat(r.unidades)||0;
+    });
+  } catch(e) { console.warn('Error histórico:', e); }
+}
+
+// ── Render tabla principal ─────────────────────────────────────────────
+function pvRenderTabla() {
+  const thead = document.getElementById('pv-thead');
+  const tbody  = document.getElementById('pv-tbody');
+  const tfoot  = document.getElementById('pv-tfoot');
+  if(!thead) return;
+
+  const MESES = PV.MESES;
+  const comp  = PV.anioComp;
+
+  // Filtrar filas
+  const q    = (document.getElementById('pv-busq')||{value:''}).value.trim().toLowerCase();
+  const catF = (document.getElementById('pv-cat-filtro')||{value:''}).value;
+  let filas  = PV.detalle.filter(r => {
+    const ok1 = !q || (r.referencia+' '+(r.descripcion||'')).toLowerCase().includes(q);
+    const ok2 = !catF || r.categoria === catF;
+    return ok1 && ok2;
+  });
+
+  // THEAD
+  const mesHeaders = MESES.map((m,i) => {
+    const mes = i+1;
+    const esMesAct = mes === PV.mesActual;
+    return `<th style="background:#0f172a;color:${esMesAct?'#f5c518':'#94a3b8'};padding:7px 6px;text-align:right;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;min-width:70px;">
+      ${m}${esMesAct?' ◀':''}
+    </th>`;
+  }).join('');
+
+  thead.innerHTML = `<tr>
+    <th style="background:#0f172a;color:#fff;padding:8px 10px;text-align:left;font-size:9px;font-weight:700;position:sticky;top:0;left:0;z-index:20;min-width:70px;">SKU</th>
+    <th style="background:#0f172a;color:#fff;padding:8px 10px;text-align:left;font-size:9px;font-weight:700;position:sticky;top:0;left:70px;z-index:20;min-width:160px;">Descripción</th>
+    <th style="background:#0f172a;color:#94a3b8;padding:8px 10px;text-align:right;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;">Precio<br>Lista</th>
+    <th style="background:#0f172a;color:#94a3b8;padding:8px 10px;text-align:right;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;">Stock<br>Bodega</th>
+    <th style="background:#0f172a;color:#94a3b8;padding:8px 10px;text-align:right;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;">Meses<br>Stock</th>
+    ${mesHeaders}
+    <th style="background:#0f172a;color:#f5c518;padding:8px 10px;text-align:right;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;">Total<br>Und.</th>
+    <th style="background:#0f172a;color:#f5c518;padding:8px 10px;text-align:right;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;">Total<br>COP</th>
+    ${comp ? `<th style="background:#1e3a5f;color:#60a5fa;padding:8px 10px;text-align:right;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;">${comp}<br>Und.</th>
+    <th style="background:#1e3a5f;color:#f5c518;padding:8px 10px;text-align:right;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;">% vs ${comp}</th>` : ''}
+    <th style="background:#0f172a;color:#94a3b8;padding:8px 6px;text-align:center;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;"></th>
+  </tr>`;
+
+  // Agrupar por categoría
+  const grupos = {};
+  filas.forEach(r => {
+    const cat = r.categoria || 'Sin categoría';
+    if(!grupos[cat]) grupos[cat] = [];
+    grupos[cat].push(r);
+  });
+
+  // Totales generales
+  let totalUndGlobal = 0, totalCOPGlobal = 0;
+
+  let htmlRows = '';
+  Object.entries(grupos).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([cat, items]) => {
+    // Fila de categoría
+    htmlRows += `<tr style="background:#f1f5f9;">
+      <td colspan="100%" style="padding:6px 10px;font-size:10px;font-weight:800;color:#1e3a5f;letter-spacing:.5px;text-transform:uppercase;">
+        📁 ${cat} <span style="font-weight:400;color:var(--mu);">(${items.length} SKUs)</span>
+      </td>
+    </tr>`;
+
+    items.forEach(r => {
+      const precio = parseFloat(r.precio_lista)||0;
+      let totalUnd = 0;
+      const celdas = MESES.map((_,i) => {
+        const mes  = i+1;
+        const key  = 'u' + String(mes).padStart(2,'0');
+        const keyR = 'r' + String(mes).padStart(2,'0');
+        const und  = parseFloat(r[key])||0;
+        const real = parseFloat(r[keyR])||0;
+        totalUnd  += und;
+        const esMesAct = mes === PV.mesActual;
+        // % cumplimiento si hay real
+        const pct = (und > 0 && real > 0) ? Math.round(real/und*100) : null;
+        const pctColor = pct===null?'' : pct>=100?'var(--gr)' : pct>=70?'var(--or)':'var(--rd)';
+        return `<td style="padding:0;border-right:1px solid var(--b1);">
+          <input type="number" min="0" step="1"
+            value="${und||''}"
+            data-ref="${r.referencia}" data-mes="${mes}"
+            onchange="pvCeldaCambio('${r.referencia}',${mes},this.value)"
+            style="width:100%;border:none;background:${esMesAct?'rgba(245,197,24,.08)':'transparent'};padding:6px 5px;text-align:right;font-size:11px;font-family:inherit;color:var(--tx);outline:none;"
+            onfocus="this.select()">
+          ${pct!==null ? `<div style="font-size:8px;text-align:right;padding:0 5px 2px;color:${pctColor};">${pct}%✓</div>` : ''}
+        </td>`;
+      }).join('');
+
+      totalUndGlobal += totalUnd;
+      const totalCOP  = totalUnd * precio;
+      totalCOPGlobal += totalCOP;
+
+      // Histórico comparativo
+      const histRef  = (PV.histLocal[comp]||{})[r.referencia]||{};
+      const histTot  = Object.values(histRef).reduce((a,v)=>a+v,0);
+      const pctComp  = histTot>0 && totalUnd>0 ? Math.round(totalUnd/histTot*100) : null;
+      const pctCompC = pctComp===null?'var(--mu)' : pctComp>=100?'var(--gr)' : pctComp>=70?'var(--or)':'var(--rd)';
+
+      // Stock
+      const stock     = pvGetStock(r.referencia);
+      const mesesStock = totalUnd > 0 ? (stock / (totalUnd/12)).toFixed(1) : '∞';
+
+      htmlRows += `<tr style="border-bottom:1px solid var(--b1);"
+        onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+        <td style="padding:7px 10px;font-family:monospace;font-size:10px;color:var(--mu);white-space:nowrap;position:sticky;left:0;background:inherit;z-index:5;">${r.referencia}</td>
+        <td style="padding:7px 10px;font-size:11px;font-weight:600;max-width:160px;position:sticky;left:70px;background:inherit;z-index:5;" title="${r.descripcion||''}">${(r.descripcion||'').substring(0,35)}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:10px;color:var(--bl);white-space:nowrap;">${precio ? '$'+Math.round(precio).toLocaleString('es-CO') : '—'}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:10px;color:${stock>0?'var(--gr)':'var(--mu)'};">${stock.toLocaleString('es-CO')}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:10px;color:${parseFloat(mesesStock)>3?'var(--gr)':parseFloat(mesesStock)>1?'var(--or)':'var(--rd)'};">${mesesStock}</td>
+        ${celdas}
+        <td style="padding:7px 8px;text-align:right;font-size:11px;font-weight:700;color:var(--tx);white-space:nowrap;">${totalUnd.toLocaleString('es-CO')}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:11px;font-weight:700;color:var(--bl);white-space:nowrap;">${totalCOP ? '$'+Math.round(totalCOP).toLocaleString('es-CO') : '—'}</td>
+        ${comp ? `<td style="padding:7px 8px;text-align:right;font-size:10px;color:#60a5fa;">${histTot ? histTot.toLocaleString('es-CO') : '—'}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:10px;font-weight:700;color:${pctCompC};">${pctComp!==null ? pctComp+'%' : '—'}</td>` : ''}
+        <td style="padding:4px;text-align:center;">
+          <button onclick="pvEliminarSKU('${r.referencia}')" style="border:none;background:transparent;cursor:pointer;font-size:13px;color:var(--mu);" title="Eliminar">🗑</button>
+        </td>
+      </tr>`;
+    });
+  });
+
+  if(!filas.length) {
+    htmlRows = `<tr><td colspan="100%" style="padding:40px;text-align:center;color:var(--mu);">
+      Sin SKUs en el presupuesto. Agrega con ➕ SKU
+    </td></tr>`;
+  }
+
+  tbody.innerHTML = htmlRows;
+
+  // TFOOT — totales
+  const mesesTotales = MESES.map((_,i) => {
+    const mes = i+1;
+    const key = 'u' + String(mes).padStart(2,'0');
+    const tot = PV.detalle.reduce((a,r)=>a+(parseFloat(r[key])||0),0);
+    return `<td style="padding:8px 6px;text-align:right;font-size:10px;font-weight:700;color:var(--tx);background:#f8fafc;">${tot ? tot.toLocaleString('es-CO') : ''}</td>`;
+  }).join('');
+
+  tfoot.innerHTML = `<tr style="border-top:2px solid var(--b2);">
+    <td colspan="5" style="padding:8px 10px;font-size:11px;font-weight:800;color:#0f172a;background:#f8fafc;">TOTAL GENERAL</td>
+    ${mesesTotales}
+    <td style="padding:8px;text-align:right;font-size:11px;font-weight:800;color:#0f172a;background:#f8fafc;">${totalUndGlobal.toLocaleString('es-CO')}</td>
+    <td style="padding:8px;text-align:right;font-size:11px;font-weight:800;color:var(--bl);background:#f8fafc;white-space:nowrap;">$${Math.round(totalCOPGlobal).toLocaleString('es-CO')}</td>
+    ${comp ? '<td colspan="2" style="background:#f8fafc;"></td>' : ''}
+    <td style="background:#f8fafc;"></td>
+  </tr>`;
+
+  // KPIs
+  pvRenderKPIs(totalUndGlobal, totalCOPGlobal);
+}
+
+function pvGetStock(ref) {
+  if(!window.INV_DATA) return 0;
+  const inv = window.INV_DATA.find ? window.INV_DATA.find(r=>r.referencia===ref) : null;
+  return inv ? (parseFloat(inv.existencia)||0) : 0;
+}
+
+function pvRenderKPIs(und, cop) {
+  const el = document.getElementById('pv-kpis');
+  if(!el) return;
+  const listaNombre = (PV.catalogo.find(c=>c.lista_id===PV.listaId)||{}).nombre || PV.listaId;
+  el.innerHTML = `
+    <div><div style="font-size:18px;font-weight:800;color:#f5c518;">${und.toLocaleString('es-CO')}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Unidades presupuestadas</div></div>
+    <div><div style="font-size:18px;font-weight:800;color:#f5c518;">$${(cop/1e6).toFixed(1)}M</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Total COP</div></div>
+    <div><div style="font-size:18px;font-weight:800;color:#f5c518;">${PV.detalle.length}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">SKUs activos</div></div>
+    <div><div style="font-size:16px;font-weight:800;color:#f5c518;">${listaNombre}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Lista de precios</div></div>
+    <div><div style="font-size:16px;font-weight:800;color:#f5c518;">${PV.canal}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Canal</div></div>`;
+}
+
+// ── Edición de celda ───────────────────────────────────────────────────
+function pvCeldaCambio(ref, mes, valor) {
+  const key = 'u' + String(mes).padStart(2,'0');
+  const row = PV.detalle.find(r=>r.referencia===ref);
+  if(row) {
+    row[key] = parseFloat(valor)||0;
+    row._dirty = true;
+  }
+  // Actualizar totales sin re-renderizar toda la tabla
+  pvActualizarTotalesColumna(mes);
+  pvRenderKPIs(
+    PV.detalle.reduce((a,r)=>{ for(let m=1;m<=12;m++) a+=(parseFloat(r['u'+String(m).padStart(2,'0')])||0); return a; },0),
+    PV.detalle.reduce((a,r)=>{ let t=0; for(let m=1;m<=12;m++) t+=(parseFloat(r['u'+String(m).padStart(2,'0')])||0); return a+t*(parseFloat(r.precio_lista)||0); },0)
+  );
+}
+
+function pvActualizarTotalesColumna(mes) {
+  const key  = 'u' + String(mes).padStart(2,'0');
+  const tot  = PV.detalle.reduce((a,r)=>a+(parseFloat(r[key])||0),0);
+  // Actualizar celda del tfoot correspondiente
+  const tfoot = document.getElementById('pv-tfoot');
+  if(tfoot) {
+    const celdas = tfoot.querySelectorAll('td');
+    // La celda del mes es: 5 (fijas) + mes-1
+    const idx = 5 + (mes-1);
+    if(celdas[idx]) celdas[idx].textContent = tot ? tot.toLocaleString('es-CO') : '';
+  }
+}
+
+// ── Guardar ────────────────────────────────────────────────────────────
+async function pvGuardar() {
+  if(PV.guardando) return;
+  PV.guardando = true;
+  pvEstado('💾 Guardando...');
+  try {
+    // Crear o actualizar cabecera
+    if(!PV.presId) {
+      const nuevo = await sb.post('presupuesto_ventas', {
+        anio: PV.anio, lista_id: PV.listaId,
+        canal: PV.canal, jefe_zona: CU.nombre||CU.email,
+        email_jefe: CU.email, estado: 'borrador'
+      });
+      PV.presId = nuevo[0].id;
+    } else {
+      await sb.patch('presupuesto_ventas', `id=eq.${PV.presId}`,
+        { lista_id: PV.listaId, actualizado: new Date().toISOString() });
+    }
+
+    // Guardar solo filas dirty
+    const dirty = PV.detalle.filter(r=>r._dirty);
+    for(const r of dirty) {
+      const payload = {
+        presupuesto_id: PV.presId,
+        categoria: r.categoria, referencia: r.referencia,
+        descripcion: r.descripcion, precio_lista: r.precio_lista,
+        u01:r.u01||0, u02:r.u02||0, u03:r.u03||0, u04:r.u04||0,
+        u05:r.u05||0, u06:r.u06||0, u07:r.u07||0, u08:r.u08||0,
+        u09:r.u09||0, u10:r.u10||0, u11:r.u11||0, u12:r.u12||0,
+        actualizado: new Date().toISOString()
+      };
+      if(r.id) {
+        await sb.patch('presupuesto_detalle', `id=eq.${r.id}`, payload);
+      } else {
+        const res = await sb.post('presupuesto_detalle', payload);
+        r.id = res[0].id;
+      }
+      r._dirty = false;
+    }
+    pvEstado(`✅ Guardado — ${dirty.length} SKU(s) actualizados`, false, 3000);
+  } catch(e) {
+    pvEstado('❌ Error al guardar: ' + e.message, true);
+  }
+  PV.guardando = false;
+}
+
+// ── Cambios de filtros ─────────────────────────────────────────────────
+async function pvCambiarAnio(v) {
+  PV.anio = parseInt(v);
+  PV.presId = null; PV.detalle = [];
+  await cargarPresupuestoActivo();
+}
+async function pvCambiarAnioComp(v) {
+  PV.anioComp = v ? parseInt(v) : null;
+  if(PV.anioComp) await cargarHistorico(PV.anioComp);
+  pvRenderTabla();
+}
+async function pvCambiarLista(v) {
+  PV.listaId = v;
+  // Actualizar precios en detalle desde precios_lista
+  await pvActualizarPrecios();
+  pvRenderTabla();
+}
+async function pvCambiarCanal(v) {
+  PV.canal = v;
+  PV.presId = null; PV.detalle = [];
+  await cargarPresupuestoActivo();
+}
+function pvFiltrar() { pvRenderTabla(); }
+
+async function pvActualizarPrecios() {
+  if(!PV.detalle.length) return;
+  const refs = PV.detalle.map(r=>r.referencia).join(',');
+  try {
+    const rows = await sb.get('precios_lista',
+      `lista=eq.${PV.listaId}&referencia=in.(${refs})&select=referencia,precio`);
+    const map = {};
+    (rows||[]).forEach(r=>{ map[r.referencia]=parseFloat(r.precio)||0; });
+    PV.detalle.forEach(r=>{
+      r.precio_lista = map[r.referencia]||r.precio_lista||0;
+      r._dirty = true;
+    });
+  } catch(e) { console.warn('Error precios:', e); }
+}
+
+// ── Modal agregar SKU ──────────────────────────────────────────────────
+function pvAgregarSKU() {
+  const m = document.getElementById('pv-modal-sku');
+  if(m){ m.style.display='flex'; }
+}
+function cerrarModalSKU() {
+  const m = document.getElementById('pv-modal-sku');
+  if(m){ m.style.display='none'; }
+}
+var _pvBusqTimeout = null;
+async function pvBuscarRef(q) {
+  clearTimeout(_pvBusqTimeout);
+  _pvBusqTimeout = setTimeout(async()=>{
+    if(!q || q.length < 2) return;
+    const el = document.getElementById('sku-sugerencias');
+    if(!el) return;
+    try {
+      const rows = await sb.get('precios_lista',
+        `lista=eq.${PV.listaId}&referencia=ilike.*${q}*&select=referencia,descripcion,precio&limit=8`);
+      el.innerHTML = (rows||[]).map(r=>`
+        <div onclick="pvSeleccionarRef('${r.referencia}','${(r.descripcion||'').replace(/'/g,"\\'")}',${r.precio||0})"
+          style="padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--b1);font-size:12px;"
+          onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+          <strong>${r.referencia}</strong> — ${(r.descripcion||'').substring(0,50)}
+          <span style="float:right;color:var(--bl);">$${Math.round(r.precio||0).toLocaleString('es-CO')}</span>
+        </div>`).join('') || '<div style="padding:8px;color:var(--mu);font-size:12px;">Sin resultados</div>';
+    } catch(e){}
+  }, 350);
+}
+function pvSeleccionarRef(ref, desc, precio) {
+  document.getElementById('sku-ref').value  = ref;
+  document.getElementById('sku-desc').value = desc;
+  document.getElementById('sku-precio').value = precio;
+  document.getElementById('sku-sugerencias').innerHTML = '';
+}
+async function confirmarAgregarSKU() {
+  const ref    = (document.getElementById('sku-ref')||{}).value.trim();
+  const desc   = (document.getElementById('sku-desc')||{}).value.trim();
+  const cat    = (document.getElementById('sku-cat')||{}).value.trim() || 'General';
+  const precio = parseFloat((document.getElementById('sku-precio')||{}).value)||0;
+  if(!ref){ toast('Ingresa una referencia','err'); return; }
+  if(PV.detalle.find(r=>r.referencia===ref)){ toast('Ya está en el presupuesto','err'); return; }
+  PV.detalle.push({
+    referencia:ref, descripcion:desc, categoria:cat,
+    precio_lista:precio, _dirty:true,
+    u01:0,u02:0,u03:0,u04:0,u05:0,u06:0,
+    u07:0,u08:0,u09:0,u10:0,u11:0,u12:0,
+    r01:0,r02:0,r03:0,r04:0,r05:0,r06:0,
+    r07:0,r08:0,r09:0,r10:0,r11:0,r12:0
+  });
+  // Actualizar selector categorías
+  const cats = [...new Set(PV.detalle.map(r=>r.categoria))].sort();
+  const sel = document.getElementById('pv-cat-filtro');
+  if(sel) sel.innerHTML = '<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${c}">${c}</option>`).join('');
+  cerrarModalSKU();
+  pvRenderTabla();
+  toast('SKU agregado — recuerda guardar 💾','ok');
+}
+
+function pvEliminarSKU(ref) {
+  if(!confirm(`¿Eliminar ${ref} del presupuesto?`)) return;
+  const r = PV.detalle.find(x=>x.referencia===ref);
+  if(r && r.id) {
+    sb.delete('presupuesto_detalle', `id=eq.${r.id}`).catch(e=>console.warn(e));
+  }
+  PV.detalle = PV.detalle.filter(x=>x.referencia!==ref);
+  pvRenderTabla();
+}
+
+// ── Modal subir histórico ──────────────────────────────────────────────
+function pvSubirHistorico() {
+  const m = document.getElementById('pv-modal-hist');
+  if(m){ m.style.display='flex'; }
+}
+function cerrarModalHist() {
+  const m = document.getElementById('pv-modal-hist');
+  if(m){ m.style.display='none'; }
+}
+async function confirmarSubirHist() {
+  const file  = (document.getElementById('hist-file')||{}).files?.[0];
+  const anio  = parseInt((document.getElementById('hist-anio')||{}).value);
+  const canal = (document.getElementById('hist-canal')||{}).value.trim() || PV.canal;
+  if(!file){ toast('Selecciona un archivo CSV','err'); return; }
+
+  const text = await file.text();
+  const lines = text.trim().split('\n');
+  const headers = lines[0].split(',').map(h=>h.trim().toLowerCase().replace(/"/g,''));
+  const rows = lines.slice(1).map(l=>{
+    const vals = l.split(',').map(v=>v.trim().replace(/"/g,''));
+    const obj  = {};
+    headers.forEach((h,i)=>{ obj[h]=vals[i]||''; });
+    return obj;
+  }).filter(r=>r.referencia);
+
+  const preview = document.getElementById('hist-preview');
+  if(preview) preview.textContent = `📋 ${rows.length} filas detectadas. Canal: ${canal}`;
+
+  try {
+    pvEstado('📤 Subiendo histórico...');
+    // Subir en lotes de 100
+    for(let i=0;i<rows.length;i+=100){
+      const lote = rows.slice(i,i+100).map(r=>({
+        anio: anio,
+        mes: parseInt(r.mes)||1,
+        referencia: r.referencia,
+        descripcion: r.descripcion||'',
+        categoria: r.categoria||'',
+        canal: canal,
+        unidades: parseFloat(r.unidades)||0,
+        valor_cop: parseFloat(r.valor_cop)||0,
+        lista_id: r.lista_id || PV.listaId,
+        subido_por: CU.email
+      }));
+      await sb.upsert('ventas_historico', lote, 'anio,mes,referencia,canal');
+    }
+    cerrarModalHist();
+    pvEstado(`✅ ${rows.length} registros subidos — año ${anio}`, false, 4000);
+    if(PV.anioComp === anio) await cargarHistorico(anio);
+    pvRenderTabla();
+  } catch(e) {
+    pvEstado('❌ Error subiendo: ' + e.message, true);
+  }
+}
+
+// ── Exportar Excel (CSV) ───────────────────────────────────────────────
+function pvExportar() {
+  const MESES = PV.MESES;
+  const headers = ['SKU','Descripción','Categoría','Precio Lista',
+    ...MESES.map(m=>m+' Und'), 'Total Und', 'Total COP'];
+  const rows = PV.detalle.map(r=>{
+    const mesesVals = MESES.map((_,i)=>{ const k='u'+String(i+1).padStart(2,'0'); return parseFloat(r[k])||0; });
+    const totalUnd  = mesesVals.reduce((a,v)=>a+v,0);
+    const totalCOP  = totalUnd * (parseFloat(r.precio_lista)||0);
+    return [r.referencia, r.descripcion||'', r.categoria||'', r.precio_lista||0,
+      ...mesesVals, totalUnd, Math.round(totalCOP)];
+  });
+  const csv = [headers, ...rows].map(r=>r.map(v=>
+    typeof v==='string' && v.includes(',') ? `"${v}"` : v
+  ).join(',')).join('\n');
+  const blob = new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'});
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = `presupuesto_ventas_${PV.anio}_${PV.canal.replace(/\s/g,'_')}.csv`;
+  a.click();
+  toast('✅ Exportado','ok');
+}
+
+// ── Helper estado ──────────────────────────────────────────────────────
+function pvEstado(msg, err=false, autoHide=0) {
+  const el = document.getElementById('pv-estado-bar');
+  if(!el) return;
+  if(!msg){ el.style.display='none'; return; }
+  el.style.display = 'block';
+  el.style.background = err ? 'var(--rdd)' : 'var(--grd)';
+  el.style.color      = err ? 'var(--rd)'  : 'var(--gr)';
+  el.style.borderColor = err ? 'rgba(220,38,38,.2)' : 'rgba(22,163,74,.2)';
+  el.textContent = msg;
+  if(autoHide) setTimeout(()=>pvEstado(''), autoHide);
 }
 
 // Auto-login desde sesión guardada
