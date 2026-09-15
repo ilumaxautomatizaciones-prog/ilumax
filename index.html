@@ -508,6 +508,7 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
 
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -559,7 +560,7 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
 <!-- APP -->
 <div class="app" id="app">
   <div class="hdr">
-    <div class="hdr-logo">ILU<span>MAX</span> <span style="font-size:11px;color:var(--mu);font-weight:500;margin-left:4px;">Cartera</span></div>
+    <div class="hdr-logo">ILU<span>MAX</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="sync-st" style="font-size:10px;color:var(--mu);display:flex;align-items:center;gap:5px;"></div>
       <button id="btn-instalar-app" onclick="instalarApp()" title="Instalar ILUMAX como app"
@@ -942,7 +943,11 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
     </div>
 
     <!-- ═══ MÓDULO PRESUPUESTOS ═══ -->
-    <div class="page" id="pg-pres">
+    <div class="page" id="pg-inv">
+  <div id="inv-content"></div>
+</div>
+
+<div class="page" id="pg-pres">
       <!-- Barra de acciones Presupuesto -->
       <div style="display:flex;gap:8px;padding:8px 14px;background:var(--w);border-bottom:1px solid var(--b1);flex-wrap:wrap;align-items:center;" id="pres-export-bar">
         <div style="flex:1;font-size:12px;color:var(--mu);">Gestión de presupuestos</div>
@@ -2042,6 +2047,7 @@ function buildNav(){
   if(CU.rol==='admin') tabs.push({id:'admin',lbl:'🛠️ Admin'});
   if(CU.rol==='admin'||CU.area==='RRHH'||CU.email==='rrhh@ilumax.com.co') tabs.push({id:'rrhh',lbl:'📋 Mis Actividades'});
   tabs.push({id:'pres',lbl:'📊 Presupuesto'});
+  tabs.push({id:'inv',lbl:'📦 Inventario'});
 
   qs('#nav').innerHTML=tabs.map(t=>`
     <div class="nt" onclick="goPage('${t.id}',this)" id="tab-${t.id}">
@@ -2056,7 +2062,7 @@ function buildNav(){
   updBadges();
 }
 
-const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres};
+const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod};
 function goPage(id,el){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
   document.querySelectorAll('.nt').forEach(t=>t.classList.remove('on'));
@@ -6306,6 +6312,325 @@ async function subirTodosAdjuntos(solicitudId) {
   }
   adjuntosTmp = [];
   return urls;
+}
+
+
+// ══════════════════════════════════════════════════════════
+// MÓDULO INVENTARIO
+// ══════════════════════════════════════════════════════════
+var INV_DATA = [];
+var INV_PERIODO = '';
+var INV_SUBIDO_POR = '';
+var INV_FLT = 'todos';
+
+async function renderInventarioMod() {
+  const el = document.getElementById('inv-content');
+  if(!el) return;
+
+  el.innerHTML = '<div style="padding:14px;" id="inv-inner"><div style="text-align:center;padding:20px;color:var(--mu);">⏳ Cargando inventario...</div></div>';
+
+  // Cargar desde Supabase
+  await cargarInventarioSupa();
+  renderInvVista();
+}
+
+async function cargarInventarioSupa() {
+  if(MODO_OFFLINE) return;
+  try {
+    const rows = await sb.get('inventario', 'order=referencia.asc&limit=2000');
+    if(rows && rows.length > 0) {
+      INV_DATA = rows;
+      if(rows[0]) {
+        INV_PERIODO = rows[0].periodo || '';
+        INV_SUBIDO_POR = rows[0].subido_por || '';
+      }
+    }
+  } catch(e) {
+    console.warn('Error cargando inventario:', e.message);
+  }
+}
+
+function renderInvVista() {
+  const el = document.getElementById('inv-content');
+  if(!el) return;
+
+  const totalRefs = new Set(INV_DATA.map(r => r.referencia)).size;
+  const totalExist = INV_DATA.reduce((a,r) => a + parseFloat(r.existencia||0), 0);
+  const valorTotal = INV_DATA.reduce((a,r) => a + parseFloat(r.costo_prom||0) * parseFloat(r.existencia||0), 0);
+  const conStock = INV_DATA.filter(r => parseFloat(r.existencia||0) > 0).length;
+
+  let html = `
+  <div style="padding:14px;" id="inv-inner">
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:14px;padding:16px 18px;margin-bottom:14px;color:#fff;">
+      <div style="font-size:10px;color:rgba(255,255,255,.5);font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px;">
+        📦 Inventario ILUMAX
+        ${INV_PERIODO ? '· Corte: <strong>'+INV_PERIODO+'</strong>' : ''}
+        ${INV_SUBIDO_POR ? '· Subido por: '+INV_SUBIDO_POR : ''}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;">
+        <div><div style="font-size:20px;font-weight:800;color:#f5c518;">${totalRefs.toLocaleString('es-CO')}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Referencias</div></div>
+        <div><div style="font-size:20px;font-weight:800;color:#f5c518;">${Math.round(totalExist).toLocaleString('es-CO')}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Unidades totales</div></div>
+        <div><div style="font-size:16px;font-weight:800;color:#f5c518;">${valorTotal>=1e9?'$'+(valorTotal/1e9).toFixed(1)+'B':valorTotal>=1e6?'$'+(valorTotal/1e6).toFixed(1)+'M':'$'+Math.round(valorTotal).toLocaleString('es-CO')}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Valor inventario</div></div>
+        <div><div style="font-size:20px;font-weight:800;color:#f5c518;">${conStock.toLocaleString('es-CO')}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Con stock</div></div>
+      </div>
+    </div>
+
+    <!-- Acciones -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+      <label style="display:inline-flex;align-items:center;gap:6px;background:var(--bl);color:#fff;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="subirExcelInventario(this)">
+        📤 Subir Excel inventario
+      </label>
+      <div style="font-size:11px;color:var(--mu);">Sube el reporte de existencias de Siesa en .xlsx</div>
+    </div>
+
+    <!-- Búsqueda y filtros -->
+    <div style="background:var(--w);border-radius:10px;padding:10px 12px;margin-bottom:10px;box-shadow:var(--sh);display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <div style="position:relative;flex:1;min-width:200px;">
+        <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;">🔍</span>
+        <input class="inp" id="srch-inv-mod" placeholder="Buscar referencia o descripción..." 
+          style="padding-left:32px;border-radius:22px;" oninput="filtrarInvMod()">
+      </div>
+      <select class="inp" id="fil-inv-bod" style="width:120px;" onchange="filtrarInvMod()">
+        <option value="">Todas las bodegas</option>
+      </select>
+      <select class="inp" id="fil-inv-stock" style="width:130px;" onchange="filtrarInvMod()">
+        <option value="todos">Todo</option>
+        <option value="stock">Con stock</option>
+        <option value="nostock">Sin stock</option>
+      </select>
+    </div>
+
+    <!-- Tabla -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-size:13px;font-weight:800;">Detalle por referencia</div>
+        <div id="inv-cnt" style="font-size:11px;color:var(--mu);"></div>
+      </div>
+      <div style="overflow-x:auto;max-height:55vh;overflow-y:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;" id="tbl-inv-mod">
+          <thead>
+            <tr>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Referencia</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Descripción</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Existencia</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Costo prom.</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Valor total</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Bodega</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">U.M.</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-inv-mod"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+
+  el.innerHTML = html;
+  poblarBodegas();
+  filtrarInvMod();
+}
+
+function poblarBodegas() {
+  const sel = document.getElementById('fil-inv-bod');
+  if(!sel) return;
+  const bodegas = [...new Set(INV_DATA.map(r => r.bodega).filter(Boolean))].sort();
+  bodegas.forEach(b => {
+    const o = document.createElement('option');
+    o.value = b; o.textContent = b;
+    sel.appendChild(o);
+  });
+}
+
+function filtrarInvMod() {
+  const q     = (document.getElementById('srch-inv-mod')||{value:''}).value.trim().toLowerCase();
+  const bod   = (document.getElementById('fil-inv-bod')||{value:''}).value;
+  const stock = (document.getElementById('fil-inv-stock')||{value:'todos'}).value;
+
+  let items = INV_DATA.filter(r => {
+    if(bod && r.bodega !== bod) return false;
+    if(stock === 'stock'   && !(parseFloat(r.existencia||0) > 0)) return false;
+    if(stock === 'nostock' && parseFloat(r.existencia||0) > 0)    return false;
+    if(q && !(r.referencia+' '+(r.descripcion||'')).toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  // Ordenar por existencia desc
+  items.sort((a,b) => parseFloat(b.existencia||0) - parseFloat(a.existencia||0));
+
+  const cnt = document.getElementById('inv-cnt');
+  if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' registros' + (items.length > 500 ? ' (mostrando 500)' : '');
+
+  const tbody = document.getElementById('tbody-inv-mod');
+  if(!tbody) return;
+
+  if(!items.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--mu);">Sin resultados</td></tr>';
+    return;
+  }
+
+  const mostrar = items.slice(0, 500);
+  const fmtCOP = n => n ? '$' + Math.round(n).toLocaleString('es-CO') : '—';
+  const fmtN   = n => n ? Math.round(n).toLocaleString('es-CO') : '0';
+
+  tbody.innerHTML = mostrar.map(r => {
+    const exist = parseFloat(r.existencia||0);
+    const costo = parseFloat(r.costo_prom||0);
+    const valor = exist * costo;
+    const existColor = exist > 1000 ? 'color:var(--gr);font-weight:700' : exist > 0 ? 'color:var(--am);font-weight:700' : 'color:var(--mu2)';
+    return `<tr style="border-bottom:1px solid var(--b1);">
+      <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${r.referencia||''}</td>
+      <td style="padding:9px 12px;max-width:220px;font-weight:600;font-size:11px;">${(r.descripcion||'').substring(0,50)}</td>
+      <td style="padding:9px 12px;text-align:right;${existColor}">${fmtN(exist)}</td>
+      <td style="padding:9px 12px;text-align:right;font-size:11px;">${fmtCOP(costo)}</td>
+      <td style="padding:9px 12px;text-align:right;font-weight:700;">${fmtCOP(valor)}</td>
+      <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.bodega||''}</td>
+      <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.um||''}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── SUBIR EXCEL INVENTARIO ────────────────────────────────
+async function subirExcelInventario(inputEl) {
+  const file = inputEl.files[0];
+  if(!file) return;
+
+  toast('📊 Procesando Excel...', 'inf');
+
+  try {
+    const data = await file.arrayBuffer();
+    const wb   = XLSX.read(data, {type:'array'});
+    const ws   = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, {header:1});
+
+    if(!rows.length) { toast('Excel vacío','er'); return; }
+
+    // Detectar headers — fila 0
+    const headers = rows[0].map(h => String(h||'').toLowerCase().trim());
+    console.log('Headers detectados:', headers);
+
+    // Mapear columnas del reporte de Siesa
+    // Formato: Referencia, Desc. item, Costo prom. unit., Costo prom. uni., ..., Bodega, Ubicación, Lote, U.M., Existencia
+    const iRef   = headers.findIndex(h => h.includes('referencia') || h === 'ref');
+    const iDesc  = headers.findIndex(h => h.includes('desc') || h.includes('descripcion') || h.includes('ítem') || h.includes('item'));
+    const iCosto = headers.findIndex(h => h.includes('costo prom. uni') && !h.includes('ins'));
+    const iBod   = headers.findIndex(h => h === 'bodega');
+    const iUbic  = headers.findIndex(h => h.includes('ubicaci'));
+    const iLote  = headers.findIndex(h => h === 'lote');
+    const iUM    = headers.findIndex(h => h === 'u.m.' || h === 'um' || h === 'u.m');
+    const iExist = headers.findIndex(h => h === 'existencia' || h.includes('existenci'));
+
+    if(iRef < 0 || iExist < 0) {
+      toast('No se reconoció el formato. Asegúrate de usar el reporte de existencias de Siesa.','er');
+      return;
+    }
+
+    // Parsear filas
+    const periodo = new Date().toISOString().split('T')[0];
+    const registros = [];
+    for(let i=1; i<rows.length; i++) {
+      const row = rows[i];
+      if(!row || !row[iRef]) continue;
+      const ref   = String(row[iRef]||'').trim();
+      const exist = parseFloat(String(row[iExist]||'0').replace(/[^0-9.-]/g,'')) || 0;
+      if(!ref) continue;
+      registros.push({
+        referencia:  ref,
+        descripcion: iDesc  >= 0 ? String(row[iDesc]||'').trim()  : '',
+        costo_prom:  iCosto >= 0 ? parseFloat(String(row[iCosto]||'0').replace(/[^0-9.-]/g,''))||0 : 0,
+        existencia:  exist,
+        bodega:      iBod   >= 0 ? String(row[iBod]||'').trim()   : '',
+        ubicacion:   iUbic  >= 0 ? String(row[iUbic]||'').trim()  : '',
+        lote:        iLote  >= 0 ? String(row[iLote]||'').trim()  : '',
+        um:          iUM    >= 0 ? String(row[iUM]||'').trim()     : '',
+        subido_por:  CU ? CU.nombre : 'Usuario',
+        periodo:     periodo,
+      });
+    }
+
+    if(!registros.length) { toast('No se encontraron datos válidos en el Excel','er'); return; }
+
+    toast('⬆️ Subiendo ' + registros.length + ' registros a Supabase...', 'inf');
+
+    // Borrar inventario anterior y subir nuevo en lotes de 200
+    if(!MODO_OFFLINE) {
+      // Cargar inventario actual de Supabase para comparar
+      toast('🔍 Comparando con inventario anterior...', 'inf');
+      let existentes = {};
+      try {
+        const rows = await sb.get('inventario', 'select=referencia,bodega,existencia,costo_prom&limit=3000');
+        rows.forEach(function(r){
+          existentes[r.referencia + '_' + (r.bodega||'')] = r;
+        });
+      } catch(e) { console.warn('No se pudo cargar anterior:', e); }
+
+      // Separar en nuevos vs actualizados
+      const nuevos = [], actualizados = [];
+      let sinCambio = 0;
+
+      registros.forEach(function(r) {
+        var key = r.referencia + '_' + (r.bodega||'');
+        var ant = existentes[key];
+        if(!ant) {
+          nuevos.push(r);
+        } else {
+          // Verificar si cambió existencia o costo
+          var existCambio = Math.abs(parseFloat(r.existencia||0) - parseFloat(ant.existencia||0)) > 0.01;
+          var costoCambio = Math.abs(parseFloat(r.costo_prom||0) - parseFloat(ant.costo_prom||0)) > 1;
+          if(existCambio || costoCambio) {
+            actualizados.push(r);
+          } else {
+            sinCambio++;
+          }
+        }
+      });
+
+      toast('📊 ' + nuevos.length + ' nuevos · ' + actualizados.length + ' actualizados · ' + sinCambio + ' sin cambio', 'inf');
+
+      // Insertar nuevos en lotes de 200
+      const lote = 200;
+      if(nuevos.length > 0) {
+        for(let i=0; i<nuevos.length; i+=lote) {
+          await sb.post('inventario', nuevos.slice(i, i+lote));
+        }
+      }
+
+      // Actualizar los que cambiaron (patch por referencia+bodega)
+      for(let i=0; i<actualizados.length; i++) {
+        const r = actualizados[i];
+        try {
+          await sb.patch('inventario',
+            'referencia=eq.' + encodeURIComponent(r.referencia) + '&bodega=eq.' + encodeURIComponent(r.bodega||''),
+            { existencia: r.existencia, costo_prom: r.costo_prom, periodo: r.periodo, subido_por: r.subido_por }
+          );
+        } catch(e) { console.warn('Error actualizando', r.referencia, e); }
+        // Progress cada 50
+        if(i % 50 === 0) toast('Actualizando ' + i + '/' + actualizados.length + '...', 'inf');
+      }
+
+      toast('✅ ' + nuevos.length + ' nuevos · ' + actualizados.length + ' actualizados · ' + sinCambio + ' sin cambio', 'ok');
+    }
+
+    // Actualizar local
+    INV_DATA = registros;
+    INV_PERIODO = periodo;
+    INV_SUBIDO_POR = CU ? CU.nombre : 'Usuario';
+
+    // Mostrar resumen de la subida
+    const resumenSubida = document.getElementById('inv-resumen-subida');
+    if(resumenSubida) {
+      resumenSubida.innerHTML = '<div style="background:var(--grd);border:1px solid var(--gr);border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:var(--gr);">'
+        + '✅ <strong>Inventario actualizado</strong> · '
+        + registros.length + ' referencias procesadas'
+        + '</div>';
+    }
+    renderInvVista();
+
+  } catch(e) {
+    toast('Error procesando Excel: ' + e.message, 'er');
+    console.error(e);
+  }
 }
 
 // Auto-login desde sesión guardada
