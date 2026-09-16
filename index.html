@@ -522,7 +522,6 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
 
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -979,6 +978,16 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
 <!-- ═══ PRESUPUESTO DE VENTAS ANUAL ═══ -->
 <div class="page" id="pg-presupuesto-ventas">
   <div id="pv-content"></div>
+</div>
+
+<!-- ═══ CENTRO DE TRABAJO — DUVIER ═══ -->
+<div class="page" id="pg-centro">
+  <div id="centro-content"></div>
+</div>
+
+<!-- ═══ REPORTE DE VENTAS DIARIO ═══ -->
+<div class="page" id="pg-reporte-ventas">
+  <div id="rv-content"></div>
 </div>
 
 <div class="page" id="pg-inv">
@@ -1976,13 +1985,6 @@ async function doLogin(){
   const usersDef = getDefaultUsers();
   const uDef = usersDef.find(function(x){ return x.email===em; });
 
-  // DEBUG — mostrar info en pantalla
-  var dbgEl = document.getElementById('login-debug');
-  if(!dbgEl){ dbgEl=document.createElement('div'); dbgEl.id='login-debug';
-    dbgEl.style.cssText='background:#1e293b;color:#f5c518;font-size:10px;padding:8px;border-radius:6px;margin:8px 0;font-family:monospace;white-space:pre-wrap;';
-    qs('#btn-login').parentNode.insertBefore(dbgEl, qs('#btn-login')); }
-  dbgEl.textContent = 'Email: '+em+' | Pass: '+pw+' | User: '+(uDef?'SI('+uDef.pass+')':'NO')+' | PIN: "'+pin+'" | PINexp: "'+(uDef&&uDef.pin?uDef.pin:'none')+'"';
-
   if(!uDef){showErr('Correo no registrado'); return;}
   if(uDef.pass !== pw){showErr('Contraseña incorrecta'); return;}
   if(uDef.pin){
@@ -2090,6 +2092,23 @@ async function startApp(){
   // Renderizar dashboard con datos listos
   renderInicio();
   hideLoader();
+  // Cargar config de correo del reporte en background
+  rvCargarConfig().catch(()=>{});
+  // Pre-cargar último snapshot de ventas en background para que el dashboard lo muestre sin esperar
+  if(!RV.cargado && !RV.autoIntentado) {
+    RV.autoIntentado = true;
+    rvCargarUltimoSnapshot().then(ok => {
+      if(ok) {
+        // Refrescar el widget del Centro de Trabajo si el tab reporte está activo
+        if(typeof CT !== 'undefined' && CT.tabActivo === 'reporte') {
+          const elCt = document.getElementById('ct-tab-content');
+          if(elCt) renderCtReporte(elCt);
+        }
+        // También refrescar el módulo completo si ya está abierto
+        if(document.getElementById('pg-reporte-ventas')?.classList.contains('on')) rvActivarUI();
+      }
+    }).catch(()=>{});
+  }
 }
 
 function buildNav(){
@@ -2115,8 +2134,9 @@ function buildNav(){
     ]},
 
     { tipo:'grupo', id:'g-comercial', lbl:'🛒 Comercial', header:'Ventas', items:[
-      { id:'precios-lista',      lbl:'Lista de Precios', ico:'💰' },
-      { id:'presupuesto-ventas', lbl:'Ppto. de Ventas',  ico:'🎯' },
+      { id:'precios-lista',      lbl:'Lista de Precios',    ico:'💰' },
+      { id:'presupuesto-ventas', lbl:'Ppto. de Ventas',     ico:'🎯' },
+      { id:'reporte-ventas',     lbl:'Reporte Diario',      ico:'📊' },
     ]},
   ];
 
@@ -2126,8 +2146,11 @@ function buildNav(){
   if(hdrBtns) hdrBtns.style.display = esApro ? 'flex' : 'none';
 
   const adminItems = [];
-  if(esAdmin) adminItems.push({ id:'admin', lbl:'Admin',           ico:'🛠️' });
+  if(esAdmin) adminItems.push({ id:'admin', lbl:'Admin', ico:'🛠️' });
   if(esRRHH)  adminItems.push({ id:'rrhh',  lbl:'Mis Actividades', ico:'📋' });
+  // Centro de trabajo — líder automatizaciones
+  const esDuvier = CU.email === 'duduwxo50@gmail.com' || CU.email === 'liderautomatizaciones@ilumax.com.co' || CU.cargo?.toLowerCase().includes('automatiz') || CU.nombre?.toLowerCase().includes('duvier');
+  if(esDuvier || esAdmin) adminItems.push({ id:'centro', lbl:'Mi Centro', ico:'⚡' });
   if(adminItems.length) grupos.push({ tipo:'grupo', id:'g-admin', lbl:'⚙️ Admin', header:'Sistema', items: adminItems });
 
   // Construir HTML
@@ -2219,11 +2242,12 @@ function resaltarGrupoActivo(pageId) {
   }
 }
 
-const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas};
+const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas,centro:renderCentro,'reporte-ventas':renderReporteVentas};
 function goPage(id, el){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
   qs('#pg-'+id)?.classList.add('on');
   resaltarGrupoActivo(id);
+  cerrarGrupos();
   if(pgMap[id]) pgMap[id]();
   hookSearchRenderers();
 }
@@ -2459,10 +2483,10 @@ function renderDashRings() {
     const pHoras = Math.min(100, RRHH.reduce((a,t)=>a+(t.horasReales||0),0) /
                    Math.max(1, RRHH.reduce((a,t)=>a+(t.horasEstimadas||0),0)) * 100);
     rings = [
-      {pct:Math.round(real/total*100), lbl:'Completado', val:real+'/'+total, color:'#22c55e'},
-      {pct:Math.round(aTimpo/Math.max(real,1)*100), lbl:'A tiempo', val:aTimpo+'/'+real, color:'#2563eb'},
-      {pct:Math.round(proc/total*100), lbl:'En proceso', val:proc+'/'+total, color:'#0891b2'},
-      {pct:Math.min(100,Math.round((1-venc/total)*100)), lbl:'Sin vencer', val:(total-venc)+'/'+total, color:venc>0?'#f97316':'#22c55e'},
+      {pct:Math.round(real/total*100), lbl:'Completado', val:real+'/'+total, color:'#22c55e', filtro:`setFqRrhh('Realizado',document.querySelector('[onclick*="Realizado"]'))`},
+      {pct:Math.round(aTimpo/Math.max(real,1)*100), lbl:'A tiempo', val:aTimpo+'/'+real, color:'#2563eb', filtro:`setFqRrhh('Realizado',document.querySelector('[onclick*="Realizado"]'))`},
+      {pct:Math.round(proc/total*100), lbl:'En proceso', val:proc+'/'+total, color:'#0891b2', filtro:`setFqRrhh('En proceso',document.querySelector('[onclick*="En proceso"]'))`},
+      {pct:Math.min(100,Math.round((1-venc/total)*100)), lbl:'Sin vencer', val:(total-venc)+'/'+total, color:venc>0?'#f97316':'#22c55e', filtro:`setFqRrhh('proximas',document.querySelector('[onclick*="proximas"]'))`},
     ];
   } else if (esApro) {
     const mios = SOLIC.filter(s=>puedoAprobar(s.tipo||s['Tipo']));
@@ -2471,10 +2495,10 @@ function renderDashRings() {
     const rech = mios.filter(s=>(s.estado||s['Estado'])==='rechazado').length;
     const pend = mios.filter(s=>(s.estado||s['Estado'])==='pendiente').length;
     rings = [
-      {pct:Math.round(apro/tot*100), lbl:'Aprobadas', val:apro+'/'+tot, color:'#22c55e'},
-      {pct:Math.round(rech/tot*100), lbl:'Rechazadas', val:rech+'/'+tot, color:'#ef4444'},
-      {pct:Math.round(pend/tot*100), lbl:'Pendientes', val:pend+'/'+tot, color:'#f97316'},
-      {pct:Math.round((tot-pend)/tot*100), lbl:'Gestionadas', val:(tot-pend)+'/'+tot, color:'#7c3aed'},
+      {pct:Math.round(apro/tot*100), lbl:'Aprobadas',  val:apro+'/'+tot,     color:'#22c55e', filtro:`setFiltroApro('aprobado')`},
+      {pct:Math.round(rech/tot*100), lbl:'Rechazadas', val:rech+'/'+tot,     color:'#ef4444', filtro:`setFiltroApro('rechazado')`},
+      {pct:Math.round(pend/tot*100), lbl:'Pendientes', val:pend+'/'+tot,     color:'#f97316', filtro:`setFiltroApro('pendiente')`},
+      {pct:Math.round((tot-pend)/tot*100), lbl:'Gestionadas', val:(tot-pend)+'/'+tot, color:'#7c3aed', filtro:null},
     ];
   } else {
     const mias = SOLIC.filter(s=>(s.email||s['Correo'])===CU.email);
@@ -2483,10 +2507,10 @@ function renderDashRings() {
     const pend = mias.filter(s=>(s.estado||s['Estado'])==='pendiente').length;
     const rech = mias.filter(s=>(s.estado||s['Estado'])==='rechazado').length;
     rings = [
-      {pct:Math.round(apro/tot*100), lbl:'Aprobadas', val:apro+'/'+tot, color:'#22c55e'},
-      {pct:Math.round(pend/tot*100), lbl:'Pendientes', val:pend+'/'+tot, color:'#f97316'},
-      {pct:Math.round(rech/tot*100), lbl:'Rechazadas', val:rech+'/'+tot, color:'#ef4444'},
-      {pct:100-Math.round(rech/tot*100), lbl:'Exitosas', val:(tot-rech)+'/'+tot, color:'#2563eb'},
+      {pct:Math.round(apro/tot*100), lbl:'Aprobadas', val:apro+'/'+tot, color:'#22c55e', filtro:null},
+      {pct:Math.round(pend/tot*100), lbl:'Pendientes', val:pend+'/'+tot, color:'#f97316', filtro:null},
+      {pct:Math.round(rech/tot*100), lbl:'Rechazadas', val:rech+'/'+tot, color:'#ef4444', filtro:null},
+      {pct:100-Math.round(rech/tot*100), lbl:'Exitosas', val:(tot-rech)+'/'+tot, color:'#2563eb', filtro:null},
     ];
   }
 
@@ -2494,8 +2518,12 @@ function renderDashRings() {
 
   const mkRing = (r) => {
     const dash = (r.pct/100)*circum;
+    const destino  = esRrhh ? 'rrhh' : 'mis';
+    const onclickJs = r.filtro
+      ? `goPage('${destino}'); setTimeout(()=>{ ${r.filtro} }, 300);`
+      : `goPage('${destino}');`;
     return `
-      <div class="cumpl-ring-card">
+      <div class="cumpl-ring-card" onclick="${onclickJs}" title="Ver ${r.lbl}">
         <svg class="cumpl-ring-svg" viewBox="0 0 ${C*2} ${C*2}">
           <circle cx="${C}" cy="${C}" r="${R}" fill="none" stroke="var(--b1)" stroke-width="5"/>
           <circle cx="${C}" cy="${C}" r="${R}" fill="none" stroke="${r.color}" stroke-width="5"
@@ -6798,7 +6826,7 @@ async function subirExcelInventario(inputEl) {
 var PRECIOS_DATA    = [];
 var PRECIOS_LOADED  = false;
 var LISTAS_CATALOGO = []; // [{lista_id, codigo, nombre, descripcion, canal, activa, orden}]
-var LISTAS_COLS     = ['001','002','003','004','005','006','007','008','009','010','011','013','014','015','016','017','019','020','021','022','023','024','026','027'];
+var LISTAS_COLS     = ['001','005','006','011','021','026','027'];
 
 // Mapa rápido: codigo ('001') → objeto catálogo
 function getCatMap() {
@@ -6895,7 +6923,7 @@ function renderPreciosVista() {
 
     <!-- Selector de listas visibles -->
     <div style="background:var(--w);border-radius:10px;padding:10px 14px;margin-bottom:10px;box-shadow:var(--sh);">
-      <div style="font-size:11px;font-weight:700;color:var(--mu);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;">Mostrar listas:</div>
+      <div style="font-size:11px;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;font-weight:700;flex-shrink:0;">Filtrar por lista:</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;" id="listas-toggle">
         ${listasConDatos.map(l => {
           const esMasUsada = MAS_USADAS.includes(l);
@@ -6907,6 +6935,8 @@ function renderPreciosVista() {
           >${etiqueta}${esMasUsada ? ' ⭐' : ''}</button>`;
         }).join('')}
       </div>
+      <!-- Barra VS -->
+      <div id="prc-vs-bar" style="display:none;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--b1);flex-wrap:wrap;"></div>
     </div>
 
     <!-- Tabla pivote -->
@@ -6923,16 +6953,101 @@ function renderPreciosVista() {
   renderPreciosTabla(listasConDatos);
 }
 
-var LISTAS_ACTIVAS = null;
+var LISTAS_SELECCIONADAS = new Set(); // selección múltiple
+var LISTA_REFERENCIA = null; // primera seleccionada — define qué filas se muestran
 
 function toggleLista(lista, btn) {
-  btn.classList.toggle('on');
-  const activas = [...document.querySelectorAll('#listas-toggle .flt.on')].map(b => b.getAttribute('data-lista'));
-  LISTAS_ACTIVAS = activas.length > 0 ? activas : null;
-  renderPreciosTabla(LISTAS_ACTIVAS || LISTAS_COLS.filter(l => {
+  if(LISTAS_SELECCIONADAS.has(lista)) {
+    LISTAS_SELECCIONADAS.delete(lista);
+    btn.classList.remove('on');
+    // Si era la referencia, la siguiente pasa a serlo
+    if(LISTA_REFERENCIA === lista) {
+      LISTA_REFERENCIA = LISTAS_SELECCIONADAS.size > 0 ? [...LISTAS_SELECCIONADAS][0] : null;
+    }
+  } else {
+    // La primera que se selecciona es la referencia
+    if(LISTAS_SELECCIONADAS.size === 0) LISTA_REFERENCIA = lista;
+    LISTAS_SELECCIONADAS.add(lista);
+    btn.classList.add('on');
+  }
+  actualizarBotonesLista();
+  renderPreciosTabla(LISTAS_COLS.filter(l => {
     const col = 'l' + l;
     return PRECIOS_DATA.some(r => r[col] && parseFloat(r[col]) > 0);
   }));
+}
+
+// Paleta de colores para diferenciar listas seleccionadas
+const LISTA_COLORES = [
+  { bg:'#dbeafe', txt:'#1d4ed8', col:'#1d4ed8', head:'#1e40af' }, // azul
+  { bg:'#dcfce7', txt:'#15803d', col:'#16a34a', head:'#166534' }, // verde
+  { bg:'#fef3c7', txt:'#b45309', col:'#d97706', head:'#92400e' }, // ámbar
+  { bg:'#f3e8ff', txt:'#7e22ce', col:'#9333ea', head:'#6b21a8' }, // morado
+  { bg:'#fee2e2', txt:'#b91c1c', col:'#dc2626', head:'#991b1b' }, // rojo
+  { bg:'#e0f2fe', txt:'#0369a1', col:'#0284c7', head:'#075985' }, // celeste
+  { bg:'#fce7f3', txt:'#be185d', col:'#db2777', head:'#9d174d' }, // rosa
+];
+
+var _listaColorMap = {};
+var _colorIdx = 0;
+
+function getListaColor(lista) {
+  if(!_listaColorMap[lista]) {
+    _listaColorMap[lista] = LISTA_COLORES[_colorIdx % LISTA_COLORES.length];
+    _colorIdx++;
+  }
+  return _listaColorMap[lista];
+}
+
+function actualizarBotonesLista() {
+  const sel = LISTAS_SELECCIONADAS;
+  document.querySelectorAll('#listas-toggle [data-lista]').forEach(btn => {
+    const l    = btn.getAttribute('data-lista');
+    const esRef = l === LISTA_REFERENCIA;
+    if(sel.has(l)) {
+      const c = getListaColor(l);
+      btn.style.background  = c.bg;
+      btn.style.color       = c.txt;
+      btn.style.borderColor = c.col;
+      btn.style.fontWeight  = '700';
+      btn.style.boxShadow   = esRef ? `0 0 0 3px ${c.col}` : `0 0 0 2px ${c.col}33`;
+      // Marcar la referencia con un indicador
+      btn.setAttribute('title', esRef ? '📌 Referencia — filtra las filas' : 'Comparar contra referencia');
+    } else {
+      btn.style.background  = '';
+      btn.style.color       = '';
+      btn.style.borderColor = '';
+      btn.style.fontWeight  = '';
+      btn.style.boxShadow   = '';
+      btn.removeAttribute('title');
+    }
+  });
+
+  // Barra VS
+  const vsBar = document.getElementById('prc-vs-bar');
+  if(vsBar) {
+    if(sel.size >= 2) {
+      const nombres = [...sel].map(l => {
+        const c    = getListaColor(l);
+        const esRef = l === LISTA_REFERENCIA;
+        return `<span style="background:${c.bg};color:${c.txt};border:${esRef?'2px':'1px'} solid ${c.col};padding:2px 10px;border-radius:20px;font-weight:700;font-size:11px;">
+          ${esRef ? '📌 ' : ''}${lblColHeader(l)}${esRef ? ' <span style="font-size:9px;opacity:.7;">(ref)</span>' : ''}
+        </span>`;
+      });
+      vsBar.innerHTML = `<span style="font-size:11px;color:var(--mu);">Comparando:</span> ${nombres.join('<span style="margin:0 4px;color:var(--mu);font-weight:700;">vs</span>')}
+        <span style="font-size:10px;color:var(--mu);margin-left:4px;">· Solo productos con precio en la referencia 📌</span>`;
+      vsBar.style.display = 'flex';
+    } else if(sel.size === 1) {
+      const l = [...sel][0];
+      const c = getListaColor(l);
+      vsBar.innerHTML = `<span style="font-size:11px;color:var(--mu);">📌 Referencia:</span>
+        <span style="background:${c.bg};color:${c.txt};border:2px solid ${c.col};padding:2px 10px;border-radius:20px;font-weight:700;font-size:11px;">${lblColHeader(l)}</span>
+        <span style="font-size:10px;color:var(--mu);">· Selecciona otra lista para comparar</span>`;
+      vsBar.style.display = 'flex';
+    } else {
+      vsBar.style.display = 'none';
+    }
+  }
 }
 
 function renderPreciosTabla(listas) {
@@ -6940,51 +7055,110 @@ function renderPreciosTabla(listas) {
   const tbody  = document.getElementById('tbody-precios');
   if(!thead || !tbody) return;
 
-  const fmtCOP = n => n ? '$' + Math.round(parseFloat(n)).toLocaleString('es-CO') : '';
+  const fmtCOP  = n => n ? '$' + Math.round(parseFloat(n)).toLocaleString('es-CO') : '';
   const MAS_USADAS = ['001','011'];
+  const modoFoco = listas.length === 1; // una sola lista seleccionada
 
-  // Header con nombre real y tooltip de canal
+  const sel       = LISTAS_SELECCIONADAS;
+  const modoFiltro = sel.size > 0;
+  const modoVS     = sel.size >= 2;
+
+  // Ordenar columnas: seleccionadas primero, luego el resto
+  const selArr  = [...sel];
+  const resto   = listas.filter(l => !sel.has(l));
+  const ordenadas = [...selArr, ...resto];
+
+  // Header
   thead.innerHTML = `<tr>
     <th style="background:#0f172a;color:#fff;padding:9px 12px;text-align:left;font-size:10px;font-weight:700;position:sticky;top:0;z-index:10;min-width:80px;">Ref.</th>
     <th style="background:#0f172a;color:#fff;padding:9px 12px;text-align:left;font-size:10px;font-weight:700;position:sticky;top:0;z-index:10;min-width:200px;">Descripción</th>
-    ${listas.map(l => {
-      const esMasUsada = MAS_USADAS.includes(l);
-      const nombre     = lblColHeader(l);
-      const tooltip    = lblColTooltip(l);
-      return `<th style="background:#0f172a;color:${esMasUsada ? '#f5c518' : '#94a3b8'};padding:9px 10px;text-align:right;font-size:10px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;cursor:help;" title="${tooltip}">${nombre}${esMasUsada ? ' ⭐' : ''}</th>`;
+    ${ordenadas.map((l, i) => {
+      const esSel    = sel.has(l);
+      const esRef    = l === LISTA_REFERENCIA;
+      const color    = esSel ? getListaColor(l) : null;
+      const nombre   = lblColHeader(l);
+      const canal    = lblColTooltip(l);
+      const tooltip  = canal;
+      const esPrimResto = !esSel && selArr.length > 0 && i === selArr.length;
+      // Nombre completo solo cuando está seleccionada
+      const labelHTML = esSel
+        ? `<div style="font-size:11px;font-weight:800;">${esRef ? '📌 ' : ''}${nombre}</div>
+           <div style="font-size:9px;font-weight:400;opacity:.85;margin-top:1px;max-width:110px;white-space:normal;line-height:1.2;">${canal}</div>`
+        : `${nombre}${MAS_USADAS.includes(l) ? ' ⭐' : ''}`;
+      return `<th style="background:${esSel ? color.head : '#0f172a'};color:${esSel ? '#fff' : MAS_USADAS.includes(l) ? '#f5c518' : '#94a3b8'};padding:9px 10px;text-align:right;font-size:10px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;cursor:help;${esSel ? 'border-bottom:3px solid #f5c518;min-width:120px;' : ''}${esPrimResto ? 'border-left:2px solid #334155;' : ''}" title="${tooltip}">
+        ${labelHTML}
+      </th>`;
     }).join('')}
+    ${modoVS ? '<th style="background:#0f172a;color:#f5c518;padding:9px 10px;text-align:right;font-size:10px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;border-left:2px solid #f5c51844;">Δ Dif.</th>' : ''}
   </tr>`;
 
-  // Filtrar
+  // Filtrar filas: SOLO por la lista referencia (la primera seleccionada)
   const q = (document.getElementById('srch-prc')||{value:''}).value.trim().toLowerCase();
   let items = PRECIOS_DATA.filter(r => {
-    if(!q) return true;
-    return (r.referencia + ' ' + (r.descripcion||'')).toLowerCase().includes(q);
+    const okBusq  = !q || (r.referencia + ' ' + (r.descripcion||'')).toLowerCase().includes(q);
+    const okLista = !LISTA_REFERENCIA || (() => {
+      const col = 'l' + LISTA_REFERENCIA;
+      return r[col] && parseFloat(r[col]) > 0;
+    })();
+    return okBusq && okLista;
   });
 
   const cnt = document.getElementById('prc-cnt');
-  if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' referencias' + (items.length > 500 ? ' (mostrando 500)' : '');
+  if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' referencias'
+    + (LISTA_REFERENCIA ? ` con precio en ${lblColHeader(LISTA_REFERENCIA)}` : '')
+    + (items.length > 500 ? ' (mostrando 500)' : '');
 
   // Filas
-  tbody.innerHTML = items.slice(0, 500).map(r => {
-    const celdas = listas.map(l => {
-      const col = 'l' + l;
-      const val  = r[col] ? parseFloat(r[col]) : null;
-      const esMU = MAS_USADAS.includes(l);
-      return `<td style="padding:8px 10px;text-align:right;color:${val ? (esMU ? 'var(--bl)' : 'var(--tx)') : 'var(--b2)'};font-weight:${val ? '600' : '400'};">${val ? fmtCOP(val) : '—'}</td>`;
+  tbody.innerHTML = items.slice(0, 500).map((r, idx) => {
+    const bg = idx % 2 === 0 ? '' : 'var(--s1)';
+
+    const celdas = ordenadas.map((l, i) => {
+      const col   = 'l' + l;
+      const val   = r[col] ? parseFloat(r[col]) : null;
+      const esSel = sel.has(l);
+      const color = esSel ? getListaColor(l) : null;
+      const esPrimResto = !esSel && selArr.length > 0 && i === selArr.length;
+      return `<td style="padding:8px 10px;text-align:right;
+        background:${esSel && val ? color.bg + '88' : ''};
+        color:${val ? (esSel ? color.txt : MAS_USADAS.includes(l) ? 'var(--bl)' : 'var(--tx)') : 'var(--b2)'};
+        font-weight:${val && esSel ? '700' : val ? '600' : '400'};
+        ${esPrimResto ? 'border-left:2px solid #e2e8f0;' : ''}">
+        ${val ? fmtCOP(val) : '—'}
+      </td>`;
     }).join('');
 
-    return `<tr style="border-bottom:1px solid var(--b1);" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+    // Columna diferencia VS (solo si hay 2 seleccionadas)
+    let difCelda = '';
+    if(modoVS) {
+      const selArr = [...sel];
+      const v1 = parseFloat(r['l'+selArr[0]])||0;
+      const v2 = parseFloat(r['l'+selArr[1]])||0;
+      if(v1 && v2) {
+        const dif    = v1 - v2;
+        const pct    = Math.round(Math.abs(dif)/Math.min(v1,v2)*100);
+        const color  = dif > 0 ? '#dc2626' : dif < 0 ? '#16a34a' : 'var(--mu)';
+        const signo  = dif > 0 ? '▲' : dif < 0 ? '▼' : '=';
+        difCelda = `<td style="padding:8px 10px;text-align:right;font-size:10px;font-weight:700;color:${color};">
+          ${signo} ${pct}%<div style="font-size:9px;font-weight:400;">${fmtCOP(Math.abs(dif))}</div>
+        </td>`;
+      } else {
+        difCelda = `<td style="padding:8px 10px;text-align:right;color:var(--b2);">—</td>`;
+      }
+    }
+
+    return `<tr style="border-bottom:1px solid var(--b1);background:${bg};"
+      onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background='${bg}'">
       <td style="padding:8px 12px;font-family:monospace;font-size:10px;color:var(--mu);white-space:nowrap;">${r.referencia||''}</td>
-      <td style="padding:8px 12px;font-size:11px;font-weight:600;max-width:240px;" title="${r.descripcion||''}">${(r.descripcion||'').trim().substring(0,45)}</td>
-      ${celdas}
+      <td style="padding:8px 12px;font-size:11px;font-weight:600;" title="${r.descripcion||''}">
+        ${modoFiltro ? (r.descripcion||'').trim() : (r.descripcion||'').trim().substring(0,45)}
+      </td>
+      ${celdas}${difCelda}
     </tr>`;
   }).join('');
 }
 
 function filtrarPrecios() {
-  const listas = [...(document.querySelectorAll('#listas-toggle .flt.on')||[])].map(b => b.getAttribute('data-lista'));
-  renderPreciosTabla(listas.length > 0 ? listas : LISTAS_COLS.filter(l => {
+  renderPreciosTabla(LISTAS_COLS.filter(l => {
     const col = 'l' + l;
     return PRECIOS_DATA.some(r => r[col] && parseFloat(r[col]) > 0);
   }));
@@ -7977,9 +8151,2968 @@ async function pvConfirmarSubirExcelVentas() {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// ⚡ CENTRO DE TRABAJO — Duvier (Líder Automatizaciones y Datos)
+// ══════════════════════════════════════════════════════════════════════
+var CT = {
+  tareas: [], manuales: [], contactos: [], tramites: [],
+  waKey: '', waNum: '573104705959', waActivo: true,
+  tabActivo: 'tareas', cargado: false
+};
+
+async function renderCentro() {
+  const el = document.getElementById('centro-content');
+  if(!el) return;
+  el.innerHTML = '<div style="padding:30px;text-align:center;color:var(--mu);">⏳ Cargando Centro de Trabajo...</div>';
+  if(!CT.cargado) await cargarCentro();
+  renderCentroShell(el);
+}
+
+async function cargarCentro() {
+  try {
+    // Cargar tabla por tabla para identificar cuál falla
+    try { CT.tareas    = await sb.get('mis_tareas',   'order=fecha_limite.asc.nullslast,prioridad.asc') || []; } catch(e){ console.warn('mis_tareas:', e.message); CT.tareas=[]; }
+    try { CT.manuales  = await sb.get('manuales',     'order=categoria.asc,titulo.asc') || []; } catch(e){ console.warn('manuales:', e.message); CT.manuales=[]; }
+    try { CT.contactos = await sb.get('contactos_ti', 'order=favorito.desc,empresa.asc') || []; } catch(e){ console.warn('contactos_ti:', e.message); CT.contactos=[]; }
+    try { CT.tramites  = await sb.get('tramites',     'order=fecha_limite.asc.nullslast') || []; } catch(e){ console.warn('tramites:', e.message); CT.tramites=[]; }
+    try {
+      const cfg = await sb.get('configuracion','clave=like.wa_%') || [];
+      cfg.forEach(c => {
+        if(c.clave==='wa_apikey')  CT.waKey    = c.valor;
+        if(c.clave==='wa_numero')  CT.waNum    = c.valor || '573104705959';
+        if(c.clave==='wa_activo')  CT.waActivo = c.valor === 'true';
+      });
+    } catch(e){ console.warn('configuracion WA:', e.message); }
+
+    CT.cargado = true;
+    verificarAlertasWA();
+  } catch(e) { console.warn('Error general cargando centro:', e); }
+}
+
+function renderCentroShell(el) {
+  const hoy     = new Date().toISOString().split('T')[0];
+  const manana  = new Date(Date.now()+86400000).toISOString().split('T')[0];
+  const pend    = CT.tareas.filter(t=>t.estado!=='Completado'&&t.estado!=='Cancelado');
+  const vencen  = pend.filter(t=>t.fecha_limite&&t.fecha_limite<=manana);
+  const altas   = pend.filter(t=>t.prioridad==='Alta');
+  const tramPend= CT.tramites.filter(t=>t.estado!=='Completado');
+
+  el.innerHTML = `
+  <div style="padding:14px;">
+
+    <!-- HEADER -->
+    <div style="background:linear-gradient(135deg,#1e1b4b,#312e81);border-radius:14px;padding:16px 18px;margin-bottom:14px;color:#fff;">
+      <div style="font-size:10px;color:rgba(255,255,255,.5);font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px;">
+        ⚡ Mi Centro de Trabajo — Líder Automatizaciones y Datos
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;">
+        <div onclick="ctTab('tareas')" style="cursor:pointer;">
+          <div style="font-size:22px;font-weight:800;color:#a5b4fc;">${pend.length}</div>
+          <div style="font-size:9px;color:rgba(255,255,255,.5);">Tareas pendientes</div>
+        </div>
+        <div onclick="ctTab('tareas')" style="cursor:pointer;">
+          <div style="font-size:22px;font-weight:800;color:${vencen.length?'#fca5a5':'#a5b4fc'};">${vencen.length}</div>
+          <div style="font-size:9px;color:rgba(255,255,255,.5);">Vencen hoy/mañana</div>
+        </div>
+        <div onclick="ctTab('tareas')" style="cursor:pointer;">
+          <div style="font-size:22px;font-weight:800;color:#fcd34d;">${altas.length}</div>
+          <div style="font-size:9px;color:rgba(255,255,255,.5);">Alta prioridad</div>
+        </div>
+        <div onclick="ctTab('tramites')" style="cursor:pointer;">
+          <div style="font-size:22px;font-weight:800;color:#6ee7b7;">${tramPend.length}</div>
+          <div style="font-size:9px;color:rgba(255,255,255,.5);">Trámites activos</div>
+        </div>
+        <div onclick="ctWAConfig()" style="cursor:pointer;">
+          <div style="font-size:20px;">${CT.waActivo&&CT.waKey ? '🟢' : '🟡'}</div>
+          <div style="font-size:9px;color:rgba(255,255,255,.5);">WhatsApp ${CT.waActivo&&CT.waKey?'activo':'config.'}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TABS -->
+    <div style="display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap;">
+      <button id="ct-tab-tareas"    class="flt on" onclick="ctTab('tareas')"    style="font-size:11px;padding:7px 14px;">📌 Tareas</button>
+      <button id="ct-tab-manuales"  class="flt"    onclick="ctTab('manuales')"  style="font-size:11px;padding:7px 14px;">📖 Manuales</button>
+      <button id="ct-tab-contactos" class="flt"    onclick="ctTab('contactos')" style="font-size:11px;padding:7px 14px;">📞 Contactos TI</button>
+      <button id="ct-tab-tramites"  class="flt"    onclick="ctTab('tramites')"  style="font-size:11px;padding:7px 14px;">📄 Trámites</button>
+      <button id="ct-tab-briefing"  class="flt"    onclick="ctTab('briefing')"  style="font-size:11px;padding:7px 14px;">🗺️ Plan & Notas</button>
+      <button id="ct-tab-reporte"   class="flt"    onclick="ctTab('reporte')"   style="font-size:11px;padding:7px 14px;">📊 Reporte Diario</button>
+    </div>
+
+    <!-- CONTENIDO DE CADA TAB -->
+    <div id="ct-tab-content"></div>
+
+    <!-- MODALES -->
+    <div id="ct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center;overflow-y:auto;">
+      <div id="ct-modal-body" style="background:var(--w);border-radius:16px;padding:22px;width:94%;max-width:500px;margin:20px auto;box-shadow:0 24px 64px rgba(0,0,0,.3);max-height:90vh;overflow-y:auto;"></div>
+    </div>
+  </div>`;
+
+  ctTab(CT.tabActivo);
+}
+
+// ── TABS ──────────────────────────────────────────────────────────────
+function ctTab(tab) {
+  CT.tabActivo = tab;
+  ['tareas','manuales','contactos','tramites','briefing','reporte'].forEach(t => {
+    const btn = document.getElementById('ct-tab-'+t);
+    if(btn) btn.classList.toggle('on', t===tab);
+  });
+  const el = document.getElementById('ct-tab-content');
+  if(!el) return;
+  if(tab==='tareas')    renderCtTareas(el);
+  if(tab==='manuales')  renderCtManuales(el);
+  if(tab==='contactos') renderCtContactos(el);
+  if(tab==='tramites')  renderCtTramites(el);
+  if(tab==='briefing')  renderCtBriefing(el);
+  if(tab==='reporte')   renderCtReporte(el);
+}
+
+// ── TAB TAREAS ─────────────────────────────────────────────────────────
+function renderCtTareas(el) {
+  const hoy    = new Date().toISOString().split('T')[0];
+  const manana = new Date(Date.now()+86400000).toISOString().split('T')[0];
+  const fmtFecha = f => f ? new Date(f+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short'}) : '—';
+  const prioColor = {Alta:'#ef4444',Media:'#f97316',Baja:'#22c55e'};
+  const estadoColor = {'Pendiente':'#f97316','En proceso':'#2563eb','Completado':'#22c55e','Cancelado':'#9ca3af'};
+
+  // Agrupar por estado
+  const grupos = [
+    { lbl:'🔴 Alta Prioridad',  items: CT.tareas.filter(t=>t.prioridad==='Alta'&&t.estado!=='Completado'&&t.estado!=='Cancelado') },
+    { lbl:'⏳ Pendientes',       items: CT.tareas.filter(t=>t.prioridad!=='Alta'&&t.estado==='Pendiente') },
+    { lbl:'🔵 En Proceso',       items: CT.tareas.filter(t=>t.prioridad!=='Alta'&&t.estado==='En proceso') },
+    { lbl:'✅ Completadas',      items: CT.tareas.filter(t=>t.estado==='Completado').slice(0,5) },
+  ].filter(g=>g.items.length);
+
+  el.innerHTML = `
+  <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+    <button class="btn btn-bl btn-sm" onclick="ctNuevaTarea()">➕ Nueva tarea</button>
+    <button class="btn btn-g btn-sm"  onclick="ctRecargar()">🔄 Actualizar</button>
+    <div style="flex:1;min-width:140px;">
+      <input class="inp" placeholder="🔍 Buscar..." style="border-radius:22px;font-size:12px;" oninput="ctFiltrarTareas(this.value)" autocomplete="off">
+    </div>
+  </div>
+  ${grupos.map(g=>`
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:800;color:var(--mu);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;padding:0 2px;">${g.lbl} (${g.items.length})</div>
+      ${g.items.map(t => {
+        const vence  = t.fecha_limite && t.fecha_limite <= hoy;
+        const urgente = t.fecha_limite && t.fecha_limite <= manana && t.estado!=='Completado';
+        const pct    = t.horas_est>0 ? Math.round((t.horas_real||0)/t.horas_est*100) : null;
+        return `
+        <div onclick="ctEditarTarea('${t.id}')" style="background:var(--w);border-radius:12px;padding:13px 14px;margin-bottom:8px;box-shadow:var(--sh);cursor:pointer;border-left:4px solid ${prioColor[t.prioridad]||'#9ca3af'};transition:box-shadow .15s;${urgente?'background:#fff7ed;':''}"
+          onmouseover="this.style.boxShadow='var(--sh2)'" onmouseout="this.style.boxShadow='var(--sh)'">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <div style="flex:1;">
+              <div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:3px;">${t.titulo}</div>
+              ${t.asignada_por&&t.asignada_por!=='Propia'?`<div style="font-size:10px;color:var(--mu);">👤 Asignada por: <strong>${t.asignada_por}</strong></div>`:''}
+              ${t.descripcion?`<div style="font-size:11px;color:var(--mu);margin-top:2px;">${t.descripcion.substring(0,80)}${t.descripcion.length>80?'…':''}</div>`:''}
+            </div>
+            <div style="text-align:right;flex-shrink:0;">
+              <span style="font-size:10px;background:${estadoColor[t.estado]||'#9ca3af'}22;color:${estadoColor[t.estado]||'#9ca3af'};padding:3px 8px;border-radius:20px;font-weight:700;">${t.estado}</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap;">
+            ${t.fecha_limite?`<span style="font-size:10px;color:${vence?'#ef4444':'var(--mu)'};font-weight:${vence?'700':'400'};">📅 ${fmtFecha(t.fecha_limite)}${vence?' ⚠️':''}</span>`:''}
+            ${t.horas_est?`<span style="font-size:10px;color:var(--mu);">⏱ ${t.horas_real||0}/${t.horas_est}h</span>`:''}
+            ${pct!==null?`<div style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--mu);">
+              <div style="width:50px;height:4px;background:var(--b1);border-radius:2px;overflow:hidden;">
+                <div style="width:${Math.min(pct,100)}%;height:100%;background:${pct>=100?'#22c55e':'#2563eb'};border-radius:2px;"></div>
+              </div>${pct}%</div>`:''}
+            ${t.notif_wa?'<span style="font-size:10px;">📱</span>':''}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`).join('')}
+  ${!CT.tareas.length?`<div style="padding:40px;text-align:center;color:var(--mu);">
+    <div style="font-size:32px;margin-bottom:8px;">📋</div>
+    <div style="font-weight:700;">Sin tareas aún</div>
+    <div style="font-size:11px;margin-top:4px;">Crea tu primera tarea con ➕</div>
+  </div>`:''}`;
+}
+
+function ctFiltrarTareas(q) {
+  if(!q) { renderCtTareas(document.getElementById('ct-tab-content')); return; }
+  const items = CT.tareas.filter(t=>(t.titulo+' '+(t.descripcion||'')+(t.asignada_por||'')).toLowerCase().includes(q.toLowerCase()));
+  const el = document.getElementById('ct-tab-content');
+  // Re-render solo las cards filtradas sin grupos
+  const cards = items.map(t=>`<div onclick="ctEditarTarea('${t.id}')" style="background:var(--w);border-radius:12px;padding:13px 14px;margin-bottom:8px;box-shadow:var(--sh);cursor:pointer;border-left:4px solid #6366f1;">
+    <div style="font-size:13px;font-weight:700;">${t.titulo}</div>
+    <div style="font-size:10px;color:var(--mu);">${t.estado} · ${t.prioridad}</div>
+  </div>`).join('');
+  el.querySelector('div') && (el.innerHTML = `<div style="padding-top:4px;">${cards||'<div style="padding:20px;color:var(--mu);">Sin resultados</div>'}</div>`);
+}
+
+// ── MODAL NUEVA / EDITAR TAREA ─────────────────────────────────────────
+function ctNuevaTarea(asignadaPor='') {
+  const m = document.getElementById('ct-modal');
+  const b = document.getElementById('ct-modal-body');
+  if(!m||!b) return;
+  b.innerHTML = `
+    <div style="font-size:15px;font-weight:800;margin-bottom:14px;">➕ Nueva Tarea</div>
+    <div class="fg"><label class="fl">Título <span class="req">*</span></label>
+      <input class="inp" id="ct-t-titulo" placeholder="Ej: Actualizar manual de VPN" autocomplete="off"></div>
+    <div class="fg"><label class="fl">Descripción</label>
+      <textarea class="inp" id="ct-t-desc" rows="2" placeholder="Detalle de la tarea..." style="resize:vertical;"></textarea></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="fg"><label class="fl">Asignada por</label>
+        <input class="inp" id="ct-t-asig" value="${asignadaPor||'Propia'}" autocomplete="off"></div>
+      <div class="fg"><label class="fl">Categoría</label>
+        <input class="inp" id="ct-t-cat" placeholder="TI, OEA, Admin..." autocomplete="off"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+      <div class="fg"><label class="fl">Prioridad</label>
+        <select class="inp" id="ct-t-prio">
+          <option value="Alta">🔴 Alta</option>
+          <option value="Media" selected>🟡 Media</option>
+          <option value="Baja">🟢 Baja</option>
+        </select></div>
+      <div class="fg"><label class="fl">Fecha límite</label>
+        <input class="inp" id="ct-t-fecha" type="date"></div>
+      <div class="fg"><label class="fl">Hora alerta</label>
+        <input class="inp" id="ct-t-hora" type="time" value="08:00"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="fg"><label class="fl">Horas estimadas</label>
+        <input class="inp" id="ct-t-hest" type="number" min="0" step="0.5" value="0"></div>
+      <div class="fg"><label class="fl">Horas reales</label>
+        <input class="inp" id="ct-t-hreal" type="number" min="0" step="0.5" value="0"></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+      <input type="checkbox" id="ct-t-wa" checked>
+      <label for="ct-t-wa" style="font-size:12px;cursor:pointer;">📱 Alertar por WhatsApp</label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-g btn-sm" onclick="ctCerrarModal()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="ctGuardarTarea(null)">💾 Guardar</button>
+    </div>`;
+  m.style.display = 'flex';
+}
+
+async function ctEditarTarea(id) {
+  const t = CT.tareas.find(x=>x.id===id);
+  if(!t) return;
+  const m = document.getElementById('ct-modal');
+  const b = document.getElementById('ct-modal-body');
+  if(!m||!b) return;
+  const estadoOpts = ['Pendiente','En proceso','Completado','Cancelado'].map(s=>
+    `<option value="${s}" ${s===t.estado?'selected':''}>${s}</option>`).join('');
+  b.innerHTML = `
+    <div style="font-size:15px;font-weight:800;margin-bottom:14px;">✏️ Editar Tarea</div>
+    <div class="fg"><label class="fl">Título</label>
+      <input class="inp" id="ct-t-titulo" value="${t.titulo||''}" autocomplete="off"></div>
+    <div class="fg"><label class="fl">Descripción</label>
+      <textarea class="inp" id="ct-t-desc" rows="2" style="resize:vertical;">${t.descripcion||''}</textarea></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="fg"><label class="fl">Asignada por</label>
+        <input class="inp" id="ct-t-asig" value="${t.asignada_por||'Propia'}" autocomplete="off"></div>
+      <div class="fg"><label class="fl">Categoría</label>
+        <input class="inp" id="ct-t-cat" value="${t.categoria||''}" autocomplete="off"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+      <div class="fg"><label class="fl">Prioridad</label>
+        <select class="inp" id="ct-t-prio">
+          <option value="Alta" ${t.prioridad==='Alta'?'selected':''}>🔴 Alta</option>
+          <option value="Media" ${t.prioridad==='Media'?'selected':''}>🟡 Media</option>
+          <option value="Baja" ${t.prioridad==='Baja'?'selected':''}>🟢 Baja</option>
+        </select></div>
+      <div class="fg"><label class="fl">Estado</label>
+        <select class="inp" id="ct-t-estado">${estadoOpts}</select></div>
+      <div class="fg"><label class="fl">Fecha límite</label>
+        <input class="inp" id="ct-t-fecha" type="date" value="${t.fecha_limite||''}"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+      <div class="fg"><label class="fl">Hora alerta</label>
+        <input class="inp" id="ct-t-hora" type="time" value="${t.hora_alerta||'08:00'}"></div>
+      <div class="fg"><label class="fl">Horas est.</label>
+        <input class="inp" id="ct-t-hest" type="number" min="0" step="0.5" value="${t.horas_est||0}"></div>
+      <div class="fg"><label class="fl">Horas reales</label>
+        <input class="inp" id="ct-t-hreal" type="number" min="0" step="0.5" value="${t.horas_real||0}"></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+      <input type="checkbox" id="ct-t-wa" ${t.notif_wa?'checked':''}>
+      <label for="ct-t-wa" style="font-size:12px;cursor:pointer;">📱 Alertar por WhatsApp</label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-rd btn-sm" onclick="ctEliminarTarea('${id}')">🗑 Eliminar</button>
+      <button class="btn btn-g btn-sm"  onclick="ctCerrarModal()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="ctGuardarTarea('${id}')">💾 Guardar</button>
+    </div>`;
+  m.style.display = 'flex';
+}
+
+async function ctGuardarTarea(id) {
+  const payload = {
+    titulo:       (document.getElementById('ct-t-titulo')||{}).value?.trim(),
+    descripcion:  (document.getElementById('ct-t-desc')||{}).value?.trim(),
+    asignada_por: (document.getElementById('ct-t-asig')||{}).value?.trim()||'Propia',
+    categoria:    (document.getElementById('ct-t-cat')||{}).value?.trim()||'General',
+    prioridad:    (document.getElementById('ct-t-prio')||{}).value,
+    estado:       (document.getElementById('ct-t-estado')||{value:'Pendiente'}).value,
+    fecha_limite: (document.getElementById('ct-t-fecha')||{}).value||null,
+    hora_alerta:  (document.getElementById('ct-t-hora')||{}).value||'08:00',
+    horas_est:    parseFloat((document.getElementById('ct-t-hest')||{}).value)||0,
+    horas_real:   parseFloat((document.getElementById('ct-t-hreal')||{}).value)||0,
+    notif_wa:     (document.getElementById('ct-t-wa')||{}).checked||false,
+    actualizado:  new Date().toISOString()
+  };
+  if(!payload.titulo){ toast('El título es obligatorio','err'); return; }
+  try {
+    if(id) {
+      await sb.patch('mis_tareas', `id=eq.${id}`, payload);
+      const idx = CT.tareas.findIndex(t=>t.id===id);
+      if(idx>=0) CT.tareas[idx] = {...CT.tareas[idx], ...payload};
+      // Enviar WA si se asignó externamente
+      if(payload.notif_wa && payload.asignada_por!=='Propia') {
+        enviarWA(`📌 *Tarea actualizada:* ${payload.titulo}\n📅 Límite: ${payload.fecha_limite||'sin fecha'}\n👤 Por: ${payload.asignada_por}`);
+      }
+    } else {
+      const res = await sb.post('mis_tareas', payload);
+      CT.tareas.unshift(res[0]);
+      if(payload.notif_wa && payload.asignada_por!=='Propia') {
+        enviarWA(`🆕 *Nueva tarea asignada:* ${payload.titulo}\n📅 Límite: ${payload.fecha_limite||'sin fecha'}\n👤 Por: ${payload.asignada_por}\n🎯 Prioridad: ${payload.prioridad}`);
+      }
+    }
+    ctCerrarModal();
+    ctTab('tareas');
+    toast('✅ Tarea guardada','ok');
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+async function ctEliminarTarea(id) {
+  if(!confirm('¿Eliminar esta tarea?')) return;
+  try {
+    await sb.delete('mis_tareas', `id=eq.${id}`);
+    CT.tareas = CT.tareas.filter(t=>t.id!==id);
+    ctCerrarModal();
+    ctTab('tareas');
+    toast('Tarea eliminada','ok');
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+// ── TAB MANUALES ───────────────────────────────────────────────────────
+function renderCtManuales(el) {
+  const cats = [...new Set(CT.manuales.map(m=>m.categoria))].sort();
+  el.innerHTML = `
+  <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+    <button class="btn btn-bl btn-sm" onclick="ctNuevoManual()">➕ Nuevo manual</button>
+    <input class="inp" placeholder="🔍 Buscar..." style="border-radius:22px;font-size:12px;flex:1;min-width:140px;" oninput="ctFiltrarManuales(this.value)" autocomplete="off">
+  </div>
+  ${cats.map(cat=>`
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:800;color:var(--mu);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">📁 ${cat}</div>
+      ${CT.manuales.filter(m=>m.categoria===cat).map(m=>`
+        <div onclick="ctVerManual('${m.id}')" style="background:var(--w);border-radius:12px;padding:12px 14px;margin-bottom:8px;box-shadow:var(--sh);cursor:pointer;display:flex;align-items:center;gap:12px;"
+          onmouseover="this.style.boxShadow='var(--sh2)'" onmouseout="this.style.boxShadow='var(--sh)'">
+          <div style="font-size:24px;flex-shrink:0;">📖</div>
+          <div style="flex:1;">
+            <div style="font-size:13px;font-weight:700;">${m.titulo}</div>
+            ${m.descripcion?`<div style="font-size:11px;color:var(--mu);margin-top:2px;">${m.descripcion.substring(0,70)}${m.descripcion.length>70?'…':''}</div>`:''}
+            ${m.link_externo?`<div style="font-size:10px;color:var(--bl);margin-top:3px;">🔗 Link externo</div>`:''}
+          </div>
+          <div style="font-size:18px;color:var(--mu);">›</div>
+        </div>`).join('')}
+    </div>`).join('')}
+  ${!CT.manuales.length?`<div style="padding:40px;text-align:center;color:var(--mu);">
+    <div style="font-size:32px;margin-bottom:8px;">📖</div>
+    <div style="font-weight:700;">Sin manuales</div>
+    <div style="font-size:11px;margin-top:4px;">Crea procedimientos para documentar qué hacer ante cada situación</div>
+  </div>`:''}`;
+}
+
+function ctFiltrarManuales(q) {
+  const items = q ? CT.manuales.filter(m=>(m.titulo+' '+(m.descripcion||'')).toLowerCase().includes(q.toLowerCase())) : CT.manuales;
+  const el = document.getElementById('ct-tab-content');
+  const cards = items.map(m=>`<div onclick="ctVerManual('${m.id}')" style="background:var(--w);border-radius:12px;padding:12px 14px;margin-bottom:8px;box-shadow:var(--sh);cursor:pointer;">
+    <div style="font-size:13px;font-weight:700;">📖 ${m.titulo}</div>
+    <div style="font-size:10px;color:var(--mu);">${m.categoria}</div>
+  </div>`).join('');
+  el.innerHTML = `<div style="padding-top:4px;"><div style="display:flex;gap:8px;margin-bottom:10px;">
+    <button class="btn btn-bl btn-sm" onclick="ctNuevoManual()">➕ Nuevo</button>
+    <input class="inp" placeholder="🔍 Buscar..." style="border-radius:22px;font-size:12px;flex:1;" value="${q}" oninput="ctFiltrarManuales(this.value)" autocomplete="off">
+  </div>${cards||'<div style="padding:20px;color:var(--mu);">Sin resultados</div>'}</div>`;
+}
+
+function ctVerManual(id) {
+  const m = CT.manuales.find(x=>x.id===id);
+  if(!m) return;
+  const modal = document.getElementById('ct-modal');
+  const body  = document.getElementById('ct-modal-body');
+  if(!modal||!body) return;
+  body.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+      <div>
+        <div style="font-size:15px;font-weight:800;">📖 ${m.titulo}</div>
+        <div style="font-size:10px;color:var(--mu);margin-top:2px;">${m.categoria}</div>
+      </div>
+      <button class="btn btn-bl btn-sm" onclick="ctEditarManual('${m.id}')">✏️ Editar</button>
+    </div>
+    ${m.descripcion?`<p style="font-size:12px;color:var(--mu);margin-bottom:12px;">${m.descripcion}</p>`:''}
+    ${m.pasos?`<div style="background:var(--bg);border-radius:8px;padding:14px;font-size:12px;line-height:1.7;white-space:pre-wrap;margin-bottom:12px;">${m.pasos}</div>`:''}
+    ${m.link_externo?`<a href="${m.link_externo}" target="_blank" class="btn btn-gr btn-sm" style="text-decoration:none;">🔗 Abrir documento externo</a>`:''}
+    <div style="margin-top:14px;text-align:right;">
+      <button class="btn btn-g btn-sm" onclick="ctCerrarModal()">Cerrar</button>
+    </div>`;
+  modal.style.display = 'flex';
+}
+
+function ctNuevoManual(id) {
+  const m = id ? CT.manuales.find(x=>x.id===id) : null;
+  const modal = document.getElementById('ct-modal');
+  const body  = document.getElementById('ct-modal-body');
+  if(!modal||!body) return;
+  body.innerHTML = `
+    <div style="font-size:15px;font-weight:800;margin-bottom:14px;">${m?'✏️ Editar':'➕ Nuevo'} Manual / Procedimiento</div>
+    <div class="fg"><label class="fl">Título <span class="req">*</span></label>
+      <input class="inp" id="ct-m-titulo" value="${m?.titulo||''}" placeholder="Ej: Qué hacer si falla la VPN" autocomplete="off"></div>
+    <div class="fg"><label class="fl">Categoría</label>
+      <input class="inp" id="ct-m-cat" value="${m?.categoria||'General'}" placeholder="Conexión, TI, OEA, Proceso..." autocomplete="off" list="ct-cats-list">
+      <datalist id="ct-cats-list">
+        <option value="Conexión"><option value="TI"><option value="OEA"><option value="Proceso"><option value="Proveedores"><option value="Seguridad">
+      </datalist></div>
+    <div class="fg"><label class="fl">Descripción breve</label>
+      <input class="inp" id="ct-m-desc" value="${m?.descripcion||''}" placeholder="Para qué sirve este manual" autocomplete="off"></div>
+    <div class="fg"><label class="fl">Pasos / Contenido</label>
+      <textarea class="inp" id="ct-m-pasos" rows="6" placeholder="Paso 1: ...\nPaso 2: ...\nPaso 3: ..." style="resize:vertical;font-family:monospace;font-size:12px;">${m?.pasos||''}</textarea></div>
+    <div class="fg"><label class="fl">Link externo (Drive, Word, PDF...)</label>
+      <input class="inp" id="ct-m-link" value="${m?.link_externo||''}" placeholder="https://docs.google.com/..." type="url" autocomplete="off"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      ${m?`<button class="btn btn-rd btn-sm" onclick="ctEliminarManual('${m.id}')">🗑</button>`:''}
+      <button class="btn btn-g btn-sm" onclick="ctCerrarModal()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="ctGuardarManual('${m?.id||null}')">💾 Guardar</button>
+    </div>`;
+  modal.style.display = 'flex';
+}
+function ctEditarManual(id) { ctNuevoManual(id); }
+
+async function ctGuardarManual(id) {
+  const payload = {
+    titulo:      (document.getElementById('ct-m-titulo')||{}).value?.trim(),
+    categoria:   (document.getElementById('ct-m-cat')||{}).value?.trim()||'General',
+    descripcion: (document.getElementById('ct-m-desc')||{}).value?.trim(),
+    pasos:       (document.getElementById('ct-m-pasos')||{}).value?.trim(),
+    link_externo:(document.getElementById('ct-m-link')||{}).value?.trim()||null,
+    actualizado: new Date().toISOString()
+  };
+  if(!payload.titulo){ toast('El título es obligatorio','err'); return; }
+  try {
+    if(id) {
+      await sb.patch('manuales', `id=eq.${id}`, payload);
+      const idx = CT.manuales.findIndex(m=>m.id===id);
+      if(idx>=0) CT.manuales[idx] = {...CT.manuales[idx],...payload};
+    } else {
+      const res = await sb.post('manuales', {...payload, activo:true});
+      CT.manuales.push(res[0]);
+    }
+    ctCerrarModal();
+    ctTab('manuales');
+    toast('✅ Manual guardado','ok');
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+async function ctEliminarManual(id) {
+  if(!confirm('¿Eliminar este manual?')) return;
+  await sb.delete('manuales', `id=eq.${id}`);
+  CT.manuales = CT.manuales.filter(m=>m.id!==id);
+  ctCerrarModal(); ctTab('manuales');
+}
+
+// ── TAB CONTACTOS TI ───────────────────────────────────────────────────
+function renderCtContactos(el) {
+  el.innerHTML = `
+  <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+    <button class="btn btn-bl btn-sm" onclick="ctNuevoContacto()">➕ Nuevo contacto</button>
+    <input class="inp" placeholder="🔍 Buscar empresa o servicio..." style="border-radius:22px;font-size:12px;flex:1;min-width:140px;" oninput="ctFiltrarContactos(this.value)" autocomplete="off">
+  </div>
+  <div id="ct-contactos-lista">
+  ${CT.contactos.map(c=>`
+    <div onclick="ctEditarContacto('${c.id}')" style="background:var(--w);border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:var(--sh);cursor:pointer;display:flex;gap:14px;align-items:center;"
+      onmouseover="this.style.boxShadow='var(--sh2)'" onmouseout="this.style.boxShadow='var(--sh)'">
+      <div style="width:44px;height:44px;border-radius:50%;background:${c.favorito?'linear-gradient(135deg,#f59e0b,#d97706)':'var(--s1)'};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">
+        ${c.favorito?'⭐':'🏢'}
+      </div>
+      <div style="flex:1;">
+        <div style="font-size:13px;font-weight:800;color:var(--tx);">${c.empresa}</div>
+        ${c.nombre?`<div style="font-size:11px;color:var(--mu);">👤 ${c.nombre}${c.cargo?' · '+c.cargo:''}</div>`:''}
+        ${c.servicio?`<div style="font-size:10px;color:var(--bl);margin-top:2px;">🔧 ${c.servicio}</div>`:''}
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        ${c.telefono?`<a href="tel:${c.telefono}" onclick="event.stopPropagation()" style="display:block;font-size:12px;font-weight:700;color:var(--gr);text-decoration:none;">📞 ${c.telefono}</a>`:''}
+        ${c.whatsapp&&c.telefono?`<a href="https://wa.me/${c.telefono.replace(/\D/g,'')}" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:#22c55e;text-decoration:none;">💬 WA</a>`:''}
+      </div>
+    </div>`).join('')}
+  ${!CT.contactos.length?`<div style="padding:40px;text-align:center;color:var(--mu);">
+    <div style="font-size:32px;">📞</div><div style="font-weight:700;margin-top:8px;">Sin contactos</div>
+  </div>`:''}
+  </div>`;
+}
+
+function ctFiltrarContactos(q) {
+  const items = q ? CT.contactos.filter(c=>(c.empresa+' '+(c.servicio||'')+(c.nombre||'')).toLowerCase().includes(q.toLowerCase())) : CT.contactos;
+  const lista = document.getElementById('ct-contactos-lista');
+  if(lista) lista.innerHTML = items.map(c=>`<div onclick="ctEditarContacto('${c.id}')" style="background:var(--w);border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:var(--sh);cursor:pointer;">
+    <div style="font-size:13px;font-weight:800;">${c.empresa}</div>
+    <div style="font-size:11px;color:var(--mu);">${c.servicio||''}</div>
+    ${c.telefono?`<div style="font-size:12px;color:var(--gr);">📞 ${c.telefono}</div>`:''}
+  </div>`).join('');
+}
+
+function ctNuevoContacto(id) {
+  const c = id ? CT.contactos.find(x=>x.id===id) : null;
+  const modal = document.getElementById('ct-modal');
+  const body  = document.getElementById('ct-modal-body');
+  if(!modal||!body) return;
+  body.innerHTML = `
+    <div style="font-size:15px;font-weight:800;margin-bottom:14px;">${c?'✏️ Editar':'➕ Nuevo'} Contacto TI</div>
+    <div class="fg"><label class="fl">Empresa <span class="req">*</span></label>
+      <input class="inp" id="ct-c-emp" value="${c?.empresa||''}" placeholder="Ej: CompuElite" autocomplete="off"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="fg"><label class="fl">Nombre contacto</label>
+        <input class="inp" id="ct-c-nom" value="${c?.nombre||''}" autocomplete="off"></div>
+      <div class="fg"><label class="fl">Cargo</label>
+        <input class="inp" id="ct-c-cargo" value="${c?.cargo||''}" autocomplete="off"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="fg"><label class="fl">Teléfono</label>
+        <input class="inp" id="ct-c-tel" value="${c?.telefono||''}" type="tel" autocomplete="off"></div>
+      <div class="fg"><label class="fl">Email</label>
+        <input class="inp" id="ct-c-email" value="${c?.email||''}" type="email" autocomplete="off"></div>
+    </div>
+    <div class="fg"><label class="fl">Servicio / Especialidad</label>
+      <input class="inp" id="ct-c-serv" value="${c?.servicio||''}" placeholder="Soporte TI, Hardware, OEA..." autocomplete="off"></div>
+    <div class="fg"><label class="fl">Notas</label>
+      <textarea class="inp" id="ct-c-notas" rows="2" style="resize:vertical;">${c?.notas||''}</textarea></div>
+    <div style="display:flex;gap:14px;margin-bottom:14px;">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;">
+        <input type="checkbox" id="ct-c-wa" ${c?.whatsapp?'checked':''}> Tiene WhatsApp</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;">
+        <input type="checkbox" id="ct-c-fav" ${c?.favorito?'checked':''}> ⭐ Favorito</label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      ${c?`<button class="btn btn-rd btn-sm" onclick="ctEliminarContacto('${c.id}')">🗑</button>`:''}
+      <button class="btn btn-g btn-sm" onclick="ctCerrarModal()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="ctGuardarContacto('${c?.id||null}')">💾 Guardar</button>
+    </div>`;
+  modal.style.display = 'flex';
+}
+function ctEditarContacto(id) { ctNuevoContacto(id); }
+
+async function ctGuardarContacto(id) {
+  const payload = {
+    empresa:   (document.getElementById('ct-c-emp')||{}).value?.trim(),
+    nombre:    (document.getElementById('ct-c-nom')||{}).value?.trim()||null,
+    cargo:     (document.getElementById('ct-c-cargo')||{}).value?.trim()||null,
+    telefono:  (document.getElementById('ct-c-tel')||{}).value?.trim()||null,
+    email:     (document.getElementById('ct-c-email')||{}).value?.trim()||null,
+    servicio:  (document.getElementById('ct-c-serv')||{}).value?.trim()||null,
+    notas:     (document.getElementById('ct-c-notas')||{}).value?.trim()||null,
+    whatsapp:  (document.getElementById('ct-c-wa')||{}).checked||false,
+    favorito:  (document.getElementById('ct-c-fav')||{}).checked||false,
+  };
+  if(!payload.empresa){ toast('La empresa es obligatoria','err'); return; }
+  try {
+    if(id) {
+      await sb.patch('contactos_ti', `id=eq.${id}`, payload);
+      const idx = CT.contactos.findIndex(c=>c.id===id);
+      if(idx>=0) CT.contactos[idx] = {...CT.contactos[idx],...payload};
+    } else {
+      const res = await sb.post('contactos_ti', payload);
+      CT.contactos.unshift(res[0]);
+    }
+    ctCerrarModal(); ctTab('contactos');
+    toast('✅ Contacto guardado','ok');
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+async function ctEliminarContacto(id) {
+  if(!confirm('¿Eliminar este contacto?')) return;
+  await sb.delete('contactos_ti', `id=eq.${id}`);
+  CT.contactos = CT.contactos.filter(c=>c.id!==id);
+  ctCerrarModal(); ctTab('contactos');
+}
+
+// ── TAB TRÁMITES ───────────────────────────────────────────────────────
+function renderCtTramites(el) {
+  const hoy    = new Date().toISOString().split('T')[0];
+  const fmtF   = f => f ? new Date(f+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  const estColor = {'Pendiente':'#f97316','En proceso':'#2563eb','Completado':'#22c55e','Vencido':'#ef4444'};
+
+  el.innerHTML = `
+  <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+    <button class="btn btn-bl btn-sm" onclick="ctNuevoTramite()">➕ Nuevo trámite</button>
+  </div>
+  ${CT.tramites.map(t=>{
+    const venceProx = t.fecha_vence && t.fecha_vence <= new Date(Date.now()+30*86400000).toISOString().split('T')[0];
+    return `
+    <div onclick="ctEditarTramite('${t.id}')" style="background:var(--w);border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:var(--sh);cursor:pointer;border-left:4px solid ${estColor[t.estado]||'#9ca3af'};"
+      onmouseover="this.style.boxShadow='var(--sh2)'" onmouseout="this.style.boxShadow='var(--sh)'">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+        <div>
+          <div style="font-size:13px;font-weight:700;">${t.titulo}</div>
+          ${t.entidad?`<div style="font-size:11px;color:var(--mu);">🏛 ${t.entidad} · ${t.tipo}</div>`:''}
+        </div>
+        <span style="font-size:10px;background:${estColor[t.estado]||'#9ca3af'}22;color:${estColor[t.estado]};padding:3px 8px;border-radius:20px;font-weight:700;flex-shrink:0;">${t.estado}</span>
+      </div>
+      <div style="display:flex;gap:14px;margin-top:8px;flex-wrap:wrap;">
+        ${t.fecha_limite?`<span style="font-size:10px;color:var(--mu);">📅 Límite: ${fmtF(t.fecha_limite)}</span>`:''}
+        ${t.fecha_vence?`<span style="font-size:10px;color:${venceProx?'#ef4444':'var(--mu)'};font-weight:${venceProx?'700':'400'};">⏳ Vence: ${fmtF(t.fecha_vence)}${venceProx?' ⚠️':''}</span>`:''}
+      </div>
+    </div>`;
+  }).join('')}
+  ${!CT.tramites.length?`<div style="padding:40px;text-align:center;color:var(--mu);">
+    <div style="font-size:32px;">📄</div><div style="font-weight:700;margin-top:8px;">Sin trámites registrados</div>
+    <div style="font-size:11px;margin-top:4px;">Registra certificados OEA y otros trámites pendientes</div>
+  </div>`:''}`;
+}
+
+function ctNuevoTramite(id) {
+  const t = id ? CT.tramites.find(x=>x.id===id) : null;
+  const modal = document.getElementById('ct-modal');
+  const body  = document.getElementById('ct-modal-body');
+  if(!modal||!body) return;
+  const estOpts = ['Pendiente','En proceso','Completado','Vencido'].map(s=>
+    `<option value="${s}" ${s===(t?.estado||'Pendiente')?'selected':''}>${s}</option>`).join('');
+  body.innerHTML = `
+    <div style="font-size:15px;font-weight:800;margin-bottom:14px;">${t?'✏️ Editar':'➕ Nuevo'} Trámite / Certificado</div>
+    <div class="fg"><label class="fl">Título <span class="req">*</span></label>
+      <input class="inp" id="ct-tr-titulo" value="${t?.titulo||''}" placeholder="Ej: Certificado OEA vigencia 2026" autocomplete="off"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="fg"><label class="fl">Entidad</label>
+        <input class="inp" id="ct-tr-entidad" value="${t?.entidad||''}" placeholder="OEA, DIAN, Ministerio..." autocomplete="off"></div>
+      <div class="fg"><label class="fl">Tipo</label>
+        <select class="inp" id="ct-tr-tipo">
+          ${['Certificado','Renovación','Trámite','Solicitud'].map(tp=>`<option value="${tp}" ${tp===(t?.tipo||'Certificado')?'selected':''}>${tp}</option>`).join('')}
+        </select></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+      <div class="fg"><label class="fl">Estado</label>
+        <select class="inp" id="ct-tr-estado">${estOpts}</select></div>
+      <div class="fg"><label class="fl">Fecha límite</label>
+        <input class="inp" id="ct-tr-flimite" type="date" value="${t?.fecha_limite||''}"></div>
+      <div class="fg"><label class="fl">Vence el</label>
+        <input class="inp" id="ct-tr-fvence" type="date" value="${t?.fecha_vence||''}"></div>
+    </div>
+    <div class="fg"><label class="fl">Notas</label>
+      <textarea class="inp" id="ct-tr-notas" rows="2" style="resize:vertical;">${t?.notas||''}</textarea></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+      <input type="checkbox" id="ct-tr-wa" ${t?.notif_wa!==false?'checked':''}>
+      <label for="ct-tr-wa" style="font-size:12px;cursor:pointer;">📱 Alertar por WhatsApp cuando venza</label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      ${t?`<button class="btn btn-rd btn-sm" onclick="ctEliminarTramite('${t.id}')">🗑</button>`:''}
+      <button class="btn btn-g btn-sm" onclick="ctCerrarModal()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="ctGuardarTramite('${t?.id||null}')">💾 Guardar</button>
+    </div>`;
+  modal.style.display = 'flex';
+}
+function ctEditarTramite(id) { ctNuevoTramite(id); }
+
+async function ctGuardarTramite(id) {
+  const payload = {
+    titulo:       (document.getElementById('ct-tr-titulo')||{}).value?.trim(),
+    entidad:      (document.getElementById('ct-tr-entidad')||{}).value?.trim()||null,
+    tipo:         (document.getElementById('ct-tr-tipo')||{}).value,
+    estado:       (document.getElementById('ct-tr-estado')||{}).value,
+    fecha_limite: (document.getElementById('ct-tr-flimite')||{}).value||null,
+    fecha_vence:  (document.getElementById('ct-tr-fvence')||{}).value||null,
+    notas:        (document.getElementById('ct-tr-notas')||{}).value?.trim()||null,
+    notif_wa:     (document.getElementById('ct-tr-wa')||{}).checked||false,
+    actualizado:  new Date().toISOString()
+  };
+  if(!payload.titulo){ toast('El título es obligatorio','err'); return; }
+  try {
+    if(id) {
+      await sb.patch('tramites', `id=eq.${id}`, payload);
+      const idx = CT.tramites.findIndex(t=>t.id===id);
+      if(idx>=0) CT.tramites[idx] = {...CT.tramites[idx],...payload};
+    } else {
+      const res = await sb.post('tramites', payload);
+      CT.tramites.unshift(res[0]);
+    }
+    ctCerrarModal(); ctTab('tramites');
+    toast('✅ Trámite guardado','ok');
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+async function ctEliminarTramite(id) {
+  if(!confirm('¿Eliminar este trámite?')) return;
+  await sb.delete('tramites', `id=eq.${id}`);
+  CT.tramites = CT.tramites.filter(t=>t.id!==id);
+  ctCerrarModal(); ctTab('tramites');
+}
+
+// ── Reporte diario embebido en Centro de Trabajo ──────────────────────
+function renderCtReporte(el) {
+  el.innerHTML = `
+  <div style="background:var(--bg);border-radius:12px;padding:2px 0 0;">
+
+    <!-- Mini header del reporte -->
+    <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:12px;padding:14px 16px;margin-bottom:12px;color:#fff;">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <div>
+          <div style="font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px;">📊 Reporte de Ventas Diario</div>
+          <div id="ct-rv-estado" style="font-size:13px;font-weight:700;color:#f5c518;">
+            ${RV.cargado ? 'Datos cargados ✅' : 'Sin archivo cargado'}
+          </div>
+          <div id="ct-rv-info" style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">
+            ${RV.cargado ? RV.datos.length+' transacciones · '+RV.fechas.length+' días' : 'Carga el Excel de Siesa para comenzar'}
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-bl btn-sm" onclick="rvAbrirArchivo();document.getElementById('rv-file-input').onchange=function(e){rvCargarArchivo(e.target.files[0]);setTimeout(()=>ctTab('reporte'),800);}">
+            📂 Cargar Excel
+          </button>
+          ${RV.cargado ? `<button class="btn btn-gr btn-sm" onclick="rvEnviarCorreo()">📧 Enviar</button>` : ''}
+          <button class="btn btn-g btn-sm" onclick="goPage('reporte-ventas')">↗️ Ver completo</button>
+        </div>
+      </div>
+      ${RV.cargado ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;margin-top:12px;">
+        ${[
+          ['Acumulado mes', rvFmtM(Object.values(RV.consolidado).reduce((a,c)=>a+c.ventaTotal,0)), '#f5c518'],
+          ['Último día',    rvFmtM(Object.values(RV.td.dia||{}).reduce((a,v)=>a+v,0)), '#6ee7b7'],
+          ['% Ppto.',       rvPct(Object.values(RV.consolidado).reduce((a,c)=>a+c.ventaTotal,0)/Math.max(Object.values(RV.consolidado).reduce((a,c)=>a+c.pptoTotal,0),1)), '#a5b4fc'],
+        ].map(([lbl,val,c])=>`<div><div style="font-size:17px;font-weight:800;color:${c};">${val}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">${lbl}</div></div>`).join('')}
+      </div>` : ''}
+    </div>
+
+    ${RV.cargado ? `
+    <!-- Resumen rápido: venta del día + top ejecutivos -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+
+      <!-- Venta del último día -->
+      <div style="background:var(--w);border-radius:10px;box-shadow:var(--sh);overflow:hidden;">
+        <div style="padding:10px 12px;font-size:11px;font-weight:800;border-bottom:1px solid var(--b1);">⚡ Último día</div>
+        <div style="padding:10px 12px;">
+          ${Object.entries(RV.td.dia||{}).filter(([,v])=>v!==0).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([nom,val])=>`
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <div style="font-size:10px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${nom.split(' ')[0]}</div>
+              <div style="font-size:11px;font-weight:800;color:${val<0?'var(--rd)':'var(--bl)'};flex-shrink:0;margin-left:6px;">${rvFmtM(val)}</div>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <!-- Top ejecutivos acumulado -->
+      <div style="background:var(--w);border-radius:10px;box-shadow:var(--sh);overflow:hidden;">
+        <div style="padding:10px 12px;font-size:11px;font-weight:800;border-bottom:1px solid var(--b1);">🏆 Ranking</div>
+        <div style="padding:10px 12px;">
+          ${Object.entries(RV.consolidado).sort((a,b)=>b[1].ventaTotal-a[1].ventaTotal).slice(0,5).map(([nom,c],i)=>{
+            const pct=c.pptoTotal>0?c.ventaTotal/c.pptoTotal:0;
+            const pctC=pct>=1?'var(--gr)':pct>=.7?'var(--or)':'var(--rd)';
+            const medal=['🥇','🥈','🥉'][i]||`${i+1}.`;
+            return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">
+              <span style="font-size:${i<3?'13px':'10px'};flex-shrink:0;">${medal}</span>
+              <div style="flex:1;overflow:hidden;">
+                <div style="font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${nom.split(' ').slice(0,2).join(' ')}</div>
+                <div style="width:100%;height:3px;background:var(--b1);border-radius:2px;margin-top:2px;overflow:hidden;">
+                  <div style="width:${Math.min(pct*100,100)}%;height:100%;background:${pctC};border-radius:2px;"></div>
+                </div>
+              </div>
+              <div style="text-align:right;flex-shrink:0;">
+                <div style="font-size:10px;font-weight:800;color:var(--bl);">${rvFmtM(c.ventaTotal)}</div>
+                <div style="font-size:9px;color:${pctC};">${rvPct(pct)}</div>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+
+    <!-- Botón para ir al módulo completo -->
+    <div style="text-align:center;padding:8px 0;">
+      <button class="btn btn-bl btn-sm" onclick="goPage('reporte-ventas')" style="font-size:12px;padding:9px 20px;">
+        📊 Abrir reporte completo con todas las vistas →
+      </button>
+    </div>` : `
+    <!-- Zona de carga cuando no hay datos -->
+    <div style="background:var(--w);border:2px dashed var(--b1);border-radius:12px;padding:30px 20px;text-align:center;cursor:pointer;"
+      ondragover="event.preventDefault()" ondrop="rvDrop(event);setTimeout(()=>ctTab('reporte'),800)" onclick="rvAbrirArchivo();document.getElementById('rv-file-input').onchange=function(e){rvCargarArchivo(e.target.files[0]);setTimeout(()=>ctTab('reporte'),800);}">
+      <div style="font-size:36px;margin-bottom:8px;">📊</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:4px;">Arrastra el Excel de ventas aquí</div>
+      <div style="font-size:11px;color:var(--mu);">Formato: Excel diario de Siesa (.xlsx) — el mismo que usaba Klein</div>
+    </div>`}
+  </div>`;
+}
+// ── WHATSAPP (CallMeBot) ───────────────────────────────────────────────
+async function enviarWA(mensaje) {
+  if(!CT.waActivo || !CT.waKey) return;
+  try {
+    const url = `https://api.callmebot.com/whatsapp.php?phone=${CT.waNum}&text=${encodeURIComponent(mensaje)}&apikey=${CT.waKey}`;
+    await fetch(url, { mode:'no-cors' });
+    console.log('📱 WA enviado:', mensaje.substring(0,50));
+  } catch(e) { console.warn('Error WA:', e); }
+}
+
+function ctWAConfig() {
+  const modal = document.getElementById('ct-modal');
+  const body  = document.getElementById('ct-modal-body');
+  if(!modal||!body) return;
+  body.innerHTML = `
+    <div style="font-size:15px;font-weight:800;margin-bottom:6px;">📱 Configurar WhatsApp</div>
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-bottom:14px;font-size:11px;color:#166534;line-height:1.6;">
+      <strong>Pasos para activar:</strong><br>
+      1. Envía <code style="background:#dcfce7;padding:1px 4px;border-radius:3px;">I allow callmebot to send me messages</code> al número <strong>+1 (206) 226-0869</strong> por WhatsApp.<br>
+      2. Recibirás tu API Key en segundos.<br>
+      3. Pégala abajo y guarda.
+    </div>
+    <div class="fg"><label class="fl">Tu número (con código país)</label>
+      <input class="inp" id="wa-num" value="${CT.waNum}" placeholder="573104705959"></div>
+    <div class="fg"><label class="fl">API Key de CallMeBot</label>
+      <input class="inp" id="wa-key" value="${CT.waKey}" placeholder="123456" autocomplete="off"></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+      <input type="checkbox" id="wa-activo" ${CT.waActivo?'checked':''}>
+      <label for="wa-activo" style="font-size:12px;cursor:pointer;">Activar alertas WhatsApp</label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-g btn-sm" onclick="ctCerrarModal()">Cancelar</button>
+      <button class="btn btn-gr btn-sm" onclick="ctTestWA()">🧪 Probar</button>
+      <button class="btn btn-bl btn-sm" onclick="ctGuardarWA()">💾 Guardar</button>
+    </div>`;
+  modal.style.display = 'flex';
+}
+
+async function ctGuardarWA() {
+  CT.waNum    = (document.getElementById('wa-num')||{}).value?.trim()||CT.waNum;
+  CT.waKey    = (document.getElementById('wa-key')||{}).value?.trim()||'';
+  CT.waActivo = (document.getElementById('wa-activo')||{}).checked;
+  try {
+    await sb.patch('configuracion','clave=eq.wa_apikey', {valor: CT.waKey});
+    await sb.patch('configuracion','clave=eq.wa_numero', {valor: CT.waNum});
+    await sb.patch('configuracion','clave=eq.wa_activo', {valor: CT.waActivo?'true':'false'});
+    ctCerrarModal();
+    toast('✅ WhatsApp configurado','ok');
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+async function ctTestWA() {
+  CT.waNum = (document.getElementById('wa-num')||{}).value?.trim()||CT.waNum;
+  CT.waKey = (document.getElementById('wa-key')||{}).value?.trim()||'';
+  await enviarWA('✅ *Prueba ILUMAX* — Las alertas de WhatsApp están funcionando correctamente. 🚀');
+  toast('Mensaje de prueba enviado 📱','ok');
+}
+
+// Verificar alertas pendientes al cargar
+function verificarAlertasWA() {
+  if(!CT.waActivo || !CT.waKey) return;
+  const hoy    = new Date().toISOString().split('T')[0];
+  const manana = new Date(Date.now()+86400000).toISOString().split('T')[0];
+  // Tareas que vencen mañana y no se ha enviado notif
+  CT.tareas.filter(t=>
+    t.notif_wa && !t.notif_enviada &&
+    t.estado!=='Completado' && t.fecha_limite===manana
+  ).forEach(t=>{
+    enviarWA(`⚠️ *Tarea vence mañana:*\n📌 ${t.titulo}\n📅 Límite: ${t.fecha_limite}\n🎯 Prioridad: ${t.prioridad}`);
+    sb.patch('mis_tareas', `id=eq.${t.id}`, {notif_enviada: true}).catch(()=>{});
+  });
+  // Trámites que vencen en 30 días
+  const en30 = new Date(Date.now()+30*86400000).toISOString().split('T')[0];
+  CT.tramites.filter(t=>
+    t.notif_wa && t.estado!=='Completado' &&
+    t.fecha_vence && t.fecha_vence<=en30 && t.fecha_vence>=hoy
+  ).forEach(t=>{
+    enviarWA(`📄 *Trámite por vencer:*\n${t.titulo}\n🏛 ${t.entidad||''}\n⏳ Vence: ${t.fecha_vence}`);
+  });
+}
+
+function ctRecargar() {
+  CT.cargado = false;
+  renderCentro();
+}
+
+function ctCerrarModal() {
+  const m = document.getElementById('ct-modal');
+  if(m) m.style.display = 'none';
+}
+
+// ── TAB BRIEFING — Notas, investigación y plan de acción ──────────────
+function renderCtBriefing(el) {
+  el.innerHTML = `
+  <div style="max-width:800px;margin:0 auto;">
+
+    <!-- Banner -->
+    <div style="background:linear-gradient(135deg,#1e1b4b,#4c1d95);border-radius:14px;padding:16px 20px;margin-bottom:16px;color:#fff;">
+      <div style="font-size:11px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px;">⚡ Briefing · Reunión Sandra Senior · 15-Sep-2026</div>
+      <div style="font-size:14px;font-weight:700;">Plan de los primeros 30 días — Líder Automatizaciones y Datos</div>
+      <div style="font-size:11px;color:rgba(255,255,255,.6);margin-top:4px;">6 compromisos activos · Fuentes: acta reunión + acta entrega cargo Klein + investigación OEA DIAN</div>
+    </div>
+
+    <!-- Plan 30 días -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);padding:16px;margin-bottom:12px;">
+      <div style="font-size:12px;font-weight:800;color:#1e1b4b;margin-bottom:12px;">📅 Plan de acción — Primeros 30 días</div>
+      ${[
+        { semana:'Semana 1 · 16–20 Sep', items:[
+          'Revisar los 4 PDFs de agosto en X:\\Reportes mensuales Compuelite\\2026 — entender el formato de informes OEA',
+          'Definir día fijo con Sandra para reunión semanal (sugerencia: miércoles 9AM)',
+          'Comprar hidrotermómetro con Bluetooth (~$80.000) → instalar → foto de evidencia'
+        ]},
+        { semana:'Semana 2 · 23–27 Sep', items:[
+          'Contactar CompuElite — presentarte y solicitar reunión de empalme',
+          'Crear Excel de control de tickets en X:\\Control TI\\Tickets CompuElite\\2026'
+        ]},
+        { semana:'1° de octubre', items:[
+          'Solicitar informes Mikrotik + Bitdefender de septiembre (primer ciclo mensual)',
+          'Primera reunión semanal OEA con Sandra — llevar tabla de seguimiento'
+        ]},
+        { semana:'Octubre', items:[
+          'Reunión con proveedor SharePoint — llevar inventario de carpetas de unidad X',
+          'Control OEA funcionando con rutina semanal establecida'
+        ]}
+      ].map(s=>`
+        <div style="margin-bottom:12px;">
+          <div style="font-size:10px;font-weight:800;color:#7c3aed;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">📌 ${s.semana}</div>
+          ${s.items.map(i=>`
+            <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:5px;">
+              <span style="color:#22c55e;font-size:12px;flex-shrink:0;margin-top:1px;">→</span>
+              <span style="font-size:12px;color:var(--tx);">${i}</span>
+            </div>`).join('')}
+        </div>`).join('')}
+    </div>
+
+    <!-- Tareas detalladas -->
+    ${[
+      {
+        id:'t1', prioridad:'Alta', emoji:'🔴', color:'#ef4444',
+        titulo:'Adquirir hidrotermómetro para área de almacenamiento',
+        asigno:'Sandra Senior', categoria:'OEA',
+        porQue:'El OEA (Decreto 3568/2011 — DIAN) exige seguridad física documentada. El control de humedad en el área de almacenamiento de equipos y documentos puede ser auditado. Sin evidencia escrita, se puede perder la certificación.',
+        pasos:[
+          'Comprar Govee H5075 con Bluetooth (~$80.000 COP en Mercado Libre) — guarda historial descargable como evidencia OEA',
+          'Instalar en el rack/archivador donde indicó Jorge',
+          'Tomar foto con fecha → guardar en X:\\OEA\\Evidencias\\Humedad',
+          'Crear tabla de mediciones mensuales (Excel simple con fecha, temperatura, humedad, firma)'
+        ],
+        nota:'Rango correcto: 40–60% HR · 18–25°C. El modelo con app es clave porque genera historial automático exportable.'
+      },
+      {
+        id:'t2', prioridad:'Alta', emoji:'🔴', color:'#ef4444',
+        titulo:'Definir día fijo semanal — Reunión OEA y TI con Sandra',
+        asigno:'Sandra Senior', categoria:'OEA',
+        porQue:'Sandra lo llama "rutina de comunicación" — es su mecanismo de control para saber que OEA está al día sin tener que preguntar. Sin este espacio los temas se acumulan.',
+        pasos:[
+          'Proponer a Sandra 3 opciones (sugerencia: miércoles 9AM — mitad de semana)',
+          'Crear evento recurrente en el calendario corporativo',
+          'Preparar antes de cada reunión tabla: Tema / Responsable / Estado / Evidencia / Próximo paso',
+          'Compartir la tabla con Sandra por Teams o email 1 día antes'
+        ],
+        nota:'La tabla de seguimiento semanal es tu mejor aliado — muestra control, genera confianza y previene sorpresas.'
+      },
+      {
+        id:'t3', prioridad:'Alta', emoji:'🔴', color:'#ef4444',
+        titulo:'Solicitar informes mensuales OEA a CompuElite',
+        asigno:'Sandra Senior', categoria:'OEA',
+        porQue:'Mikrotik (firewall) y Bitdefender (antivirus) son el corazón de la evidencia de seguridad TI para OEA. La DIAN valida el capítulo "Seguridad en TI" con 6 requisitos — sin estos informes no hay cumplimiento.',
+        pasos:[
+          'Revisar los 4 PDFs de agosto en X:\\Reportes mensuales Compuelite\\2026 para entender el formato',
+          'Contactar CompuElite el 1° de octubre con email solicitando: informe Mikrotik + informe Bitdefender GravityZone antes del día 5 de cada mes',
+          'Guardar en: X:\\Reportes mensuales Compuelite\\2026\\[mes]',
+          'Presentar resumen en la reunión semanal con Sandra'
+        ],
+        nota:'Email modelo: "Soy el nuevo Líder TI de ILUMAX. Para cumplimiento OEA necesito retomar los informes mensuales: 1) Actividad Mikrotik firewall, 2) Bitdefender GravityZone — amenazas, equipos y estado de protección. Antes del día 5 de cada mes."'
+      },
+      {
+        id:'t4', prioridad:'Media', emoji:'🟡', color:'#f97316',
+        titulo:'Elaborar herramienta de control de tickets CompuElite',
+        asigno:'Sandra Senior', categoria:'TI',
+        porQue:'CompuElite opera 100% por tickets sin persona presencial. Sin control no hay visibilidad de tiempos, problemas recurrentes ni pendientes — Sandra lo pidió explícitamente.',
+        pasos:[
+          'Crear Excel con columnas: # Ticket / Fecha / Área / Descripción / Prioridad / Estado / Fecha cierre / Días resolución',
+          'Definir con CompuElite cómo reportan (¿ellos envían resumen o tú consolidas?)',
+          'KPIs mensuales para Sandra: total tickets, % resueltos, promedio días resolución, top 3 problemas, tickets pendientes',
+          'Guardar en: X:\\Control TI\\Tickets CompuElite\\2026'
+        ],
+        nota:'A mediano plazo: si el volumen crece considera un módulo en el ERP de ILUMAX.'
+      },
+      {
+        id:'t5', prioridad:'Media', emoji:'🟡', color:'#f97316',
+        titulo:'Revisar acta de entrega Klein — formato de informes',
+        asigno:'Propia', categoria:'TI',
+        porQue:'Klein ya tenía el flujo establecido. Los 4 PDFs de agosto son la plantilla de lo que debes pedirle a CompuElite cada mes.',
+        pasos:[
+          'Abrir: X:\\Reportes mensuales Compuelite\\2026',
+          'Revisar los 4 PDFs: Antiphishing · Resumen ejecutivo · Gerencial Seguridad TI Agosto · Seguridad Firewall',
+          'Documentar el formato y frecuencia que venía usando Klein',
+          'Usar como base para el email a CompuElite'
+        ],
+        nota:'Nota del acta: "Se debe corregir tablas de Agosto por información" — hay datos de agosto pendientes de ajustar.'
+      },
+      {
+        id:'t6', prioridad:'Media', emoji:'🟡', color:'#f97316',
+        titulo:'Coordinar reunión para migración a SharePoint',
+        asigno:'Sandra Senior', categoria:'SharePoint',
+        porQue:'Ya existe una instancia de SharePoint activa. Hay que migrar toda la unidad X (\\\\172.100.100.11\\ilumax-data) a la nube. El proveedor necesita información base para arrancar.',
+        pasos:[
+          'Hacer inventario de carpetas de unidad X antes de la reunión (2–3 horas)',
+          'Calcular tamaño total en GB e identificar permisos por área',
+          'Reunión con proveedor: preguntar herramienta (SPMT recomendada, gratuita), manejo de permisos NTFS, migración piloto, horarios',
+          'Definir con Sandra qué área migra primero (piloto recomendado: TI)'
+        ],
+        nota:'Riesgo: SharePoint no maneja bien rutas largas (+400 caracteres). Carpetas muy anidadas como las de ventas diarias pueden dar problemas — hay que aplanar la estructura antes de migrar.'
+      }
+    ].map(t=>`
+      <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);margin-bottom:10px;overflow:hidden;">
+        <!-- Header tarea -->
+        <div style="background:${t.color}12;border-left:4px solid ${t.color};padding:12px 14px;cursor:pointer;"
+          onclick="ctToggleBriefing('${t.id}')">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <div>
+              <span style="font-size:10px;background:${t.color}22;color:${t.color};padding:2px 8px;border-radius:20px;font-weight:700;margin-right:6px;">${t.emoji} ${t.prioridad}</span>
+              <span style="font-size:10px;color:var(--mu);">${t.categoria} · Asignó: ${t.asigno}</span>
+              <div style="font-size:13px;font-weight:700;color:var(--tx);margin-top:4px;">${t.titulo}</div>
+            </div>
+            <span id="arr-${t.id}" style="font-size:14px;color:var(--mu);flex-shrink:0;">▼</span>
+          </div>
+        </div>
+        <!-- Contenido expandible -->
+        <div id="body-${t.id}" style="display:none;padding:14px;">
+          <div style="margin-bottom:10px;">
+            <div style="font-size:10px;font-weight:800;color:#7c3aed;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">¿Por qué importa?</div>
+            <div style="font-size:12px;color:var(--mu);line-height:1.6;">${t.porQue}</div>
+          </div>
+          <div style="margin-bottom:10px;">
+            <div style="font-size:10px;font-weight:800;color:#2563eb;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Cómo resolverlo</div>
+            ${t.pasos.map((p,i)=>`
+              <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;">
+                <div style="background:#2563eb;color:#fff;border-radius:50%;width:18px;height:18px;font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">${i+1}</div>
+                <div style="font-size:12px;color:var(--tx);line-height:1.5;">${p}</div>
+              </div>`).join('')}
+          </div>
+          <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:10px 12px;">
+            <div style="font-size:10px;font-weight:800;color:#92400e;margin-bottom:3px;">💡 Sugerencia</div>
+            <div style="font-size:11px;color:#78350f;line-height:1.5;">${t.nota}</div>
+          </div>
+        </div>
+      </div>`).join('')}
+
+    <!-- Límites de responsabilidad -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);padding:16px;margin-bottom:12px;">
+      <div style="font-size:12px;font-weight:800;color:#1e1b4b;margin-bottom:10px;">⚖️ Límites de responsabilidad (aclarado por Sandra)</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead><tr style="background:#f8fafc;">
+          <th style="padding:7px 10px;text-align:left;color:var(--mu);font-weight:700;border-bottom:1px solid var(--b1);">Tema</th>
+          <th style="padding:7px 10px;text-align:left;color:var(--mu);font-weight:700;border-bottom:1px solid var(--b1);">Responsable</th>
+        </tr></thead>
+        <tbody>
+          ${[
+            ['Infraestructura y hardware','✅ Duvier + CompuElite'],
+            ['Software y permisos CIESA/SIESA','🔴 CAF (no es TI)'],
+            ['Licencias físicas (en el RAC)','✅ Custodia Duvier'],
+            ['Licencias equipos Novotechno','🟢 No requieren gestión (vienen con el proveedor)'],
+            ['Informes de seguridad OEA','✅ Duvier — pide a CompuElite, adapta y reporta'],
+          ].map(([t,r],i)=>`<tr style="border-bottom:1px solid var(--b1);${i%2?'background:var(--bg)':''}">
+            <td style="padding:8px 10px;font-weight:600;">${t}</td>
+            <td style="padding:8px 10px;color:var(--mu);">${r}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Rutas clave -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);padding:16px;margin-bottom:12px;">
+      <div style="font-size:12px;font-weight:800;color:#1e1b4b;margin-bottom:10px;">📁 Rutas clave — Unidad X</div>
+      <div style="background:#0f172a;border-radius:8px;padding:12px 14px;">
+        ${[
+          ['Ventas por canal','X:\\Archivos para informes diarios\\Ventas diarias 2026\\Por canal'],
+          ['Ventas por vendedor','X:\\Archivos para informes diarios\\Ventas diarias 2026\\Por vendedor'],
+          ['Cierres viernes','X:\\Archivos para informes diarios\\Ventas por vendedor 2026 – Viernes -Cierres'],
+          ['Informes CompuElite','X:\\Reportes mensuales Compuelite\\2026'],
+          ['Facturas Carvajal','X:\\Facturas Carvajal'],
+          ['Formatos entrega','X:\\FORMATOS\\Formatos de entrega'],
+          ['Instalación Biable','X:\\INSTALACION BIABLE 2026'],
+          ['ERP SBS SIESA','X:\\PROYECTO ERP SBS SIESA'],
+          ['Red completa','\\\\\\\\172.100.100.11\\\\ilumax-data\\\\USUARIO (X:)'],
+        ].map(([n,r])=>`
+          <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:5px;">
+            <span style="color:#94a3b8;font-size:10px;width:100px;flex-shrink:0;margin-top:1px;">${n}</span>
+            <code style="color:#f5c518;font-size:10px;font-family:monospace;">${r}</code>
+          </div>`).join('')}
+      </div>
+    </div>
+
+  </div>`;
+}
+
+function ctToggleBriefing(id) {
+  const body = document.getElementById('body-'+id);
+  const arr  = document.getElementById('arr-'+id);
+  if(!body) return;
+  const abierto = body.style.display !== 'none';
+  body.style.display = abierto ? 'none' : 'block';
+  if(arr) arr.textContent = abierto ? '▼' : '▲';
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 📊 REPORTE DE VENTAS DIARIO — Automático desde Excel Siesa
+// ══════════════════════════════════════════════════════════════════════
+var RV = {
+  datos:[], td:{}, consolidado:{}, recaudo:[], semana:[], pptoCanal:{},
+  fechas:[], cargado:false, tabActivo:'resumen',
+  destinatarios: 'vend.multicanal@ilumax.com.co',
+  asunto: 'Reporte de ventas por vendedor y canal',
+  configCargada: false,
+  origenArchivo: '', autoIntentado:false, historial:[]
+};
+
+// Cargar config de correo guardada en Supabase
+async function rvCargarConfig() {
+  if(RV.configCargada) return;
+  try {
+    const rows = await sb.get('configuracion','clave=like.rv_%');
+    (rows||[]).forEach(r => {
+      if(r.clave==='rv_destinatarios' && r.valor) RV.destinatarios = r.valor;
+      if(r.clave==='rv_asunto'        && r.valor) RV.asunto        = r.valor;
+    });
+    RV.configCargada = true;
+  } catch(e){ console.warn('Config RV:', e.message); }
+}
+
+// ── Helpers de formato ────────────────────────────────────────────────
+const rvFmt  = n => n ? '$'+Math.round(n).toLocaleString('es-CO') : '—';
+const rvFmtM = n => n ? '$'+(Math.abs(n)/1e6).toFixed(1)+'M' : '—';
+const rvPct  = p => (p*100).toFixed(1)+'%';
+const rvFecha = n => { const d=new Date(1899,11,30); d.setDate(d.getDate()+n); return d; };
+const rvFmtD = d => d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'});
+const CCTAG = {'ESPECIALIZADO':'#1e40af','CANAL MIXTO':'#15803d','PROYECTOS':'#b45309','ONLINE':'#7e22ce','DISTRIBUIDOR':'#0369a1','CANAL HOMECENTER':'#c2410c','HARD DISCOUNT':'#c2410c','CANAL MODERNO':'#be185d','INSTITUCIONAL':'#b45309'};
+
+function renderReporteVentas() {
+  const el = document.getElementById('rv-content');
+  if(!el) return;
+  // Cargar config guardada primero
+  rvCargarConfig().then(() => {
+    // Actualizar textarea si el modal ya existe
+    const ta = document.getElementById('rv-destinatarios');
+    if(ta) ta.value = RV.destinatarios;
+    const asi = document.getElementById('rv-asunto');
+    if(asi) asi.value = RV.asunto;
+  });
+  el.innerHTML = `
+  <div style="padding:14px;">
+    <!-- HEADER -->
+    <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:14px;padding:16px 18px;margin-bottom:14px;color:#fff;">
+      <div style="font-size:10px;color:rgba(255,255,255,.5);font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;">📊 Reporte de Ventas Diario — ILUMAX</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <div>
+          <div id="rv-hdr-fecha" style="font-size:18px;font-weight:800;color:#f5c518;">Sin archivo cargado</div>
+          <div id="rv-hdr-info" style="font-size:11px;color:rgba(255,255,255,.5);margin-top:2px;">Carga el Excel de Siesa para generar el reporte</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-bl btn-sm" onclick="rvAbrirArchivo()">📂 Cargar Excel</button>
+          <button class="btn btn-gr btn-sm" id="rv-btn-enviar" style="display:none;" onclick="rvEnviarCorreo()">📧 Enviar</button>
+          <button class="btn btn-bl btn-sm" id="rv-btn-descargar" style="display:none;" onclick="rvDescargarReporte()">⬇️ Descargar</button>
+          <button class="btn btn-g btn-sm" id="rv-btn-config" onclick="rvConfigCorreo()">⚙️ Config correo</button>
+        </div>
+      </div>
+      <input type="file" id="rv-file-input" accept=".xlsx,.xls" style="display:none;" onchange="rvCargarArchivo(this.files[0])">
+      <!-- KPIs cuando hay datos -->
+      <div id="rv-kpis-hdr" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-top:14px;"></div>
+    </div>
+
+    <!-- ZONA DROP cuando no hay datos -->
+    <div id="rv-dropzone" style="background:var(--w);border:2px dashed var(--b1);border-radius:14px;padding:40px 20px;text-align:center;cursor:pointer;margin-bottom:14px;"
+      ondragover="event.preventDefault()" ondrop="rvDrop(event)" onclick="rvAbrirArchivo()">
+      <div style="font-size:40px;margin-bottom:10px;">📊</div>
+      <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:4px;">Arrastra el Excel de ventas aquí</div>
+      <div style="font-size:12px;color:var(--mu);">O haz clic para seleccionar · Formato: Excel diario de Siesa (.xlsx)</div>
+    </div>
+
+    <!-- CONTENIDO del reporte -->
+    <div id="rv-reporte" style="display:none;">
+
+      <!-- TABS internos -->
+      <div style="display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap;">
+        <button id="rv-tab-resumen"      class="flt on" onclick="rvTab('resumen')"      style="font-size:11px;padding:6px 12px;">📊 Resumen</button>
+        <button id="rv-tab-cumplimiento" class="flt"    onclick="rvTab('cumplimiento')" style="font-size:11px;padding:6px 12px;">🎯 Cumplimiento</button>
+        <button id="rv-tab-ejecutivos"   class="flt"    onclick="rvTab('ejecutivos')"   style="font-size:11px;padding:6px 12px;">👤 Ejecutivos</button>
+        <button id="rv-tab-canales"      class="flt"    onclick="rvTab('canales')"      style="font-size:11px;padding:6px 12px;">📦 Canales</button>
+        <button id="rv-tab-semana"       class="flt"    onclick="rvTab('semana')"       style="font-size:11px;padding:6px 12px;">📅 Semana</button>
+        <button id="rv-tab-recaudo"      class="flt"    onclick="rvTab('recaudo')"      style="font-size:11px;padding:6px 12px;">💰 Recaudo</button>
+        <button id="rv-tab-detalle"      class="flt"    onclick="rvTab('detalle')"      style="font-size:11px;padding:6px 12px;">🔍 Detalle</button>
+      </div>
+
+      <!-- Contenido de cada tab -->
+      <div id="rv-tab-content-resumen"></div>
+      <div id="rv-tab-content-cumplimiento" style="display:none;"></div>
+      <div id="rv-tab-content-ejecutivos"   style="display:none;"></div>
+      <div id="rv-tab-content-canales"      style="display:none;"></div>
+      <div id="rv-tab-content-semana"       style="display:none;"></div>
+      <div id="rv-tab-content-recaudo"      style="display:none;"></div>
+      <div id="rv-tab-content-detalle"      style="display:none;"></div>
+
+    </div>
+
+    <!-- MODAL config correo -->
+    <div id="rv-modal-correo" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center;">
+      <div style="background:var(--w);border-radius:16px;padding:24px;width:94%;max-width:480px;box-shadow:0 24px 64px rgba(0,0,0,.3);">
+        <div style="font-size:15px;font-weight:800;margin-bottom:14px;">⚙️ Configuración de envío</div>
+        <div class="fg"><label class="fl">Destinatarios (separados por coma)</label>
+          <textarea class="inp" id="rv-destinatarios" rows="3" placeholder="correo1@ilumax.com.co, correo2@ilumax.com.co">${RV.destinatarios}</textarea></div>
+        <div class="fg"><label class="fl">Asunto del correo</label>
+          <input class="inp" id="rv-asunto" value="${RV.asunto}"></div>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;font-size:11px;color:#166534;margin-bottom:14px;line-height:1.6;">
+          📧 El reporte se envía como HTML embebido en el correo — los destinatarios lo ven directamente sin necesidad de descargar archivos.
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn btn-g btn-sm" onclick="rvCerrarModal()">Cancelar</button>
+          <button class="btn btn-bl btn-sm" onclick="rvGuardarConfig()">💾 Guardar</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+
+  // Auto-cargar el último reporte guardado en Supabase (si nadie ha cargado Excel en esta sesión aún)
+  if(!RV.cargado && !RV.autoIntentado) {
+    RV.autoIntentado = true;
+    const dz = document.getElementById('rv-dropzone');
+    if(dz) dz.innerHTML = '<div style="padding:20px;text-align:center;color:var(--mu);">⏳ Buscando el último reporte guardado...</div>';
+    rvCargarUltimoSnapshot().then(ok => {
+      if(ok) { rvActivarUI(); toast('☁️ Reporte cargado desde Supabase','ok'); }
+      else if(dz) dz.innerHTML = `
+        <div style="font-size:40px;margin-bottom:10px;">📊</div>
+        <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:4px;">Arrastra el Excel de ventas aquí</div>
+        <div style="font-size:12px;color:var(--mu);">O haz clic para seleccionar · Formato: Excel diario de Siesa (.xlsx)</div>`;
+    });
+  } else if(RV.cargado) {
+    rvActivarUI();
+  }
+}
+
+// ── Drag & drop ───────────────────────────────────────────────────────
+function rvDrop(e) {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if(file) rvCargarArchivo(file);
+}
+function rvAbrirArchivo() {
+  document.getElementById('rv-file-input')?.click();
+}
+
+// ── Carga del Excel ───────────────────────────────────────────────────
+function rvCargarArchivo(file) {
+  if(!file) return;
+  const dropzone = document.getElementById('rv-dropzone');
+  if(dropzone) dropzone.innerHTML = '<div style="padding:20px;text-align:center;color:var(--mu);">⏳ Procesando Excel...</div>';
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const wb = XLSX.read(e.target.result, {type:'array'});
+
+      // Hoja Datos
+      const wsDatos = wb.Sheets['Datos'];
+      if(wsDatos) {
+        const raw = XLSX.utils.sheet_to_json(wsDatos, {header:1, defval:''});
+        const hdr = raw[0];
+        RV.datos = raw.slice(1).filter(r=>r[0]).map(r => {
+          const o={}; hdr.forEach((h,i)=>o[h]=r[i]); return o;
+        });
+        RV.fechas = [...new Set(RV.datos.map(r=>r.Fecha))].sort();
+      }
+
+      // Hoja TD
+      const wsTD = wb.Sheets['TD'];
+      if(wsTD) RV.td = rvParseTD(XLSX.utils.sheet_to_json(wsTD,{header:1,defval:''}));
+
+      // Hoja CONSOLIDADO
+      const wsC = wb.Sheets['CONSOLIDADO'];
+      if(wsC) RV.consolidado = rvParseConsolidado(XLSX.utils.sheet_to_json(wsC,{header:1,defval:''}));
+
+      // Hoja Recaudo
+      const wsR = wb.Sheets['Recaudo'];
+      if(wsR) RV.recaudo = XLSX.utils.sheet_to_json(wsR,{header:1,defval:''});
+
+      // Hoja Semana
+      const wsS = wb.Sheets['EJECUTIVOS - PRONÓSTICO SEMANAL'];
+      if(wsS) RV.semana = XLSX.utils.sheet_to_json(wsS,{header:1,defval:''});
+
+      RV.cargado = true;
+      RV.origenArchivo = file.name;
+      rvActivarUI();
+
+      toast('✅ Excel cargado correctamente','ok');
+      rvGuardarSnapshot();
+    } catch(err) {
+      console.error(err);
+      if(dropzone) dropzone.innerHTML = '<div style="padding:20px;text-align:center;color:var(--rd);">❌ Error al leer el archivo: '+err.message+'</div>';
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// ── Parseo ────────────────────────────────────────────────────────────
+function rvParseTD(raw) {
+  const acum={}, dia={};
+  let en=false;
+  for(const row of raw) {
+    const lbl=String(row[0]||'').trim(), val=parseFloat(row[1])||0;
+    const lblD=String(row[4]||'').trim(), valD=parseFloat(row[5])||0;
+    if(lbl==='Vendedor y canal'){en=true;continue;}
+    if(!en) continue;
+    if(lbl==='Total general') break;
+    if(lbl && val) acum[lbl]=(acum[lbl]||0)+val;
+    if(lblD && valD) dia[lblD]=(dia[lblD]||0)+valD;
+  }
+  return {acum, dia};
+}
+
+function rvParseConsolidado(raw) {
+  const r={};
+  for(let i=3;i<raw.length;i++){
+    const row=raw[i], n=String(row[0]||'').trim();
+    if(!n||n.includes('Total')) continue;
+    r[n]={
+      pptoEsp:parseFloat(row[1])||0, ventaEsp:parseFloat(row[2])||0,
+      pptoMix:parseFloat(row[4])||0, ventaMix:parseFloat(row[5])||0,
+      pptoPro:parseFloat(row[7])||0, ventaPro:parseFloat(row[8])||0,
+      pptoOnl:parseFloat(row[10])||0,ventaOnl:parseFloat(row[11])||0,
+      ventaDis:parseFloat(row[13])||0,
+      pptoTotal:parseFloat(row[14])||0, ventaTotal:parseFloat(row[15])||0,
+    };
+  }
+  return r;
+}
+
+// ── Persistencia en Supabase (snapshot por fecha de corte) ─────────────
+function rvUltimaFechaISO() {
+  if(!RV.fechas.length) return null;
+  const d = rvFecha(RV.fechas[RV.fechas.length-1]);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
+async function rvGuardarSnapshot() {
+  const fechaISO = rvUltimaFechaISO();
+  if(!fechaISO) return;
+  const totalAcum = Object.values(RV.consolidado).reduce((a,c)=>a+(c.ventaTotal||0),0);
+  const totalPpto = Object.values(RV.consolidado).reduce((a,c)=>a+(c.pptoTotal||0),0);
+  const payload = { datos: RV.datos, td: RV.td, consolidado: RV.consolidado, recaudo: RV.recaudo, semana: RV.semana, fechas: RV.fechas };
+  try {
+    await sb.upsert('ventas_diarias_snapshots', {
+      fecha: fechaISO,
+      total_acumulado: totalAcum,
+      total_ppto: totalPpto,
+      num_transacciones: RV.datos.length,
+      payload,
+      subido_por: (typeof CU!=='undefined' && CU.email) || '',
+      actualizado: new Date().toISOString()
+    }, 'fecha');
+    toast('☁️ Reporte guardado en Supabase — visible para todos','ok');
+  } catch(e) {
+    console.warn('Error guardando snapshot RV:', e.message);
+    toast('⚠️ No se pudo guardar en Supabase: '+e.message,'err');
+  }
+}
+
+// Trae el snapshot más reciente y lo deja listo para mostrarlo (sin re-subir Excel)
+async function rvCargarUltimoSnapshot() {
+  try {
+    const rows = await sb.get('ventas_diarias_snapshots','order=fecha.desc&limit=1');
+    if(!rows || !rows[0]) return false;
+    const s = rows[0];
+    RV.datos       = s.payload.datos       || [];
+    RV.td          = s.payload.td          || {};
+    RV.consolidado = s.payload.consolidado || {};
+    RV.recaudo     = s.payload.recaudo     || [];
+    RV.semana      = s.payload.semana      || [];
+    RV.fechas      = s.payload.fechas      || [];
+    RV.cargado     = true;
+    RV.origenArchivo = '☁️ Cargado desde Supabase (subido por '+(s.subido_por||'—')+')';
+    return true;
+  } catch(e) {
+    console.warn('Error cargando snapshot RV:', e.message);
+    return false;
+  }
+}
+
+// Lista compacta de snapshots (fecha, total) para el panel de histórico/proyección
+async function rvCargarHistorialSnapshots() {
+  try {
+    RV.historial = await sb.get('ventas_diarias_snapshots','select=fecha,total_acumulado,total_ppto,num_transacciones&order=fecha.asc') || [];
+  } catch(e) { console.warn('Error historial RV:', e.message); RV.historial = []; }
+}
+
+// Refleja RV.* (ya cargado, sea por Excel o por Supabase) en el DOM
+function rvActivarUI() {
+  const ultimaFecha = RV.fechas.length ? rvFecha(RV.fechas[RV.fechas.length-1]) : new Date();
+  const hdrFecha = document.getElementById('rv-hdr-fecha');
+  const hdrInfo  = document.getElementById('rv-hdr-info');
+  if(hdrFecha) hdrFecha.textContent = 'Ventas al ' + rvFmtD(ultimaFecha);
+  if(hdrInfo)  hdrInfo.textContent  = `${RV.fechas.length} días · ${RV.datos.length} transacciones · ${RV.origenArchivo}`;
+
+  const btnEnv = document.getElementById('rv-btn-enviar');
+  if(btnEnv) btnEnv.style.display = '';
+  const btnDes = document.getElementById('rv-btn-descargar');
+  if(btnDes) btnDes.style.display = '';
+
+  const dropzone = document.getElementById('rv-dropzone');
+  if(dropzone) dropzone.style.display = 'none';
+  const rep = document.getElementById('rv-reporte');
+  if(rep) rep.style.display = '';
+
+  rvRenderKpisHdr();
+  rvTab(RV.tabActivo);
+}
+
+// ── KPIs header ───────────────────────────────────────────────────────
+function rvRenderKpisHdr() {
+  const el = document.getElementById('rv-kpis-hdr');
+  if(!el) return;
+  const totalAcum = Object.values(RV.consolidado).reduce((a,c)=>a+c.ventaTotal,0);
+  const totalDia  = Object.values(RV.td.dia||{}).reduce((a,v)=>a+v,0);
+  const totalPpto = Object.values(RV.consolidado).reduce((a,c)=>a+c.pptoTotal,0);
+  const pct = totalPpto>0 ? totalAcum/totalPpto : 0;
+
+  // Proyección a fin de mes según el ritmo actual (días de calendario transcurridos vs. días del mes)
+  const ultimaFecha = RV.fechas.length ? rvFecha(RV.fechas[RV.fechas.length-1]) : null;
+  let proyeccion = 0, pctProy = 0, diasTx = 0, diasMes = 0;
+  if(ultimaFecha && totalAcum>0) {
+    diasTx  = ultimaFecha.getDate();
+    diasMes = new Date(ultimaFecha.getFullYear(), ultimaFecha.getMonth()+1, 0).getDate();
+    proyeccion = diasTx>0 ? (totalAcum/diasTx)*diasMes : 0;
+    pctProy = totalPpto>0 ? proyeccion/totalPpto : 0;
+  }
+
+  el.innerHTML = `
+    <div><div style="font-size:20px;font-weight:800;color:#f5c518;">${rvFmtM(totalAcum)}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Venta acumulada</div></div>
+    <div><div style="font-size:20px;font-weight:800;color:#6ee7b7;">${rvFmtM(totalDia)}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Venta último día</div></div>
+    <div><div style="font-size:20px;font-weight:800;color:${pct>=1?'#6ee7b7':pct>=.7?'#fcd34d':'#fca5a5'};">${rvPct(pct)}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">% Ppto. mes</div></div>
+    <div><div style="font-size:20px;font-weight:800;color:#a5b4fc;">${RV.datos.length}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Facturas</div></div>
+    <div title="Con base en el ritmo de los ${diasTx} días transcurridos del mes, proyectado a ${diasMes} días"><div style="font-size:20px;font-weight:800;color:#fcd34d;">${rvFmtM(proyeccion)}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Proyección fin de mes${totalPpto>0?' · '+rvPct(pctProy)+' ppto':''}</div></div>`;
+}
+
+// ── TABS ──────────────────────────────────────────────────────────────
+function rvTab(tab) {
+  RV.tabActivo = tab;
+  ['resumen','cumplimiento','ejecutivos','canales','semana','recaudo','detalle'].forEach(t => {
+    const btn = document.getElementById('rv-tab-'+t);
+    const cnt = document.getElementById('rv-tab-content-'+t);
+    if(btn) btn.classList.toggle('on', t===tab);
+    if(cnt) cnt.style.display = t===tab ? '' : 'none';
+  });
+  const el = document.getElementById('rv-tab-content-'+tab);
+  if(!el || !RV.cargado) return;
+  const renders = { resumen:rvRenderResumen, cumplimiento:rvRenderCumplimiento, ejecutivos:rvRenderEjecutivos, canales:rvRenderCanales, semana:rvRenderSemana, recaudo:rvRenderRecaudo, detalle:rvRenderDetalle };
+  if(renders[tab]) renders[tab](el);
+}
+
+// ── CUMPLIMIENTO ──────────────────────────────────────────────────────
+function rvRenderCumplimiento(el) {
+  const eje       = Object.entries(RV.consolidado);
+  const totalV    = eje.reduce((a,[,c])=>a+c.ventaTotal,0);
+  const totalP    = eje.reduce((a,[,c])=>a+c.pptoTotal,0);
+  const pctGlobal = totalP>0 ? totalV/totalP : 0;
+
+  // ── Días reales con ventas ────────────────────────────────────────────
+  const ultimaFecha   = RV.fechas.length ? rvFecha(RV.fechas[RV.fechas.length-1]) : new Date();
+  const diaCorte      = ultimaFecha.getDate();
+  const diasMes       = new Date(ultimaFecha.getFullYear(), ultimaFecha.getMonth()+1, 0).getDate();
+  const diasCalRest   = diasMes - diaCorte;
+
+  // Días con al menos una factura (días hábiles reales ya transcurridos)
+  const diasConVenta  = new Set(RV.datos.map(r => r.Fecha)).size || 1;
+
+  // Proporción hábil observada y extrapolación al resto del mes
+  const propHabil     = diasConVenta / Math.max(diaCorte, 1);
+  const diasHabilRest = Math.max(1, Math.round(diasCalRest * propHabil));
+  const diasHabilMes  = diasConVenta + diasHabilRest;
+
+  // Ritmo actual (por día hábil real)
+  const ritmoActual   = totalV / diasConVenta;
+
+  // Proyección a fin de mes con ritmo actual
+  const proyeccion    = ritmoActual * diasHabilMes;
+  const pctProy       = totalP > 0 ? proyeccion / totalP : 0;
+
+  // Ppto esperado a la fecha de corte (distribuido en días hábiles)
+  const pptoXDiaHabil   = totalP / diasHabilMes;
+  const pptoAFechaCorte = pptoXDiaHabil * diasConVenta;
+  const pctVsEsperado   = pptoAFechaCorte > 0 ? totalV / pptoAFechaCorte : 0;
+
+  // Ritmo necesario para cerrar el ppto en los días hábiles restantes
+  const faltaParaMeta  = Math.max(0, totalP - totalV);
+  const ritmoNecesario = diasHabilRest > 0 ? faltaParaMeta / diasHabilRest : 0;
+  const hayQueAcelerar = ritmoNecesario > ritmoActual;
+  const factorAceler   = ritmoActual > 0 ? ritmoNecesario / ritmoActual : 0;
+
+  const gapCierre      = totalP - proyeccion; // positivo = falta, negativo = supera
+
+  // Cumplimiento por canal (sumar todos los ejecutivos)
+  const canales = {
+    ESP: { v: eje.reduce((a,[,c])=>a+c.ventaEsp,0), p: eje.reduce((a,[,c])=>a+c.pptoEsp,0), lbl:'Especializado', ico:'🔵' },
+    MIX: { v: eje.reduce((a,[,c])=>a+c.ventaMix,0), p: eje.reduce((a,[,c])=>a+c.pptoMix,0), lbl:'Canal Mixto',   ico:'🟢' },
+    PRY: { v: eje.reduce((a,[,c])=>a+c.ventaPro,0), p: eje.reduce((a,[,c])=>a+c.pptoPro,0), lbl:'Proyectos',    ico:'🟡' },
+    ONL: { v: eje.reduce((a,[,c])=>a+c.ventaOnl,0), p: eje.reduce((a,[,c])=>a+c.pptoOnl,0), lbl:'Online',       ico:'🟣' },
+  };
+
+  // Semáforo color
+  const sem = p => p >= 1 ? '#16a34a' : p >= 0.85 ? '#ca8a04' : p >= 0.7 ? '#ea580c' : '#dc2626';
+  const semBg = p => p >= 1 ? 'rgba(22,163,74,.12)' : p >= 0.85 ? 'rgba(202,138,4,.12)' : p >= 0.7 ? 'rgba(234,88,12,.12)' : 'rgba(220,38,38,.12)';
+  const semLbl = p => p >= 1 ? '✅ En meta' : p >= 0.85 ? '🟡 En riesgo leve' : p >= 0.7 ? '🟠 En riesgo' : '🔴 Por debajo';
+
+  // Ejecutivos ordenados por % cumplimiento
+  const ejeSort = [...eje].sort((a,b)=>{
+    const pa = a[1].pptoTotal>0 ? a[1].ventaTotal/a[1].pptoTotal : 0;
+    const pb = b[1].pptoTotal>0 ? b[1].ventaTotal/b[1].pptoTotal : 0;
+    return pb - pa;
+  });
+
+  el.innerHTML = `
+  <!-- ① PANEL PRINCIPAL: PROGRESO + RITMO DIARIO -->
+  <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:14px;padding:18px 20px;margin-bottom:12px;color:#fff;">
+    <div style="font-size:10px;color:rgba(255,255,255,.5);font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px;">🎯 Progreso del Mes — ${ultimaFecha.toLocaleDateString('es-CO',{month:'long',year:'numeric'})}</div>
+
+    <!-- Fila superior: % cumplimiento + venta vs ppto -->
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:8px;flex-wrap:wrap;gap:4px;">
+      <div>
+        <div style="font-size:32px;font-weight:800;color:#f5c518;">${rvPct(pctGlobal)}</div>
+        <div style="font-size:11px;color:rgba(255,255,255,.5);">cumplimiento · ${diasConVenta} días hábiles de ~${diasHabilMes} estimados en el mes</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:13px;font-weight:700;color:rgba(255,255,255,.8);">${rvFmtM(totalV)} <span style="color:rgba(255,255,255,.35);font-weight:400;">/ ${rvFmtM(totalP)}</span></div>
+        <div style="font-size:10px;color:rgba(255,255,255,.4);">acumulado / presupuesto</div>
+      </div>
+    </div>
+
+    <!-- Barra de progreso con marcador "dónde debería ir" -->
+    <div style="position:relative;height:14px;background:rgba(255,255,255,.1);border-radius:8px;overflow:visible;margin-bottom:4px;">
+      <div style="height:100%;width:${Math.min(pctGlobal*100,100).toFixed(1)}%;background:${pctGlobal>=1?'#16a34a':pctGlobal>=.85?'#ca8a04':pctGlobal>=.7?'#ea580c':'#dc2626'};border-radius:8px;"></div>
+      <!-- Línea amarilla: ritmo esperado a esta fecha según días hábiles -->
+      <div style="position:absolute;top:-5px;left:${Math.min(diasConVenta/diasHabilMes*100,99).toFixed(1)}%;width:2px;height:24px;background:#f5c518;border-radius:2px;" title="Aquí deberías ir según días hábiles (${diasConVenta}/${diasHabilMes})"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:9px;color:rgba(255,255,255,.3);margin-bottom:14px;">
+      <span>0%</span>
+      <span style="color:#f5c518;">▲ Ritmo esperado hoy (${rvPct(diasConVenta/diasHabilMes)})</span>
+      <span>100%</span>
+    </div>
+
+    <!-- ② BLOQUE RITMO DIARIO — el indicador clave -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+      <!-- Ritmo actual -->
+      <div style="background:rgba(255,255,255,.07);border-radius:12px;padding:13px 14px;">
+        <div style="font-size:9px;color:rgba(255,255,255,.45);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">📈 Ritmo actual / día hábil</div>
+        <div style="font-size:20px;font-weight:800;color:#6ee7b7;">${rvFmtM(ritmoActual)}</div>
+        <div style="font-size:9px;color:rgba(255,255,255,.4);margin-top:3px;">promedio de los ${diasConVenta} días con venta</div>
+      </div>
+      <!-- Ritmo necesario -->
+      <div style="background:${hayQueAcelerar?'rgba(220,38,38,.2)':'rgba(22,163,74,.15)'};border-radius:12px;padding:13px 14px;border:1px solid ${hayQueAcelerar?'rgba(220,38,38,.35)':'rgba(22,163,74,.3)'};">
+        <div style="font-size:9px;color:rgba(255,255,255,.45);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">🎯 Ritmo necesario / día hábil</div>
+        <div style="font-size:20px;font-weight:800;color:${hayQueAcelerar?'#fca5a5':'#6ee7b7'};">${rvFmtM(ritmoNecesario)}</div>
+        <div style="font-size:9px;color:rgba(255,255,255,.4);margin-top:3px;">para cerrar en ${diasHabilRest} días hábiles restantes</div>
+      </div>
+    </div>
+
+    <!-- KPIs de contexto -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:12px;">
+      <div style="background:rgba(255,255,255,.07);border-radius:10px;padding:10px 12px;">
+        <div style="font-size:14px;font-weight:800;color:${pctVsEsperado>=1?'#6ee7b7':pctVsEsperado>=.85?'#fcd34d':'#fca5a5'};">${rvPct(pctVsEsperado)}</div>
+        <div style="font-size:9px;color:rgba(255,255,255,.4);margin-top:2px;">vs. esperado a hoy</div>
+      </div>
+      <div style="background:rgba(255,255,255,.07);border-radius:10px;padding:10px 12px;">
+        <div style="font-size:14px;font-weight:800;color:#a5b4fc;">${rvFmtM(proyeccion)}</div>
+        <div style="font-size:9px;color:rgba(255,255,255,.4);margin-top:2px;">proyección fin de mes</div>
+      </div>
+      <div style="background:rgba(255,255,255,.07);border-radius:10px;padding:10px 12px;">
+        <div style="font-size:14px;font-weight:800;color:${gapCierre<=0?'#6ee7b7':'#fca5a5'};">${gapCierre<=0?'+':'-'}${rvFmtM(Math.abs(gapCierre))}</div>
+        <div style="font-size:9px;color:rgba(255,255,255,.4);margin-top:2px;">${gapCierre<=0?'superávit esperado':'falta proyectado'}</div>
+      </div>
+      <div style="background:rgba(255,255,255,.07);border-radius:10px;padding:10px 12px;">
+        <div style="font-size:14px;font-weight:800;color:#fcd34d;">${diasHabilRest}</div>
+        <div style="font-size:9px;color:rgba(255,255,255,.4);margin-top:2px;">días hábiles restantes</div>
+      </div>
+    </div>
+
+    <!-- Alerta dinámica -->
+    ${hayQueAcelerar && faltaParaMeta>0 ? `
+    <div style="background:rgba(220,38,38,.2);border:1px solid rgba(220,38,38,.4);border-radius:10px;padding:12px 14px;font-size:11px;color:#fca5a5;line-height:1.6;">
+      ⚠️ El ritmo actual (${rvFmtM(ritmoActual)}/día) no alcanza para cerrar el presupuesto.<br>
+      Hay que vender <strong>${rvFmtM(ritmoNecesario)}/día</strong> en los próximos ${diasHabilRest} días hábiles —
+      es decir, <strong>${factorAceler.toFixed(1)}× el ritmo actual</strong>.
+      Faltan <strong>${rvFmtM(faltaParaMeta)}</strong> para la meta del mes.
+    </div>` : totalV >= totalP ? `
+    <div style="background:rgba(22,163,74,.2);border:1px solid rgba(22,163,74,.4);border-radius:10px;padding:12px 14px;font-size:11px;color:#6ee7b7;">
+      🏆 ¡Ya se superó el presupuesto del mes! Superávit de <strong>${rvFmtM(totalV-totalP)}</strong>.
+    </div>` : `
+    <div style="background:rgba(22,163,74,.15);border:1px solid rgba(22,163,74,.3);border-radius:10px;padding:12px 14px;font-size:11px;color:#6ee7b7;line-height:1.6;">
+      ✅ Al ritmo actual se proyecta cerrar en <strong>${rvPct(pctProy)}</strong> del presupuesto.
+      Mantener <strong>${rvFmtM(ritmoActual)}/día</strong> es suficiente para llegar a la meta.
+    </div>`}
+  </div>
+
+  <!-- ③ CUMPLIMIENTO POR CANAL -->
+  <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);margin-bottom:12px;">
+    <div style="padding:12px 14px;font-size:12px;font-weight:800;border-bottom:1px solid var(--b1);">📦 Cumplimiento por Canal</div>
+    <div style="padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">
+      ${Object.entries(canales).filter(([,d])=>d.p>0||d.v>0).map(([key,d])=>{
+        const p = d.p>0 ? d.v/d.p : 0;
+        return `
+        <div style="border:1px solid var(--b1);border-radius:10px;padding:12px;background:${semBg(p)};">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-size:11px;font-weight:700;">${d.ico} ${d.lbl}</span>
+            <span style="font-size:11px;font-weight:800;color:${sem(p)};">${rvPct(p)}</span>
+          </div>
+          <div style="height:6px;background:var(--b1);border-radius:4px;overflow:hidden;margin-bottom:6px;">
+            <div style="width:${Math.min(p*100,100).toFixed(1)}%;height:100%;background:${sem(p)};border-radius:4px;"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--mu);">
+            <span>${rvFmtM(d.v)}</span><span>ppto ${rvFmtM(d.p)}</span>
+          </div>
+          <div style="font-size:9px;color:${sem(p)};font-weight:700;margin-top:4px;">${semLbl(p)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>
+
+  <!-- ④ SEMÁFORO POR EJECUTIVO -->
+  <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);">
+    <div style="padding:12px 14px;font-size:12px;font-weight:800;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center;">
+      <span>👤 Semáforo por Ejecutivo</span>
+      <span style="font-size:9px;color:var(--mu);font-weight:400;">ordenado por % cumplimiento</span>
+    </div>
+    <div style="padding:12px 14px;">
+      ${ejeSort.map(([nom,c])=>{
+        const p        = c.pptoTotal>0 ? c.ventaTotal/c.pptoTotal : 0;
+        const ritmoEje = c.ventaTotal / diasConVenta;
+        const proyEje  = ritmoEje * diasHabilMes;
+        const pProy    = c.pptoTotal>0 ? proyEje/c.pptoTotal : 0;
+        const faltaEje = Math.max(0, c.pptoTotal - c.ventaTotal);
+        const necesEje = diasHabilRest>0 ? faltaEje/diasHabilRest : 0;
+        const dif      = c.ventaTotal - c.pptoTotal;
+        return `
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--b1);">
+          <div style="width:10px;height:10px;border-radius:50%;background:${sem(p)};flex-shrink:0;box-shadow:0 0 6px ${sem(p)};"></div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${nom.split(' ').slice(0,3).join(' ')}</div>
+            <div style="display:flex;gap:8px;margin-top:3px;flex-wrap:wrap;align-items:center;">
+              <span style="font-size:9px;color:var(--mu);">Ppto ${rvFmtM(c.pptoTotal)}</span>
+              <span style="font-size:9px;color:var(--bl);font-weight:700;">Venta ${rvFmtM(c.ventaTotal)}</span>
+              <span style="font-size:9px;font-weight:700;color:${dif>=0?'var(--gr)':'var(--rd)'};">${dif>=0?'+':''}${rvFmtM(dif)}</span>
+              ${faltaEje>0?`<span style="font-size:9px;color:var(--or);">necesita ${rvFmtM(necesEje)}/día</span>`:''}
+            </div>
+            <div style="margin-top:5px;height:5px;background:var(--b1);border-radius:3px;overflow:hidden;">
+              <div style="width:${Math.min(p*100,100).toFixed(1)}%;height:100%;background:${sem(p)};border-radius:3px;"></div>
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <div style="font-size:16px;font-weight:800;color:${sem(p)};">${rvPct(p)}</div>
+            <div style="font-size:9px;color:var(--mu);">proy. ${rvPct(pProy)}</div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+// ── RESUMEN ───────────────────────────────────────────────────────────
+function rvRenderResumen(el) {
+  const acumE = Object.entries(RV.consolidado).sort((a,b)=>b[1].ventaTotal-a[1].ventaTotal);
+  const maxV  = acumE[0]?.[1]?.ventaTotal || 1;
+  const diaE  = Object.entries(RV.td.dia||{}).filter(([,v])=>v!==0).sort((a,b)=>b[1]-a[1]);
+  const ultimaFecha = RV.fechas.length ? rvFmtD(rvFecha(RV.fechas[RV.fechas.length-1])) : '';
+
+  el.innerHTML = `
+    <!-- Venta del último día -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);margin-bottom:12px;">
+      <div style="padding:12px 14px;font-size:12px;font-weight:800;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;">
+        <span>⚡ Venta del Último Día</span><span style="font-size:10px;color:var(--mu);font-weight:400;">${ultimaFecha}</span>
+      </div>
+      <div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">
+        ${diaE.length ? diaE.map(([nom,val])=>`
+          <div style="background:linear-gradient(135deg,#1e1b4b,#4c1d95);border-radius:10px;padding:12px;color:#fff;">
+            <div style="font-size:11px;font-weight:700;margin-bottom:4px;">${nom.split(' ').slice(0,2).join(' ')}</div>
+            <div style="font-size:17px;font-weight:800;color:#f5c518;">${rvFmtM(val)}</div>
+          </div>`).join('') : '<div style="color:var(--mu);font-size:12px;">Sin ventas el último día</div>'}
+      </div>
+    </div>
+    <!-- Ranking -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);">
+      <div style="padding:12px 14px;font-size:12px;font-weight:800;border-bottom:1px solid var(--b1);">🏆 Ranking Acumulado del Mes</div>
+      <div style="padding:12px 14px;">
+        ${acumE.map(([nom,c],i)=>{
+          const pct=c.pptoTotal>0?c.ventaTotal/c.pptoTotal:0;
+          const pctC=pct>=1?'var(--gr)':pct>=.7?'var(--or)':'var(--rd)';
+          const barW=Math.round(c.ventaTotal/maxV*100);
+          const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':'';
+          return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--b1);">
+            <div style="width:26px;text-align:center;font-size:${medal?'16px':'11px'};font-weight:800;color:var(--mu);flex-shrink:0;">${medal||i+1}</div>
+            <div style="flex:1;">
+              <div style="font-size:12px;font-weight:700;">${nom.split(' ').slice(0,3).join(' ')}</div>
+              <div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap;">
+                ${c.ventaEsp>0?`<span style="font-size:9px;background:#dbeafe;color:#1e40af;padding:1px 6px;border-radius:10px;font-weight:700;">ESP ${rvFmtM(c.ventaEsp)}</span>`:''}
+                ${c.ventaMix>0?`<span style="font-size:9px;background:#dcfce7;color:#15803d;padding:1px 6px;border-radius:10px;font-weight:700;">MIX ${rvFmtM(c.ventaMix)}</span>`:''}
+                ${c.ventaPro>0?`<span style="font-size:9px;background:#fef3c7;color:#b45309;padding:1px 6px;border-radius:10px;font-weight:700;">PRY ${rvFmtM(c.ventaPro)}</span>`:''}
+              </div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;">
+              <div style="font-size:13px;font-weight:800;color:var(--bl);">${rvFmtM(c.ventaTotal)}</div>
+              <div style="font-size:10px;font-weight:700;color:${pctC};">${rvPct(pct)} ppto</div>
+              <div style="width:70px;height:4px;background:var(--b1);border-radius:2px;margin-top:3px;">
+                <div style="width:${barW}%;height:100%;background:var(--bl);border-radius:2px;"></div>
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+// ── EJECUTIVOS ────────────────────────────────────────────────────────
+function rvRenderEjecutivos(el) {
+  const rows = Object.entries(RV.consolidado).sort((a,b)=>b[1].ventaTotal-a[1].ventaTotal);
+  const totV = rows.reduce((a,[,c])=>a+c.ventaTotal,0), totP=rows.reduce((a,[,c])=>a+c.pptoTotal,0);
+  el.innerHTML = `
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead><tr>
+            <th style="background:#0f172a;color:#fff;padding:9px 12px;text-align:left;position:sticky;top:0;">Ejecutivo</th>
+            <th style="background:#0f172a;color:#94a3b8;padding:9px 10px;text-align:right;position:sticky;top:0;">Ppto</th>
+            <th style="background:#0f172a;color:#f5c518;padding:9px 10px;text-align:right;position:sticky;top:0;">Venta</th>
+            <th style="background:#0f172a;color:#94a3b8;padding:9px 10px;text-align:right;position:sticky;top:0;">% Cumpl.</th>
+            <th style="background:#0f172a;color:#94a3b8;padding:9px 10px;text-align:right;position:sticky;top:0;">Diferencia</th>
+            <th style="background:#1e40af;color:#93c5fd;padding:9px 8px;text-align:right;position:sticky;top:0;">ESP</th>
+            <th style="background:#15803d;color:#86efac;padding:9px 8px;text-align:right;position:sticky;top:0;">MIX</th>
+            <th style="background:#b45309;color:#fcd34d;padding:9px 8px;text-align:right;position:sticky;top:0;">PRY</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(([nom,c],idx)=>{
+              const pct=c.pptoTotal>0?c.ventaTotal/c.pptoTotal:0;
+              const pctC=pct>=1?'var(--gr)':pct>=.7?'var(--or)':'var(--rd)';
+              const dif=c.ventaTotal-c.pptoTotal;
+              return `<tr style="border-bottom:1px solid var(--b1);background:${idx%2?'var(--bg)':''};">
+                <td style="padding:8px 12px;font-weight:700;">${nom.split(' ').slice(0,3).join(' ')}</td>
+                <td style="padding:8px 10px;text-align:right;color:var(--mu);">${rvFmtM(c.pptoTotal)}</td>
+                <td style="padding:8px 10px;text-align:right;font-weight:700;color:var(--bl);">${rvFmtM(c.ventaTotal)}</td>
+                <td style="padding:8px 10px;text-align:right;font-weight:800;color:${pctC};">${rvPct(pct)}</td>
+                <td style="padding:8px 10px;text-align:right;font-weight:700;color:${dif>=0?'var(--gr)':'var(--rd)'};">${dif>=0?'+':''}${rvFmtM(dif)}</td>
+                <td style="padding:8px 8px;text-align:right;">${c.ventaEsp?rvFmtM(c.ventaEsp):'—'}</td>
+                <td style="padding:8px 8px;text-align:right;">${c.ventaMix?rvFmtM(c.ventaMix):'—'}</td>
+                <td style="padding:8px 8px;text-align:right;">${c.ventaPro?rvFmtM(c.ventaPro):'—'}</td>
+              </tr>`;
+            }).join('')}
+            <tr style="background:#f1f5f9;border-top:2px solid var(--b1);">
+              <td style="padding:9px 12px;font-weight:800;">TOTAL</td>
+              <td style="padding:9px 10px;text-align:right;font-weight:800;">${rvFmtM(totP)}</td>
+              <td style="padding:9px 10px;text-align:right;font-weight:800;color:var(--bl);">${rvFmtM(totV)}</td>
+              <td style="padding:9px 10px;text-align:right;font-weight:800;color:${totV/totP>=1?'var(--gr)':totV/totP>=.7?'var(--or)':'var(--rd)'};">${rvPct(totV/totP)}</td>
+              <td style="padding:9px 10px;text-align:right;font-weight:800;color:${totV-totP>=0?'var(--gr)':'var(--rd)'};">${totV-totP>=0?'+':''}${rvFmtM(totV-totP)}</td>
+              <td colspan="3"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// ── CANALES ───────────────────────────────────────────────────────────
+function rvRenderCanales(el) {
+  const cmap={};
+  RV.datos.forEach(r=>{ const c=(r['Desc. tipo de cliente']||'').trim(), v=parseFloat(r['Valor subtotal local'])||0; cmap[c]=(cmap[c]||0)+v; });
+  const entries=Object.entries(cmap).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  const total=entries.reduce((a,[,v])=>a+v,0);
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px;">
+      ${entries.slice(0,4).map(([c,v])=>`<div style="background:var(--w);border-radius:10px;padding:12px;box-shadow:var(--sh);">
+        <div style="font-size:16px;font-weight:800;color:var(--bl);">${rvFmtM(v)}</div>
+        <div style="font-size:9px;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;margin-top:2px;">${c}</div>
+        <div style="font-size:10px;font-weight:700;color:var(--mu);margin-top:4px;">${(v/total*100).toFixed(1)}%</div>
+      </div>`).join('')}
+    </div>
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);padding:14px;">
+      ${entries.map(([c,v])=>{const pct=Math.round(v/total*100);return`
+        <div style="margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+            <span style="font-size:11px;font-weight:700;background:${CCTAG[c]?CCTAG[c]+'22':'#f1f5f9'};color:${CCTAG[c]||'var(--mu)'};padding:2px 8px;border-radius:10px;">${c}</span>
+            <span style="font-size:11px;font-weight:700;">${rvFmtM(v)} <span style="color:var(--mu);font-weight:400;">(${pct}%)</span></span>
+          </div>
+          <div style="height:7px;background:var(--b1);border-radius:4px;overflow:hidden;">
+            <div style="width:${pct}%;height:100%;border-radius:4px;background:${CCTAG[c]||'var(--bl)'};"></div>
+          </div>
+        </div>`;}).join('')}
+    </div>`;
+}
+
+// ── SEMANA ────────────────────────────────────────────────────────────
+function rvRenderSemana(el) {
+  // Detectar header "EJECUTIVO" en cualquier columna
+  let hdrIdx=-1, ejCol=0;
+  if(RV.semana.length) {
+    outer: for(let i=0;i<RV.semana.length;i++){
+      for(let j=0;j<RV.semana[i].length;j++){
+        if(String(RV.semana[i][j]||'').trim().toUpperCase()==='EJECUTIVO'){
+          hdrIdx=i; ejCol=j; break outer;
+        }
+      }
+    }
+  }
+
+  if(!RV.semana.length || hdrIdx<0) {
+    el.innerHTML=`
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);padding:28px 20px;text-align:center;">
+      <div style="font-size:32px;margin-bottom:10px;">📅</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Sin datos de pronóstico semanal</div>
+      <div style="font-size:11px;color:var(--mu);line-height:1.7;max-width:380px;margin:0 auto 14px;">
+        El snapshot en Supabase no incluye la hoja <strong>"EJECUTIVOS - PRONÓSTICO SEMANAL"</strong>.<br>
+        Sube un Excel que contenga esa hoja para actualizar.
+      </div>
+      <button class="btn btn-bl btn-sm" onclick="rvAbrirArchivo()">📂 Cargar Excel actualizado</button>
+    </div>`;
+    return;
+  }
+
+  const hdrRow   = RV.semana[hdrIdx];
+  const dataRows = RV.semana.slice(hdrIdx+1).filter(r => {
+    const v = String(r[ejCol]||'').trim();
+    return v && !v.toUpperCase().includes('TOTAL') && !v.toUpperCase().includes('PPTO');
+  });
+
+  // Detectar columnas de días (hasta 7 columnas después de ejCol con header)
+  const colsData = [];
+  for(let j=ejCol+1; j<hdrRow.length && colsData.length<7; j++){
+    const h = String(hdrRow[j]||'').trim();
+    if(h) colsData.push({col:j, lbl:h});
+  }
+  if(!colsData.length){
+    for(let j=ejCol+1; j<=ejCol+5; j++) colsData.push({col:j, lbl:'Día '+(j-ejCol)});
+  }
+
+  // Detectar escala (en miles o pesos completos)
+  const muestras = dataRows.flatMap(r=>colsData.map(c=>Math.abs(parseFloat(r[c.col])||0))).filter(v=>v>0);
+  const maxVal   = muestras.length ? Math.max(...muestras) : 0;
+  const escala   = (maxVal>0 && maxVal<100000) ? 1000 : 1;
+  const escLbl   = escala===1000 ? ' · cifras en miles' : '';
+
+  const tots = new Array(colsData.length).fill(0);
+
+  el.innerHTML=`
+  <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
+    <div style="padding:11px 14px;font-size:11px;font-weight:800;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;">
+      <span>📅 Pronóstico Semanal${escLbl}</span>
+      <span style="font-size:9px;color:var(--mu);font-weight:400;">${dataRows.length} ejecutivos</span>
+    </div>
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead><tr>
+          <th style="background:#0f172a;color:#fff;padding:9px 12px;text-align:left;">Ejecutivo</th>
+          ${colsData.map(c=>`<th style="background:#0f172a;color:#94a3b8;padding:9px 10px;text-align:right;white-space:nowrap;">${c.lbl}</th>`).join('')}
+          <th style="background:#0f172a;color:#f5c518;padding:9px 10px;text-align:right;">Total semana</th>
+        </tr></thead>
+        <tbody>
+          ${dataRows.map((row,idx)=>{
+            const nom  = String(row[ejCol]||'').trim();
+            const vals = colsData.map(c=>parseFloat(row[c.col])||0);
+            const tot  = vals.reduce((a,v)=>a+v,0);
+            vals.forEach((v,i)=>tots[i]+=v);
+            return `<tr style="border-bottom:1px solid var(--b1);background:${idx%2?'var(--bg)':''};">
+              <td style="padding:8px 12px;font-weight:700;">${nom.split(' ').slice(0,3).join(' ')}</td>
+              ${vals.map(v=>`<td style="padding:8px 10px;text-align:right;font-weight:${v?'700':'400'};color:${v>0?'var(--bl)':v<0?'var(--rd)':'var(--mu)'};">${v?rvFmtM(v*escala):'—'}</td>`).join('')}
+              <td style="padding:8px 10px;text-align:right;font-weight:800;">${tot?rvFmtM(tot*escala):'—'}</td>
+            </tr>`;
+          }).join('')}
+          <tr style="background:#f1f5f9;border-top:2px solid var(--b1);">
+            <td style="padding:9px 12px;font-weight:800;">TOTAL</td>
+            ${tots.map(v=>`<td style="padding:9px 10px;text-align:right;font-weight:800;color:var(--bl);">${v?rvFmtM(v*escala):'—'}</td>`).join('')}
+            <td style="padding:9px 10px;text-align:right;font-weight:800;color:var(--bl);">${rvFmtM(tots.reduce((a,v)=>a+v,0)*escala)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function rvRenderRecaudo(el) {
+  if(!RV.recaudo.length){el.innerHTML='<div style="padding:20px;color:var(--mu);">Sin datos de recaudo</div>';return;}
+  const hdrIdx=RV.recaudo.findIndex(r=>String(r[0]||'').trim()==='EJECUTIVO');
+  if(hdrIdx<0) return;
+  const dataRows=RV.recaudo.slice(hdrIdx+1).filter(r=>r[0]&&!String(r[0]).includes('PPTO')&&!String(r[0]).includes('TOTAL')&&String(r[0]).trim()!=='');
+  let totP=0,tot1=0,tot2=0,tot3=0,tot4=0,totA=0;
+  el.innerHTML=`<div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;"><div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">
+    <thead><tr>
+      <th style="background:#0f172a;color:#fff;padding:9px 12px;text-align:left;">Ejecutivo</th>
+      <th style="background:#0f172a;color:#94a3b8;padding:9px 10px;text-align:right;">Ppto Ago.</th>
+      <th style="background:#0f172a;color:#94a3b8;padding:9px 10px;text-align:right;white-space:nowrap;">S1 01–09</th>
+      <th style="background:#0f172a;color:#94a3b8;padding:9px 10px;text-align:right;white-space:nowrap;">S2 10–16</th>
+      <th style="background:#0f172a;color:#94a3b8;padding:9px 10px;text-align:right;white-space:nowrap;">S3 17–23</th>
+      <th style="background:#0f172a;color:#94a3b8;padding:9px 10px;text-align:right;white-space:nowrap;">S4 24–31</th>
+      <th style="background:#0f172a;color:#f5c518;padding:9px 10px;text-align:right;">Total</th>
+      <th style="background:#0f172a;color:#6ee7b7;padding:9px 10px;text-align:right;">% Cumpl.</th>
+    </tr></thead>
+    <tbody>
+      ${dataRows.map((row,idx)=>{
+        const nom=String(row[0]||'').trim();
+        const p=parseFloat(row[1])||0, s1=parseFloat(row[2])||0, s2=parseFloat(row[3])||0, s3=parseFloat(row[4])||0, s4=parseFloat(row[5])||0, a=parseFloat(row[6])||0, pct=parseFloat(row[7])||0;
+        totP+=p;tot1+=s1;tot2+=s2;tot3+=s3;tot4+=s4;totA+=a;
+        const pctC=pct>=1?'var(--gr)':pct>=.7?'var(--or)':'var(--rd)';
+        return `<tr style="border-bottom:1px solid var(--b1);background:${idx%2?'var(--bg)':''};">
+          <td style="padding:8px 12px;font-weight:700;">${nom.split(' ').slice(0,3).join(' ')}</td>
+          <td style="padding:8px 10px;text-align:right;color:var(--mu);">${rvFmtM(p)}</td>
+          <td style="padding:8px 10px;text-align:right;">${rvFmtM(s1)}</td>
+          <td style="padding:8px 10px;text-align:right;">${rvFmtM(s2)}</td>
+          <td style="padding:8px 10px;text-align:right;">${rvFmtM(s3)}</td>
+          <td style="padding:8px 10px;text-align:right;">${rvFmtM(s4)}</td>
+          <td style="padding:8px 10px;text-align:right;font-weight:800;">${rvFmtM(a)}</td>
+          <td style="padding:8px 10px;text-align:right;font-weight:800;color:${pctC};">${rvPct(pct)}</td>
+        </tr>`;
+      }).join('')}
+      <tr style="background:#f1f5f9;border-top:2px solid var(--b1);">
+        <td style="padding:9px 12px;font-weight:800;">TOTAL</td>
+        <td style="padding:9px 10px;text-align:right;font-weight:800;">${rvFmtM(totP)}</td>
+        <td style="padding:9px 10px;text-align:right;font-weight:800;">${rvFmtM(tot1)}</td>
+        <td style="padding:9px 10px;text-align:right;font-weight:800;">${rvFmtM(tot2)}</td>
+        <td style="padding:9px 10px;text-align:right;font-weight:800;">${rvFmtM(tot3)}</td>
+        <td style="padding:9px 10px;text-align:right;font-weight:800;">${rvFmtM(tot4)}</td>
+        <td style="padding:9px 10px;text-align:right;font-weight:800;color:var(--bl);">${rvFmtM(totA)}</td>
+        <td style="padding:9px 10px;text-align:right;font-weight:800;color:${totA/totP>=1?'var(--gr)':totA/totP>=.7?'var(--or)':'var(--rd)'};">${rvPct(totA/totP)}</td>
+      </tr>
+    </tbody>
+  </table></div></div>`;
+}
+
+// ── DETALLE ───────────────────────────────────────────────────────────
+function rvRenderDetalle(el) {
+  el.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+      <input id="rv-busq" class="inp" placeholder="🔍 Buscar cliente o vendedor..." style="flex:1;min-width:180px;border-radius:22px;font-size:12px;" oninput="rvFiltrar()" autocomplete="off">
+      <select id="rv-fil-canal" class="inp" style="width:auto;font-size:12px;" onchange="rvFiltrar()">
+        <option value="">Todos los canales</option>
+        ${[...new Set(RV.datos.map(r=>(r['Desc. tipo de cliente']||'').trim()))].filter(Boolean).sort().map(c=>`<option>${c}</option>`).join('')}
+      </select>
+      <select id="rv-fil-desde" class="inp" style="width:auto;font-size:12px;" onchange="rvFiltrar()">
+        <option value="">Desde el inicio</option>
+        ${[...new Set(RV.datos.map(r=>r.Fecha))].sort().map(f=>`<option value="${f}">Desde ${rvFmtD(rvFecha(f))}</option>`).join('')}
+      </select>
+      <select id="rv-fil-hasta" class="inp" style="width:auto;font-size:12px;" onchange="rvFiltrar()">
+        <option value="">Hasta el final</option>
+        ${[...new Set(RV.datos.map(r=>r.Fecha))].sort().map(f=>`<option value="${f}">Hasta ${rvFmtD(rvFecha(f))}</option>`).join('')}
+      </select>
+      <span id="rv-cnt" style="font-size:11px;color:var(--mu);align-self:center;"></span>
+    </div>
+    <div id="rv-tot-rango" style="font-size:11px;color:var(--mu);margin-bottom:8px;"></div>
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
+      <div style="overflow-x:auto;max-height:55vh;overflow-y:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;" id="rv-tabla-det">
+          <thead><tr>
+            <th style="background:#0f172a;color:#fff;padding:8px 10px;text-align:left;position:sticky;top:0;">Fecha</th>
+            <th style="background:#0f172a;color:#fff;padding:8px 10px;text-align:left;position:sticky;top:0;">Doc.</th>
+            <th style="background:#0f172a;color:#fff;padding:8px 10px;text-align:left;position:sticky;top:0;">Canal</th>
+            <th style="background:#0f172a;color:#fff;padding:8px 10px;text-align:left;position:sticky;top:0;">Cliente</th>
+            <th style="background:#0f172a;color:#fff;padding:8px 10px;text-align:left;position:sticky;top:0;">Vendedor</th>
+            <th style="background:#0f172a;color:#94a3b8;padding:8px 10px;text-align:right;position:sticky;top:0;">Subtotal</th>
+          </tr></thead>
+          <tbody id="rv-tbody-det"></tbody>
+        </table>
+      </div>
+    </div>`;
+  rvFiltrar();
+}
+
+function rvFiltrar() {
+  const q    = (document.getElementById('rv-busq')?.value||'').toLowerCase();
+  const canal = document.getElementById('rv-fil-canal')?.value||'';
+  const desde = document.getElementById('rv-fil-desde')?.value||'';
+  const hasta = document.getElementById('rv-fil-hasta')?.value||'';
+  const items = RV.datos.filter(r => {
+    const okQ = !q || (r['Razon social cliente factura']||'').toLowerCase().includes(q) || (r['Nombre vendedor']||'').toLowerCase().includes(q);
+    const okC = !canal || (r['Desc. tipo de cliente']||'').trim()===canal;
+    const okD = !desde || r.Fecha>=desde;
+    const okH = !hasta || r.Fecha<=hasta;
+    return okQ && okC && okD && okH;
+  });
+  const cnt = document.getElementById('rv-cnt');
+  if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' registros' + (items.length>500?' (500 mostrados)':'');
+  const totRango = document.getElementById('rv-tot-rango');
+  if(totRango) {
+    const suma = items.reduce((a,r)=>a+(parseFloat(r['Valor subtotal local'])||0),0);
+    totRango.textContent = (desde||hasta) ? `Total del rango filtrado: ${rvFmt(suma)}` : '';
+  }
+  const tbody = document.getElementById('rv-tbody-det');
+  if(!tbody) return;
+  tbody.innerHTML = items.slice(0,500).map((r,idx) => {
+    const v=parseFloat(r['Valor subtotal local'])||0;
+    const c=(r['Desc. tipo de cliente']||'').trim();
+    return `<tr style="border-bottom:1px solid var(--b1);background:${idx%2?'var(--bg)':''};">
+      <td style="padding:7px 10px;font-size:10px;white-space:nowrap;">${r.Fecha?rvFmtD(rvFecha(r.Fecha)):''}</td>
+      <td style="padding:7px 10px;font-family:monospace;font-size:9px;color:var(--mu);">${r['Nro documento']||''}</td>
+      <td style="padding:7px 10px;"><span style="font-size:9px;background:${CCTAG[c]?CCTAG[c]+'22':'#f1f5f9'};color:${CCTAG[c]||'var(--mu)'};padding:2px 6px;border-radius:8px;font-weight:700;">${c}</span></td>
+      <td style="padding:7px 10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;" title="${r['Razon social cliente factura']||''}">${(r['Razon social cliente factura']||'').substring(0,30)}</td>
+      <td style="padding:7px 10px;font-size:10px;">${(r['Nombre vendedor']||'').split(' ').slice(0,2).join(' ')}</td>
+      <td style="padding:7px 10px;text-align:right;font-weight:700;color:${v<0?'var(--rd)':'var(--tx)'};">${rvFmtM(v)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── ENVÍO DE CORREO ───────────────────────────────────────────────────
+function rvConfigCorreo() {
+  const m = document.getElementById('rv-modal-correo');
+  if(m) m.style.display='flex';
+}
+function rvCerrarModal() {
+  const m = document.getElementById('rv-modal-correo');
+  if(m) m.style.display='none';
+}
+async function rvGuardarConfig() {
+  const dest = (document.getElementById('rv-destinatarios')?.value||'').trim();
+  const asu  = (document.getElementById('rv-asunto')?.value||'').trim();
+  if(!dest) { toast('⚠️ Ingresa al menos un destinatario','wa'); return; }
+  // Bloquear botón mientras guarda
+  const btn = document.querySelector('#rv-modal-correo .btn-bl');
+  if(btn){ btn.textContent='⏳ Guardando...'; btn.disabled=true; }
+  try {
+    await sb.upsert('configuracion',[
+      {clave:'rv_destinatarios', valor:dest, tipo:'texto'},
+      {clave:'rv_asunto',        valor:asu,  tipo:'texto'},
+    ],'clave');
+    RV.destinatarios = dest;
+    RV.asunto        = asu;
+    rvCerrarModal();
+    toast('✅ Configuración guardada en Supabase','ok');
+  } catch(e) {
+    console.error('Error guardando config RV:', e);
+    toast('❌ Error al guardar: '+e.message,'er');
+    if(btn){ btn.textContent='💾 Guardar'; btn.disabled=false; }
+  }
+}
+
+async function rvEnviarCorreo() {
+  if(!RV.cargado){ toast('Primero carga el Excel','err'); return; }
+  const btn = document.getElementById('rv-btn-enviar');
+  if(btn){ btn.textContent='⏳ Enviando...'; btn.disabled=true; }
+
+  const ultimaFecha = RV.fechas.length ? rvFmtD(rvFecha(RV.fechas[RV.fechas.length-1])) : new Date().toLocaleDateString('es-CO');
+  const asunto      = `${RV.asunto} - ${ultimaFecha}`;
+  const htmlReporte = rvGenerarHTMLEmail();
+
+  // Guardar en Supabase
+  try {
+    await sb.post('emails_pendientes', {
+      para: RV.destinatarios, asunto, cuerpo_html: htmlReporte, enviado: false, intentos: 0
+    });
+  } catch(e){ console.warn('BD email:', e.message); }
+
+  // Intentar envío vía Apps Script Web App si está configurado
+  const appsScriptUrl = await rvGetAppsScriptUrl();
+
+  if(appsScriptUrl) {
+    try {
+      const res = await fetch(appsScriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          para:    RV.destinatarios,
+          asunto:  asunto,
+          html:    htmlReporte,
+          desde:   CU.email
+        })
+      });
+      const data = await res.json();
+      if(data.ok) {
+        toast('✅ Reporte HTML enviado a ' + RV.destinatarios, 'ok');
+        if(btn){ btn.textContent='📧 Enviar Reporte'; btn.disabled=false; }
+        return;
+      }
+    } catch(e){ console.warn('Apps Script:', e.message); }
+  }
+
+  // Sin Apps Script → mostrar modal para configurarlo o elegir app
+  if(btn){ btn.textContent='📧 Enviar Reporte'; btn.disabled=false; }
+  rvMostrarModalEnvio(asunto, htmlReporte);
+}
+
+async function rvGetAppsScriptUrl() {
+  try {
+    const rows = await sb.get('configuracion','clave=eq.rv_apps_script_url');
+    return rows?.[0]?.valor || '';
+  } catch(e){ return ''; }
+}
+
+function rvMostrarModalEnvio(asunto, html) {
+  const modal = document.getElementById('rv-modal-correo');
+  const body  = modal?.querySelector('div');
+  if(!body) return;
+
+  // Generar blob URL del HTML completo del reporte
+  const blob    = new Blob([html], {type:'text/html;charset=utf-8'});
+  const blobUrl = URL.createObjectURL(blob);
+  const fileName = `Reporte_Ventas_ILUMAX_${new Date().toISOString().split('T')[0]}.html`;
+
+  body.innerHTML = `
+    <div style="font-size:15px;font-weight:800;margin-bottom:14px;">📧 Compartir reporte HTML</div>
+
+    <!-- OPCIÓN PRINCIPAL: Descargar y adjuntar -->
+    <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:12px;padding:16px;margin-bottom:14px;color:#fff;">
+      <div style="font-size:12px;font-weight:800;color:#f5c518;margin-bottom:6px;">⭐ Reporte completo — como se ve en el ERP</div>
+      <div style="font-size:11px;color:rgba(255,255,255,.7);margin-bottom:12px;line-height:1.6;">
+        Descarga el reporte completo — venta del día, ejecutivos, canales y semana. Al abrirlo se ve exactamente igual que en el ERP con tablas, colores y datos interactivos.
+      </div>
+      <a href="${blobUrl}" download="${fileName}"
+        style="display:flex;align-items:center;justify-content:center;gap:8px;background:#f5c518;color:#0f172a;border-radius:8px;padding:14px;text-decoration:none;font-size:14px;font-weight:800;margin-bottom:8px;">
+        ⬇️ Descargar reporte completo
+      </a>
+      <div style="font-size:10px;color:rgba(255,255,255,.5);text-align:center;">Ábrelo en el navegador · compártelo por WhatsApp o adjúntalo al correo</div>
+    </div>
+
+    <!-- OPCIÓN 2: Abrir en nueva pestaña para compartir -->
+    <div style="background:#f8fafc;border:1px solid var(--b1);border-radius:12px;padding:14px;margin-bottom:14px;">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px;">🌐 Ver reporte en pantalla completa</div>
+      <div style="font-size:11px;color:var(--mu);margin-bottom:10px;">Abre el reporte como página web completa — puedes hacer captura de pantalla o compartir la pestaña.</div>
+      <a href="${blobUrl}" target="_blank"
+        style="display:flex;align-items:center;justify-content:center;gap:8px;background:var(--bl);color:#fff;border-radius:8px;padding:10px;text-decoration:none;font-size:12px;font-weight:700;">
+        🔍 Abrir reporte completo
+      </a>
+    </div>
+
+    <!-- OPCIÓN 3: Abrir app de correo -->
+    <div style="margin-bottom:14px;">
+      <button onclick="rvAbrirGmail('${encodeURIComponent(asunto)}','${encodeURIComponent(RV.destinatarios)}')"
+        style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:#0f172a;border:none;border-radius:10px;padding:13px;font-size:13px;font-weight:800;color:#fff;cursor:pointer;">
+        ✉️ Abrir app de correo del celular
+      </button>
+      <div style="font-size:10px;color:var(--mu);text-align:center;margin-top:5px;">Abre Gmail, Outlook o la app que tengas configurada</div>
+    </div>
+
+    <!-- Apps Script si quiere configurarlo -->
+    <details>
+      <summary style="font-size:11px;color:var(--bl);cursor:pointer;padding:4px 0;font-weight:600;">⚡ Configurar envío automático con HTML (Apps Script)</summary>
+      <div style="margin-top:10px;background:#f0fdf4;border-radius:8px;padding:12px;font-size:11px;color:#166534;line-height:1.7;">
+        <strong>Una vez configurado, el HTML se envía automáticamente sin pasos manuales.</strong><br><br>
+        1. Ve a <strong>script.google.com</strong> → Nuevo proyecto<br>
+        2. Pega este código:
+        <div style="background:#0f172a;border-radius:6px;padding:8px;font-family:monospace;font-size:9px;color:#f5c518;margin:8px 0;line-height:1.6;overflow-x:auto;white-space:pre;">function doPost(e) {
+  const d = JSON.parse(e.postData.contents);
+  d.para.split(',').forEach(dest => {
+    GmailApp.sendEmail(dest.trim(), d.asunto, '', {
+      htmlBody: d.html,
+      name: 'ILUMAX — Reporte de Ventas',
+      replyTo: d.desde
+    });
+  });
+  return ContentService
+    .createTextOutput(JSON.stringify({ok:true}))
+    .setMimeType(ContentService.MimeType.JSON);
+}</div>
+        3. <strong>Implementar → Aplicación web</strong> · Ejecutar como: Yo · Acceso: Cualquier usuario<br>
+        4. Pega la URL aquí:
+        <input class="inp" id="rv-apps-script-url" placeholder="https://script.google.com/macros/s/.../exec" style="margin-top:8px;" autocomplete="off">
+        <button class="btn btn-gr btn-sm" style="margin-top:8px;width:100%;" onclick="rvGuardarAppsScript('${asunto.replace(/'/g,"\\'")}')">💾 Guardar y activar envío automático</button>
+      </div>
+    </details>
+
+    <!-- Config -->
+    <details style="margin-top:8px;">
+      <summary style="font-size:11px;color:var(--mu);cursor:pointer;padding:4px 0;">⚙️ Cambiar destinatarios</summary>
+      <div style="margin-top:8px;">
+        <textarea class="inp" id="rv-destinatarios" rows="2" style="margin-bottom:6px;">${RV.destinatarios}</textarea>
+        <input class="inp" id="rv-asunto" value="${RV.asunto}" style="margin-bottom:6px;">
+        <button class="btn btn-bl btn-sm" onclick="rvGuardarConfig()">💾 Guardar</button>
+      </div>
+    </details>
+
+    <div style="text-align:right;margin-top:12px;">
+      <button class="btn btn-g btn-sm" onclick="rvCerrarModal()">Cerrar</button>
+    </div>`;
+
+  if(modal) modal.style.display='flex';
+}
+
+function rvAbrirGmail(asuntoEnc, destsEnc) {
+  rvCerrarModal();
+  // Generar cuerpo completo en texto para el correo
+  const cuerpo = rvGenerarCuerpoTexto();
+  window.location.href = `mailto:${destsEnc}?subject=${asuntoEnc}&body=${encodeURIComponent(cuerpo)}`;
+}
+
+function rvAbrirOutlook(asuntoEnc, destsEnc) {
+  rvCerrarModal();
+  const cuerpo = rvGenerarCuerpoTexto();
+  window.location.href = `mailto:${destsEnc}?subject=${asuntoEnc}&body=${encodeURIComponent(cuerpo)}`;
+}
+
+function rvGenerarCuerpoTexto() {
+  const ultimaFecha = RV.fechas.length ? rvFmtD(rvFecha(RV.fechas[RV.fechas.length-1])) : '';
+  const totalAcum = Object.values(RV.consolidado).reduce((a,c)=>a+c.ventaTotal,0);
+  const totalDia  = Object.values(RV.td.dia||{}).reduce((a,v)=>a+v,0);
+  const totalPpto = Object.values(RV.consolidado).reduce((a,c)=>a+c.pptoTotal,0);
+  const pct       = totalPpto>0 ? (totalAcum/totalPpto*100).toFixed(1) : '0';
+
+  const sep = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
+
+  const diaLineas = Object.entries(RV.td.dia||{})
+    .filter(([,v])=>v!==0).sort((a,b)=>b[1]-a[1])
+    .map(([nom,val])=>`  • ${nom.split(' ').slice(0,3).join(' ')}: ${rvFmt(val)}`).join('\n');
+
+  const acumLineas = Object.entries(RV.consolidado)
+    .sort((a,b)=>b[1].ventaTotal-a[1].ventaTotal)
+    .map(([nom,c])=>{
+      const p = c.pptoTotal>0?(c.ventaTotal/c.pptoTotal*100).toFixed(1):'0';
+      const canales = [
+        c.ventaEsp>0?`ESP:${rvFmtM(c.ventaEsp)}`:'',
+        c.ventaMix>0?`MIX:${rvFmtM(c.ventaMix)}`:'',
+        c.ventaPro>0?`PRY:${rvFmtM(c.ventaPro)}`:'',
+      ].filter(Boolean).join(' | ');
+      return `  • ${nom.split(' ').slice(0,3).join(' ')}\n    Venta: ${rvFmt(c.ventaTotal)} | Ppto: ${rvFmtM(c.pptoTotal)} | Cumpl: ${p}%${canales?'\n    '+canales:''}`;
+    }).join('\n');
+
+  return `Buen día para todos,
+
+Envío reporte de ventas actualizado hasta el ${ultimaFecha}.
+
+${sep}
+📊 RESUMEN GENERAL
+${sep}
+Venta acumulada mes : ${rvFmt(totalAcum)}
+Venta último día    : ${rvFmt(totalDia)}
+% Cumplimiento ppto : ${pct}%
+Presupuesto mes     : ${rvFmt(totalPpto)}
+
+${sep}
+⚡ VENTA DEL ÚLTIMO DÍA — ${ultimaFecha}
+${sep}
+${diaLineas||'  Sin ventas registradas'}
+
+  TOTAL: ${rvFmt(totalDia)}
+
+${sep}
+📈 ACUMULADO MES — EJECUTIVOS
+${sep}
+${acumLineas}
+
+  TOTAL: ${rvFmt(totalAcum)} de ${rvFmt(totalPpto)} ppto (${pct}% cumplimiento)
+
+${sep}
+Cordialmente,
+${CU.nombre||'Duvier Trujillo'}
+Líder Automatizaciones y Datos — ILUMAX
+${sep}`;
+}
+
+function rvAbrirGmailConInstruccion(asuntoEnc, destsEnc) {
+  const url = `https://mail.google.com/mail/?view=cm&to=${destsEnc}&su=${asuntoEnc}&body=${encodeURIComponent('Adjunto el reporte de ventas en HTML.\n\nCordialmente,\n'+( CU.nombre||'Duvier Trujillo')+'\nLíder Automatizaciones y Datos — ILUMAX')}`;
+  window.open(url, '_blank');
+}
+
+async function rvGuardarAppsScript(asunto) {
+  const url = (document.getElementById('rv-apps-script-url')?.value||'').trim();
+  if(!url || !url.includes('script.google.com')){ toast('Pega la URL del Apps Script','err'); return; }
+  try {
+    await sb.upsert('configuracion',[
+      {clave:'rv_apps_script_url', valor:url, tipo:'texto'}
+    ],'clave');
+    rvCerrarModal();
+    toast('✅ Guardado — enviando...','ok');
+    await rvEnviarCorreo();
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+function rvDescargarReporte() {
+  if(!RV.cargado){ toast('Primero carga el Excel','err'); return; }
+  const html     = rvGenerarHTMLInteractivo();
+  const fecha    = RV.fechas.length ? RV.fechas[RV.fechas.length-1] : new Date().toISOString().split('T')[0];
+  const nombre   = `Reporte_Ventas_ILUMAX_${fecha}.html`;
+  const blob     = new Blob([html], {type:'text/html;charset=utf-8'});
+  const url      = URL.createObjectURL(blob);
+  const a        = document.createElement('a');
+  a.href         = url;
+  a.download     = nombre;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('✅ Reporte descargado — ábrelo en el navegador','ok');
+}
+
+function rvGenerarHTMLEmail() {
+  // Para correo: versión simplificada compatible con clientes de email
+  return rvGenerarHTMLCompleto(true);
+}
+
+function rvGenerarHTMLCompleto(modoEmail=false) {
+  if (modoEmail) return rvGenerarHTMLEstatico();
+  return rvGenerarHTMLInteractivo();
+}
+
+// ── Versión estática (compatible con clientes de correo, sin JS) ───────
+function rvGenerarHTMLEstatico() {
+  const ultimaFecha = RV.fechas.length ? rvFmtD(rvFecha(RV.fechas[RV.fechas.length-1])) : '';
+  const totalAcum   = Object.values(RV.consolidado).reduce((a,c)=>a+c.ventaTotal,0);
+  const totalDia    = Object.values(RV.td.dia||{}).reduce((a,v)=>a+v,0);
+  const totalPpto   = Object.values(RV.consolidado).reduce((a,c)=>a+c.pptoTotal,0);
+  const pct         = totalPpto>0 ? totalAcum/totalPpto : 0;
+  const pctColor    = pct>=1?'#16a34a':pct>=.7?'#ea580c':'#dc2626';
+
+  // Venta del día
+  const diaEntries = Object.entries(RV.td.dia||{}).filter(([,v])=>v!==0).sort((a,b)=>b[1]-a[1]);
+  const diaRows = diaEntries.map(([nom,val]) =>
+    `<tr>
+      <td style="padding:10px 14px;font-weight:600;border-bottom:1px solid #e2e8f0;font-size:12px;">${nom}</td>
+      <td style="padding:10px 14px;text-align:right;font-weight:800;font-size:13px;color:${val<0?'#dc2626':'#2563eb'};border-bottom:1px solid #e2e8f0;">${rvFmt(val)}</td>
+    </tr>`).join('');
+
+  // Acumulado ejecutivos
+  const acumEntries = Object.entries(RV.consolidado).sort((a,b)=>b[1].ventaTotal-a[1].ventaTotal);
+  const maxV = acumEntries[0]?.[1]?.ventaTotal || 1;
+  const acumRows = acumEntries.map(([nom,c],i) => {
+    const p   = c.pptoTotal>0 ? c.ventaTotal/c.pptoTotal : 0;
+    const pc  = p>=1?'#16a34a':p>=.7?'#ea580c':'#dc2626';
+    const bar = Math.round(c.ventaTotal/maxV*100);
+    const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':'';
+    return `<tr style="background:${i%2?'#f8fafc':'#fff'};">
+      <td style="padding:10px 14px;font-weight:700;font-size:12px;border-bottom:1px solid #f1f5f9;">
+        ${medal} ${nom.split(' ').slice(0,3).join(' ')}
+        <div style="width:${bar}%;height:3px;background:${pc};border-radius:2px;margin-top:4px;"></div>
+      </td>
+      <td style="padding:10px 10px;text-align:right;font-size:11px;color:#64748b;border-bottom:1px solid #f1f5f9;">${rvFmtM(c.pptoTotal)}</td>
+      <td style="padding:10px 10px;text-align:right;font-weight:800;font-size:12px;color:#2563eb;border-bottom:1px solid #f1f5f9;">${rvFmtM(c.ventaTotal)}</td>
+      <td style="padding:10px 10px;text-align:right;font-weight:800;font-size:12px;color:${pc};border-bottom:1px solid #f1f5f9;">${rvPct(p)}</td>
+      <td style="padding:10px 8px;text-align:right;font-size:11px;border-bottom:1px solid #f1f5f9;">${c.ventaEsp?rvFmtM(c.ventaEsp):'—'}</td>
+      <td style="padding:10px 8px;text-align:right;font-size:11px;border-bottom:1px solid #f1f5f9;">${c.ventaMix?rvFmtM(c.ventaMix):'—'}</td>
+      <td style="padding:10px 8px;text-align:right;font-size:11px;border-bottom:1px solid #f1f5f9;">${c.ventaPro?rvFmtM(c.ventaPro):'—'}</td>
+    </tr>`;
+  }).join('');
+
+  // Canales
+  const cmap = {};
+  RV.datos.forEach(r=>{ const c=(r['Desc. tipo de cliente']||'').trim(), v=parseFloat(r['Valor subtotal local'])||0; if(c) cmap[c]=(cmap[c]||0)+v; });
+  const canalEntries = Object.entries(cmap).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  const canalTotal   = canalEntries.reduce((a,[,v])=>a+v,0);
+  const CCOL = {'ESPECIALIZADO':'#1e40af','CANAL MIXTO':'#15803d','PROYECTOS':'#b45309','ONLINE':'#7e22ce','DISTRIBUIDOR':'#0369a1','CANAL HOMECENTER':'#c2410c','HARD DISCOUNT':'#c2410c','CANAL MODERNO':'#be185d'};
+  const canalRows = canalEntries.map(([c,v]) => {
+    const p = Math.round(v/canalTotal*100);
+    const col = CCOL[c]||'#475569';
+    return `<tr>
+      <td style="padding:10px 14px;font-weight:700;font-size:12px;border-bottom:1px solid #f1f5f9;">
+        <span style="background:${col}18;color:${col};padding:2px 8px;border-radius:8px;font-size:10px;font-weight:800;">${c}</span>
+      </td>
+      <td style="padding:10px 14px;text-align:right;font-weight:800;color:${col};font-size:12px;border-bottom:1px solid #f1f5f9;">${rvFmtM(v)}</td>
+      <td style="padding:10px 14px;border-bottom:1px solid #f1f5f9;min-width:120px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div style="flex:1;height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;">
+            <div style="width:${p}%;height:100%;background:${col};border-radius:3px;"></div>
+          </div>
+          <span style="font-size:10px;font-weight:700;color:#64748b;min-width:28px;">${p}%</span>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Semana
+  let semanaRows = '';
+  if(RV.semana.length) {
+    const hdrIdx = RV.semana.findIndex(r=>String(r[1]||'').trim()==='EJECUTIVO');
+    if(hdrIdx>=0) {
+      const dataRows = RV.semana.slice(hdrIdx+1).filter(r=>r[1]&&!String(r[1]).includes('Total'));
+      let tots=[0,0,0,0,0];
+      semanaRows = dataRows.map((row,idx)=>{
+        const nom=String(row[1]||'').trim();
+        const dias=[2,3,4,5,6].map(i=>parseFloat(row[i])||0);
+        const tot=dias.reduce((a,v)=>a+v,0);
+        dias.forEach((v,i)=>tots[i]+=v);
+        return `<tr style="background:${idx%2?'#f8fafc':'#fff'};">
+          <td style="padding:9px 14px;font-weight:600;font-size:12px;border-bottom:1px solid #f1f5f9;">${nom.split(' ').slice(0,3).join(' ')}</td>
+          ${dias.map(v=>`<td style="padding:9px 10px;text-align:right;font-size:11px;font-weight:${v?'700':'400'};color:${v>0?'#2563eb':v<0?'#dc2626':'#cbd5e1'};border-bottom:1px solid #f1f5f9;">${v?rvFmtM(v*1000):'—'}</td>`).join('')}
+          <td style="padding:9px 10px;text-align:right;font-weight:800;font-size:12px;border-bottom:1px solid #f1f5f9;">${rvFmtM(tot*1000)}</td>
+        </tr>`;
+      }).join('') + `<tr style="background:#f1f5f9;border-top:2px solid #e2e8f0;">
+        <td style="padding:10px 14px;font-weight:800;font-size:12px;">TOTAL</td>
+        ${tots.map(v=>`<td style="padding:10px 10px;text-align:right;font-weight:800;color:#2563eb;font-size:12px;">${rvFmtM(v*1000)}</td>`).join('')}
+        <td style="padding:10px 10px;text-align:right;font-weight:800;font-size:12px;">${rvFmtM(tots.reduce((a,v)=>a+v,0)*1000)}</td>
+      </tr>`;
+    }
+  }
+
+  const generado = new Date().toLocaleDateString('es-CO',{weekday:'long',day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'});
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Reporte de Ventas ILUMAX — ${ultimaFecha}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f1f5f9;color:#0f172a;}
+  .wrap{max-width:780px;margin:0 auto;padding:16px;}
+  .sec{background:#fff;border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);}
+  .sec-title{font-size:14px;font-weight:800;color:#0f172a;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid #f1f5f9;display:flex;align-items:center;gap:8px;}
+  table{width:100%;border-collapse:collapse;}
+  th{background:#0f172a;color:#fff;padding:9px 12px;font-size:10px;font-weight:700;text-align:right;}
+  th:first-child{text-align:left;}
+  .scroll{overflow-x:auto;}
+  @media(max-width:600px){.wrap{padding:10px;} .sec{padding:14px;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HEADER -->
+  <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:16px;padding:24px 20px;margin-bottom:16px;color:#fff;text-align:center;">
+    <div style="font-size:30px;font-weight:900;letter-spacing:-1px;margin-bottom:4px;">ILU<span style="color:#f5c518;">MAX</span></div>
+    <div style="font-size:12px;color:rgba(255,255,255,.6);">Reporte de Ventas por Vendedor y Canal</div>
+    <div style="display:inline-block;margin-top:8px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:4px 12px;font-size:10px;font-weight:700;letter-spacing:.3px;color:rgba(255,255,255,.75);">Informe Ejecutivo · Confidencial</div>
+    <div style="font-size:20px;font-weight:800;color:#f5c518;margin:10px 0;">📅 ${ultimaFecha}</div>
+    <div style="display:flex;justify-content:center;gap:20px;flex-wrap:wrap;margin-top:8px;">
+      <div><div style="font-size:22px;font-weight:800;color:#6ee7b7;">${rvFmtM(totalDia)}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Venta último día</div></div>
+      <div><div style="font-size:22px;font-weight:800;color:#f5c518;">${rvFmtM(totalAcum)}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Acumulado mes</div></div>
+      <div><div style="font-size:22px;font-weight:800;color:${pct>=1?'#6ee7b7':pct>=.7?'#fcd34d':'#fca5a5'};">${rvPct(pct)}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">% Ppto. mes</div></div>
+      <div><div style="font-size:22px;font-weight:800;color:#a5b4fc;">${RV.datos.length}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Facturas</div></div>
+    </div>
+  </div>
+
+  <!-- VENTA DEL DÍA -->
+  <div class="sec">
+    <div class="sec-title">⚡ Venta del Último Día <span style="font-size:11px;font-weight:400;color:#64748b;">${ultimaFecha}</span></div>
+    <table>
+      <thead><tr>
+        <th style="text-align:left;border-radius:6px 0 0 0;">Vendedor y canal</th>
+        <th style="border-radius:0 6px 0 0;color:#f5c518;">Subtotal</th>
+      </tr></thead>
+      <tbody>${diaRows}</tbody>
+      <tr style="background:#f8fafc;">
+        <td style="padding:10px 14px;font-weight:800;font-size:13px;">Total general</td>
+        <td style="padding:10px 14px;text-align:right;font-weight:800;font-size:14px;color:#2563eb;">${rvFmt(totalDia)}</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- EJECUTIVOS -->
+  <div class="sec">
+    <div class="sec-title">📊 Cumplimiento por Ejecutivo</div>
+    <div class="scroll">
+    <table>
+      <thead><tr>
+        <th style="text-align:left;">Ejecutivo</th>
+        <th>Ppto</th>
+        <th style="color:#f5c518;">Venta</th>
+        <th style="color:#6ee7b7;">% Cumpl.</th>
+        <th style="color:#93c5fd;">ESP</th>
+        <th style="color:#86efac;">MIX</th>
+        <th style="color:#fcd34d;">PRY</th>
+      </tr></thead>
+      <tbody>${acumRows}</tbody>
+      <tr style="background:#f1f5f9;border-top:2px solid #e2e8f0;">
+        <td style="padding:10px 14px;font-weight:800;">TOTAL GENERAL</td>
+        <td style="padding:10px 10px;text-align:right;font-weight:800;">${rvFmtM(totalPpto)}</td>
+        <td style="padding:10px 10px;text-align:right;font-weight:800;color:#2563eb;">${rvFmtM(totalAcum)}</td>
+        <td style="padding:10px 10px;text-align:right;font-weight:800;color:${pctColor};">${rvPct(pct)}</td>
+        <td colspan="3"></td>
+      </tr>
+    </table>
+    </div>
+  </div>
+
+  <!-- CANALES -->
+  <div class="sec">
+    <div class="sec-title">📦 Venta por Canal</div>
+    <table>
+      <thead><tr>
+        <th style="text-align:left;">Canal</th>
+        <th style="color:#f5c518;">Venta</th>
+        <th style="color:#94a3b8;min-width:140px;">Participación</th>
+      </tr></thead>
+      <tbody>${canalRows}</tbody>
+      <tr style="background:#f1f5f9;border-top:2px solid #e2e8f0;">
+        <td style="padding:10px 14px;font-weight:800;">TOTAL</td>
+        <td style="padding:10px 14px;text-align:right;font-weight:800;color:#2563eb;">${rvFmtM(canalTotal)}</td>
+        <td style="padding:10px 14px;text-align:right;font-weight:800;">100%</td>
+      </tr>
+    </table>
+  </div>
+
+  ${semanaRows ? `<!-- SEMANA -->
+  <div class="sec">
+    <div class="sec-title">📅 Ventas por Día — Primera Semana</div>
+    <div class="scroll">
+    <table>
+      <thead><tr>
+        <th style="text-align:left;">Ejecutivo</th>
+        <th>Día 1</th><th>Día 2</th><th>Día 3</th><th>Día 4</th><th>Día 5</th>
+        <th style="color:#f5c518;">Total S1</th>
+      </tr></thead>
+      <tbody>${semanaRows}</tbody>
+    </table>
+    </div>
+  </div>` : ''}
+
+  <!-- FOOTER -->
+  <div style="text-align:center;padding:16px;color:#94a3b8;font-size:11px;line-height:1.8;">
+    Generado automáticamente · ${generado}<br>
+    <strong style="color:#1e3a5f;">ILUMAX · Reporte de Ventas · Documento de uso interno</strong>
+  </div>
+
+</div>
+</body>
+</html>`;
+}
+
+// ── Versión interactiva (para descargar y abrir en el navegador) ───────
+function rvGenerarHTMLInteractivo() {
+  const ultimaFecha = RV.fechas.length ? rvFmtD(rvFecha(RV.fechas[RV.fechas.length-1])) : '';
+  const totalAcum   = Object.values(RV.consolidado).reduce((a,c)=>a+c.ventaTotal,0);
+  const totalDia    = Object.values(RV.td.dia||{}).reduce((a,v)=>a+v,0);
+  const totalPpto   = Object.values(RV.consolidado).reduce((a,c)=>a+c.pptoTotal,0);
+  const pct         = totalPpto>0 ? totalAcum/totalPpto : 0;
+
+  // ── Datos para las pestañas interactivas ──
+  const acumEntries = Object.entries(RV.consolidado).sort((a,b)=>b[1].ventaTotal-a[1].ventaTotal);
+  const maxV = acumEntries[0]?.[1]?.ventaTotal || 1;
+  const diaEntries = Object.entries(RV.td.dia||{}).filter(([,v])=>v!==0).sort((a,b)=>b[1]-a[1]);
+
+  const cmap = {};
+  RV.datos.forEach(r=>{ const c=(r['Desc. tipo de cliente']||'').trim(), v=parseFloat(r['Valor subtotal local'])||0; if(c) cmap[c]=(cmap[c]||0)+v; });
+  const canalEntries = Object.entries(cmap).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+
+  let semanaData = [];
+  if(RV.semana.length) {
+    const hdrIdx = RV.semana.findIndex(r=>String(r[1]||'').trim()==='EJECUTIVO');
+    if(hdrIdx>=0) {
+      const dataRows = RV.semana.slice(hdrIdx+1).filter(r=>r[1]&&!String(r[1]).includes('Total'));
+      semanaData = dataRows.map(row=>{
+        const nom = String(row[1]||'').trim();
+        const dias = [2,3,4,5,6].map(i=>parseFloat(row[i])||0);
+        return { nombre:nom, dias, total: dias.reduce((a,v)=>a+v,0) };
+      });
+    }
+  }
+
+  const detalle = RV.datos.map(r=>({
+    f: r.Fecha||0,
+    doc: r['Nro documento']||'',
+    canal: (r['Desc. tipo de cliente']||'').trim(),
+    cliente: r['Razon social cliente factura']||'',
+    vendedor: r['Nombre vendedor']||'',
+    valor: parseFloat(r['Valor subtotal local'])||0
+  }));
+
+  const payload = {
+    ejecutivos: acumEntries.map(([nom,c])=>({
+      nombre: nom, pptoTotal:c.pptoTotal, ventaTotal:c.ventaTotal,
+      ventaEsp:c.ventaEsp||0, ventaMix:c.ventaMix||0, ventaPro:c.ventaPro||0
+    })),
+    canales: canalEntries.map(([c,v])=>({canal:c, valor:v})),
+    semana: semanaData,
+    detalle
+  };
+  // Defensa: evitar que datos con backticks, comillas o etiquetas de cierre rompan el documento generado
+  const payloadJson = JSON.stringify(payload)
+    .replace(/</g,'\\u003c')
+    .replace(/`/g,'\\u0060')
+    .replace(/\$\{/g,'\\u0024{');
+
+  // ── Bloques estáticos (calculados aquí, insertados abajo) ──
+  const diaCardsHtml = diaEntries.length ? diaEntries.map(([nom,val])=>`
+    <div style="background:linear-gradient(135deg,#1e1b4b,#4c1d95);border-radius:10px;padding:12px;color:#fff;">
+      <div style="font-size:11px;font-weight:700;margin-bottom:4px;">${nom.split(' ').slice(0,2).join(' ')}</div>
+      <div style="font-size:17px;font-weight:800;color:#f5c518;">${rvFmtM(val)}</div>
+    </div>`).join('') : '<div style="color:#64748b;font-size:12px;">Sin ventas el último día</div>';
+
+  const rankingHtml = acumEntries.map(([nom,c],i)=>{
+    const p = c.pptoTotal>0 ? c.ventaTotal/c.pptoTotal : 0;
+    const pc = p>=1?'#16a34a':p>=.7?'#ea580c':'#dc2626';
+    const barW = Math.round(c.ventaTotal/maxV*100);
+    const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':'';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f1f5f9;">
+      <div style="width:26px;text-align:center;font-size:${medal?'16px':'11px'};font-weight:800;color:#64748b;flex-shrink:0;">${medal||i+1}</div>
+      <div style="flex:1;">
+        <div style="font-size:12px;font-weight:700;">${nom.split(' ').slice(0,3).join(' ')}</div>
+        <div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap;">
+          ${c.ventaEsp>0?`<span style="font-size:9px;background:#dbeafe;color:#1e40af;padding:1px 6px;border-radius:10px;font-weight:700;">ESP ${rvFmtM(c.ventaEsp)}</span>`:''}
+          ${c.ventaMix>0?`<span style="font-size:9px;background:#dcfce7;color:#15803d;padding:1px 6px;border-radius:10px;font-weight:700;">MIX ${rvFmtM(c.ventaMix)}</span>`:''}
+          ${c.ventaPro>0?`<span style="font-size:9px;background:#fef3c7;color:#b45309;padding:1px 6px;border-radius:10px;font-weight:700;">PRY ${rvFmtM(c.ventaPro)}</span>`:''}
+        </div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <div style="font-size:13px;font-weight:800;color:#2563eb;">${rvFmtM(c.ventaTotal)}</div>
+        <div style="font-size:10px;font-weight:700;color:${pc};">${rvPct(p)} ppto</div>
+        <div style="width:70px;height:4px;background:#e2e8f0;border-radius:2px;margin-top:3px;">
+          <div style="width:${barW}%;height:100%;background:#2563eb;border-radius:2px;"></div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const semanaSecHtml = semanaData.length ? `
+  <div id="panel-semana" class="rv-panel" data-panel="semana">
+    <div class="rv-card">
+      <div class="rv-card-t">📅 Ventas por Día — Primera Semana</div>
+      <div class="scroll">
+      <table>
+        <thead><tr>
+          <th style="text-align:left;">Ejecutivo</th>
+          <th>Día 1</th><th>Día 2</th><th>Día 3</th><th>Día 4</th><th>Día 5</th>
+          <th style="color:#f5c518;">Total S1</th>
+        </tr></thead>
+        <tbody>${semanaData.map((r,idx)=>`<tr style="background:${idx%2?'#f8fafc':'#fff'};">
+          <td style="padding:9px 14px;font-weight:600;font-size:12px;border-bottom:1px solid #f1f5f9;">${r.nombre.split(' ').slice(0,3).join(' ')}</td>
+          ${r.dias.map(v=>`<td style="padding:9px 10px;text-align:right;font-size:11px;font-weight:${v?'700':'400'};color:${v>0?'#2563eb':v<0?'#dc2626':'#cbd5e1'};border-bottom:1px solid #f1f5f9;">${v?rvFmtM(v*1000):'—'}</td>`).join('')}
+          <td style="padding:9px 10px;text-align:right;font-weight:800;font-size:12px;border-bottom:1px solid #f1f5f9;">${rvFmtM(r.total*1000)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+      </div>
+    </div>
+  </div>` : '';
+
+  const canalDistintos = [...new Set(RV.datos.map(r=>(r['Desc. tipo de cliente']||'').trim()))].filter(Boolean).sort();
+  const fechasDistintas = [...new Set(RV.datos.map(r=>r.Fecha))].filter(Boolean).sort();
+  const detCanalOptionsHtml = canalDistintos.map(c=>`<option>${c}</option>`).join('');
+  const detFechaOptionsHtml = fechasDistintas.map(f=>`<option value="${f}">${rvFmtD(rvFecha(f))}</option>`).join('');
+
+  const generado = new Date().toLocaleDateString('es-CO',{weekday:'long',day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  const tabsSemana = semanaData.length ? '<button class="rv-tab-btn" data-tab="semana" onclick="rvTabGo(\'semana\')">📅 Semana</button>' : '';
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Reporte de Ventas ILUMAX — ${ultimaFecha}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f1f5f9;color:#0f172a;}
+  .wrap{max-width:820px;margin:0 auto;padding:16px;}
+  .rv-card{background:#fff;border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);}
+  .rv-card-t{font-size:14px;font-weight:800;color:#0f172a;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;}
+  table{width:100%;border-collapse:collapse;}
+  th{background:#0f172a;color:#fff;padding:9px 12px;font-size:10px;font-weight:700;text-align:right;white-space:nowrap;}
+  th:first-child{text-align:left;}
+  th.sortable{cursor:pointer;user-select:none;}
+  th.sortable:hover{background:#1e293b;}
+  .scroll{overflow-x:auto;}
+  .rv-tabs{display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;padding-bottom:4px;-webkit-overflow-scrolling:touch;}
+  .rv-tab-btn{padding:9px 16px;border-radius:20px;border:1px solid #e2e8f0;background:#fff;font-size:12px;font-weight:700;color:#475569;cursor:pointer;white-space:nowrap;transition:all .15s;flex-shrink:0;}
+  .rv-tab-btn.on{background:#0f172a;color:#f5c518;border-color:#0f172a;}
+  .rv-panel{display:none;}
+  .rv-panel.on{display:block;}
+  .rv-toolbar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;}
+  .rv-inp{padding:9px 14px;border-radius:20px;border:1px solid #cbd5e1;font-size:12px;flex:1;min-width:160px;outline:none;}
+  .rv-inp:focus{border-color:#2563eb;}
+  .rv-sel{padding:9px 10px;border-radius:10px;border:1px solid #cbd5e1;font-size:12px;background:#fff;}
+  .rv-cnt{font-size:11px;color:#64748b;white-space:nowrap;}
+  .rv-btn{background:#0f172a;color:#f5c518;border:none;padding:9px 16px;border-radius:20px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;}
+  .rv-btn:hover{background:#1e293b;}
+  .rv-more{display:none;margin-top:10px;text-align:center;}
+  .rv-more button{background:#f1f5f9;color:#0f172a;border:none;padding:9px 18px;border-radius:20px;font-size:11px;font-weight:700;cursor:pointer;}
+  .rv-more button:hover{background:#e2e8f0;}
+  @media(max-width:600px){.wrap{padding:10px;} .rv-card{padding:14px;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HEADER -->
+  <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:16px;padding:24px 20px;margin-bottom:16px;color:#fff;text-align:center;">
+    <div style="font-size:30px;font-weight:900;letter-spacing:-1px;margin-bottom:4px;">ILU<span style="color:#f5c518;">MAX</span></div>
+    <div style="font-size:12px;color:rgba(255,255,255,.6);">Reporte de Ventas por Vendedor y Canal</div>
+    <div style="display:inline-block;margin-top:8px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:4px 12px;font-size:10px;font-weight:700;letter-spacing:.3px;color:rgba(255,255,255,.75);">Informe Ejecutivo · Confidencial</div>
+    <div style="font-size:20px;font-weight:800;color:#f5c518;margin:10px 0;">📅 ${ultimaFecha}</div>
+    <div style="display:flex;justify-content:center;gap:20px;flex-wrap:wrap;margin-top:8px;">
+      <div><div style="font-size:22px;font-weight:800;color:#6ee7b7;">${rvFmtM(totalDia)}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Venta último día</div></div>
+      <div><div style="font-size:22px;font-weight:800;color:#f5c518;">${rvFmtM(totalAcum)}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Acumulado mes</div></div>
+      <div><div style="font-size:22px;font-weight:800;color:${pct>=1?'#6ee7b7':pct>=.7?'#fcd34d':'#fca5a5'};">${rvPct(pct)}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">% Ppto. mes</div></div>
+      <div><div style="font-size:22px;font-weight:800;color:#a5b4fc;">${RV.datos.length}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Facturas</div></div>
+    </div>
+  </div>
+
+  <!-- TABS -->
+  <div class="rv-tabs">
+    <button class="rv-tab-btn on" data-tab="resumen" onclick="rvTabGo('resumen')">🏠 Resumen</button>
+    <button class="rv-tab-btn" data-tab="ejecutivos" onclick="rvTabGo('ejecutivos')">📊 Ejecutivos</button>
+    <button class="rv-tab-btn" data-tab="canales" onclick="rvTabGo('canales')">📦 Canales</button>
+    ${tabsSemana}
+    <button class="rv-tab-btn" data-tab="detalle" onclick="rvTabGo('detalle')">🔎 Detalle</button>
+  </div>
+
+  <!-- RESUMEN -->
+  <div id="panel-resumen" class="rv-panel on" data-panel="resumen">
+    <div class="rv-card">
+      <div class="rv-card-t"><span>⚡ Venta del Último Día</span><span style="font-size:11px;font-weight:400;color:#64748b;">${ultimaFecha}</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">${diaCardsHtml}</div>
+    </div>
+    <div class="rv-card">
+      <div class="rv-card-t">🏆 Ranking Acumulado del Mes</div>
+      <div>${rankingHtml}</div>
+    </div>
+  </div>
+
+  <!-- EJECUTIVOS -->
+  <div id="panel-ejecutivos" class="rv-panel" data-panel="ejecutivos">
+    <div class="rv-card">
+      <div class="rv-toolbar">
+        <input id="eje-busq" class="rv-inp" placeholder="🔍 Buscar ejecutivo..." oninput="ejeRender()" autocomplete="off">
+        <span id="eje-cnt" class="rv-cnt"></span>
+      </div>
+      <div class="scroll">
+      <table>
+        <thead id="eje-thead"><tr>
+          <th class="sortable" style="text-align:left;" data-key="nombre" onclick="ejeOrdenar('nombre')">Ejecutivo <span class="rv-sort-ind"></span></th>
+          <th class="sortable" data-key="pptoTotal" onclick="ejeOrdenar('pptoTotal')">Ppto <span class="rv-sort-ind"></span></th>
+          <th class="sortable" style="color:#f5c518;" data-key="ventaTotal" onclick="ejeOrdenar('ventaTotal')">Venta <span class="rv-sort-ind">▼</span></th>
+          <th class="sortable" style="color:#6ee7b7;" data-key="pct" onclick="ejeOrdenar('pct')">% Cumpl. <span class="rv-sort-ind"></span></th>
+          <th class="sortable" style="color:#93c5fd;" data-key="ventaEsp" onclick="ejeOrdenar('ventaEsp')">ESP <span class="rv-sort-ind"></span></th>
+          <th class="sortable" style="color:#86efac;" data-key="ventaMix" onclick="ejeOrdenar('ventaMix')">MIX <span class="rv-sort-ind"></span></th>
+          <th class="sortable" style="color:#fcd34d;" data-key="ventaPro" onclick="ejeOrdenar('ventaPro')">PRY <span class="rv-sort-ind"></span></th>
+        </tr></thead>
+        <tbody id="eje-tbody"></tbody>
+      </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- CANALES -->
+  <div id="panel-canales" class="rv-panel" data-panel="canales">
+    <div class="rv-card">
+      <table>
+        <thead><tr>
+          <th class="sortable" style="text-align:left;" data-key="canal" onclick="canOrdenar('canal')">Canal <span class="rv-sort-ind"></span></th>
+          <th class="sortable" style="color:#f5c518;" data-key="valor" onclick="canOrdenar('valor')">Venta <span class="rv-sort-ind">▼</span></th>
+          <th style="color:#94a3b8;min-width:140px;">Participación</th>
+        </tr></thead>
+        <tbody id="can-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  ${semanaSecHtml}
+
+  <!-- DETALLE -->
+  <div id="panel-detalle" class="rv-panel" data-panel="detalle">
+    <div class="rv-card">
+      <div class="rv-toolbar">
+        <input id="det-busq" class="rv-inp" placeholder="🔍 Buscar cliente o vendedor..." oninput="detFiltrar(true)" autocomplete="off">
+        <select id="det-canal" class="rv-sel" onchange="detFiltrar(true)">
+          <option value="">Todos los canales</option>
+          ${detCanalOptionsHtml}
+        </select>
+        <select id="det-fecha" class="rv-sel" onchange="detFiltrar(true)">
+          <option value="">Todas las fechas</option>
+          ${detFechaOptionsHtml}
+        </select>
+        <button class="rv-btn" onclick="detCSV()">⬇ Exportar CSV</button>
+      </div>
+      <div class="rv-cnt" id="det-cnt" style="margin-bottom:8px;"></div>
+      <div class="scroll" style="max-height:60vh;overflow-y:auto;">
+        <table>
+          <thead><tr>
+            <th style="text-align:left;position:sticky;top:0;">Fecha</th>
+            <th style="text-align:left;position:sticky;top:0;">Doc.</th>
+            <th style="text-align:left;position:sticky;top:0;">Canal</th>
+            <th style="text-align:left;position:sticky;top:0;">Cliente</th>
+            <th style="text-align:left;position:sticky;top:0;">Vendedor</th>
+            <th style="color:#94a3b8;position:sticky;top:0;">Subtotal</th>
+          </tr></thead>
+          <tbody id="det-tbody"></tbody>
+        </table>
+      </div>
+      <div class="rv-more" id="det-mas"><button onclick="detMas()">Cargar más registros</button></div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div style="text-align:center;padding:16px;color:#94a3b8;font-size:11px;line-height:1.8;">
+    Generado automáticamente · ${generado}<br>
+    <strong style="color:#1e3a5f;">ILUMAX · Reporte de Ventas · Documento de uso interno</strong>
+  </div>
+
+</div>
+
+<script>
+var DATA = ${payloadJson};
+
+function esc(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, function(c){
+    var m = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+    return m[c];
+  });
+}
+function fmt(n){ return n ? '$'+Math.round(n).toLocaleString('es-CO') : '—'; }
+function fmtM(n){ return n ? '$'+(Math.abs(n)/1e6).toFixed(1)+'M' : '—'; }
+function pctF(p){ return (p*100).toFixed(1)+'%'; }
+function fechaSerial(n){ var d = new Date(1899,11,30); d.setDate(d.getDate()+Number(n)); return d; }
+function fmtD(n){ if(!n) return ''; var d = fechaSerial(n); return d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}); }
+
+function rvTabGo(tab){
+  var btns = document.querySelectorAll('.rv-tab-btn');
+  for(var i=0;i<btns.length;i++){ btns[i].classList.toggle('on', btns[i].getAttribute('data-tab')===tab); }
+  var panels = document.querySelectorAll('.rv-panel');
+  for(var j=0;j<panels.length;j++){ panels[j].classList.toggle('on', panels[j].getAttribute('data-panel')===tab); }
+}
+
+// ── EJECUTIVOS ──
+var ejeSort = { key:'ventaTotal', dir:-1 };
+function ejeValor(e, key){
+  if(key==='nombre') return e.nombre;
+  if(key==='pct') return e.pptoTotal>0 ? e.ventaTotal/e.pptoTotal : 0;
+  return e[key]||0;
+}
+function ejeRender(){
+  var q = ((document.getElementById('eje-busq')||{}).value||'').toLowerCase();
+  var rows = DATA.ejecutivos.filter(function(e){ return !q || e.nombre.toLowerCase().indexOf(q)>=0; });
+  rows.sort(function(a,b){
+    var va = ejeValor(a, ejeSort.key), vb = ejeValor(b, ejeSort.key);
+    if(typeof va === 'string') return ejeSort.dir * va.localeCompare(vb);
+    return ejeSort.dir * (va - vb);
+  });
+  var maxV = 1;
+  for(var i=0;i<DATA.ejecutivos.length;i++){ if(DATA.ejecutivos[i].ventaTotal>maxV) maxV=DATA.ejecutivos[i].ventaTotal; }
+  var html = '';
+  rows.forEach(function(e, idx){
+    var p = e.pptoTotal>0 ? e.ventaTotal/e.pptoTotal : 0;
+    var pc = p>=1?'#16a34a':(p>=.7?'#ea580c':'#dc2626');
+    var bar = Math.round(e.ventaTotal/maxV*100);
+    html += '<tr style="background:'+(idx%2?'#f8fafc':'#fff')+';">'
+      + '<td style="padding:10px 14px;font-weight:700;font-size:12px;border-bottom:1px solid #f1f5f9;">'
+      +   esc(e.nombre.split(' ').slice(0,3).join(' '))
+      +   '<div style="width:'+bar+'%;height:3px;background:'+pc+';border-radius:2px;margin-top:4px;"></div></td>'
+      + '<td style="padding:10px 10px;text-align:right;font-size:11px;color:#64748b;border-bottom:1px solid #f1f5f9;">'+fmtM(e.pptoTotal)+'</td>'
+      + '<td style="padding:10px 10px;text-align:right;font-weight:800;font-size:12px;color:#2563eb;border-bottom:1px solid #f1f5f9;">'+fmtM(e.ventaTotal)+'</td>'
+      + '<td style="padding:10px 10px;text-align:right;font-weight:800;font-size:12px;color:'+pc+';border-bottom:1px solid #f1f5f9;">'+pctF(p)+'</td>'
+      + '<td style="padding:10px 8px;text-align:right;font-size:11px;border-bottom:1px solid #f1f5f9;">'+(e.ventaEsp?fmtM(e.ventaEsp):'—')+'</td>'
+      + '<td style="padding:10px 8px;text-align:right;font-size:11px;border-bottom:1px solid #f1f5f9;">'+(e.ventaMix?fmtM(e.ventaMix):'—')+'</td>'
+      + '<td style="padding:10px 8px;text-align:right;font-size:11px;border-bottom:1px solid #f1f5f9;">'+(e.ventaPro?fmtM(e.ventaPro):'—')+'</td>'
+      + '</tr>';
+  });
+  var tbody = document.getElementById('eje-tbody');
+  if(tbody) tbody.innerHTML = html || '<tr><td colspan="7" style="padding:20px;text-align:center;color:#94a3b8;">Sin resultados</td></tr>';
+  var cnt = document.getElementById('eje-cnt');
+  if(cnt) cnt.textContent = rows.length + ' de ' + DATA.ejecutivos.length + ' ejecutivos';
+}
+function ejeOrdenar(key){
+  if(ejeSort.key===key){ ejeSort.dir *= -1; } else { ejeSort.key = key; ejeSort.dir = (key==='nombre') ? 1 : -1; }
+  var ths = document.querySelectorAll('#eje-thead th[data-key]');
+  for(var i=0;i<ths.length;i++){
+    var ind = ths[i].querySelector('.rv-sort-ind');
+    if(!ind) continue;
+    ind.textContent = (ths[i].getAttribute('data-key')===ejeSort.key) ? (ejeSort.dir>0?'▲':'▼') : '';
+  }
+  ejeRender();
+}
+
+// ── CANALES ──
+var canSort = { key:'valor', dir:-1 };
+var CCOL = {'ESPECIALIZADO':'#1e40af','CANAL MIXTO':'#15803d','PROYECTOS':'#b45309','ONLINE':'#7e22ce','DISTRIBUIDOR':'#0369a1','CANAL HOMECENTER':'#c2410c','HARD DISCOUNT':'#c2410c','CANAL MODERNO':'#be185d'};
+function canRender(){
+  var rows = DATA.canales.slice();
+  rows.sort(function(a,b){
+    var va = canSort.key==='canal' ? a.canal : a.valor;
+    var vb = canSort.key==='canal' ? b.canal : b.valor;
+    if(typeof va === 'string') return canSort.dir * va.localeCompare(vb);
+    return canSort.dir * (va - vb);
+  });
+  var total = 0;
+  for(var i=0;i<DATA.canales.length;i++){ total += DATA.canales[i].valor; }
+  var html = '';
+  rows.forEach(function(c){
+    var p = total>0 ? Math.round(c.valor/total*100) : 0;
+    var col = CCOL[c.canal] || '#475569';
+    html += '<tr>'
+      + '<td style="padding:10px 14px;font-weight:700;font-size:12px;border-bottom:1px solid #f1f5f9;"><span style="background:'+col+'18;color:'+col+';padding:2px 8px;border-radius:8px;font-size:10px;font-weight:800;">'+esc(c.canal)+'</span></td>'
+      + '<td style="padding:10px 14px;text-align:right;font-weight:800;color:'+col+';font-size:12px;border-bottom:1px solid #f1f5f9;">'+fmtM(c.valor)+'</td>'
+      + '<td style="padding:10px 14px;border-bottom:1px solid #f1f5f9;min-width:120px;"><div style="display:flex;align-items:center;gap:6px;"><div style="flex:1;height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;"><div style="width:'+p+'%;height:100%;background:'+col+';border-radius:3px;"></div></div><span style="font-size:10px;font-weight:700;color:#64748b;min-width:28px;">'+p+'%</span></div></td>'
+      + '</tr>';
+  });
+  var tbody = document.getElementById('can-tbody');
+  if(tbody) tbody.innerHTML = html;
+}
+function canOrdenar(key){
+  if(canSort.key===key){ canSort.dir *= -1; } else { canSort.key = key; canSort.dir = (key==='canal') ? 1 : -1; }
+  canRender();
+}
+
+// ── DETALLE ──
+var detLimit = 300;
+var CCTAG = {'ESPECIALIZADO':'#1e40af','CANAL MIXTO':'#15803d','PROYECTOS':'#b45309','ONLINE':'#7e22ce','DISTRIBUIDOR':'#0369a1','CANAL HOMECENTER':'#c2410c','HARD DISCOUNT':'#c2410c','CANAL MODERNO':'#be185d'};
+function detFiltrar(reset){
+  if(reset) detLimit = 300;
+  var q = ((document.getElementById('det-busq')||{}).value||'').toLowerCase();
+  var canal = (document.getElementById('det-canal')||{}).value || '';
+  var fecha = (document.getElementById('det-fecha')||{}).value || '';
+  var items = DATA.detalle.filter(function(r){
+    var okQ = !q || r.cliente.toLowerCase().indexOf(q)>=0 || r.vendedor.toLowerCase().indexOf(q)>=0;
+    var okC = !canal || r.canal===canal;
+    var okF = !fecha || String(r.f)===fecha;
+    return okQ && okC && okF;
+  });
+  window._detFiltered = items;
+  var cnt = document.getElementById('det-cnt');
+  if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' registros' + (items.length>detLimit ? ' (mostrando '+detLimit+')' : '');
+  var slice = items.slice(0, detLimit);
+  var html = '';
+  slice.forEach(function(r, idx){
+    var col = CCTAG[r.canal] || '#64748b';
+    html += '<tr style="border-bottom:1px solid #f1f5f9;background:'+(idx%2?'#f8fafc':'#fff')+';">'
+      + '<td style="padding:7px 10px;font-size:10px;white-space:nowrap;">'+fmtD(r.f)+'</td>'
+      + '<td style="padding:7px 10px;font-family:monospace;font-size:9px;color:#64748b;">'+esc(r.doc)+'</td>'
+      + '<td style="padding:7px 10px;"><span style="font-size:9px;background:'+col+'22;color:'+col+';padding:2px 6px;border-radius:8px;font-weight:700;">'+esc(r.canal)+'</span></td>'
+      + '<td style="padding:7px 10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;" title="'+esc(r.cliente)+'">'+esc(r.cliente.substring(0,34))+'</td>'
+      + '<td style="padding:7px 10px;font-size:10px;">'+esc(r.vendedor.split(' ').slice(0,2).join(' '))+'</td>'
+      + '<td style="padding:7px 10px;text-align:right;font-weight:700;color:'+(r.valor<0?'#dc2626':'#0f172a')+';">'+fmtM(r.valor)+'</td>'
+      + '</tr>';
+  });
+  var tbody = document.getElementById('det-tbody');
+  if(tbody) tbody.innerHTML = html || '<tr><td colspan="6" style="padding:20px;text-align:center;color:#94a3b8;">Sin resultados</td></tr>';
+  var mas = document.getElementById('det-mas');
+  if(mas) mas.style.display = items.length>detLimit ? 'block' : 'none';
+}
+function detMas(){ detLimit += 300; detFiltrar(false); }
+function detCSV(){
+  var items = window._detFiltered || DATA.detalle;
+  var rows = [['Fecha','Documento','Canal','Cliente','Vendedor','Subtotal']];
+  items.forEach(function(r){ rows.push([fmtD(r.f), r.doc, r.canal, r.cliente, r.vendedor, r.valor]); });
+  var csv = rows.map(function(row){
+    return row.map(function(v){
+      var s = String(v==null?'':v).replace(/"/g,'""');
+      return '"'+s+'"';
+    }).join(',');
+  }).join('\\n');
+  var blob = new Blob(['\\ufeff'+csv], {type:'text/csv;charset=utf-8'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = 'Detalle_Ventas_ILUMAX.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+ejeRender();
+canRender();
+detFiltrar(true);
+<\/script>
+</body>
+</html>`;
+}
+
 // Auto-login desde sesión guardada
 const sc = sessionStorage.getItem('ilx_cu') || localStorage.getItem('ilx_cu');
-if(sc){ try{ CU=JSON.parse(sc); sessionStorage.setItem('ilx_cu',sc); startApp(); }catch(e){ sessionStorage.removeItem('ilx_cu');localStorage.removeItem('ilx_cu'); } }
+if(sc){
+  try{
+    const parsed = JSON.parse(sc);
+    // Validar que la sesión tenga los campos mínimos requeridos
+    if(parsed && parsed.email && parsed.nombre && parsed.rol) {
+      CU = parsed;
+      sessionStorage.setItem('ilx_cu', sc); // sincronizar ambos storages
+      startApp().then(async ()=>{
+        // Refrescar perfil en background sin bloquear
+        try {
+          const fresh = await sb.get('usuarios', `email=eq.${encodeURIComponent(CU.email)}&select=email,nombre,rol,area,color,aprueba`);
+          if(fresh && fresh[0]) {
+            const updated = {...CU, ...fresh[0]};
+            // Solo actualizar si cambió algo
+            if(JSON.stringify(updated) !== JSON.stringify(CU)) {
+              CU = updated;
+              sessionStorage.setItem('ilx_cu', JSON.stringify(CU));
+              localStorage.setItem('ilx_cu', JSON.stringify(CU));
+              buildNav();
+            }
+          }
+        } catch(e){ /* sin conexión — continúa con sesión local */ }
+      }).catch(e => {
+        // Si startApp falla, limpiar sesión y mostrar login
+        console.warn('startApp error:', e);
+        sessionStorage.removeItem('ilx_cu');
+        localStorage.removeItem('ilx_cu');
+      });
+    } else {
+      // Sesión incompleta — limpiar
+      sessionStorage.removeItem('ilx_cu');
+      localStorage.removeItem('ilx_cu');
+    }
+  } catch(e){
+    sessionStorage.removeItem('ilx_cu');
+    localStorage.removeItem('ilx_cu');
+  }
+}
 
 // Banner de estado de conexión
 // URL configurada internamente
