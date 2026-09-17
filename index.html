@@ -6668,6 +6668,10 @@ var INV_DATA = [];
 var INV_PERIODO = '';
 var INV_SUBIDO_POR = '';
 var INV_FLT = 'todos';
+var INV_RESALTADOS = new Set();      // claves "referencia_bodega" recién actualizadas por SIESA
+var INV_RESALTADOS_TIMER = null;      // timer para quitar el resaltado tras 3 min
+var INV_LISTA_SEL = '';                // lista_id seleccionada para mostrar precio (columna "Precio lista")
+var INV_LISTAS_CAT = [];               // catálogo de listas_catalogo, cargado una vez
 
 async function renderInventarioMod() {
   const el = document.getElementById('inv-content');
@@ -6728,7 +6732,10 @@ function renderInvVista() {
         <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="subirExcelInventario(this)">
         📤 Subir Excel inventario
       </label>
-      <div style="font-size:11px;color:var(--mu);">Sube el reporte de existencias de Siesa en .xlsx</div>
+      <button id="btn-siesa-sync" onclick="actualizarDesdeSiesa()" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        🔄 Actualizar desde SIESA
+      </button>
+      <div id="inv-siesa-status" style="font-size:11px;color:var(--mu);">Sincroniza el inventario directo desde la API de SIESA</div>
     </div>
 
     <!-- Búsqueda y filtros -->
@@ -6745,6 +6752,9 @@ function renderInvVista() {
         <option value="todos">Todo</option>
         <option value="stock">Con stock</option>
         <option value="nostock">Sin stock</option>
+      </select>
+      <select class="inp" id="fil-inv-lista" style="width:180px;" onchange="INV_LISTA_SEL=this.value;filtrarInvMod()">
+        <option value="">Sin precio de lista</option>
       </select>
     </div>
 
@@ -6766,6 +6776,7 @@ function renderInvVista() {
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Bodega</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Valor total</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">U.M.</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);" id="th-inv-precio-lista">Precio lista</th>
             </tr>
           </thead>
           <tbody id="tbody-inv-mod"></tbody>
@@ -6776,7 +6787,25 @@ function renderInvVista() {
 
   el.innerHTML = html;
   poblarBodegas();
+  poblarListasInv();
   filtrarInvMod();
+}
+
+async function poblarListasInv() {
+  const sel = document.getElementById('fil-inv-lista');
+  if(!sel) return;
+  if(!INV_LISTAS_CAT.length) {
+    try {
+      INV_LISTAS_CAT = await sb.get('listas_catalogo', 'activa=eq.true&order=orden.asc');
+    } catch(e) { console.warn('Error cargando listas_catalogo:', e); INV_LISTAS_CAT = []; }
+  }
+  (INV_LISTAS_CAT||[]).forEach(c => {
+    const o = document.createElement('option');
+    o.value = c.lista_id;
+    o.textContent = c.nombre + ' — ' + (c.descripcion||'');
+    if(c.lista_id === INV_LISTA_SEL) o.selected = true;
+    sel.appendChild(o);
+  });
 }
 
 function poblarBodegas() {
@@ -6790,7 +6819,7 @@ function poblarBodegas() {
   });
 }
 
-function filtrarInvMod() {
+async function filtrarInvMod() {
   const q     = (document.getElementById('srch-inv-mod')||{value:''}).value.trim().toLowerCase();
   const bod   = (document.getElementById('fil-inv-bod')||{value:''}).value;
   const stock = (document.getElementById('fil-inv-stock')||{value:'todos'}).value;
@@ -6803,8 +6832,13 @@ function filtrarInvMod() {
     return true;
   });
 
-  // Ordenar por existencia desc
-  items.sort((a,b) => parseFloat(b.existencia||0) - parseFloat(a.existencia||0));
+  // Ordenar: primero las recién actualizadas por SIESA, luego por existencia desc
+  items.sort((a,b) => {
+    const aRes = INV_RESALTADOS.has(a.referencia+'_'+(a.bodega||'')) ? 1 : 0;
+    const bRes = INV_RESALTADOS.has(b.referencia+'_'+(b.bodega||'')) ? 1 : 0;
+    if(aRes !== bRes) return bRes - aRes;
+    return parseFloat(b.existencia||0) - parseFloat(a.existencia||0);
+  });
 
   const cnt = document.getElementById('inv-cnt');
   if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' registros' + (items.length > 500 ? ' (mostrando 500)' : '');
@@ -6813,29 +6847,433 @@ function filtrarInvMod() {
   if(!tbody) return;
 
   if(!items.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--mu);">Sin resultados</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--mu);">Sin resultados</td></tr>';
     return;
   }
 
   const mostrar = items.slice(0, 500);
+
+  // Primer render, sin precio de lista (para no bloquear la vista mientras se consulta)
+  tbody.innerHTML = _renderFilasInv(mostrar, {});
+
+  // Si hay una lista de precios seleccionada, traer los precios (por lotes de 100 referencias)
+  // y volver a renderizar solo cuando estén listos
+  if(INV_LISTA_SEL) {
+    try {
+      const refs = [...new Set(mostrar.map(r => r.referencia).filter(Boolean))];
+      const preciosMap = {};
+      for(let i = 0; i < refs.length; i += 100) {
+        const lote = refs.slice(i, i + 100).map(r => encodeURIComponent(r)).join(',');
+        const rows = await sb.get('precios_lista',
+          `lista=eq.${encodeURIComponent(INV_LISTA_SEL)}&referencia=in.(${lote})&select=referencia,precio`);
+        (rows||[]).forEach(r => { preciosMap[r.referencia] = parseFloat(r.precio)||0; });
+      }
+      tbody.innerHTML = _renderFilasInv(mostrar, preciosMap);
+    } catch(e) { console.warn('Error cargando precios de lista:', e); }
+  }
+}
+
+function _renderFilasInv(mostrar, preciosMap) {
   const fmtCOP = n => n ? '$' + Math.round(n).toLocaleString('es-CO') : '—';
   const fmtN   = n => n ? Math.round(n).toLocaleString('es-CO') : '0';
 
-  tbody.innerHTML = mostrar.map(r => {
+  return mostrar.map(r => {
     const exist = parseFloat(r.existencia||0);
     const costo = parseFloat(r.costo_prom||0);
     const valor = exist * costo;
     const existColor = exist > 1000 ? 'color:var(--gr);font-weight:700' : exist > 0 ? 'color:var(--am);font-weight:700' : 'color:var(--mu2)';
-    return `<tr style="border-bottom:1px solid var(--b1);">
-      <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${r.referencia||''}</td>
+    const keyRow = r.referencia + '_' + (r.bodega||'');
+    const resaltada = INV_RESALTADOS.has(keyRow);
+    const rowStyle = resaltada
+      ? 'border-bottom:1px solid var(--b1);background:#fef9c3;transition:background 2s ease;'
+      : 'border-bottom:1px solid var(--b1);';
+    const precioLista = INV_LISTA_SEL ? preciosMap[r.referencia] : undefined;
+    return `<tr style="${rowStyle}" ${resaltada ? 'data-resaltada="1"' : ''}>
+      <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${r.referencia||''}${resaltada?' <span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">SIESA</span>':''}</td>
       <td style="padding:9px 12px;max-width:220px;font-weight:600;font-size:11px;">${(r.descripcion||'').substring(0,50)}</td>
       <td style="padding:9px 12px;text-align:right;${existColor}">${fmtN(exist)}</td>
       <td style="padding:9px 12px;text-align:right;font-size:11px;">${fmtCOP(costo)}</td>
       <td style="padding:9px 12px;text-align:right;font-weight:700;">${fmtCOP(valor)}</td>
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.bodega||''}</td>
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.um||''}</td>
+      <td style="padding:9px 12px;text-align:right;font-size:11px;color:var(--bl);font-weight:700;">${INV_LISTA_SEL ? fmtCOP(precioLista) : '—'}</td>
     </tr>`;
   }).join('');
+}
+
+// ── ACTUALIZAR INVENTARIO DESDE API SIESA ────────────────────────────────────
+//
+//  ╔══════════════════════════════════════════════════════════════════════════╗
+//  ║  CONFIGURACIÓN SIESA                                                    ║
+//  ║  Solo cambia SIESA_BASE_URL cuando tengas el dominio real               ║
+//  ╚══════════════════════════════════════════════════════════════════════════╝
+//
+//  SIESA_BASE_URL  → dominio real que reemplaza {baseUrl} en el portal SIESA
+//                    ejemplo: 'https://erp.ilumax.com.co'
+//
+const SIESA_BASE_URL = 'https://serviciosqa.siesacloud.com/api/connekta';   // Adatec — SIESA Cloud QA
+
+const SIESA_CONFIG = {
+  // Endpoint con paginación dinámica — se construye en _siesaFetchPaginas()
+  // NOTA: esta consulta es "estándar" (prefijo API_), la Edge Function la enruta
+  // automáticamente a /api/siesa/v3/ejecutarconsultaestandar (no a /connekta).
+  urlBase: SIESA_BASE_URL + '/v3/ejecutarconsultaestandar',
+  params: {
+    idCompania:  '9263',
+    descripcion: 'API_v2_Inventarios_InvFecha',  // consulta estándar módulo SQL Server (antes: ilumax_WA_CONSULTA_INVENTARIOS)
+    parametros:  null,                            // TODO: confirmar si esta consulta requiere algún parámetro (ej. fecha de corte)
+    paginacion:  'numPag={PAG}|tamPag=100',
+  },
+  headers: {
+    'Content-Type': 'application/json',
+    'ConniKey':   'a5c2f1f36a3542b19a930bea9414faec',
+    'ConniToken': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1laWRlbnRpZmllciI6IjNjN2ZjNzlhLWY2NGMtNDE2Ni05MDIxLTYxNmRkNzk5OTI4YiIsImh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vd3MvMjAwOC8wNi9pZGVudGl0eS9jbGFpbXMvcHJpbWFyeXNpZCI6ImExMDk5ODk2LTNmYTMtNGQ5NS05ZDIwLTQ2YTlkODQwZjgwZSJ9.0KCRSHmoaoedwyFalBJVvvWPe7UhjA2y-BOlMvtshos',
+  },
+  // arrayPath: ruta al array dentro del JSON de respuesta.
+  // Ajusta si SIESA devuelve algo como { data: [...] } → 'data'
+  // Deja '' si la respuesta ES directamente el array
+  // arrayPath: CONFIRMADO tras la primera llamada real (2026-09-17) — esta consulta
+  // estándar devuelve { detalle: { Table: [...] } }, NO { detalle: { Datos: [...] } }
+  // como la consulta vieja de connekta. Este era el bug que causaba "Sin registros".
+  arrayPath: 'detalle.Table',
+  // tamPag: registros por página
+  tamPag: 100,
+  // MAPEO CONFIRMADO tras la primera llamada real (2026-09-17) contra
+  // API_v2_Inventarios_InvFecha, y verificado contra la documentación oficial de SIESA
+  // (Modulo de Conectividad > Observaciones). Nombres de campo reales:
+  //   f120_referencia, f150_id (bodega), f400_cant_existencia_1, f400_costo_prom_uni,
+  //   f120_id_unidad_inventario, f400_id_lote, f400_id_ubicacion_aux
+  //
+  // ✅ CONFIRMADO por la documentación oficial: esta consulta NO tiene parámetro de fecha
+  // (a pesar del nombre "InvFecha"). La estructura de datos documentada no incluye ningún
+  // campo de fecha — solo existencia/comprometida/costo por ítem+bodega.
+  //
+  // La existencia en 0 que vimos en la prueba inicial fue porque esa llamada (página 1,
+  // sin filtro) solo trajo la bodega "AD" (probablemente administrativa/virtual, sin stock
+  // real), no las bodegas físicas con inventario (BA, BS, RE, etc. — las que se ven en el
+  // portal). _siesaFetchPaginas ya pagina hasta agotar los datos, así que al recorrer todas
+  // las páginas debería llegar también a las bodegas con stock real.
+  //
+  // Filtro opcional soportado (formato SQL sin WHERE, comillas simples dobles para strings):
+  //   parametros: "f120_id_cia = 1 AND f150_id = ''BA''"
+  // Útil si en el futuro se quiere excluir bodegas virtuales como "AD" desde el propio filtro
+  // en vez de traer todo y descartar en el frontend.
+  mapeo: function(item) {
+    return {
+      referencia:  String(item.f120_referencia || '').trim(),
+      descripcion: '',   // esta consulta no trae descripción — se conserva la existente al sincronizar
+      existencia:  parseFloat(item.f400_cant_existencia_1 || 0) || 0,
+      costo_prom:  parseFloat(item.f400_costo_prom_uni || 0) || 0,
+      bodega:      String(item.f150_id || '').trim(),
+      ubicacion:   String(item.f400_id_ubicacion_aux || '').trim(),
+      lote:        String(item.f400_id_lote || '').trim(),
+      um:          String(item.f120_id_unidad_inventario || '').trim(),
+      subido_por:  'SIESA (automático)',
+      periodo:     new Date().toISOString().split('T')[0],
+    };
+  },
+};
+
+// Construye la URL para una página determinada
+function _siesaUrl(pag) {
+  const p = Object.assign({}, SIESA_CONFIG.params);
+  p.paginacion = p.paginacion.replace('{PAG}', pag);
+  const qs = Object.entries(p).map(([k,v]) => k + '=' + encodeURIComponent(v)).join('&');
+  return SIESA_CONFIG.urlBase + '?' + qs;
+}
+
+// Extrae el array de datos de la respuesta JSON
+function _siesaGetArray(resp) {
+  if(!SIESA_CONFIG.arrayPath) return Array.isArray(resp) ? resp : [];
+  const parts = SIESA_CONFIG.arrayPath.split('.');
+  let cur = resp;
+  for(const p of parts) {
+    if(cur == null) return [];
+    cur = cur[p];
+  }
+  return Array.isArray(cur) ? cur : [];
+}
+
+// Recorre todas las páginas via Edge Function "consulta-siesa" (evita CORS)
+async function _siesaFetchPaginas(setStatus, descripcion, parametros, tamPag) {
+  descripcion = descripcion || SIESA_CONFIG.params.descripcion;
+  parametros  = (parametros !== undefined) ? parametros : (SIESA_CONFIG.params.parametros || null);
+  const tam   = tamPag || SIESA_CONFIG.tamPag;
+
+  const todos = [];
+  let pag = 1;
+  let totalPags = null; // SIESA informa total_páginas en la primera respuesta (no todas las consultas lo traen)
+
+  const PROXY_URL = SB_URL + '/functions/v1/consulta-siesa';
+
+  while(true) {
+    const label = totalPags
+      ? '📡 ' + descripcion + ' — página ' + pag + ' de ' + totalPags + '...'
+      : '📡 ' + descripcion + ' — página ' + pag + '...';
+    setStatus(label, '#60a5fa');
+
+    const resp = await fetch(PROXY_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'apikey':        SB_KEY,
+        'Authorization': 'Bearer ' + SB_KEY,
+      },
+      body: JSON.stringify({
+        descripcion: descripcion,
+        parametros:  parametros,
+        numPag:      pag,
+        tamPag:      tam,
+      }),
+    });
+
+    if(!resp.ok) {
+      const txt = await resp.text();
+      throw new Error('Edge Function error ' + resp.status + ': ' + txt);
+    }
+
+    const json = await resp.json();
+    if(json.error) throw new Error('SIESA: ' + json.error);
+
+    // Leer total_páginas del detalle de SIESA (disponible desde pág 1)
+    if(totalPags === null && json.detalle && json.detalle['total_páginas']) {
+      totalPags = json.detalle['total_páginas'];
+      console.log('[SIESA] ' + descripcion + ' total_páginas:', totalPags, '| total_registros:', json.detalle['total_registros']);
+    }
+
+    const items = _siesaGetArray(json);
+    todos.push(...items);
+
+    // Terminar cuando llegamos a la última página
+    if(totalPags !== null && pag >= totalPags) break;
+    if(totalPags === null && items.length < tam) break; // fallback (consultas sin total_páginas, ej. las estándar API_v2_*)
+    pag++;
+    if(pag > 200) { console.warn('SIESA: límite de seguridad 200 páginas — ' + descripcion); break; }
+  }
+  return todos;
+}
+
+async function actualizarDesdeSiesa() {
+  const btn    = document.getElementById('btn-siesa-sync');
+  const status = document.getElementById('inv-siesa-status');
+
+  const setStatus = (msg, color='var(--mu)') => {
+    if(status) { status.textContent = msg; status.style.color = color; }
+  };
+  const setBtnState = (loading) => {
+    if(!btn) return;
+    btn.disabled = loading;
+    btn.style.opacity = loading ? '0.65' : '1';
+    btn.innerHTML = loading
+      ? '⏳ Consultando SIESA...'
+      : '🔄 Actualizar desde SIESA';
+  };
+
+  // Validar que el baseUrl ya fue configurado
+  if(SIESA_BASE_URL.includes('TU-DOMINIO-SIESA')) {
+    toast('⚠️ Configura SIESA_BASE_URL con el dominio real del servidor SIESA', 'er');
+    setStatus('⚠️ SIESA_BASE_URL no configurada — edita el valor en el código', '#ef4444');
+    return;
+  }
+
+  setBtnState(true);
+  setStatus('🔌 Conectando con SIESA...', '#60a5fa');
+
+  try {
+    // ── 1. Recorrer todas las páginas de SIESA ────────────────────
+    const items = await _siesaFetchPaginas(setStatus);
+
+    if(!items.length) {
+      toast('SIESA no devolvió registros. Verifica el endpoint o arrayPath.', 'er');
+      setStatus('Sin registros en la respuesta de SIESA', '#ef4444');
+      setBtnState(false);
+      return;
+    }
+
+    setStatus('📊 ' + items.length + ' registros recibidos — mapeando...', '#60a5fa');
+
+    // ── 2. Mapear al formato de Supabase ──────────────────────────
+    const registrosCrudos = items
+      .map(SIESA_CONFIG.mapeo)
+      .filter(r => r.referencia); // descartar filas sin referencia
+
+    // SIESA devuelve normalmente 2 filas por combinación ítem+bodega (variantes de
+    // lote: una con f400_id_lote=null y otra con f400_id_lote=""). Como no rastreamos
+    // lote por separado, deduplicamos por referencia+bodega para no insertar el mismo
+    // registro dos veces (bug confirmado en producción el 2026-09-17).
+    const registrosPorClave = {};
+    registrosCrudos.forEach(r => {
+      registrosPorClave[r.referencia + '_' + (r.bodega||'')] = r;
+    });
+    const registros = Object.values(registrosPorClave);
+
+    if(!registros.length) {
+      toast('Ningún registro válido tras el mapeo. Revisa SIESA_CONFIG.mapeo', 'er');
+      setBtnState(false);
+      return;
+    }
+
+    // ── 3. Sincronizar en Supabase (mismo algoritmo que Excel) ────
+    setStatus('🔍 Comparando con inventario anterior...', '#60a5fa');
+    toast('🔍 Comparando con inventario anterior...', 'inf');
+
+    let existentes = {};
+    try {
+      const rows = await sb.get('inventario', 'select=referencia,bodega,existencia,costo_prom&limit=5000');
+      (rows||[]).forEach(r => {
+        existentes[r.referencia + '_' + (r.bodega||'')] = r;
+      });
+    } catch(e) { console.warn('No se pudo cargar anterior:', e); }
+
+    const nuevos = [], actualizados = [];
+    let sinCambio = 0;
+
+    registros.forEach(r => {
+      const key = r.referencia + '_' + (r.bodega||'');
+      const ant = existentes[key];
+      if(!ant) {
+        nuevos.push(r);
+      } else {
+        const existCambio = Math.abs(parseFloat(r.existencia||0) - parseFloat(ant.existencia||0)) > 0.01;
+        const costoCambio = Math.abs(parseFloat(r.costo_prom||0) - parseFloat(ant.costo_prom||0)) > 1;
+        if(existCambio || costoCambio) actualizados.push(r);
+        else sinCambio++;
+      }
+    });
+
+    toast('📊 ' + nuevos.length + ' nuevos · ' + actualizados.length + ' actualizados · ' + sinCambio + ' sin cambio', 'inf');
+    setStatus('⬆️ Guardando en Supabase...', '#f59e0b');
+
+    // Insertar nuevos en lotes de 200
+    const LOTE = 200;
+    for(let i = 0; i < nuevos.length; i += LOTE) {
+      await sb.post('inventario', nuevos.slice(i, i + LOTE));
+    }
+
+    // Actualizar los que cambiaron
+    for(let i = 0; i < actualizados.length; i++) {
+      const r = actualizados[i];
+      try {
+        await sb.patch(
+          'inventario',
+          'referencia=eq.' + encodeURIComponent(r.referencia) + '&bodega=eq.' + encodeURIComponent(r.bodega||''),
+          { existencia: r.existencia, costo_prom: r.costo_prom, periodo: r.periodo, subido_por: r.subido_por }
+        );
+      } catch(e) { console.warn('Error actualizando', r.referencia, e); }
+      if(i % 50 === 0 && i > 0) setStatus('Actualizando ' + i + '/' + actualizados.length + '...', '#f59e0b');
+    }
+
+    // ── 4. Actualizar vista ───────────────────────────────────────
+    INV_DATA = registros;
+    INV_PERIODO = registros[0]?.periodo || new Date().toISOString().split('T')[0];
+    INV_SUBIDO_POR = 'SIESA (automático)';
+
+    // Resaltar en la tabla los registros nuevos/actualizados durante 3 minutos
+    INV_RESALTADOS = new Set(
+      nuevos.concat(actualizados).map(r => r.referencia + '_' + (r.bodega||''))
+    );
+    if(INV_RESALTADOS_TIMER) clearTimeout(INV_RESALTADOS_TIMER);
+    if(INV_RESALTADOS.size > 0) {
+      INV_RESALTADOS_TIMER = setTimeout(function(){
+        INV_RESALTADOS = new Set();
+        filtrarInvMod();
+      }, 3 * 60 * 1000); // 3 minutos
+    }
+
+    const resumen = nuevos.length + ' nuevos · ' + actualizados.length + ' actualizados · ' + sinCambio + ' sin cambio';
+    toast('✅ Inventario sincronizado — ' + resumen, 'ok');
+    setStatus('✅ Inventario listo · ' + resumen, '#16a34a');
+
+    // NOTA: el paso de descripciones (API_v2_Items) se quitó del sync automático a
+    // partir del 2026-09-17 — ya se corrió una vez y las descripciones no cambian con
+    // frecuencia. De aquí en adelante el sync solo actualiza existencia/costo
+    // (inventario) y precio (precios_lista), y solo lo que realmente cambió.
+
+    // ── 5. Traer precios por lista desde API_v2_ItemsPrecios ───────
+    try {
+      setStatus('💰 Consultando precios por lista (API_v2_ItemsPrecios)...', '#60a5fa');
+
+      // Mapeo código SIESA (ej. "001") → lista_id interno usado en precios_lista (ej. "1")
+      let catalogo = INV_LISTAS_CAT.length ? INV_LISTAS_CAT : await sb.get('listas_catalogo', 'select=lista_id,codigo');
+      const codigoToListaId = {};
+      (catalogo||[]).forEach(c => { codigoToListaId[c.codigo] = c.lista_id; });
+
+      const preciosRaw = await _siesaFetchPaginas(setStatus, 'API_v2_ItemsPrecios', null, 100);
+
+      // Mapear y deduplicar por referencia+lista (SIESA puede repetir filas, como en Inventarios)
+      const preciosPorClave = {};
+      preciosRaw.forEach(p => {
+        const referencia  = String(p.f120_referencia || '').trim();
+        const codigoLista = String(p.f126_id_lista_precio || '').trim();
+        const listaId = codigoToListaId[codigoLista];
+        if(!referencia || !listaId) return; // ignorar listas que no están en listas_catalogo
+        preciosPorClave[referencia + '_' + listaId] = {
+          lista:       listaId,
+          referencia:  referencia,
+          descripcion: String(p.f120_descripcion || '').trim(),
+          precio:      parseFloat(p.f126_precio         || 0) || 0,
+          precio_min:  parseFloat(p.f126_precio_minimo   || 0) || 0,
+          precio_max:  parseFloat(p.f126_precio_maximo   || 0) || 0,
+          periodo:     new Date().toISOString().split('T')[0],
+          subido_por:  'SIESA (automático)',
+        };
+      });
+      const preciosRegistros = Object.values(preciosPorClave);
+
+      if(preciosRegistros.length) {
+        setStatus('🔍 Comparando precios anteriores...', '#60a5fa');
+        let existentesPrecios = {};
+        try {
+          const rows = await sb.get('precios_lista', 'select=lista,referencia,precio&limit=10000');
+          (rows||[]).forEach(r => { existentesPrecios[r.referencia + '_' + r.lista] = r; });
+        } catch(e) { console.warn('No se pudo cargar precios anteriores:', e); }
+
+        const preciosNuevos = [], preciosActualizados = [];
+        let preciosSinCambio = 0;
+        preciosRegistros.forEach(r => {
+          const key = r.referencia + '_' + r.lista;
+          const ant = existentesPrecios[key];
+          if(!ant) preciosNuevos.push(r);
+          else if(Math.abs(parseFloat(r.precio||0) - parseFloat(ant.precio||0)) > 0.01) preciosActualizados.push(r);
+          else preciosSinCambio++;
+        });
+
+        for(let i = 0; i < preciosNuevos.length; i += LOTE) {
+          await sb.post('precios_lista', preciosNuevos.slice(i, i + LOTE));
+        }
+        for(let i = 0; i < preciosActualizados.length; i++) {
+          const r = preciosActualizados[i];
+          try {
+            await sb.patch('precios_lista',
+              'referencia=eq.' + encodeURIComponent(r.referencia) + '&lista=eq.' + encodeURIComponent(r.lista),
+              { precio: r.precio, precio_min: r.precio_min, precio_max: r.precio_max, periodo: r.periodo, subido_por: r.subido_por }
+            );
+          } catch(e) { console.warn('Error actualizando precio', r.referencia, r.lista, e); }
+          if(i % 100 === 0 && i > 0) setStatus('Actualizando precios ' + i + '/' + preciosActualizados.length + '...', '#60a5fa');
+        }
+        toast('💰 Precios: ' + preciosNuevos.length + ' nuevos · ' + preciosActualizados.length + ' actualizados · ' + preciosSinCambio + ' sin cambio', 'inf');
+      }
+    } catch(e) {
+      console.warn('Error consultando API_v2_ItemsPrecios:', e);
+      toast('⚠️ No se pudieron traer precios por lista (API_v2_ItemsPrecios): ' + e.message, 'er');
+    }
+
+    setStatus('✅ Última sync: ' + new Date().toLocaleTimeString('es-CO') + ' · ' + resumen, '#16a34a');
+    renderInvVista();
+
+  } catch(e) {
+    console.error('Error sync SIESA:', e);
+    // Distinguir error de red vs error de servidor
+    if(e instanceof TypeError && e.message.toLowerCase().includes('fetch')) {
+      toast('❌ No se pudo conectar con SIESA. Verifica la URL y que el servidor sea accesible.', 'er');
+      setStatus('❌ Error de conexión — revisa la URL o CORS', '#ef4444');
+    } else {
+      toast('❌ Error: ' + e.message, 'er');
+      setStatus('❌ ' + e.message, '#ef4444');
+    }
+  } finally {
+    setBtnState(false);
+  }
 }
 
 // ── SUBIR EXCEL INVENTARIO ────────────────────────────────
