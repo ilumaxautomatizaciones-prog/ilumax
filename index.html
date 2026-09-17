@@ -994,6 +994,14 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
   <div id="inv-content"></div>
 </div>
 
+<div class="page" id="pg-admin-center">
+  <div id="ac-content"></div>
+</div>
+
+<div class="page" id="pg-ppto-areas">
+  <div id="ppto-areas-content"></div>
+</div>
+
 <div class="page" id="pg-pres">
       <!-- Barra de acciones Presupuesto -->
       <div style="display:flex;gap:8px;padding:8px 14px;background:var(--w);border-bottom:1px solid var(--b1);flex-wrap:wrap;align-items:center;" id="pres-export-bar">
@@ -2136,6 +2144,7 @@ function buildNav(){
     { tipo:'grupo', id:'g-comercial', lbl:'🛒 Comercial', header:'Ventas', items:[
       { id:'precios-lista',      lbl:'Lista de Precios',    ico:'💰' },
       { id:'presupuesto-ventas', lbl:'Ppto. de Ventas',     ico:'🎯' },
+      { id:'ppto-areas',         lbl:'Ppto. por Áreas',     ico:'🗂️' },
       { id:'reporte-ventas',     lbl:'Reporte Diario',      ico:'📊' },
     ]},
   ];
@@ -2147,6 +2156,7 @@ function buildNav(){
 
   const adminItems = [];
   if(esAdmin) adminItems.push({ id:'admin', lbl:'Admin', ico:'🛠️' });
+  if(esAdmin) adminItems.push({ id:'admin-center', lbl:'Admin Center', ico:'🎛️' });
   if(esRRHH)  adminItems.push({ id:'rrhh',  lbl:'Mis Actividades', ico:'📋' });
   // Centro de trabajo — líder automatizaciones
   const esDuvier = CU.email === 'duduwxo50@gmail.com' || CU.email === 'liderautomatizaciones@ilumax.com.co' || CU.cargo?.toLowerCase().includes('automatiz') || CU.nombre?.toLowerCase().includes('duvier');
@@ -2242,7 +2252,7 @@ function resaltarGrupoActivo(pageId) {
   }
 }
 
-const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas,centro:renderCentro,'reporte-ventas':renderReporteVentas};
+const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas,centro:renderCentro,'reporte-ventas':renderReporteVentas,'ppto-areas':renderPptoAreas,'admin-center':renderAdminCenter};
 function goPage(id, el){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
   qs('#pg-'+id)?.classList.add('on');
@@ -7295,6 +7305,7 @@ function renderPVShell(el, canales) {
     <div style="display:flex;gap:4px;margin-bottom:10px;">
       <button id="tab-pv-presupuesto" class="flt on" onclick="pvSwitchTab('presupuesto')" style="font-size:11px;padding:6px 14px;">🎯 Presupuesto</button>
       <button id="tab-pv-historico"   class="flt"    onclick="pvSwitchTab('historico')"   style="font-size:11px;padding:6px 14px;">📊 Ventas Reales por Canal</button>
+      <button id="tab-pv-resumen"     class="flt"    onclick="pvSwitchTab('resumen')"     style="font-size:11px;padding:6px 14px;">📈 Ver Resumen</button>
     </div>
 
     <!-- TABLA PRINCIPAL PRESUPUESTO -->
@@ -7311,6 +7322,10 @@ function renderPVShell(el, canales) {
     </div>
 
     <!-- DASHBOARD VENTAS POR CANAL -->
+    <div id="pv-tab-resumen" style="display:none;">
+      <div id="pv-resumen-content"></div>
+    </div>
+
     <div id="pv-tab-historico" style="display:none;">
       <!-- Controles del dashboard -->
       <div style="background:var(--w);border-radius:10px;padding:10px 14px;margin-bottom:10px;box-shadow:var(--sh);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -7895,26 +7910,255 @@ async function confirmarSubirHist() {
 }
 
 // ── Exportar Excel (CSV) ───────────────────────────────────────────────
-function pvExportar() {
-  const MESES = PV.MESES;
-  const headers = ['SKU','Descripción','Categoría','Precio Lista',
-    ...MESES.map(m=>m+' Und'), 'Total Und', 'Total COP'];
-  const rows = PV.detalle.map(r=>{
-    const mesesVals = MESES.map((_,i)=>{ const k='u'+String(i+1).padStart(2,'0'); return parseFloat(r[k])||0; });
-    const totalUnd  = mesesVals.reduce((a,v)=>a+v,0);
-    const totalCOP  = totalUnd * (parseFloat(r.precio_lista)||0);
-    return [r.referencia, r.descripcion||'', r.categoria||'', r.precio_lista||0,
-      ...mesesVals, totalUnd, Math.round(totalCOP)];
+async function pvExportar() {
+  // Cargar SheetJS si no está disponible
+  if(typeof XLSX === 'undefined') {
+    await new Promise((res,rej)=>{
+      const s=document.createElement('script');
+      s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      s.onload=res; s.onerror=rej;
+      document.head.appendChild(s);
+    });
+  }
+
+  toast('⏳ Generando Excel con todos los canales...','inf');
+
+  const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const anio = PV.anio;
+
+  // Cargar canales disponibles
+  let canales = [...CANALES_DEFAULT];
+  try {
+    const cfg = await sb.get('configuracion','clave=eq.canales_comerciales');
+    if(cfg?.[0]) canales = cfg[0].valor.split(',').map(s=>s.trim()).filter(Boolean);
+  } catch(e){}
+
+  // Cargar datos de TODOS los canales desde Supabase
+  const dataPorCanal = {};
+  for(const canal of canales) {
+    try {
+      const pvRows = await sb.get('presupuesto_ventas',
+        `anio=eq.${anio}&canal=eq.${encodeURIComponent(canal)}&order=creado_en.desc&limit=1`);
+      if(!pvRows?.length) { dataPorCanal[canal]=[]; continue; }
+      const presId = pvRows[0].id;
+      const detalle = await sb.get('presupuesto_detalle',
+        `presupuesto_id=eq.${presId}&order=categoria.asc,referencia.asc`);
+      dataPorCanal[canal] = detalle || [];
+    } catch(e) { dataPorCanal[canal]=[]; }
+  }
+
+  // Consolidar todos los SKUs únicos
+  const allSkus = {};
+  canales.forEach(canal => {
+    (dataPorCanal[canal]||[]).forEach(r => {
+      const key = r.referencia;
+      if(!allSkus[key]) allSkus[key] = { sku:r.referencia, desc:r.descripcion||'', cat:r.categoria||'' };
+    });
   });
-  const csv = [headers, ...rows].map(r=>r.map(v=>
-    typeof v==='string' && v.includes(',') ? `"${v}"` : v
-  ).join(',')).join('\n');
-  const blob = new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'});
-  const a    = document.createElement('a');
-  a.href     = URL.createObjectURL(blob);
-  a.download = `presupuesto_ventas_${PV.anio}_${PV.canal.replace(/\s/g,'_')}.csv`;
-  a.click();
-  toast('✅ Exportado','ok');
+  const skuList = Object.values(allSkus).sort((a,b)=>a.cat.localeCompare(b.cat)||a.sku.localeCompare(b.sku));
+
+  // Helper: obtener unidades o precio de un SKU en un canal
+  const getVal = (canal, sku, campoBase) => {
+    const row = (dataPorCanal[canal]||[]).find(r=>r.referencia===sku);
+    if(!row) return Array(12).fill(0);
+    return Array.from({length:12},(_,i)=>parseFloat(row[campoBase+String(i+1).padStart(2,'0')])||0);
+  };
+  const getPrice = (canal, sku) => {
+    const row = (dataPorCanal[canal]||[]).find(r=>r.referencia===sku);
+    return parseFloat(row?.precio_lista)||0;
+  };
+
+  // ── Colores para estilos (SheetJS Pro solo, aquí usamos datos planos) ──
+  // SheetJS CE no soporta estilos complejos, así que generamos datos bien estructurados
+
+  // ── Construir arrays de filas para cada hoja ──
+  const buildDataRows = (tipo) => {
+    const rows = [];
+    // Fila 1: headers de canal
+    const row1 = ['','',''];
+    canales.forEach(canal => {
+      row1.push(canal);
+      for(let i=1;i<13;i++) row1.push('');
+    });
+    row1.push('TOTAL');
+    rows.push(row1);
+
+    // Fila 2: headers de columna
+    const suffix = tipo==='Cant' ? 'Und' : '$';
+    const row2 = ['SKU','Descripción','Categoría'];
+    canales.forEach(() => {
+      MESES_CORTOS.forEach(m => row2.push(`${m} ${suffix}`));
+      row2.push(tipo==='Cant'?'Total Und':'Total COP');
+    });
+    row2.push(tipo==='Cant'?'Total Und General':'Total COP General');
+    rows.push(row2);
+
+    // Filas de datos
+    skuList.forEach(({sku,desc,cat}) => {
+      const row = [sku, desc, cat];
+      let grandTotal = 0;
+      canales.forEach(canal => {
+        const vals = tipo==='Cant'
+          ? getVal(canal, sku, 'u')
+          : Array(12).fill(getPrice(canal, sku));
+        const canalTotal = tipo==='Cant'
+          ? vals.reduce((a,v)=>a+v,0)
+          : (() => {
+              const u = getVal(canal, sku, 'u');
+              const p = getPrice(canal, sku);
+              return u.reduce((a,v)=>a+v*p,0);
+            })();
+        vals.forEach(v => row.push(v||0));
+        row.push(Math.round(canalTotal));
+        grandTotal += canalTotal;
+      });
+      row.push(Math.round(grandTotal));
+      rows.push(row);
+    });
+
+    // Fila totales
+    const totRow = ['','TOTAL GENERAL',''];
+    let grandSum = 0;
+    canales.forEach(canal => {
+      for(let mi=0;mi<12;mi++) {
+        const col_sum = skuList.reduce((a,{sku})=>{
+          if(tipo==='Cant') return a+(getVal(canal,sku,'u')[mi]||0);
+          return a+getVal(canal,sku,'u')[mi]*(getPrice(canal,sku));
+        },0);
+        totRow.push(Math.round(col_sum));
+      }
+      const canalSum = skuList.reduce((a,{sku})=>{
+        const u=getVal(canal,sku,'u');
+        const p=getPrice(canal,sku);
+        return tipo==='Cant'
+          ? a+u.reduce((s,v)=>s+v,0)
+          : a+u.reduce((s,v)=>s+v*p,0);
+      },0);
+      totRow.push(Math.round(canalSum));
+      grandSum += canalSum;
+    });
+    totRow.push(Math.round(grandSum));
+    rows.push(totRow);
+    return rows;
+  };
+
+  // ── Hoja Venta (Cant × Precio) ──
+  const buildVentaRows = () => {
+    const rows = [];
+    const row1 = ['','',''];
+    canales.forEach(canal=>{ row1.push(canal); for(let i=1;i<13;i++) row1.push(''); });
+    row1.push('TOTAL');
+    rows.push(row1);
+    const row2 = ['SKU','Descripción','Categoría'];
+    canales.forEach(()=>{ MESES_CORTOS.forEach(m=>row2.push(`${m} $`)); row2.push('Total COP'); });
+    row2.push('Total COP General');
+    rows.push(row2);
+
+    skuList.forEach(({sku,desc,cat})=>{
+      const row=[sku,desc,cat];
+      let grand=0;
+      canales.forEach(canal=>{
+        const u=getVal(canal,sku,'u');
+        const p=getPrice(canal,sku);
+        u.forEach(v=>row.push(Math.round(v*p)));
+        const tot=u.reduce((a,v)=>a+v*p,0);
+        row.push(Math.round(tot));
+        grand+=tot;
+      });
+      row.push(Math.round(grand));
+      rows.push(row);
+    });
+
+    const totRow=['','TOTAL GENERAL',''];
+    let grand=0;
+    canales.forEach(canal=>{
+      for(let mi=0;mi<12;mi++){
+        totRow.push(Math.round(skuList.reduce((a,{sku})=>a+getVal(canal,sku,'u')[mi]*getPrice(canal,sku),0)));
+      }
+      const cs=skuList.reduce((a,{sku})=>a+getVal(canal,sku,'u').reduce((s,v)=>s+v,0)*getPrice(canal,sku),0);
+      totRow.push(Math.round(cs)); grand+=cs;
+    });
+    totRow.push(Math.round(grand));
+    rows.push(totRow);
+    return rows;
+  };
+
+  // ── Hoja Resumen ──
+  const buildResumenRows = () => {
+    const rows = [];
+    rows.push(['RESUMEN EJECUTIVO — PRESUPUESTO DE VENTAS '+anio]);
+    rows.push([]);
+    rows.push(['VENTA PRESUPUESTADA POR CANAL (COP)']);
+    const hdr=['CANAL',...MESES_CORTOS,'TOTAL AÑO','% PART.'];
+    rows.push(hdr);
+
+    const totalesPorCanal = {};
+    let grandTotal=0;
+    canales.forEach(canal=>{
+      const tot=skuList.reduce((a,{sku})=>a+getVal(canal,sku,'u').reduce((s,v)=>s+v,0)*getPrice(canal,sku),0);
+      totalesPorCanal[canal]=tot; grandTotal+=tot;
+    });
+
+    canales.forEach(canal=>{
+      const row=[canal];
+      MESES_CORTOS.forEach((_,mi)=>{
+        row.push(Math.round(skuList.reduce((a,{sku})=>a+getVal(canal,sku,'u')[mi]*getPrice(canal,sku),0)));
+      });
+      row.push(Math.round(totalesPorCanal[canal]));
+      row.push(grandTotal>0?(totalesPorCanal[canal]/grandTotal):0);
+      rows.push(row);
+    });
+
+    // Total
+    const totRow=['TOTAL GENERAL'];
+    MESES_CORTOS.forEach((_,mi)=>{
+      totRow.push(Math.round(canales.reduce((a,canal)=>
+        a+skuList.reduce((b,{sku})=>b+getVal(canal,sku,'u')[mi]*getPrice(canal,sku),0),0)));
+    });
+    totRow.push(Math.round(grandTotal));
+    totRow.push(1);
+    rows.push(totRow);
+
+    rows.push([]);
+    rows.push(['VENTA POR CATEGORÍA (COP)']);
+    rows.push(['CATEGORÍA','TOTAL AÑO COP','% PART.']);
+
+    const cats=[...new Set(skuList.map(s=>s.cat))].sort();
+    let catTotal=0;
+    const catTotales={};
+    cats.forEach(cat=>{
+      const t=canales.reduce((a,canal)=>
+        a+skuList.filter(s=>s.cat===cat).reduce((b,{sku})=>b+getVal(canal,sku,'u').reduce((s,v)=>s+v,0)*getPrice(canal,sku),0),0);
+      catTotales[cat]=t; catTotal+=t;
+    });
+    cats.forEach(cat=>{
+      rows.push([cat, Math.round(catTotales[cat]), catTotal>0?(catTotales[cat]/catTotal):0]);
+    });
+    rows.push(['TOTAL',Math.round(catTotal),1]);
+    return rows;
+  };
+
+  // ── Crear workbook SheetJS ──
+  const wb = XLSX.utils.book_new();
+
+  const addSheet = (name, data) => {
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    // Ancho de columnas
+    const wscols = [{wch:10},{wch:40},{wch:14}];
+    const nCols  = 3 + canales.length * 13 + 1;
+    for(let i=3;i<nCols;i++) wscols.push({wch:i%13===12?13:9});
+    ws['!cols'] = wscols;
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  };
+
+  addSheet('Cant',    buildDataRows('Cant'));
+  addSheet('Precio',  buildDataRows('Precio'));
+  addSheet('Venta',   buildVentaRows());
+  addSheet('Resumen', buildResumenRows());
+
+  // Descargar
+  XLSX.writeFile(wb, `Presupuesto_Ventas_ILUMAX_${anio}.xlsx`);
+  toast(`✅ Excel generado — ${skuList.length} SKUs, ${canales.length} canales`,'ok');
 }
 
 // ── Helper estado ──────────────────────────────────────────────────────
@@ -7932,11 +8176,194 @@ function pvEstado(msg, err=false, autoHide=0) {
 
 // ── Switch de tabs internas del presupuesto ───────────────────────────
 function pvSwitchTab(tab) {
-  document.getElementById('pv-tab-presupuesto').style.display = tab==='presupuesto' ? '' : 'none';
-  document.getElementById('pv-tab-historico').style.display   = tab==='historico'   ? '' : 'none';
-  document.getElementById('tab-pv-presupuesto').classList.toggle('on', tab==='presupuesto');
-  document.getElementById('tab-pv-historico').classList.toggle('on',   tab==='historico');
+  ['presupuesto','historico','resumen'].forEach(t => {
+    const div = document.getElementById('pv-tab-'+t);
+    const btn = document.getElementById('tab-pv-'+t);
+    if(div) div.style.display = t===tab ? '' : 'none';
+    if(btn) btn.classList.toggle('on', t===tab);
+  });
   if(tab==='historico' && !VCM.cargado) renderDashVentas();
+  if(tab==='resumen') pvRenderResumenDash();
+}
+
+async function pvRenderResumenDash() {
+  const el = document.getElementById('pv-resumen-content');
+  if(!el) return;
+
+  el.innerHTML = '<div style="padding:30px;text-align:center;"><span class="spin-sm spin-bl"></span><div style="margin-top:10px;font-size:11px;color:var(--mu);">Cargando datos de todos los canales...</div></div>';
+
+  // Cargar canales
+  let canales = [...CANALES_DEFAULT];
+  try {
+    const cfg = await sb.get('configuracion','clave=eq.canales_comerciales');
+    if(cfg?.[0]) canales = cfg[0].valor.split(',').map(s=>s.trim()).filter(Boolean);
+  } catch(e){}
+
+  const anio = PV.anio;
+  const MESES_C = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const CANAL_COLORS = {
+    'Ferroeléctrico':'#1E40AF','Mixto':'#15803D','Distribuidores':'#B45309',
+    'Institucional':'#6D28D9','Home Center':'#BE185D','Ara':'#0369A1',
+  };
+
+  // Cargar todos los canales
+  const dataPorCanal = {};
+  for(const canal of canales) {
+    try {
+      const pvRows = await sb.get('presupuesto_ventas',
+        `anio=eq.${anio}&canal=eq.${encodeURIComponent(canal)}&order=creado_en.desc&limit=1`);
+      if(!pvRows?.length) { dataPorCanal[canal]=[]; continue; }
+      const detalle = await sb.get('presupuesto_detalle',
+        `presupuesto_id=eq.${pvRows[0].id}&order=categoria.asc,referencia.asc`);
+      dataPorCanal[canal] = detalle || [];
+    } catch(e) { dataPorCanal[canal]=[]; }
+  }
+
+  // Helpers
+  const getU = (canal,sku) => Array.from({length:12},(_,i)=>parseFloat((dataPorCanal[canal]||[]).find(r=>r.referencia===sku)?.['u'+String(i+1).padStart(2,'0')])||0);
+  const getP = (canal,sku) => parseFloat((dataPorCanal[canal]||[]).find(r=>r.referencia===sku)?.precio_lista)||0;
+  const allSkus = [...new Set(canales.flatMap(c=>(dataPorCanal[c]||[]).map(r=>r.referencia)))];
+  const skuData = {};
+  allSkus.forEach(sku => {
+    canales.forEach(canal => {
+      const r=(dataPorCanal[canal]||[]).find(x=>x.referencia===sku);
+      if(r && !skuData[sku]) skuData[sku]={sku,desc:r.descripcion||'',cat:r.categoria||''};
+    });
+  });
+
+  // Totales por canal
+  const canalTotales = {};
+  let grandTotal = 0;
+  canales.forEach(canal => {
+    const tot = allSkus.reduce((a,sku)=>a+getU(canal,sku).reduce((s,v)=>s+v,0)*getP(canal,sku),0);
+    canalTotales[canal] = { total:tot, meses: Array.from({length:12},(_,mi)=>
+      allSkus.reduce((a,sku)=>a+getU(canal,sku)[mi]*getP(canal,sku),0)) };
+    grandTotal += tot;
+  });
+
+  // Totales por categoría
+  const cats = [...new Set(Object.values(skuData).map(s=>s.cat))].sort();
+  const catTotales = {};
+  cats.forEach(cat => {
+    const skusDeCat = Object.values(skuData).filter(s=>s.cat===cat).map(s=>s.sku);
+    catTotales[cat] = canales.reduce((a,canal)=>
+      a+skusDeCat.reduce((b,sku)=>b+getU(canal,sku).reduce((s,v)=>s+v,0)*getP(canal,sku),0),0);
+  });
+
+  // Totales mensuales globales
+  const totMeses = Array.from({length:12},(_,mi)=>
+    canales.reduce((a,canal)=>a+allSkus.reduce((b,sku)=>b+getU(canal,sku)[mi]*getP(canal,sku),0),0));
+
+  // ── Render HTML ──────────────────────────────────────────────────
+  el.innerHTML = `
+  <!-- KPIs globales -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px;">
+    <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:12px;padding:14px;color:#fff;text-align:center;">
+      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-bottom:4px;">Total Presupuestado ${anio}</div>
+      <div style="font-size:22px;font-weight:800;color:#f5c518;">${rvFmtM(grandTotal)}</div>
+      <div style="font-size:9px;color:rgba(255,255,255,.4);margin-top:2px;">${canales.length} canales · ${allSkus.length} SKUs</div>
+    </div>
+    <div style="background:var(--w);border-radius:12px;padding:14px;box-shadow:var(--sh);text-align:center;">
+      <div style="font-size:10px;color:var(--mu);margin-bottom:4px;">Promedio mensual</div>
+      <div style="font-size:20px;font-weight:800;color:var(--bl);">${rvFmtM(grandTotal/12)}</div>
+    </div>
+    <div style="background:var(--w);border-radius:12px;padding:14px;box-shadow:var(--sh);text-align:center;">
+      <div style="font-size:10px;color:var(--mu);margin-bottom:4px;">Mes pico</div>
+      <div style="font-size:20px;font-weight:800;color:#16a34a;">${MESES_C[totMeses.indexOf(Math.max(...totMeses))]}</div>
+      <div style="font-size:9px;color:var(--mu);">${rvFmtM(Math.max(...totMeses))}</div>
+    </div>
+    <div style="background:var(--w);border-radius:12px;padding:14px;box-shadow:var(--sh);text-align:center;">
+      <div style="font-size:10px;color:var(--mu);margin-bottom:4px;">Canal líder</div>
+      <div style="font-size:14px;font-weight:800;color:#7c3aed;">${canales.reduce((a,c)=>canalTotales[c].total>canalTotales[a].total?c:a,canales[0]||'—')}</div>
+      <div style="font-size:9px;color:var(--mu);">${rvFmtM(Math.max(...canales.map(c=>canalTotales[c].total)))}</div>
+    </div>
+  </div>
+
+  <!-- Barras por canal -->
+  <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);padding:14px;margin-bottom:12px;">
+    <div style="font-size:12px;font-weight:800;margin-bottom:12px;">📦 Por Canal</div>
+    ${canales.map(canal => {
+      const d = canalTotales[canal];
+      const pct = grandTotal>0 ? d.total/grandTotal : 0;
+      const color = CANAL_COLORS[canal] || '#64748b';
+      return `
+      <div style="margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <div style="width:10px;height:10px;border-radius:50%;background:#${color.replace('#','')};flex-shrink:0;"></div>
+          <div style="flex:1;font-size:12px;font-weight:700;">${canal}</div>
+          <div style="font-size:12px;font-weight:800;color:#${color.replace('#','')};">${rvFmtM(d.total)}</div>
+          <div style="font-size:10px;color:var(--mu);min-width:36px;text-align:right;">${rvPct(pct)}</div>
+        </div>
+        <div style="height:8px;background:var(--b1);border-radius:4px;overflow:hidden;">
+          <div style="width:${(pct*100).toFixed(1)}%;height:100%;background:${color};border-radius:4px;"></div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>
+
+  <!-- Tabla mensual por canal -->
+  <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);margin-bottom:12px;overflow:hidden;">
+    <div style="padding:11px 14px;font-size:12px;font-weight:800;border-bottom:1px solid var(--b1);">📅 Venta por Canal × Mes (COP)</div>
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:10px;">
+        <thead>
+          <tr style="background:#0f172a;">
+            <th style="padding:8px 12px;text-align:left;color:#fff;font-size:10px;position:sticky;left:0;background:#0f172a;">Canal</th>
+            ${MESES_C.map(m=>`<th style="padding:8px 8px;text-align:right;color:#94a3b8;font-size:9px;white-space:nowrap;">${m}</th>`).join('')}
+            <th style="padding:8px 10px;text-align:right;color:#f5c518;font-size:10px;">Total</th>
+            <th style="padding:8px 10px;text-align:right;color:#f5c518;font-size:10px;">%</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${canales.map((canal,ci)=>{
+            const d = canalTotales[canal];
+            const color = CANAL_COLORS[canal]||'#64748b';
+            const pct = grandTotal>0?d.total/grandTotal:0;
+            return `<tr style="border-bottom:1px solid var(--b1);background:${ci%2?'var(--bg)':''};">
+              <td style="padding:8px 12px;font-weight:700;position:sticky;left:0;background:${ci%2?'var(--bg)':'var(--w)'};">
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <div style="width:8px;height:8px;border-radius:50%;background:${color};"></div>
+                  ${canal}
+                </div>
+              </td>
+              ${d.meses.map(v=>`<td style="padding:7px 8px;text-align:right;color:var(--mu);">${v?rvFmtM(v):'—'}</td>`).join('')}
+              <td style="padding:7px 10px;text-align:right;font-weight:800;color:${color};">${rvFmtM(d.total)}</td>
+              <td style="padding:7px 10px;text-align:right;font-size:10px;color:var(--mu);">${rvPct(pct)}</td>
+            </tr>`;
+          }).join('')}
+          <tr style="background:#f1f5f9;border-top:2px solid var(--b1);">
+            <td style="padding:9px 12px;font-weight:800;position:sticky;left:0;background:#f1f5f9;">TOTAL</td>
+            ${totMeses.map(v=>`<td style="padding:8px 8px;text-align:right;font-weight:700;color:var(--bl);">${v?rvFmtM(v):'—'}</td>`).join('')}
+            <td style="padding:8px 10px;text-align:right;font-weight:800;font-size:12px;">${rvFmtM(grandTotal)}</td>
+            <td style="padding:8px 10px;text-align:right;font-weight:800;">100%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Por categoría -->
+  ${cats.length ? `
+  <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);padding:14px;">
+    <div style="font-size:12px;font-weight:800;margin-bottom:12px;">🏷️ Por Categoría</div>
+    ${cats.map((cat,ci)=>{
+      const tot = catTotales[cat]||0;
+      const pct = grandTotal>0?tot/grandTotal:0;
+      return `
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--b1);">
+        <div style="flex:1;">
+          <div style="font-size:11px;font-weight:700;">${cat}</div>
+          <div style="margin-top:4px;height:4px;background:var(--b1);border-radius:2px;overflow:hidden;">
+            <div style="width:${(pct*100).toFixed(1)}%;height:100%;background:#2563eb;border-radius:2px;"></div>
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div style="font-size:12px;font-weight:800;">${rvFmtM(tot)}</div>
+          <div style="font-size:9px;color:var(--mu);">${rvPct(pct)}</div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>` : ''}`;
 }
 
 async function pvCambiarAnioVCM(v) {
@@ -9271,6 +9698,1280 @@ const rvPct  = p => (p*100).toFixed(1)+'%';
 const rvFecha = n => { const d=new Date(1899,11,30); d.setDate(d.getDate()+n); return d; };
 const rvFmtD = d => d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'});
 const CCTAG = {'ESPECIALIZADO':'#1e40af','CANAL MIXTO':'#15803d','PROYECTOS':'#b45309','ONLINE':'#7e22ce','DISTRIBUIDOR':'#0369a1','CANAL HOMECENTER':'#c2410c','HARD DISCOUNT':'#c2410c','CANAL MODERNO':'#be185d','INSTITUCIONAL':'#b45309'};
+
+
+
+// ══════════════════════════════════════════════════════════════════════
+// ADMIN CENTER — Panel de administración central ILUMAX
+// ══════════════════════════════════════════════════════════════════════
+const AC = {
+  tab: 'usuarios',
+  usuarios: [],
+  config: {},
+  cats: [],
+  subs: [],
+  perms: [],
+  modulos: { admin:[], aprobador:[], empleado:[] },
+  cargando: false,
+};
+
+const AC_TABS = [
+  { id:'usuarios',  lbl:'👥 Usuarios',        desc:'Crear, editar y asignar roles' },
+  { id:'permisos',  lbl:'🔐 Permisos Ppto.',  desc:'Qué área llena qué subcategoría' },
+  { id:'catalogo',  lbl:'📁 Catálogo Ppto.',  desc:'Categorías y subcategorías' },
+  { id:'modulos',   lbl:'🧩 Módulos por Rol', desc:'Qué ve cada tipo de usuario' },
+  { id:'sistema',   lbl:'⚙️ Sistema',         desc:'Límites, correos y parámetros' },
+];
+
+const AC_ROLES     = ['admin','aprobador','empleado'];
+const AC_ROLES_PPT = ['admin','líder','contabilidad','gerencia','lider'];
+const AC_MODULOS_DISP = [
+  { id:'inicio',             lbl:'🏠 Inicio / Dashboard' },
+  { id:'mis',                lbl:'📋 Mis Solicitudes' },
+  { id:'notif',              lbl:'🔔 Notificaciones' },
+  { id:'apro',               lbl:'✅ Aprobaciones' },
+  { id:'admin',              lbl:'⚙️ Configuración' },
+  { id:'admin-center',       lbl:'🎛️ Admin Center' },
+  { id:'rrhh',               lbl:'👔 Actividades RRHH' },
+  { id:'reporte-ventas',     lbl:'📊 Reporte Diario Ventas' },
+  { id:'ppto-areas',         lbl:'🗂️ Presupuesto por Áreas' },
+  { id:'presupuesto-ventas', lbl:'🎯 Ppto. de Ventas' },
+  { id:'precios-lista',      lbl:'💰 Lista de Precios' },
+  { id:'inventario',         lbl:'📦 Inventario' },
+  { id:'centro',             lbl:'⚡ Mi Centro de Trabajo' },
+  { id:'pres',               lbl:'📒 Presupuestos (legacy)' },
+];
+
+async function renderAdminCenter() {
+  const el = document.getElementById('ac-content');
+  if(!el) return;
+  if(!(typeof esAdmin==='function' ? esAdmin() : CU?.rol==='admin')) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--rd);">⛔ Solo administradores pueden acceder a esta sección.</div>';
+    return;
+  }
+  el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:220px;"><span class="spin-sm spin-bl"></span></div>';
+  await acCargarTodo();
+  acRenderShell(el);
+}
+
+async function acCargarTodo() {
+  const [usuarios, cfgRows, cats, subs, perms] = await Promise.all([
+    sb.get('usuarios','order=nombre.asc').catch(()=>[]),
+    sb.get('configuracion','order=clave.asc').catch(()=>[]),
+    sb.get('categorias_ppto','activo=eq.true&order=orden.asc').catch(()=>[]),
+    sb.get('subcategorias_ppto','activo=eq.true&order=cat_codigo.asc,orden.asc').catch(()=>[]),
+    sb.get('permisos_ppto','order=area.asc,sub_codigo.asc').catch(()=>[]),
+  ]);
+  AC.usuarios = usuarios || [];
+  AC.cats     = cats     || [];
+  AC.subs     = subs     || [];
+  AC.perms    = perms    || [];
+  AC.config   = {};
+  (cfgRows || []).forEach(r => AC.config[r.clave] = r.valor);
+  // Parsear módulos por rol
+  ['admin','aprobador','empleado'].forEach(rol => {
+    const val = AC.config[`modulos_${rol}`] || '';
+    AC.modulos[rol] = val ? val.split(',').map(s=>s.trim()).filter(Boolean) : [];
+  });
+}
+
+function acRenderShell(el) {
+  el.innerHTML = `
+  <!-- HEADER -->
+  <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);padding:16px 20px;display:flex;align-items:center;gap:12px;">
+    <div>
+      <div style="font-size:16px;font-weight:800;color:#fff;">🎛️ Admin Center — ILUMAX</div>
+      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">Panel de administración central · Solo administradores</div>
+    </div>
+    <div style="margin-left:auto;display:flex;gap:6px;">
+      <button class="btn btn-sm" style="background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.2);" onclick="acCargarTodo().then(()=>acRenderTab())">🔄 Recargar</button>
+    </div>
+  </div>
+
+  <!-- TABS LATERALES + CONTENIDO -->
+  <div style="display:flex;min-height:calc(100vh - 120px);">
+    <!-- Sidebar -->
+    <div style="width:200px;flex-shrink:0;background:#f8fafc;border-right:1px solid var(--b1);padding:10px 8px;">
+      ${AC_TABS.map(t=>`
+      <button onclick="AC.tab='${t.id}';acRenderTab()" id="ac-tab-${t.id}"
+        style="width:100%;text-align:left;padding:10px 12px;border:none;border-radius:10px;cursor:pointer;margin-bottom:4px;background:${AC.tab===t.id?'var(--bl)':'transparent'};color:${AC.tab===t.id?'#fff':'var(--tx)'};transition:all .15s;">
+        <div style="font-size:12px;font-weight:700;">${t.lbl}</div>
+        <div style="font-size:9px;opacity:.7;margin-top:1px;">${t.desc}</div>
+      </button>`).join('')}
+    </div>
+    <!-- Contenido -->
+    <div id="ac-tab-content" style="flex:1;overflow-y:auto;"></div>
+  </div>`;
+  acRenderTab();
+}
+
+function acRenderTab() {
+  // Update sidebar active state
+  AC_TABS.forEach(t => {
+    const btn = document.getElementById(`ac-tab-${t.id}`);
+    if(btn) {
+      btn.style.background = AC.tab===t.id ? 'var(--bl)' : 'transparent';
+      btn.style.color      = AC.tab===t.id ? '#fff' : 'var(--tx)';
+    }
+  });
+  const el = document.getElementById('ac-tab-content');
+  if(!el) return;
+  if(AC.tab==='usuarios')  acRenderUsuarios(el);
+  if(AC.tab==='permisos')  acRenderPermisos(el);
+  if(AC.tab==='catalogo')  acRenderCatalogo(el);
+  if(AC.tab==='modulos')   acRenderModulos(el);
+  if(AC.tab==='sistema')   acRenderSistema(el);
+}
+
+// ── 1. USUARIOS ──────────────────────────────────────────────────────
+function acRenderUsuarios(el) {
+  const areas = [...new Set(AC.usuarios.map(u=>u.area).filter(Boolean))].sort();
+  el.innerHTML = `
+  <div style="padding:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <div style="font-size:14px;font-weight:800;">👥 Usuarios <span style="font-size:11px;color:var(--mu);font-weight:400;">(${AC.usuarios.length})</span></div>
+      <button class="btn btn-bl btn-sm" onclick="acModalUsuario()">+ Nuevo usuario</button>
+    </div>
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead>
+          <tr style="background:#f8fafc;">
+            <th style="padding:10px 12px;text-align:left;font-size:10px;color:var(--mu);font-weight:700;">NOMBRE</th>
+            <th style="padding:10px 12px;text-align:left;font-size:10px;color:var(--mu);font-weight:700;">EMAIL</th>
+            <th style="padding:10px 12px;text-align:center;font-size:10px;color:var(--mu);font-weight:700;">ROL SISTEMA</th>
+            <th style="padding:10px 12px;text-align:center;font-size:10px;color:var(--mu);font-weight:700;">ROL PPTO.</th>
+            <th style="padding:10px 12px;text-align:center;font-size:10px;color:var(--mu);font-weight:700;">ÁREA</th>
+            <th style="padding:10px 12px;text-align:center;font-size:10px;color:var(--mu);font-weight:700;">ACTIVO</th>
+            <th style="padding:10px 12px;text-align:center;font-size:10px;color:var(--mu);font-weight:700;">ACCIONES</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${AC.usuarios.map(u => {
+            const rolColor = {admin:'#dc2626',aprobador:'#d97706',empleado:'#2563eb'}[u.rol]||'#64748b';
+            return `<tr style="border-bottom:1px solid var(--b1);">
+              <td style="padding:10px 12px;font-weight:700;">${u.nombre}</td>
+              <td style="padding:10px 12px;color:var(--mu);font-size:11px;">${u.email}</td>
+              <td style="padding:10px 12px;text-align:center;">
+                <span style="background:${rolColor}22;color:${rolColor};padding:3px 10px;border-radius:10px;font-size:10px;font-weight:700;">${u.rol}</span>
+              </td>
+              <td style="padding:10px 12px;text-align:center;">
+                <span style="background:rgba(124,58,237,.1);color:#7c3aed;padding:3px 10px;border-radius:10px;font-size:10px;font-weight:700;">${u.rol_pres||'—'}</span>
+              </td>
+              <td style="padding:10px 12px;text-align:center;font-size:11px;color:var(--mu);">${u.area||'—'}</td>
+              <td style="padding:10px 12px;text-align:center;">
+                <label class="sw"><input type="checkbox" ${u.activo?'checked':''} onchange="acToggleUsuario('${u.id}',this.checked)"><span class="sw-sl"></span></label>
+              </td>
+              <td style="padding:10px 12px;text-align:center;">
+                <button class="btn btn-bl btn-xs" onclick="acModalUsuario(${JSON.stringify(u).replace(/"/g,'&quot;')})">✏️</button>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function acModalUsuario(u) {
+  const areas = [...new Set(AC.usuarios.map(x=>x.area).filter(Boolean))].sort();
+  const esNuevo = !u;
+  u = u || {};
+  const mo = document.createElement('div');
+  mo.id = 'ac-mo-usuario';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `
+  <div style="background:var(--w);border-radius:16px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-size:14px;font-weight:800;">${esNuevo?'➕ Nuevo usuario':'✏️ Editar usuario'}</div>
+      <button onclick="document.getElementById('ac-mo-usuario').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button>
+    </div>
+    <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">NOMBRE COMPLETO</label>
+        <input class="inp" id="ac-u-nombre" value="${u.nombre||''}" placeholder="Nombre completo"></div>
+      <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">EMAIL</label>
+        <input class="inp" id="ac-u-email" value="${u.email||''}" placeholder="correo@ilumax.com.co" type="email" ${!esNuevo?'disabled':''}></div>
+      ${esNuevo?`<div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">CONTRASEÑA INICIAL</label>
+        <input class="inp" id="ac-u-pass" placeholder="Contraseña inicial" type="password"></div>`:''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">ROL EN SISTEMA</label>
+          <select class="inp" id="ac-u-rol">
+            ${AC_ROLES.map(r=>`<option value="${r}" ${u.rol===r?'selected':''}>${r}</option>`).join('')}
+          </select></div>
+        <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">ROL EN PRESUPUESTO</label>
+          <select class="inp" id="ac-u-rolpres">
+            ${AC_ROLES_PPT.map(r=>`<option value="${r}" ${u.rol_pres===r?'selected':''}>${r}</option>`).join('')}
+          </select></div>
+      </div>
+      <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">ÁREA</label>
+        <div style="display:flex;gap:6px;">
+          <select class="inp" id="ac-u-area" style="flex:1;" onchange="if(this.value==='__nueva__')document.getElementById('ac-u-area-new').style.display='block'">
+            <option value="">— Seleccionar —</option>
+            ${areas.map(a=>`<option value="${a}" ${u.area===a?'selected':''}>${a}</option>`).join('')}
+            <option value="__nueva__">+ Nueva área...</option>
+          </select>
+        </div>
+        <input class="inp" id="ac-u-area-new" placeholder="Nombre del área nueva" style="display:none;margin-top:6px;"></div>
+      <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">COLOR (para identificación)</label>
+        <input type="color" id="ac-u-color" value="${u.color||'#2563eb'}" style="width:60px;height:36px;border:none;border-radius:8px;cursor:pointer;padding:2px;"></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-sm" onclick="document.getElementById('ac-mo-usuario').remove()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="acGuardarUsuario('${u.id||''}','${u.email||''}')">💾 Guardar</button>
+    </div>
+  </div>`;
+  document.body.appendChild(mo);
+}
+
+async function acGuardarUsuario(uid, emailOrig) {
+  const nombre  = document.getElementById('ac-u-nombre')?.value.trim();
+  const email   = document.getElementById('ac-u-email')?.value.trim() || emailOrig;
+  const rol     = document.getElementById('ac-u-rol')?.value;
+  const rolpres = document.getElementById('ac-u-rolpres')?.value;
+  const areaEl  = document.getElementById('ac-u-area');
+  const areaNw  = document.getElementById('ac-u-area-new')?.value.trim();
+  const area    = (areaEl?.value==='__nueva__' ? areaNw : areaEl?.value) || '';
+  const color   = document.getElementById('ac-u-color')?.value || '#2563eb';
+  const passEl  = document.getElementById('ac-u-pass');
+
+  if(!nombre || !email) { toast('Nombre y email son requeridos','wa'); return; }
+
+  const data = { nombre, rol, rol_pres:rolpres, area, color, actualizado:new Date().toISOString() };
+
+  try {
+    if(uid) {
+      await sb.patch('usuarios', `id=eq.${uid}`, data);
+      const i = AC.usuarios.findIndex(u=>u.id===uid);
+      if(i>=0) AC.usuarios[i] = {...AC.usuarios[i], ...data};
+    } else {
+      if(passEl?.value) {
+        // Hash simple para demo — en producción usar función de Supabase
+        data.pass_hash = btoa(passEl.value);
+      }
+      data.email = email;
+      data.activo = true;
+      data.creado_en = new Date().toISOString();
+      const res = await sb.post('usuarios', data);
+      AC.usuarios.push({...data, id:res?.id||'u'+Date.now()});
+    }
+    document.getElementById('ac-mo-usuario')?.remove();
+    toast('✅ Usuario guardado','ok');
+    acRenderTab();
+  } catch(e) { toast('❌ '+e.message,'er'); }
+}
+
+async function acToggleUsuario(uid, activo) {
+  try {
+    await sb.patch('usuarios',`id=eq.${uid}`,{activo, actualizado:new Date().toISOString()});
+    const u = AC.usuarios.find(u=>u.id===uid);
+    if(u) u.activo = activo;
+    toast(activo?'✅ Usuario activado':'⛔ Usuario desactivado','ok');
+  } catch(e) { toast('❌ '+e.message,'er'); }
+}
+
+// ── 2. PERMISOS DE PRESUPUESTO ────────────────────────────────────────
+function acRenderPermisos(el) {
+  const areas = [...new Set(AC.usuarios.map(u=>u.area).filter(Boolean))].sort();
+  // Estado interno del configurador
+  if(!AC._perm) AC._perm = { areaActiva: areas[0]||'', cambiosPendientes: {} };
+  if(!AC._perm.areaActiva && areas.length) AC._perm.areaActiva = areas[0];
+
+  el.innerHTML = `
+  <div style="display:flex;height:calc(100vh - 112px);overflow:hidden;">
+
+    <!-- COLUMNA IZQUIERDA: selector de área fijo -->
+    <div style="width:190px;flex-shrink:0;border-right:2px solid var(--b1);display:flex;flex-direction:column;background:#f8fafc;">
+      <div style="padding:12px 14px;border-bottom:1px solid var(--b1);">
+        <div style="font-size:11px;font-weight:800;color:var(--mu);margin-bottom:2px;">ÁREAS</div>
+        <div style="font-size:9px;color:var(--mu);">Selecciona para configurar</div>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:8px;">
+        ${areas.map(area => {
+          const totalSubs = AC.subs.length;
+          const asignadas = AC.perms.filter(p=>p.area===area && p.puede_llenar).length;
+          const pct = totalSubs>0 ? Math.round(asignadas/totalSubs*100) : 0;
+          const activa = area === AC._perm.areaActiva;
+          return `
+          <button onclick="AC._perm.areaActiva='${area}';acRefreshPermisosDerecha()" id="ac-area-btn-${area.replace(/\s/g,'_')}"
+            style="width:100%;text-align:left;padding:10px 12px;border:2px solid ${activa?'var(--bl)':'transparent'};border-radius:10px;
+            cursor:pointer;margin-bottom:4px;background:${activa?'rgba(37,99,235,.08)':'var(--w)'};transition:all .15s;">
+            <div style="font-size:12px;font-weight:${activa?'800':'600'};color:${activa?'var(--bl)':'var(--tx)'};">${area}</div>
+            <div style="display:flex;align-items:center;gap:5px;margin-top:4px;">
+              <div style="flex:1;height:4px;background:var(--b1);border-radius:2px;overflow:hidden;">
+                <div style="width:${pct}%;height:100%;background:${pct===100?'#16a34a':pct>50?'var(--bl)':'#d97706'};border-radius:2px;"></div>
+              </div>
+              <span style="font-size:9px;color:var(--mu);white-space:nowrap;">${asignadas}/${totalSubs}</span>
+            </div>
+          </button>`;
+        }).join('')}
+      </div>
+      <!-- Botón guardar fijo abajo -->
+      <div style="padding:10px 12px;border-top:1px solid var(--b1);">
+        <button class="btn btn-gr btn-sm" style="width:100%;" onclick="acGuardarPermisosArea()">
+          💾 Guardar área
+        </button>
+        <div id="ac-perm-pending" style="font-size:9px;color:var(--mu);text-align:center;margin-top:4px;"></div>
+      </div>
+    </div>
+
+    <!-- COLUMNA DERECHA: categorías y subcategorías siempre visibles -->
+    <div style="flex:1;overflow-y:auto;display:flex;flex-direction:column;">
+      <!-- Header del área activa -->
+      <div style="padding:12px 16px;border-bottom:1px solid var(--b1);background:var(--w);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;">
+        <div>
+          <div style="font-size:13px;font-weight:800;" id="ac-perm-area-titulo">— Selecciona un área —</div>
+          <div style="font-size:10px;color:var(--mu);" id="ac-perm-area-sub">Marca o desmarca las subcategorías que puede llenar</div>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-sm" style="font-size:10px;" onclick="acSeleccionarTodosPermisos(true)">☑ Todas</button>
+          <button class="btn btn-sm" style="font-size:10px;" onclick="acSeleccionarTodosPermisos(false)">☐ Ninguna</button>
+        </div>
+      </div>
+      <!-- Lista de categorías expandidas -->
+      <div id="ac-perm-lista" style="padding:12px 16px;flex:1;"></div>
+    </div>
+  </div>`;
+
+  acRefreshPermisosDerecha();
+}
+
+function acRefreshPermisosDerecha() {
+  const area = AC._perm?.areaActiva || '';
+
+  // Actualizar botones del sidebar
+  document.querySelectorAll('[id^="ac-area-btn-"]').forEach(btn => {
+    const btnArea = btn.id.replace('ac-area-btn-','').replace(/_/g,' ');
+    const activa  = btnArea === area;
+    btn.style.border    = `2px solid ${activa?'var(--bl)':'transparent'}`;
+    btn.style.background = activa ? 'rgba(37,99,235,.08)' : 'var(--w)';
+    btn.querySelector('div').style.fontWeight = activa ? '800' : '600';
+    btn.querySelector('div').style.color      = activa ? 'var(--bl)' : 'var(--tx)';
+  });
+
+  const titulo = document.getElementById('ac-perm-area-titulo');
+  const sub    = document.getElementById('ac-perm-area-sub');
+  const lista  = document.getElementById('ac-perm-lista');
+  if(!lista) return;
+
+  if(!area) {
+    if(titulo) titulo.textContent = '— Selecciona un área —';
+    lista.innerHTML = '<div style="padding:40px;text-align:center;color:var(--mu);">👈 Selecciona un área de la izquierda</div>';
+    return;
+  }
+
+  const asignadas = AC.perms.filter(p=>p.area===area && p.puede_llenar).length;
+  if(titulo) titulo.textContent = area;
+  if(sub) sub.textContent = `${asignadas} de ${AC.subs.length} subcategorías asignadas`;
+
+  // Renderizar todas las categorías expandidas con sus subcategorías
+  lista.innerHTML = AC.cats.map(cat => {
+    const subs = AC.subs.filter(s=>s.cat_codigo===cat.codigo);
+    if(!subs.length) return '';
+    const subsAsig = subs.filter(s=>AC.perms.some(p=>p.sub_codigo===s.codigo && p.area===area && p.puede_llenar)).length;
+    const todosAsig = subsAsig === subs.length;
+    const algunoAsig = subsAsig > 0 && !todosAsig;
+
+    return `
+    <div style="margin-bottom:12px;border:1px solid var(--b1);border-radius:12px;overflow:hidden;">
+      <!-- Header categoría: clic selecciona/deselecciona todas sus subs -->
+      <div style="display:flex;align-items:center;gap:10px;padding:11px 14px;background:#1e3a5f;cursor:pointer;"
+        onclick="acToggleCategoriaSubs('${cat.codigo}',${!todosAsig})">
+        <input type="checkbox" data-cat="${cat.codigo}"
+          ${todosAsig?'checked':''} ${algunoAsig?'indeterminate':'' /* set via JS */}
+          style="width:16px;height:16px;accent-color:#f5c518;flex-shrink:0;cursor:pointer;"
+          onclick="event.stopPropagation();acToggleCategoriaSubs('${cat.codigo}',this.checked)">
+        <div style="flex:1;">
+          <div style="font-size:12px;font-weight:800;color:#fff;">${cat.nombre}</div>
+          <div style="font-size:9px;color:rgba(255,255,255,.5);">${cat.codigo} · ${subsAsig}/${subs.length} subcategorías asignadas</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div style="height:6px;width:80px;background:rgba(255,255,255,.2);border-radius:3px;overflow:hidden;">
+            <div style="width:${Math.round(subsAsig/subs.length*100)}%;height:100%;background:${subsAsig===subs.length?'#16a34a':'#f5c518'};border-radius:3px;"></div>
+          </div>
+          <span style="font-size:10px;color:rgba(255,255,255,.6);">${Math.round(subsAsig/subs.length*100)}%</span>
+        </div>
+      </div>
+      <!-- Subcategorías en grid de píldoras -->
+      <div style="padding:12px 14px;display:flex;flex-wrap:wrap;gap:8px;">
+        ${subs.map(sub => {
+          const tiene = AC.perms.some(p=>p.sub_codigo===sub.codigo && p.area===area && p.puede_llenar);
+          return `
+          <label data-sub="${sub.codigo}" data-area="${area}"
+            style="display:flex;align-items:center;gap:6px;padding:7px 12px;border-radius:20px;cursor:pointer;
+            border:2px solid ${tiene?'var(--bl)':'var(--b1)'};
+            background:${tiene?'rgba(37,99,235,.08)':'var(--w)'};
+            transition:all .15s;user-select:none;"
+            onclick="acTogglePildora(this,'${sub.codigo}','${area}')">
+            <span style="font-size:14px;line-height:1;">${tiene?'✅':'⬜'}</span>
+            <div>
+              <div style="font-size:11px;font-weight:${tiene?'700':'500'};color:${tiene?'var(--bl)':'var(--tx)'};">${sub.nombre}</div>
+              <div style="font-size:9px;color:var(--mu);">${sub.codigo}${sub.centro_costo?' · CC:'+sub.centro_costo:''}</div>
+            </div>
+          </label>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Aplicar indeterminate vía JS (no se puede en HTML)
+  AC.cats.forEach(cat => {
+    const subs = AC.subs.filter(s=>s.cat_codigo===cat.codigo);
+    const asig = subs.filter(s=>AC.perms.some(p=>p.sub_codigo===s.codigo && p.area===area && p.puede_llenar)).length;
+    const chk  = document.querySelector(`input[data-cat="${cat.codigo}"]`);
+    if(chk) chk.indeterminate = asig>0 && asig<subs.length;
+  });
+
+  acActualizarPendientes();
+}
+
+function acTogglePildora(label, subCod, area) {
+  // Leer estado actual del cache
+  const idx = AC.perms.findIndex(p=>p.sub_codigo===subCod && p.area===area);
+  const tenia = idx>=0 ? AC.perms[idx].puede_llenar : false;
+  const ahora = !tenia;
+
+  // Actualizar cache
+  if(idx>=0) { AC.perms[idx].puede_llenar=ahora; AC.perms[idx].puede_ver=ahora; }
+  else if(ahora) AC.perms.push({sub_codigo:subCod, area, puede_ver:true, puede_llenar:true});
+
+  // Marcar como pendiente
+  if(!AC._perm.cambiosPendientes[area]) AC._perm.cambiosPendientes[area] = {};
+  AC._perm.cambiosPendientes[area][subCod] = ahora;
+
+  // Actualizar visual de la píldora sin re-renderizar todo
+  label.style.border     = `2px solid ${ahora?'var(--bl)':'var(--b1)'}`;
+  label.style.background = ahora ? 'rgba(37,99,235,.08)' : 'var(--w)';
+  label.querySelector('span').textContent = ahora ? '✅' : '⬜';
+  label.querySelector('div div').style.fontWeight = ahora ? '700' : '500';
+  label.querySelector('div div').style.color      = ahora ? 'var(--bl)' : 'var(--tx)';
+
+  // Actualizar header de categoría
+  const cat   = AC.subs.find(s=>s.codigo===subCod)?.cat_codigo;
+  const subs  = AC.subs.filter(s=>s.cat_codigo===cat);
+  const asig  = subs.filter(s=>AC.perms.some(p=>p.sub_codigo===s.codigo && p.area===area && p.puede_llenar)).length;
+  const chk   = document.querySelector(`input[data-cat="${cat}"]`);
+  if(chk) { chk.checked=asig===subs.length; chk.indeterminate=asig>0&&asig<subs.length; }
+
+  // Actualizar barra del sidebar
+  const totalSubs = AC.subs.length;
+  const totalAsig = AC.perms.filter(p=>p.area===area && p.puede_llenar).length;
+  const pct = totalSubs>0 ? Math.round(totalAsig/totalSubs*100) : 0;
+  const sideBtn = document.getElementById('ac-area-btn-'+area.replace(/\s/g,'_'));
+  if(sideBtn) {
+    const barra = sideBtn.querySelector('.flex div');
+    const texto = sideBtn.querySelector('.flex span');
+    if(barra) { barra.style.width=pct+'%'; barra.style.background=pct===100?'#16a34a':pct>50?'var(--bl)':'#d97706'; }
+    if(texto) texto.textContent = `${totalAsig}/${totalSubs}`;
+  }
+
+  acActualizarPendientes();
+}
+
+function acToggleCategoriaSubs(catCod, activar) {
+  const area = AC._perm?.areaActiva || '';
+  const subs = AC.subs.filter(s=>s.cat_codigo===catCod);
+  subs.forEach(sub => {
+    const idx = AC.perms.findIndex(p=>p.sub_codigo===sub.codigo && p.area===area);
+    if(idx>=0) { AC.perms[idx].puede_llenar=activar; AC.perms[idx].puede_ver=activar; }
+    else if(activar) AC.perms.push({sub_codigo:sub.codigo, area, puede_ver:true, puede_llenar:true});
+    if(!AC._perm.cambiosPendientes[area]) AC._perm.cambiosPendientes[area]={};
+    AC._perm.cambiosPendientes[area][sub.codigo] = activar;
+  });
+  acRefreshPermisosDerecha();
+}
+
+function acSeleccionarTodosPermisos(activar) {
+  const area = AC._perm?.areaActiva || '';
+  if(!area) return;
+  AC.subs.forEach(sub => {
+    const idx = AC.perms.findIndex(p=>p.sub_codigo===sub.codigo && p.area===area);
+    if(idx>=0) { AC.perms[idx].puede_llenar=activar; AC.perms[idx].puede_ver=activar; }
+    else if(activar) AC.perms.push({sub_codigo:sub.codigo, area, puede_ver:true, puede_llenar:true});
+    if(!AC._perm.cambiosPendientes[area]) AC._perm.cambiosPendientes[area]={};
+    AC._perm.cambiosPendientes[area][sub.codigo] = activar;
+  });
+  acRefreshPermisosDerecha();
+}
+
+function acActualizarPendientes() {
+  const area    = AC._perm?.areaActiva || '';
+  const cambios = Object.keys(AC._perm?.cambiosPendientes[area]||{}).length;
+  const el      = document.getElementById('ac-perm-pending');
+  if(el) el.textContent = cambios ? `${cambios} cambio${cambios>1?'s':''} sin guardar` : 'Todo guardado ✅';
+  if(el) el.style.color = cambios ? '#d97706' : '#16a34a';
+}
+
+async function acGuardarPermisosArea() {
+  const area    = AC._perm?.areaActiva || '';
+  const cambios = AC._perm?.cambiosPendientes[area] || {};
+  const entries = Object.entries(cambios);
+  if(!entries.length) { toast('Sin cambios pendientes','wa'); return; }
+
+  const btn = document.querySelector('[onclick="acGuardarPermisosArea()"]');
+  if(btn) { btn.textContent='⏳ Guardando...'; btn.disabled=true; }
+
+  let ok=0, err=0;
+  for(const [subCod, val] of entries) {
+    try {
+      await sb.upsert('permisos_ppto',
+        { area, sub_codigo:subCod, puede_ver:val, puede_llenar:val, actualizado:new Date().toISOString() },
+        'area,sub_codigo'
+      );
+      ok++;
+    } catch(e) { err++; }
+  }
+
+  // Limpiar pendientes del área
+  if(AC._perm.cambiosPendientes[area]) delete AC._perm.cambiosPendientes[area];
+
+  if(btn) { btn.textContent='💾 Guardar área'; btn.disabled=false; }
+  toast(`✅ ${ok} permisos guardados para ${area}${err?` · ❌ ${err} errores`:''}`, err?'wa':'ok');
+  acActualizarPendientes();
+
+  // Refrescar barras del sidebar
+  acRefreshPermisosDerecha();
+}
+
+
+// ── 3. CATÁLOGO DE PRESUPUESTO ────────────────────────────────────────
+function acRenderCatalogo(el) {
+  el.innerHTML = `
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;height:100%;">
+
+    <!-- CATEGORÍAS -->
+    <div style="border-right:1px solid var(--b1);padding:16px;">
+      <div style="font-size:13px;font-weight:800;margin-bottom:12px;">📁 Categorías <span style="font-size:10px;color:var(--mu);font-weight:400;">(${AC.cats.length})</span></div>
+      <div style="background:#f8fafc;border-radius:10px;padding:12px;margin-bottom:12px;">
+        <div style="font-size:9px;font-weight:700;color:var(--mu);margin-bottom:8px;">NUEVA CATEGORÍA</div>
+        <input class="inp" id="ac-cat-cod" placeholder="Código (ej: 5200)" style="margin-bottom:6px;">
+        <input class="inp" id="ac-cat-nom" placeholder="Nombre" style="margin-bottom:6px;">
+        <button class="btn btn-bl btn-sm" style="width:100%;" onclick="acCrearCategoria()">+ Agregar categoría</button>
+      </div>
+      <div style="max-height:calc(100vh - 300px);overflow-y:auto;">
+        ${AC.cats.map(c=>`
+        <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;margin-bottom:6px;background:var(--w);">
+          <div style="flex:1;">
+            <div style="font-size:12px;font-weight:700;">${c.nombre}</div>
+            <div style="font-size:9px;color:var(--mu);">${c.codigo} · ${AC.subs.filter(s=>s.cat_codigo===c.codigo).length} subcategorías</div>
+          </div>
+          <label class="sw" title="Activo/Inactivo">
+            <input type="checkbox" ${c.activo?'checked':''} onchange="acToggleCat('${c.codigo}',this.checked)">
+            <span class="sw-sl"></span>
+          </label>
+        </div>`).join('')}
+      </div>
+    </div>
+
+    <!-- SUBCATEGORÍAS -->
+    <div style="padding:16px;">
+      <div style="font-size:13px;font-weight:800;margin-bottom:12px;">📄 Subcategorías <span style="font-size:10px;color:var(--mu);font-weight:400;">(${AC.subs.length})</span></div>
+      <div style="background:#f8fafc;border-radius:10px;padding:12px;margin-bottom:12px;">
+        <div style="font-size:9px;font-weight:700;color:var(--mu);margin-bottom:8px;">NUEVA SUBCATEGORÍA</div>
+        <select class="inp" id="ac-sub-cat" style="margin-bottom:6px;">
+          <option value="">— Categoría —</option>
+          ${AC.cats.map(c=>`<option value="${c.codigo}">${c.codigo} · ${c.nombre}</option>`).join('')}
+        </select>
+        <input class="inp" id="ac-sub-cod" placeholder="Código (ej: 5105-27)" style="margin-bottom:6px;">
+        <input class="inp" id="ac-sub-nom" placeholder="Nombre de la subcategoría" style="margin-bottom:6px;">
+        <input class="inp" id="ac-sub-cc"  placeholder="Centro de costo (opcional)" style="margin-bottom:6px;">
+        <button class="btn btn-bl btn-sm" style="width:100%;" onclick="acCrearSubcategoria()">+ Agregar subcategoría</button>
+      </div>
+      <div style="max-height:calc(100vh - 300px);overflow-y:auto;">
+        ${AC.subs.map(s=>{
+          const cat = AC.cats.find(c=>c.codigo===s.cat_codigo);
+          return `<div style="padding:9px 12px;border:1px solid var(--b1);border-radius:8px;margin-bottom:5px;background:var(--w);">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <div style="flex:1;">
+                <div style="font-size:11px;font-weight:700;">${s.nombre}</div>
+                <div style="font-size:9px;color:var(--mu);">${s.codigo} · ${cat?.nombre||s.cat_codigo}${s.centro_costo?' · CC:'+s.centro_costo:''}</div>
+              </div>
+              <label class="sw"><input type="checkbox" ${s.activo?'checked':''} onchange="acToggleSub('${s.codigo}',this.checked)"><span class="sw-sl"></span></label>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+async function acCrearCategoria() {
+  const cod=document.getElementById('ac-cat-cod')?.value.trim();
+  const nom=document.getElementById('ac-cat-nom')?.value.trim();
+  if(!cod||!nom){toast('Ingresa código y nombre','wa');return;}
+  try {
+    await sb.upsert('categorias_ppto',{codigo:cod,nombre:nom,orden:AC.cats.length+1,activo:true},'codigo');
+    AC.cats.push({codigo:cod,nombre:nom,orden:AC.cats.length+1,activo:true});
+    document.getElementById('ac-cat-cod').value='';
+    document.getElementById('ac-cat-nom').value='';
+    toast('✅ Categoría creada','ok');
+    acRenderTab();
+  } catch(e){toast('❌ '+e.message,'er');}
+}
+
+async function acCrearSubcategoria() {
+  const cat=document.getElementById('ac-sub-cat')?.value;
+  const cod=document.getElementById('ac-sub-cod')?.value.trim();
+  const nom=document.getElementById('ac-sub-nom')?.value.trim();
+  const cc =document.getElementById('ac-sub-cc')?.value.trim()||'';
+  if(!cat||!cod||!nom){toast('Completa categoría, código y nombre','wa');return;}
+  try {
+    await sb.upsert('subcategorias_ppto',{codigo:cod,cat_codigo:cat,nombre:nom,centro_costo:cc,orden:AC.subs.length+1,activo:true},'codigo');
+    AC.subs.push({codigo:cod,cat_codigo:cat,nombre:nom,centro_costo:cc,activo:true});
+    document.getElementById('ac-sub-cod').value='';
+    document.getElementById('ac-sub-nom').value='';
+    document.getElementById('ac-sub-cc').value='';
+    toast('✅ Subcategoría creada','ok');
+    acRenderTab();
+  } catch(e){toast('❌ '+e.message,'er');}
+}
+
+async function acToggleCat(cod, activo) {
+  await sb.patch('categorias_ppto',`codigo=eq.${cod}`,{activo}).catch(e=>toast('❌ '+e.message,'er'));
+  const c=AC.cats.find(c=>c.codigo===cod); if(c) c.activo=activo;
+  toast(activo?'Categoría activada':'Categoría desactivada','ok');
+}
+async function acToggleSub(cod, activo) {
+  await sb.patch('subcategorias_ppto',`codigo=eq.${cod}`,{activo}).catch(e=>toast('❌ '+e.message,'er'));
+  const s=AC.subs.find(s=>s.codigo===cod); if(s) s.activo=activo;
+  toast(activo?'Subcategoría activada':'Desactivada','ok');
+}
+
+// ── 4. MÓDULOS POR ROL ────────────────────────────────────────────────
+function acRenderModulos(el) {
+  el.innerHTML = `
+  <div style="padding:16px;">
+    <div style="font-size:14px;font-weight:800;margin-bottom:6px;">🧩 Módulos visibles por Rol</div>
+    <div style="font-size:11px;color:var(--mu);margin-bottom:16px;">Controla qué secciones ve cada tipo de usuario en el menú de navegación.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;">
+      ${['admin','aprobador','empleado'].map(rol => {
+        const color={admin:'#dc2626',aprobador:'#d97706',empleado:'#2563eb'}[rol];
+        const mods = AC.modulos[rol] || [];
+        return `
+        <div style="border:2px solid ${color}33;border-radius:12px;overflow:hidden;">
+          <div style="background:${color}11;padding:12px 14px;border-bottom:1px solid ${color}22;display:flex;align-items:center;gap:8px;">
+            <div style="width:10px;height:10px;border-radius:50%;background:${color};"></div>
+            <div style="font-size:12px;font-weight:800;color:${color};">${rol.charAt(0).toUpperCase()+rol.slice(1)}</div>
+            <span style="font-size:9px;color:var(--mu);margin-left:auto;">${mods.length} módulos activos</span>
+          </div>
+          <div style="padding:12px 14px;">
+            ${AC_MODULOS_DISP.map(m=>`
+            <label style="display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;border-bottom:1px solid var(--b1);">
+              <input type="checkbox" data-rol="${rol}" data-mod="${m.id}" ${mods.includes(m.id)?'checked':''}
+                style="width:14px;height:14px;accent-color:${color};">
+              <span style="font-size:11px;">${m.lbl}</span>
+            </label>`).join('')}
+            <button class="btn btn-sm" style="width:100%;margin-top:10px;background:${color};color:#fff;border:none;" onclick="acGuardarModulos('${rol}')">💾 Guardar ${rol}</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+async function acGuardarModulos(rol) {
+  const chks = [...document.querySelectorAll(`input[data-rol="${rol}"]:checked`)].map(c=>c.dataset.mod);
+  try {
+    await sb.upsert('configuracion',{clave:`modulos_${rol}`,valor:chks.join(','),tipo:'texto'},'clave');
+    AC.modulos[rol] = chks;
+    toast(`✅ Módulos de ${rol} guardados`,'ok');
+    acRenderTab();
+  } catch(e){toast('❌ '+e.message,'er');}
+}
+
+// ── 5. SISTEMA ────────────────────────────────────────────────────────
+function acRenderSistema(el) {
+  const c = AC.config;
+  el.innerHTML = `
+  <div style="padding:16px;max-width:640px;">
+    <div style="font-size:14px;font-weight:800;margin-bottom:16px;">⚙️ Parámetros del Sistema</div>
+
+    <!-- Límites -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);padding:16px;margin-bottom:14px;">
+      <div style="font-size:12px;font-weight:800;margin-bottom:12px;color:var(--bl);">💰 Límites financieros</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">ADELANTO MÁX SIN GERENCIA</label>
+          <input class="inp" id="ac-lim-ad" type="number" value="${c.limite_adelanto||2000000}" step="100000"></div>
+        <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">GASTO SIN SOPORTE MÁX</label>
+          <input class="inp" id="ac-lim-gs" type="number" value="${c.limite_gasto_sin_sop||50000}" step="1000"></div>
+      </div>
+      <button class="btn btn-bl btn-sm" onclick="acGuardarLimites()">💾 Guardar límites</button>
+    </div>
+
+    <!-- Reporte de ventas -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);padding:16px;margin-bottom:14px;">
+      <div style="font-size:12px;font-weight:800;margin-bottom:12px;color:var(--bl);">📊 Reporte de Ventas Diario</div>
+      <div style="margin-bottom:8px;"><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">DESTINATARIOS (separados por coma)</label>
+        <input class="inp" id="ac-rv-dest" value="${c.rv_destinatarios||''}" placeholder="correo1@ilumax.com.co, correo2@..."></div>
+      <div style="margin-bottom:10px;"><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">ASUNTO DEL CORREO</label>
+        <input class="inp" id="ac-rv-asu" value="${c.rv_asunto||''}" placeholder="Reporte de ventas ILUMAX"></div>
+      <button class="btn btn-bl btn-sm" onclick="acGuardarReporteConfig()">💾 Guardar config correo</button>
+    </div>
+
+    <!-- WhatsApp -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);padding:16px;margin-bottom:14px;">
+      <div style="font-size:12px;font-weight:800;margin-bottom:12px;color:#16a34a;">💬 WhatsApp / Alertas</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
+        <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">NÚMERO (con código país)</label>
+          <input class="inp" id="ac-wa-num" value="${c.wa_numero||''}" placeholder="573XXXXXXXXX"></div>
+        <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">HORA DE ALERTA</label>
+          <input class="inp" id="ac-wa-hora" type="time" value="${c.wa_hora_alerta||'08:00'}"></div>
+      </div>
+      <div style="margin-bottom:10px;"><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">API KEY</label>
+        <input class="inp" id="ac-wa-key" type="password" value="${c.wa_apikey||''}" placeholder="API Key del proveedor"></div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <label class="sw"><input type="checkbox" id="ac-wa-activo" ${c.wa_activo==='true'?'checked':''}><span class="sw-sl"></span></label>
+        <span style="font-size:11px;">WhatsApp activo</span>
+      </div>
+      <button class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;" onclick="acGuardarWA()">💾 Guardar WhatsApp</button>
+    </div>
+
+    <!-- Canales comerciales -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);padding:16px;">
+      <div style="font-size:12px;font-weight:800;margin-bottom:12px;color:var(--bl);">📦 Canales Comerciales</div>
+      <div style="margin-bottom:10px;"><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">CANALES (separados por coma)</label>
+        <textarea class="inp" id="ac-canales" rows="3" placeholder="Canal 1, Canal 2...">${c.canales_comerciales||''}</textarea></div>
+      <button class="btn btn-bl btn-sm" onclick="acGuardarCanales()">💾 Guardar canales</button>
+    </div>
+  </div>`;
+}
+
+async function acGuardarConfig(pairs) {
+  try {
+    for(const [clave, valor] of pairs) {
+      await sb.upsert('configuracion',{clave, valor, tipo:'texto'},'clave');
+      AC.config[clave] = valor;
+    }
+    toast('✅ Guardado','ok');
+  } catch(e) { toast('❌ '+e.message,'er'); }
+}
+
+async function acGuardarLimites() {
+  await acGuardarConfig([
+    ['limite_adelanto',     document.getElementById('ac-lim-ad')?.value||'2000000'],
+    ['limite_gasto_sin_sop',document.getElementById('ac-lim-gs')?.value||'50000'],
+  ]);
+}
+async function acGuardarReporteConfig() {
+  await acGuardarConfig([
+    ['rv_destinatarios', document.getElementById('ac-rv-dest')?.value?.trim()||''],
+    ['rv_asunto',        document.getElementById('ac-rv-asu')?.value?.trim()||''],
+  ]);
+}
+async function acGuardarWA() {
+  await acGuardarConfig([
+    ['wa_numero',     document.getElementById('ac-wa-num')?.value?.trim()||''],
+    ['wa_hora_alerta',document.getElementById('ac-wa-hora')?.value||'08:00'],
+    ['wa_apikey',     document.getElementById('ac-wa-key')?.value?.trim()||''],
+    ['wa_activo',     document.getElementById('ac-wa-activo')?.checked?'true':'false'],
+  ]);
+}
+async function acGuardarCanales() {
+  await acGuardarConfig([
+    ['canales_comerciales', document.getElementById('ac-canales')?.value?.trim()||''],
+  ]);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// MÓDULO: PRESUPUESTO POR ÁREAS
+// Tablas: categorias_ppto, subcategorias_ppto, permisos_ppto, presupuestos
+// ══════════════════════════════════════════════════════════════════════
+const PA = {
+  cats: [],    // [{codigo, nombre, orden}]
+  subs: [],    // [{codigo, cat_codigo, nombre, grupo6, centro_costo, orden}]
+  perms: [],   // [{id, area, sub_codigo, puede_ver, puede_llenar}]
+  ptos: [],    // [{id, area, cat_codigo, sub_codigo, mes, anio, monto, estado, obs, ...}]
+  mesSel: new Date().getMonth() + 1,
+  anioSel: new Date().getFullYear(),
+  tabActivo: 'resumen',
+};
+
+const PA_MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+const PA_ESTADOS = { borrador:'🖊️ Borrador', enviado:'📤 Enviado', aprobado:'✅ Aprobado', devuelto:'↩️ Devuelto' };
+const PA_COLORES = { '5105':'#2563eb','5110':'#7c3aed','5115':'#dc2626','5120':'#d97706','5125':'#0891b2','5130':'#be185d','5135':'#16a34a','5140':'#ea580c','5145':'#0369a1','5155':'#65a30d','5195':'#6b7280','5199':'#374151' };
+
+async function renderPptoAreas() {
+  const el = document.getElementById('ppto-areas-content');
+  if(!el) return;
+  el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:200px;"><span class="spin-sm spin-bl"></span></div>';
+  try { await paCargarTodo(); } catch(e) {
+    el.innerHTML = `<div style="padding:20px;color:var(--rd);">❌ Error: ${e.message}</div>`; return;
+  }
+  paRenderShell(el);
+}
+
+async function paCargarTodo() {
+  const esAdm = typeof esAdmin==='function' ? esAdmin() : CU?.rol==='admin';
+  const miArea = CU?.area || '';
+  const [cats, subs, perms, ptos] = await Promise.all([
+    sb.get('categorias_ppto','activo=eq.true&order=orden.asc').catch(()=>[]),
+    sb.get('subcategorias_ppto','activo=eq.true&order=cat_codigo.asc,orden.asc').catch(()=>[]),
+    sb.get('permisos_ppto', esAdm ? 'order=area.asc' : `area=eq.${encodeURIComponent(miArea)}`).catch(()=>[]),
+    sb.get('presupuestos',`anio=eq.${PA.anioSel}&mes=eq.${PA.mesSel}&order=cat_codigo.asc,sub_codigo.asc`).catch(()=>[]),
+  ]);
+  PA.cats  = cats  || [];
+  PA.subs  = subs  || [];
+  PA.perms = perms || [];
+  PA.ptos  = ptos  || [];
+}
+
+function paRenderShell(el) {
+  const esAdm = typeof esAdmin==='function' ? esAdmin() : CU?.rol==='admin';
+  el.innerHTML = `
+  <div style="background:linear-gradient(135deg,#1e3a5f,#0f172a);padding:14px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <div style="flex:1;">
+      <div style="font-size:14px;font-weight:800;color:#fff;">🗂️ Presupuesto por Áreas</div>
+      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;">${PA_MESES[PA.mesSel-1]} ${PA.anioSel} · ${esAdm?'Vista admin':'Área: '+(CU?.area||'—')}</div>
+    </div>
+    <select style="background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:6px 10px;font-size:11px;" onchange="PA.mesSel=parseInt(this.value);paRecargar()">
+      ${PA_MESES.map((m,i)=>`<option value="${i+1}" ${i+1===PA.mesSel?'selected':''}>${m}</option>`).join('')}
+    </select>
+    <select style="background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:6px 10px;font-size:11px;" onchange="PA.anioSel=parseInt(this.value);paRecargar()">
+      ${[2024,2025,2026,2027].map(a=>`<option value="${a}" ${a===PA.anioSel?'selected':''}>${a}</option>`).join('')}
+    </select>
+  </div>
+  <div style="display:flex;gap:0;border-bottom:2px solid var(--b1);background:var(--w);overflow-x:auto;">
+    <button class="pa-tab ${PA.tabActivo==='resumen'?'pa-tab-on':''}" onclick="paTab('resumen')">📊 Resumen</button>
+    <button class="pa-tab ${PA.tabActivo==='ingresar'?'pa-tab-on':''}" onclick="paTab('ingresar')">✏️ ${esAdm?'Ingresar / Editar':'Mis valores'}</button>
+    ${esAdm?`<button class="pa-tab ${PA.tabActivo==='configurar'?'pa-tab-on':''}" onclick="paTab('configurar')">⚙️ Configurar</button>`:''}
+    ${esAdm?`<button class="pa-tab ${PA.tabActivo==='consolidar'?'pa-tab-on':''}" onclick="paTab('consolidar')">✅ Consolidar</button>`:''}
+  </div>
+  <style>
+    .pa-tab{padding:10px 16px;border:none;background:none;font-size:11px;font-weight:700;color:var(--mu);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-2px;}
+    .pa-tab-on{color:var(--bl);border-bottom-color:var(--bl);}
+    .pa-tab:hover{color:var(--tx);}
+    .pa-card{background:var(--w);border-radius:12px;box-shadow:var(--sh);margin:12px;padding:14px;}
+    .pa-inp{width:100%;padding:8px 10px;border:1px solid var(--b1);border-radius:8px;font-size:12px;background:var(--bg);}
+    .pa-inp:focus{outline:none;border-color:var(--bl);}
+    .pa-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;}
+  </style>
+  <div id="pa-tab-content" style="min-height:200px;"></div>`;
+  paRenderTab();
+}
+
+function paTab(tab) {
+  PA.tabActivo = tab;
+  document.querySelectorAll('.pa-tab').forEach(b => {
+    const txt = b.textContent.trim().toLowerCase();
+    b.classList.toggle('pa-tab-on',
+      (tab==='resumen'   && txt.includes('resumen')) ||
+      (tab==='ingresar'  && (txt.includes('ingresar')||txt.includes('mis val'))) ||
+      (tab==='configurar'&& txt.includes('configurar')) ||
+      (tab==='consolidar'&& txt.includes('consolidar'))
+    );
+  });
+  paRenderTab();
+}
+
+function paRenderTab() {
+  const el = document.getElementById('pa-tab-content');
+  if(!el) return;
+  if(PA.tabActivo==='resumen')    paRenderResumen(el);
+  if(PA.tabActivo==='ingresar')   paRenderIngresar(el);
+  if(PA.tabActivo==='configurar') paRenderConfigurar(el);
+  if(PA.tabActivo==='consolidar') paRenderConsolidar(el);
+}
+
+async function paRecargar() {
+  const el = document.getElementById('ppto-areas-content');
+  if(el) { await paCargarTodo(); paRenderShell(el); }
+}
+
+// ── RESUMEN ──────────────────────────────────────────────────────────
+function paRenderResumen(el) {
+  const totalGlobal = PA.ptos.reduce((a,r)=>a+(parseFloat(r.monto)||0),0);
+  const aprobado    = PA.ptos.filter(r=>r.estado==='aprobado').reduce((a,r)=>a+(parseFloat(r.monto_aprobado||r.monto)||0),0);
+  const enviados    = PA.ptos.filter(r=>r.estado==='enviado').length;
+  const devueltos   = PA.ptos.filter(r=>r.estado==='devuelto').length;
+
+  if(!PA.cats.length) {
+    el.innerHTML=`<div class="pa-card" style="text-align:center;padding:32px;"><div style="font-size:32px;margin-bottom:10px;">🗂️</div><div style="font-size:13px;font-weight:700;">Sin categorías</div><div style="font-size:11px;color:var(--mu);margin-top:6px;">Ve a ⚙️ Configurar para agregar categorías y subcategorías.</div></div>`;
+    return;
+  }
+
+  let html = `
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:12px;">
+    <div class="pa-card" style="margin:0;text-align:center;"><div style="font-size:11px;color:var(--mu);margin-bottom:4px;">Total presupuestado</div><div style="font-size:20px;font-weight:800;color:var(--bl);">${rvFmtM(totalGlobal)}</div></div>
+    <div class="pa-card" style="margin:0;text-align:center;"><div style="font-size:11px;color:var(--mu);margin-bottom:4px;">Aprobado</div><div style="font-size:20px;font-weight:800;color:#16a34a;">${rvFmtM(aprobado)}</div></div>
+    <div class="pa-card" style="margin:0;text-align:center;"><div style="font-size:11px;color:var(--mu);margin-bottom:4px;">Pendientes</div><div style="font-size:20px;font-weight:800;color:#d97706;">${enviados}</div></div>
+    <div class="pa-card" style="margin:0;text-align:center;"><div style="font-size:11px;color:var(--mu);margin-bottom:4px;">Devueltos</div><div style="font-size:20px;font-weight:800;color:#dc2626;">${devueltos}</div></div>
+  </div>
+  ${PA.cats.map(cat => {
+    const subsDeEsta = PA.subs.filter(s=>s.cat_codigo===cat.codigo);
+    const ptosDeEsta = PA.ptos.filter(r=>r.cat_codigo===cat.codigo);
+    const totalCat   = ptosDeEsta.reduce((a,r)=>a+(parseFloat(r.monto)||0),0);
+    const pct        = totalGlobal>0 ? totalCat/totalGlobal : 0;
+    const color      = PA_COLORES[cat.codigo] || '#64748b';
+    if(!totalCat && !ptosDeEsta.length && PA.ptos.length) return '';
+    return `
+    <div class="pa-card">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+        <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0;"></div>
+        <div style="flex:1;font-size:12px;font-weight:800;">${cat.nombre}</div>
+        <span style="font-size:9px;color:var(--mu);">${cat.codigo}</span>
+        <div style="font-size:14px;font-weight:800;color:${color};">${rvFmtM(totalCat)}</div>
+      </div>
+      <div style="height:5px;background:var(--b1);border-radius:3px;margin-bottom:12px;overflow:hidden;">
+        <div style="width:${Math.min(pct*100,100).toFixed(1)}%;height:100%;background:${color};border-radius:3px;"></div>
+      </div>
+      ${subsDeEsta.length ? `
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead><tr>
+          <th style="text-align:left;padding:5px 8px;background:#f8fafc;font-size:9px;color:var(--mu);">Subcategoría</th>
+          <th style="padding:5px 8px;background:#f8fafc;font-size:9px;color:var(--mu);">Área</th>
+          <th style="text-align:right;padding:5px 8px;background:#f8fafc;font-size:9px;color:var(--mu);">Monto</th>
+          <th style="text-align:center;padding:5px 8px;background:#f8fafc;font-size:9px;color:var(--mu);">Estado</th>
+        </tr></thead>
+        <tbody>
+          ${subsDeEsta.map(sub=>{
+            const ptSub = PA.ptos.filter(r=>r.sub_codigo===sub.codigo);
+            const totSub = ptSub.reduce((a,r)=>a+(parseFloat(r.monto)||0),0);
+            const estados = [...new Set(ptSub.map(r=>r.estado||'borrador'))];
+            const est = estados.includes('devuelto')?'devuelto':estados.includes('borrador')?'borrador':estados.includes('enviado')?'enviado':'aprobado';
+            const ec = {aprobado:'#16a34a',enviado:'#2563eb',devuelto:'#dc2626',borrador:'#94a3b8'}[est]||'#94a3b8';
+            const areas = [...new Set(ptSub.map(r=>r.area))];
+            return `<tr style="border-bottom:1px solid var(--b1);">
+              <td style="padding:7px 8px;font-weight:600;">${sub.nombre}<br><span style="font-size:9px;color:var(--mu);font-weight:400;">${sub.codigo}${sub.centro_costo?' · CC:'+sub.centro_costo:''}</span></td>
+              <td style="padding:7px 8px;text-align:center;">${areas.map(a=>`<span class="pa-badge" style="background:rgba(37,99,235,.1);color:#1e40af;margin:1px;">${a}</span>`).join('')||'<span style="font-size:9px;color:var(--mu);">—</span>'}</td>
+              <td style="padding:7px 8px;text-align:right;font-weight:700;">${totSub?rvFmtM(totSub):'—'}</td>
+              <td style="padding:7px 8px;text-align:center;"><span class="pa-badge" style="background:${ec}22;color:${ec};">${PA_ESTADOS[est]||est}</span></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>` : `<div style="font-size:10px;color:var(--mu);text-align:center;padding:8px;">Sin subcategorías activas</div>`}
+    </div>`;
+  }).join('')}`;
+
+  el.innerHTML = html;
+}
+
+// ── INGRESAR ─────────────────────────────────────────────────────────
+function paRenderIngresar(el) {
+  const esAdm = typeof esAdmin==='function' ? esAdmin() : CU?.rol==='admin';
+  const miArea = CU?.area || '';
+
+  // Subcategorías que puede llenar este usuario
+  const subCodigosPermitidos = esAdm
+    ? PA.subs.map(s=>s.codigo)
+    : PA.perms.filter(p=>p.puede_llenar && p.area.toLowerCase()===miArea.toLowerCase()).map(p=>p.sub_codigo);
+
+  const subsVisibles = PA.subs.filter(s=>subCodigosPermitidos.includes(s.codigo));
+
+  if(!subsVisibles.length) {
+    el.innerHTML=`<div class="pa-card" style="text-align:center;padding:32px;">
+      <div style="font-size:28px;margin-bottom:8px;">📋</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:6px;">Sin subcategorías asignadas</div>
+      <div style="font-size:11px;color:var(--mu);">Tu área <strong>${miArea}</strong> no tiene subcategorías asignadas para ingresar presupuesto.<br>Contacta al administrador.</div>
+    </div>`;
+    return;
+  }
+
+  // Agrupar por categoría
+  const porCat = {};
+  subsVisibles.forEach(s => {
+    if(!porCat[s.cat_codigo]) porCat[s.cat_codigo] = [];
+    porCat[s.cat_codigo].push(s);
+  });
+
+  // Para admin: selector de área
+  const areasDisponibles = esAdm ? [...new Set(PA.perms.map(p=>p.area))].filter(Boolean).sort() : [];
+
+  let html = '<div style="padding:12px;">';
+
+  if(esAdm && areasDisponibles.length) {
+    html += `<div class="pa-card" style="margin-bottom:12px;">
+      <div style="font-size:11px;font-weight:700;margin-bottom:8px;color:var(--mu);">INGRESANDO COMO ÁREA</div>
+      <select id="pa-area-sel" class="pa-inp" style="max-width:300px;" onchange="PA._areaFiltro=this.value;paRenderTab()">
+        <option value="">— Todas las áreas —</option>
+        ${areasDisponibles.map(a=>`<option value="${a}" ${PA._areaFiltro===a?'selected':''}>${a}</option>`).join('')}
+      </select>
+    </div>`;
+  }
+
+  const areaFiltro = esAdm ? (PA._areaFiltro||'') : miArea;
+
+  Object.entries(porCat).forEach(([catCod, subs]) => {
+    const cat = PA.cats.find(c=>c.codigo===catCod);
+    if(!cat) return;
+    const color = PA_COLORES[catCod] || '#64748b';
+
+    html += `<div class="pa-card" style="margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--b1);">
+        <div style="width:10px;height:10px;border-radius:50%;background:${color};"></div>
+        <div style="font-size:13px;font-weight:800;flex:1;">${cat.nombre}</div>
+        <span style="font-size:9px;color:var(--mu);">${cat.codigo}</span>
+      </div>
+      ${subs.map(sub => {
+        // Determinar qué áreas pueden llenar esta subcategoría
+        const permsub = PA.perms.filter(p=>p.sub_codigo===sub.codigo && p.puede_llenar);
+        const areasSubPermitidas = esAdm
+          ? (areaFiltro ? permsub.filter(p=>p.area===areaFiltro) : permsub)
+          : permsub.filter(p=>p.area.toLowerCase()===miArea.toLowerCase());
+
+        if(!areasSubPermitidas.length && esAdm && !areaFiltro) {
+          // Sin áreas asignadas — mostrar con aviso
+          return `<div style="padding:10px;border:1px dashed var(--b1);border-radius:8px;margin-bottom:8px;opacity:.6;">
+            <div style="font-size:11px;font-weight:600;">${sub.nombre}</div>
+            <div style="font-size:9px;color:var(--mu);">Sin áreas asignadas en permisos</div>
+          </div>`;
+        }
+
+        return areasSubPermitidas.map(perm => {
+          const area = perm.area;
+          const pto = PA.ptos.find(r=>r.sub_codigo===sub.codigo && r.area===area);
+          const valor  = pto ? parseFloat(pto.monto)||0 : 0;
+          const estado = pto?.estado || 'borrador';
+          const obs    = pto?.obs || '';
+          const ptoId  = pto?.id || '';
+          const ec = {aprobado:'#16a34a',enviado:'#2563eb',devuelto:'#dc2626',borrador:'#94a3b8'}[estado]||'#94a3b8';
+          const bloqueado = estado==='aprobado';
+          const key = `${sub.codigo}__${area.replace(/\s/g,'_')}`;
+
+          return `<div style="padding:12px;border:1px solid ${estado==='devuelto'?'#fecaca':estado==='enviado'?'#bfdbfe':'var(--b1)'};border-radius:10px;margin-bottom:8px;background:${estado==='devuelto'?'#fef2f2':estado==='enviado'?'#eff6ff':'var(--w)'};">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+              <div style="flex:1;">
+                <div style="font-size:12px;font-weight:700;">${sub.nombre}</div>
+                <div style="font-size:9px;color:var(--mu);">${sub.codigo}${sub.centro_costo?' · CC:'+sub.centro_costo:''}${esAdm?' · Área: <strong>'+area+'</strong>':''}</div>
+              </div>
+              <span class="pa-badge" style="background:${ec}22;color:${ec};">${PA_ESTADOS[estado]||estado}</span>
+            </div>
+            ${estado==='devuelto' && pto?.obs_contabilidad ? `<div style="font-size:10px;background:#fee2e2;border-radius:6px;padding:6px 10px;color:#991b1b;margin-bottom:8px;">↩️ ${pto.obs_contabilidad}</div>` : ''}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:120px;">
+                <label style="font-size:9px;color:var(--mu);display:block;margin-bottom:3px;">MONTO PRESUPUESTADO</label>
+                <input type="number" class="pa-inp" id="pa-val-${key}" value="${valor||''}" placeholder="$0" step="1000" style="font-size:14px;font-weight:700;" ${bloqueado?'disabled':''}>
+              </div>
+              <div style="flex:1;min-width:140px;">
+                <label style="font-size:9px;color:var(--mu);display:block;margin-bottom:3px;">OBSERVACIONES</label>
+                <input type="text" class="pa-inp" id="pa-obs-${key}" value="${obs}" placeholder="Opcional..." ${bloqueado?'disabled':''}>
+              </div>
+              ${!bloqueado ? `<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;padding-top:16px;">
+                <button class="btn btn-bl btn-sm" onclick="paGuardar('${sub.codigo}','${area}','${sub.cat_codigo}','${ptoId}','borrador')">💾 Guardar</button>
+                ${estado!=='enviado'?`<button class="btn btn-gr btn-sm" onclick="paGuardar('${sub.codigo}','${area}','${sub.cat_codigo}','${ptoId}','enviado')">📤 Enviar</button>`:''}
+              </div>` : ''}
+            </div>
+          </div>`;
+        }).join('');
+      }).join('')}
+    </div>`;
+  });
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function paGuardar(subCod, area, catCod, ptoId, estado) {
+  const key  = `${subCod}__${area.replace(/\s/g,'_')}`;
+  const monto = parseFloat(document.getElementById(`pa-val-${key}`)?.value) || 0;
+  const obs   = document.getElementById(`pa-obs-${key}`)?.value?.trim() || '';
+  const cat   = PA.cats.find(c=>c.codigo===catCod);
+  const sub   = PA.subs.find(s=>s.codigo===subCod);
+
+  const data = {
+    area, cat_codigo:catCod, cat_nombre:cat?.nombre||'',
+    sub_codigo:subCod, sub_nombre:sub?.nombre||'',
+    mes:PA.mesSel, anio:PA.anioSel,
+    monto, obs, estado,
+    autor: CU?.email||'',
+    actualizado: new Date().toISOString(),
+    ts_envio: estado==='enviado' ? new Date().toISOString() : undefined,
+  };
+  // Limpiar undefined
+  Object.keys(data).forEach(k=>data[k]===undefined&&delete data[k]);
+
+  try {
+    if(ptoId) {
+      await sb.patch('presupuestos',`id=eq.${ptoId}`,data);
+    } else {
+      data.id = `${subCod}_${area.replace(/\s/g,'')}_${PA.anioSel}_${PA.mesSel}`;
+      const res = await sb.upsert('presupuestos',data,'id');
+    }
+    toast(estado==='enviado'?'📤 Enviado a contabilidad':'💾 Guardado','ok');
+    await paRecargar();
+  } catch(e) { toast('❌ '+e.message,'er'); }
+}
+
+// ── CONFIGURAR ───────────────────────────────────────────────────────
+function paRenderConfigurar(el) {
+  const areasConocidas = [...new Set(PA.perms.map(p=>p.area))].filter(Boolean).sort();
+
+  el.innerHTML = `
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px;min-width:0;">
+
+    <!-- CATEGORÍAS -->
+    <div class="pa-card" style="margin:0;">
+      <div style="font-size:12px;font-weight:800;margin-bottom:10px;">📁 Categorías <span style="font-size:10px;color:var(--mu);font-weight:400;">(${PA.cats.length})</span></div>
+      <div style="background:var(--bg);border-radius:10px;padding:10px;margin-bottom:10px;">
+        <div style="font-size:9px;font-weight:700;color:var(--mu);margin-bottom:6px;">NUEVA CATEGORÍA</div>
+        <input class="pa-inp" id="pa-cat-cod" placeholder="Código (ej: 5200)" style="margin-bottom:5px;">
+        <input class="pa-inp" id="pa-cat-nom" placeholder="Nombre (ej: GASTOS FINANCIEROS)" style="margin-bottom:5px;">
+        <button class="btn btn-bl btn-sm" style="width:100%;" onclick="paCrearCat()">+ Agregar</button>
+      </div>
+      <div style="max-height:280px;overflow-y:auto;">
+        ${PA.cats.map(c=>`
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--b1);border-radius:8px;margin-bottom:5px;">
+          <div style="width:8px;height:8px;border-radius:50%;background:${PA_COLORES[c.codigo]||'#64748b'};"></div>
+          <div style="flex:1;"><div style="font-size:11px;font-weight:700;">${c.nombre}</div><div style="font-size:9px;color:var(--mu);">${c.codigo}</div></div>
+          <span style="font-size:9px;color:var(--mu);">${PA.subs.filter(s=>s.cat_codigo===c.codigo).length} sub</span>
+        </div>`).join('')}
+      </div>
+    </div>
+
+    <!-- SUBCATEGORÍAS + PERMISOS -->
+    <div class="pa-card" style="margin:0;">
+      <div style="font-size:12px;font-weight:800;margin-bottom:10px;">📄 Subcategorías <span style="font-size:10px;color:var(--mu);font-weight:400;">(${PA.subs.length})</span></div>
+      <div style="background:var(--bg);border-radius:10px;padding:10px;margin-bottom:10px;">
+        <div style="font-size:9px;font-weight:700;color:var(--mu);margin-bottom:6px;">NUEVA SUBCATEGORÍA</div>
+        <select class="pa-inp" id="pa-sub-cat" style="margin-bottom:5px;">
+          <option value="">— Categoría —</option>
+          ${PA.cats.map(c=>`<option value="${c.codigo}">${c.codigo} · ${c.nombre}</option>`).join('')}
+        </select>
+        <input class="pa-inp" id="pa-sub-cod" placeholder="Código (ej: 5200-01)" style="margin-bottom:5px;">
+        <input class="pa-inp" id="pa-sub-nom" placeholder="Nombre" style="margin-bottom:5px;">
+        <input class="pa-inp" id="pa-sub-cc" placeholder="Centro de costo (opcional)" style="margin-bottom:5px;">
+        <div style="font-size:9px;font-weight:700;color:var(--mu);margin-bottom:4px;">ÁREAS QUE LA LLENAN:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;border:1px solid var(--b1);border-radius:8px;padding:6px;margin-bottom:5px;min-height:36px;">
+          ${areasConocidas.map(a=>`<label style="display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 7px;border-radius:10px;border:1px solid var(--b1);font-size:10px;background:var(--w);">
+            <input type="checkbox" class="pa-area-chk" value="${a}" style="width:11px;height:11px;"> ${a}
+          </label>`).join('')}
+          <input class="pa-inp" id="pa-area-extra" placeholder="+ Otra área..." style="flex:1;min-width:90px;height:24px;padding:2px 8px;font-size:10px;">
+        </div>
+        <button class="btn btn-bl btn-sm" style="width:100%;" onclick="paCrearSub()">+ Agregar subcategoría</button>
+      </div>
+      <div style="max-height:220px;overflow-y:auto;">
+        ${PA.subs.slice(0,30).map(s=>{
+          const permsS = PA.perms.filter(p=>p.sub_codigo===s.codigo);
+          const areas  = [...new Set(permsS.map(p=>p.area))];
+          return `<div style="padding:7px 10px;border:1px solid var(--b1);border-radius:8px;margin-bottom:4px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <div style="flex:1;"><div style="font-size:11px;font-weight:700;">${s.nombre}</div><div style="font-size:9px;color:var(--mu);">${s.codigo}${s.centro_costo?' · CC:'+s.centro_costo:''}</div></div>
+            </div>
+            <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:2px;">
+              ${areas.map(a=>`<span class="pa-badge" style="background:rgba(37,99,235,.1);color:#1e40af;">${a}</span>`).join('')}
+              ${!areas.length?'<span style="font-size:9px;color:var(--mu);">Sin áreas</span>':''}
+            </div>
+          </div>`;
+        }).join('')}
+        ${PA.subs.length>30?`<div style="font-size:10px;color:var(--mu);text-align:center;padding:6px;">... y ${PA.subs.length-30} más</div>`:''}
+      </div>
+    </div>
+  </div>`;
+}
+
+async function paCrearCat() {
+  const cod = document.getElementById('pa-cat-cod')?.value.trim();
+  const nom = document.getElementById('pa-cat-nom')?.value.trim();
+  if(!cod||!nom){toast('Ingresa código y nombre','wa');return;}
+  try {
+    await sb.upsert('categorias_ppto',{codigo:cod,nombre:nom,orden:PA.cats.length+1,activo:true},'codigo');
+    PA.cats.push({codigo:cod,nombre:nom,orden:PA.cats.length+1,activo:true});
+    document.getElementById('pa-cat-cod').value='';
+    document.getElementById('pa-cat-nom').value='';
+    toast('✅ Categoría creada','ok');
+    paRenderConfigurar(document.getElementById('pa-tab-content'));
+  } catch(e){toast('❌ '+e.message,'er');}
+}
+
+async function paCrearSub() {
+  const catCod = document.getElementById('pa-sub-cat')?.value;
+  const cod    = document.getElementById('pa-sub-cod')?.value.trim();
+  const nom    = document.getElementById('pa-sub-nom')?.value.trim();
+  const cc     = document.getElementById('pa-sub-cc')?.value.trim()||'';
+  if(!catCod||!cod||!nom){toast('Completa categoría, código y nombre','wa');return;}
+
+  const chks   = [...document.querySelectorAll('.pa-area-chk:checked')].map(c=>c.value);
+  const extra  = document.getElementById('pa-area-extra')?.value.trim();
+  if(extra) chks.push(extra);
+  if(!chks.length){toast('Selecciona al menos un área','wa');return;}
+
+  try {
+    await sb.upsert('subcategorias_ppto',{codigo:cod,cat_codigo:catCod,nombre:nom,centro_costo:cc,orden:PA.subs.length+1,activo:true},'codigo');
+    // Crear permisos para cada área
+    for(const area of chks){
+      await sb.upsert('permisos_ppto',{area,sub_codigo:cod,puede_ver:true,puede_llenar:true},'area,sub_codigo').catch(()=>{});
+    }
+    PA.subs.push({codigo:cod,cat_codigo:catCod,nombre:nom,centro_costo:cc});
+    toast('✅ Subcategoría creada con permisos','ok');
+    await paRecargar();
+  } catch(e){toast('❌ '+e.message,'er');}
+}
+
+// ── CONSOLIDAR ───────────────────────────────────────────────────────
+function paRenderConsolidar(el) {
+  const enviados  = PA.ptos.filter(r=>r.estado==='enviado');
+  const aprobados = PA.ptos.filter(r=>r.estado==='aprobado');
+  const devueltos = PA.ptos.filter(r=>r.estado==='devuelto');
+  const totalApro = aprobados.reduce((a,r)=>a+(parseFloat(r.monto_aprobado||r.monto)||0),0);
+
+  el.innerHTML = `<div style="padding:12px;">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:14px;">
+    <div class="pa-card" style="margin:0;text-align:center;border:2px solid #fde68a;"><div style="font-size:22px;font-weight:800;color:#d97706;">${enviados.length}</div><div style="font-size:9px;color:var(--mu);">📤 Para revisar</div></div>
+    <div class="pa-card" style="margin:0;text-align:center;border:2px solid #bbf7d0;"><div style="font-size:22px;font-weight:800;color:#16a34a;">${aprobados.length}</div><div style="font-size:9px;color:var(--mu);">✅ Aprobados</div></div>
+    <div class="pa-card" style="margin:0;text-align:center;"><div style="font-size:22px;font-weight:800;color:#dc2626;">${devueltos.length}</div><div style="font-size:9px;color:var(--mu);">↩️ Devueltos</div></div>
+    <div class="pa-card" style="margin:0;text-align:center;"><div style="font-size:20px;font-weight:800;color:#16a34a;">${rvFmtM(totalApro)}</div><div style="font-size:9px;color:var(--mu);">Total aprobado</div></div>
+  </div>
+
+  ${enviados.length ? `
+  <div class="pa-card">
+    <div style="font-size:12px;font-weight:800;margin-bottom:10px;color:#d97706;">📤 Pendientes de aprobación</div>
+    ${enviados.map(r=>`
+    <div style="padding:12px;border:1px solid #fde68a;border-radius:10px;margin-bottom:8px;background:#fffbeb;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div style="flex:1;">
+          <div style="font-size:12px;font-weight:700;">${r.sub_nombre||r.sub_codigo}</div>
+          <div style="font-size:10px;color:var(--mu);">${r.cat_nombre||r.cat_codigo} · Área: <strong>${r.area}</strong></div>
+          ${r.obs?`<div style="font-size:10px;color:#92400e;margin-top:2px;">💬 ${r.obs}</div>`:''}
+        </div>
+        <div style="font-size:16px;font-weight:800;color:#d97706;">${rvFmtM(parseFloat(r.monto)||0)}</div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-gr btn-sm" onclick="paAprobar('${r.id}',${r.monto})">✅ Aprobar</button>
+          <button class="btn btn-rd btn-sm" onclick="paDevolver('${r.id}')">↩️ Devolver</button>
+        </div>
+      </div>
+    </div>`).join('')}
+  </div>` : `<div class="pa-card" style="text-align:center;padding:24px;"><div style="font-size:28px;margin-bottom:8px;">✅</div><div style="font-size:12px;color:var(--mu);">No hay registros pendientes.</div></div>`}
+
+  ${aprobados.length ? `
+  <div class="pa-card" style="margin-top:0;">
+    <div style="font-size:12px;font-weight:800;margin-bottom:10px;color:#16a34a;">✅ Aprobados — ${PA_MESES[PA.mesSel-1]} ${PA.anioSel}</div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;">
+      <thead><tr>
+        <th style="text-align:left;padding:7px 8px;background:#f0fdf4;">Subcategoría</th>
+        <th style="padding:7px 8px;background:#f0fdf4;">Área</th>
+        <th style="text-align:right;padding:7px 8px;background:#f0fdf4;">Monto aprobado</th>
+      </tr></thead>
+      <tbody>
+        ${aprobados.map(r=>`<tr style="border-bottom:1px solid #dcfce7;">
+          <td style="padding:7px 8px;font-weight:600;">${r.sub_nombre||r.sub_codigo}</td>
+          <td style="padding:7px 8px;text-align:center;"><span class="pa-badge" style="background:rgba(22,163,74,.1);color:#15803d;">${r.area}</span></td>
+          <td style="padding:7px 8px;text-align:right;font-weight:700;color:#16a34a;">${rvFmtM(parseFloat(r.monto_aprobado||r.monto)||0)}</td>
+        </tr>`).join('')}
+        <tr style="background:#f0fdf4;font-weight:800;">
+          <td colspan="2" style="padding:8px;">TOTAL</td>
+          <td style="padding:8px;text-align:right;color:#16a34a;">${rvFmtM(totalApro)}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>` : ''}
+  </div>`;
+}
+
+async function paAprobar(id, monto) {
+  try {
+    await sb.patch('presupuestos',`id=eq.${id}`,{estado:'aprobado',monto_aprobado:monto,aprobado_por:CU?.email||'',ts_aprobado:new Date().toISOString()});
+    toast('✅ Aprobado','ok');
+    await paRecargar();
+  } catch(e){toast('❌ '+e.message,'er');}
+}
+
+async function paDevolver(id) {
+  const obs = prompt('Motivo de devolución (requerido):');
+  if(!obs) return;
+  try {
+    await sb.patch('presupuestos',`id=eq.${id}`,{estado:'devuelto',obs_contabilidad:obs,ts_devuelto:new Date().toISOString()});
+    toast('↩️ Devuelto al área','ok');
+    await paRecargar();
+  } catch(e){toast('❌ '+e.message,'er');}
+}
+
 
 function renderReporteVentas() {
   const el = document.getElementById('rv-content');
@@ -10686,6 +12387,128 @@ function rvGenerarHTMLInteractivo() {
     semana: semanaData,
     detalle
   };
+  // ── Cálculos de cumplimiento para el descargable ──
+  const _ejeCump  = Object.entries(RV.consolidado);
+  const _totalV   = _ejeCump.reduce((a,[,c])=>a+c.ventaTotal,0);
+  const _totalP   = _ejeCump.reduce((a,[,c])=>a+c.pptoTotal,0);
+  const _pctG     = _totalP>0 ? _totalV/_totalP : 0;
+  const _ultF     = RV.fechas.length ? rvFecha(RV.fechas[RV.fechas.length-1]) : new Date();
+  const _diaC     = _ultF.getDate();
+  const _diasMes  = new Date(_ultF.getFullYear(),_ultF.getMonth()+1,0).getDate();
+  const _dCV      = new Set(RV.datos.map(r=>r.Fecha)).size || 1;
+  const _prop     = _dCV / Math.max(_diaC,1);
+  const _dHR      = Math.max(1, Math.round((_diasMes-_diaC)*_prop));
+  const _dHM      = _dCV + _dHR;
+  const _ritmoA   = _totalV / _dCV;
+  const _proy     = _ritmoA * _dHM;
+  const _pctProy  = _totalP>0 ? _proy/_totalP : 0;
+  const _pptoXD   = _totalP / _dHM;
+  const _pptoFC   = _pptoXD * _dCV;
+  const _pctVsE   = _pptoFC>0 ? _totalV/_pptoFC : 0;
+  const _faltaM   = Math.max(0, _totalP-_totalV);
+  const _ritmoN   = _dHR>0 ? _faltaM/_dHR : 0;
+  const _hayAcl   = _ritmoN > _ritmoA;
+  const _factAcl  = _ritmoA>0 ? _ritmoN/_ritmoA : 0;
+  const _gapC     = _totalP - _proy;
+  const _sem2     = p => p>=1?'#16a34a':p>=.85?'#ca8a04':p>=.7?'#ea580c':'#dc2626';
+  const _semBg2   = p => p>=1?'rgba(22,163,74,.1)':p>=.85?'rgba(202,138,4,.1)':p>=.7?'rgba(234,88,12,.1)':'rgba(220,38,38,.1)';
+  const _semLbl2  = p => p>=1?'✅ En meta':p>=.85?'🟡 Riesgo leve':p>=.7?'🟠 En riesgo':'🔴 Por debajo';
+  const _mes      = _ultF.toLocaleDateString('es-CO',{month:'long',year:'numeric'});
+
+  const _canales  = {
+    ESP:{v:_ejeCump.reduce((a,[,c])=>a+c.ventaEsp,0),p:_ejeCump.reduce((a,[,c])=>a+c.pptoEsp,0),lbl:'Especializado',ico:'🔵'},
+    MIX:{v:_ejeCump.reduce((a,[,c])=>a+c.ventaMix,0),p:_ejeCump.reduce((a,[,c])=>a+c.pptoMix,0),lbl:'Canal Mixto',ico:'🟢'},
+    PRY:{v:_ejeCump.reduce((a,[,c])=>a+c.ventaPro,0),p:_ejeCump.reduce((a,[,c])=>a+c.pptoPro,0),lbl:'Proyectos',ico:'🟡'},
+    ONL:{v:_ejeCump.reduce((a,[,c])=>a+c.ventaOnl,0),p:_ejeCump.reduce((a,[,c])=>a+c.pptoOnl,0),lbl:'Online',ico:'🟣'},
+  };
+
+  const _ejeSort  = [..._ejeCump].sort((a,b)=>{
+    const pa=a[1].pptoTotal>0?a[1].ventaTotal/a[1].pptoTotal:0;
+    const pb=b[1].pptoTotal>0?b[1].ventaTotal/b[1].pptoTotal:0;
+    return pb-pa;
+  });
+
+  const cumplHtml = `
+  <div class="rv-card">
+    <div class="rv-card-t" style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:10px;padding:16px 18px;margin:-20px -20px 16px;color:#fff;flex-direction:column;align-items:flex-start;border-bottom:none;">
+      <div style="font-size:9px;color:rgba(255,255,255,.5);font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px;">🎯 Progreso del Mes — ${_mes}</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;width:100%;flex-wrap:wrap;gap:6px;">
+        <div><div style="font-size:30px;font-weight:800;color:#f5c518;">${rvPct(_pctG)}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">cumplimiento · ${_dCV} días hábiles de ~${_dHM} est. en el mes</div></div>
+        <div style="text-align:right;"><div style="font-size:13px;font-weight:700;color:rgba(255,255,255,.8);">${rvFmtM(_totalV)} <span style="color:rgba(255,255,255,.35);">/ ${rvFmtM(_totalP)}</span></div><div style="font-size:10px;color:rgba(255,255,255,.4);">acumulado / presupuesto</div></div>
+      </div>
+      <div style="position:relative;height:12px;background:rgba(255,255,255,.1);border-radius:6px;overflow:visible;margin:10px 0 4px;width:100%;">
+        <div style="height:100%;width:${Math.min(_pctG*100,100).toFixed(1)}%;background:${_sem2(_pctG)};border-radius:6px;"></div>
+        <div style="position:absolute;top:-4px;left:${Math.min(_dCV/_dHM*100,99).toFixed(1)}%;width:2px;height:20px;background:#f5c518;border-radius:2px;" title="Ritmo esperado hoy"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:rgba(255,255,255,.3);width:100%;"><span>0%</span><span style="color:#f5c518;">▲ Hoy (${rvPct(_dCV/_dHM)})</span><span>100%</span></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+      <div style="background:#f8fafc;border-radius:10px;padding:12px 14px;">
+        <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">📈 Ritmo actual / día hábil</div>
+        <div style="font-size:20px;font-weight:800;color:#16a34a;">${rvFmtM(_ritmoA)}</div>
+        <div style="font-size:9px;color:#94a3b8;margin-top:2px;">promedio de los ${_dCV} días con venta</div>
+      </div>
+      <div style="background:${_hayAcl?'#fef2f2':'#f0fdf4'};border:1px solid ${_hayAcl?'#fecaca':'#bbf7d0'};border-radius:10px;padding:12px 14px;">
+        <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">🎯 Ritmo necesario / día hábil</div>
+        <div style="font-size:20px;font-weight:800;color:${_hayAcl?'#dc2626':'#16a34a'};">${rvFmtM(_ritmoN)}</div>
+        <div style="font-size:9px;color:#94a3b8;margin-top:2px;">para cerrar en ${_dHR} días hábiles restantes</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:14px;">
+      <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;"><div style="font-size:13px;font-weight:800;color:${_sem2(_pctVsE)};">${rvPct(_pctVsE)}</div><div style="font-size:9px;color:#94a3b8;margin-top:2px;">vs. esperado a hoy</div></div>
+      <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;"><div style="font-size:13px;font-weight:800;color:#7c3aed;">${rvFmtM(_proy)}</div><div style="font-size:9px;color:#94a3b8;margin-top:2px;">proyección fin de mes</div></div>
+      <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;"><div style="font-size:13px;font-weight:800;color:${_gapC<=0?'#16a34a':'#dc2626'};">${_gapC<=0?'+':'-'}${rvFmtM(Math.abs(_gapC))}</div><div style="font-size:9px;color:#94a3b8;margin-top:2px;">${_gapC<=0?'superávit esperado':'falta proyectado'}</div></div>
+      <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;"><div style="font-size:13px;font-weight:800;color:#d97706;">${_dHR}</div><div style="font-size:9px;color:#94a3b8;margin-top:2px;">días hábiles restantes</div></div>
+    </div>
+
+    ${_hayAcl && _faltaM>0 ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 14px;font-size:11px;color:#991b1b;line-height:1.6;margin-bottom:14px;">⚠️ Ritmo actual <strong>${rvFmtM(_ritmoA)}/día</strong> · Necesario <strong>${rvFmtM(_ritmoN)}/día</strong> (${_factAcl.toFixed(1)}× el actual) · Faltan <strong>${rvFmtM(_faltaM)}</strong></div>` : _totalV>=_totalP ? `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;font-size:11px;color:#166534;margin-bottom:14px;">🏆 ¡Presupuesto superado! Superávit <strong>${rvFmtM(_totalV-_totalP)}</strong></div>` : `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;font-size:11px;color:#166534;margin-bottom:14px;">✅ Al ritmo actual (<strong>${rvFmtM(_ritmoA)}/día</strong>) se proyecta cerrar en <strong>${rvPct(_pctProy)}</strong> del presupuesto.</div>`}
+  </div>
+
+  <div class="rv-card">
+    <div class="rv-card-t">📦 Cumplimiento por Canal</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">
+      ${Object.entries(_canales).filter(([,d])=>d.p>0||d.v>0).map(([,d])=>{
+        const p=d.p>0?d.v/d.p:0;
+        return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;background:${_semBg2(p)};">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span style="font-size:11px;font-weight:700;">${d.ico} ${d.lbl}</span><span style="font-size:11px;font-weight:800;color:${_sem2(p)};">${rvPct(p)}</span></div>
+          <div style="height:6px;background:#e2e8f0;border-radius:4px;overflow:hidden;margin-bottom:6px;"><div style="width:${Math.min(p*100,100).toFixed(1)}%;height:100%;background:${_sem2(p)};border-radius:4px;"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:#64748b;"><span>${rvFmtM(d.v)}</span><span>ppto ${rvFmtM(d.p)}</span></div>
+          <div style="font-size:9px;color:${_sem2(p)};font-weight:700;margin-top:3px;">${_semLbl2(p)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>
+
+  <div class="rv-card">
+    <div class="rv-card-t" style="justify-content:space-between;"><span>👤 Semáforo por Ejecutivo</span><span style="font-size:9px;color:#64748b;font-weight:400;">por % cumplimiento</span></div>
+    ${_ejeSort.map(([nom,c])=>{
+      const p  = c.pptoTotal>0?c.ventaTotal/c.pptoTotal:0;
+      const pP = c.pptoTotal>0?(_ritmoA*_dHM)/c.pptoTotal:0;
+      const dif= c.ventaTotal-c.pptoTotal;
+      const nec= Math.max(0,c.pptoTotal-c.ventaTotal);
+      const nd = _dHR>0?nec/_dHR:0;
+      return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #f1f5f9;">
+        <div style="width:10px;height:10px;border-radius:50%;background:${_sem2(p)};flex-shrink:0;"></div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;font-weight:700;">${nom.split(' ').slice(0,3).join(' ')}</div>
+          <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;">
+            <span style="font-size:9px;color:#64748b;">Ppto ${rvFmtM(c.pptoTotal)}</span>
+            <span style="font-size:9px;color:#2563eb;font-weight:700;">Venta ${rvFmtM(c.ventaTotal)}</span>
+            <span style="font-size:9px;font-weight:700;color:${dif>=0?'#16a34a':'#dc2626'};">${dif>=0?'+':''}${rvFmtM(dif)}</span>
+            ${nec>0?`<span style="font-size:9px;color:#ea580c;">necesita ${rvFmtM(nd)}/día</span>`:''}
+          </div>
+          <div style="margin-top:4px;height:4px;background:#e2e8f0;border-radius:3px;overflow:hidden;"><div style="width:${Math.min(p*100,100).toFixed(1)}%;height:100%;background:${_sem2(p)};"></div></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div style="font-size:16px;font-weight:800;color:${_sem2(p)};">${rvPct(p)}</div>
+          <div style="font-size:9px;color:#94a3b8;">proy. ${rvPct(pP)}</div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+
   // Defensa: evitar que datos con backticks, comillas o etiquetas de cierre rompan el documento generado
   const payloadJson = JSON.stringify(payload)
     .replace(/</g,'\\u003c')
@@ -10810,6 +12633,7 @@ function rvGenerarHTMLInteractivo() {
   <div class="rv-tabs">
     <button class="rv-tab-btn on" data-tab="resumen" onclick="rvTabGo('resumen')">🏠 Resumen</button>
     <button class="rv-tab-btn" data-tab="ejecutivos" onclick="rvTabGo('ejecutivos')">📊 Ejecutivos</button>
+    <button class="rv-tab-btn" data-tab="cumplimiento" onclick="rvTabGo('cumplimiento')">🎯 Cumplimiento</button>
     <button class="rv-tab-btn" data-tab="canales" onclick="rvTabGo('canales')">📦 Canales</button>
     ${tabsSemana}
     <button class="rv-tab-btn" data-tab="detalle" onclick="rvTabGo('detalle')">🔎 Detalle</button>
@@ -10825,6 +12649,11 @@ function rvGenerarHTMLInteractivo() {
       <div class="rv-card-t">🏆 Ranking Acumulado del Mes</div>
       <div>${rankingHtml}</div>
     </div>
+  </div>
+
+  <!-- CUMPLIMIENTO -->
+  <div id="panel-cumplimiento" class="rv-panel" data-panel="cumplimiento">
+    ${cumplHtml}
   </div>
 
   <!-- EJECUTIVOS -->
