@@ -7184,12 +7184,39 @@ async function actualizarDesdeSiesa() {
     toast('✅ Inventario sincronizado — ' + resumen, 'ok');
     setStatus('✅ Inventario listo · ' + resumen, '#16a34a');
 
-    // NOTA: el paso de descripciones (API_v2_Items) se quitó del sync automático a
-    // partir del 2026-09-17 — ya se corrió una vez y las descripciones no cambian con
-    // frecuencia. De aquí en adelante el sync solo actualiza existencia/costo
-    // (inventario) y precio (precios_lista), y solo lo que realmente cambió.
+    // ── 5. Traer descripciones desde API_v2_Items ──────────────────
+    try {
+      setStatus('📇 Consultando descripciones (API_v2_Items)...', '#60a5fa');
+      const itemsRaw = await _siesaFetchPaginas(setStatus, 'API_v2_Items', null, 100);
+      const descPorRef = {};
+      itemsRaw.forEach(it => {
+        const ref  = String(it.f120_referencia  || '').trim();
+        const desc = String(it.f120_descripcion || '').trim();
+        if(ref && desc) descPorRef[ref] = desc;
+      });
 
-    // ── 5. Traer precios por lista desde API_v2_ItemsPrecios ───────
+      // Reflejar de inmediato en memoria para que la tabla ya se vea completa
+      INV_DATA.forEach(r => { if(descPorRef[r.referencia]) r.descripcion = descPorRef[r.referencia]; });
+
+      // Guardar en Supabase solo las referencias con descripción nueva o distinta
+      const refsDesc = Object.keys(descPorRef);
+      let descActualizadas = 0;
+      for(let i = 0; i < refsDesc.length; i++) {
+        const ref = refsDesc[i];
+        try {
+          await sb.patch('inventario', 'referencia=eq.' + encodeURIComponent(ref),
+            { descripcion: descPorRef[ref] });
+          descActualizadas++;
+        } catch(e) { /* referencia puede no existir aún en inventario; se ignora */ }
+        if(i % 50 === 0 && i > 0) setStatus('Actualizando descripciones ' + i + '/' + refsDesc.length + '...', '#60a5fa');
+      }
+      toast('📇 Descripciones: ' + refsDesc.length + ' referencias con datos de SIESA', 'inf');
+    } catch(e) {
+      console.warn('Error consultando API_v2_Items:', e);
+      toast('⚠️ No se pudieron traer descripciones (API_v2_Items): ' + e.message, 'er');
+    }
+
+    // ── 6. Traer precios por lista desde API_v2_ItemsPrecios ───────
     try {
       setStatus('💰 Consultando precios por lista (API_v2_ItemsPrecios)...', '#60a5fa');
 
