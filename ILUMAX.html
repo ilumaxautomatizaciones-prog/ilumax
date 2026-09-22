@@ -18151,6 +18151,7 @@ function mcActivarUI() {
               <option value="">Todos los meses</option>
             </select>
           </span>
+          <button class="btn btn-sm" onclick="mcDescargarReporte()" title="Descarga un HTML con lo que ves aquí (o solo los clientes marcados con el checkbox), para compartir y revisar fuera del sistema" style="white-space:nowrap;">📥 Descargar HTML</button>
           <span id="mc-cnt" style="font-size:11px;color:var(--mu);margin-left:auto;"></span>
         </div>
         <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
@@ -18256,9 +18257,26 @@ function mcActualizarKPIs() {
     { lbl: 'Venta total',    val: rvFmtM(totalVenta), col: '#f5c518' },
     { lbl: 'Costo total',    val: rvFmtM(totalCosto), col: '#93c5fd' },
     { lbl: 'Utilidad total', val: rvFmtM(totalUtilidad), col: totalUtilidad >= 0 ? '#6ee7b7' : '#fca5a5' },
-    { lbl: 'Margen % prom.', val: margenProm.toFixed(1) + '%', col: margenProm >= 30 ? '#6ee7b7' : margenProm >= 15 ? '#fcd34d' : '#fca5a5' },
+    { lbl: 'Margen % prom.', val: (totalVenta < 0 ? '⚠ ' : '') + margenProm.toFixed(1) + '%', col: totalVenta < 0 ? '#c4b5fd' : (margenProm >= 30 ? '#6ee7b7' : margenProm >= 15 ? '#fcd34d' : '#fca5a5') },
     { lbl: 'Clientes',       val: agregado.length.toLocaleString('es-CO'), col: '#fff' },
   ].map(k => `<div><div style="font-size:9px;color:#94a3b8;font-weight:700;">${k.lbl}</div><div style="font-size:16px;font-weight:800;color:${k.col};">${k.val}</div></div>`).join('');
+}
+
+// Cuando la venta de un período es negativa (las devoluciones o notas
+// crédito superaron las ventas), dividir utilidad/venta da un número que
+// matemáticamente "cuadra" pero NO es un margen real — negativo entre
+// negativo da positivo, y un verde brillante ahí confundiría al lector
+// haciéndole pensar que fue un buen período. Se marca aparte con ⚠ y un
+// color neutro (morado) para no mezclarlo con un margen sano de verdad.
+function mcMargenInfo(margen, venta) {
+  if (venta < 0) {
+    return {
+      txt: '⚠ ' + margen.toFixed(1) + '%',
+      color: '#7c3aed',
+      titulo: 'Venta neta negativa en este período (las devoluciones/notas crédito superaron las ventas) — este % no es un margen real, revisa el detalle de esas líneas'
+    };
+  }
+  return { txt: margen.toFixed(1) + '%', color: margen >= 30 ? 'var(--gr)' : margen >= 15 ? 'var(--or)' : 'var(--rd)', titulo: '' };
 }
 
 function mcFiltrar() {
@@ -18281,7 +18299,7 @@ function mcFiltrar() {
   const tbody = document.getElementById('mc-tbody');
   if (!tbody) return;
   tbody.innerHTML = items.slice(0, 500).map((c, idx) => {
-    const margenCol = c.margen >= 30 ? 'var(--gr)' : c.margen >= 15 ? 'var(--or)' : 'var(--rd)';
+    const mi = mcMargenInfo(c.margen, c.venta);
     const nitAttr = sselEsc(c.nit).replace(/"/g, '&quot;');
     return `<tr style="border-bottom:1px solid var(--b1);background:${idx % 2 ? 'var(--bg)' : ''};">
       <td style="padding:7px 6px;text-align:center;"><input type="checkbox" onchange="mcToggleComparar('${nitAttr}', this.checked)" ${MC.comparar.has(c.nit) ? 'checked' : ''}></td>
@@ -18290,7 +18308,7 @@ function mcFiltrar() {
       <td style="padding:7px 10px;text-align:right;">${rvFmt(c.venta)}</td>
       <td style="padding:7px 10px;text-align:right;color:var(--mu);">${rvFmt(c.costo)}</td>
       <td style="padding:7px 10px;text-align:right;font-weight:700;color:${c.utilidad < 0 ? 'var(--rd)' : 'var(--tx)'};">${rvFmt(c.utilidad)}</td>
-      <td style="padding:7px 10px;text-align:right;font-weight:800;color:${margenCol};">${c.margen.toFixed(1)}%</td>
+      <td style="padding:7px 10px;text-align:right;font-weight:800;color:${mi.color};" title="${mi.titulo}">${mi.txt}</td>
     </tr>`;
   }).join('') || `<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--mu);">Sin resultados</td></tr>`;
 }
@@ -18344,7 +18362,7 @@ function mcRenderComparar() {
   });
 
   const cols = clientes.map(c => {
-    const margenCol = c.margen >= 30 ? 'var(--gr)' : c.margen >= 15 ? 'var(--or)' : 'var(--rd)';
+    const mi = mcMargenInfo(c.margen, c.venta);
     const nitAttr = sselEsc(c.nit).replace(/"/g, '&quot;');
     return `<div style="flex:1;min-width:170px;background:var(--bg);border-radius:10px;padding:12px;position:relative;">
       <button onclick="mcToggleComparar('${nitAttr}', false); mcFiltrar();" title="Quitar de la comparación" style="position:absolute;top:6px;right:6px;border:none;background:none;color:var(--mu);cursor:pointer;font-size:13px;line-height:1;">✕</button>
@@ -18357,7 +18375,7 @@ function mcRenderComparar() {
       <div style="font-size:9px;color:var(--mu);">Utilidad</div>
       <div style="font-size:13px;font-weight:800;color:${c.utilidad < 0 ? 'var(--rd)' : 'var(--tx)'};margin-bottom:6px;">${rvFmt(c.utilidad)}</div>
       <div style="font-size:9px;color:var(--mu);">Margen %</div>
-      <div style="font-size:15px;font-weight:800;color:${margenCol};">${c.margen.toFixed(1)}%</div>
+      <div style="font-size:15px;font-weight:800;color:${mi.color};" title="${mi.titulo}">${mi.txt}</div>
     </div>`;
   }).join('');
 
@@ -18382,14 +18400,14 @@ function mcRenderComparar() {
         const utilidad = venta - costo;
         const margen = venta !== 0 ? (utilidad / venta * 100) : 0;
         const sinDatos = !venta && !costo;
-        const margenCol = margen >= 30 ? 'var(--gr)' : margen >= 15 ? 'var(--or)' : 'var(--rd)';
+        const mi = mcMargenInfo(margen, venta);
         filas += `<tr style="border-bottom:1px solid var(--b1);">
           ${i === 0 ? `<td style="padding:6px 10px;font-weight:700;font-size:11px;vertical-align:top;white-space:nowrap;" rowspan="${meses.length}">${sselEsc(c.nombre)}</td>` : ''}
           <td style="padding:6px 10px;font-size:11px;white-space:nowrap;">${sselEsc(m.lbl)}</td>
           <td style="padding:6px 10px;text-align:right;font-size:11px;${sinDatos ? 'color:var(--mu);' : ''}">${sinDatos ? '—' : rvFmt(venta)}</td>
           <td style="padding:6px 10px;text-align:right;font-size:11px;color:var(--mu);">${sinDatos ? '—' : rvFmt(costo)}</td>
           <td style="padding:6px 10px;text-align:right;font-size:11px;font-weight:700;${sinDatos ? 'color:var(--mu);' : (utilidad < 0 ? 'color:var(--rd);' : '')}">${sinDatos ? '—' : rvFmt(utilidad)}</td>
-          <td style="padding:6px 10px;text-align:right;font-size:11px;font-weight:800;${sinDatos ? 'color:var(--mu);' : 'color:' + margenCol + ';'}">${sinDatos ? '—' : margen.toFixed(1) + '%'}</td>
+          <td style="padding:6px 10px;text-align:right;font-size:11px;font-weight:800;${sinDatos ? 'color:var(--mu);' : 'color:' + mi.color + ';'}" title="${sinDatos ? '' : mi.titulo}">${sinDatos ? '—' : mi.txt}</td>
         </tr>`;
       });
     });
@@ -18515,7 +18533,12 @@ function mcRenderMensual() {
   const q = (document.getElementById('mc-mensual-busq')?.value || '').toLowerCase();
   const soloSel = document.getElementById('mc-mensual-solosel')?.checked || false;
   const esPct = metrica === 'margen';
-  const fmtCelda = esPct ? (v => v.toFixed(1) + '%') : (v => rvFmt(v));
+  const fmtCelda = (obj) => {
+    const v = mcValorCelda(obj, metrica);
+    if (!esPct) return rvFmt(v);
+    const mi = mcMargenInfo(v, (obj && obj.venta) || 0);
+    return `<span style="color:${mi.color};" title="${mi.titulo}">${mi.txt}</span>`;
+  };
   const multiAnio = new Set(meses.map(m => m.key.split('-')[0])).size > 1;
   const lblMes = m => multiAnio ? m.lbl : m.lbl.split(' ')[0];
 
@@ -18547,8 +18570,8 @@ function mcRenderMensual() {
   const theadMeses = meses.map(m => `<th style="background:#0f172a;color:#fff;padding:8px 10px;text-align:right;position:sticky;top:0;white-space:nowrap;">${sselEsc(lblMes(m))}</th>`).join('');
 
   const filas = filtrados.slice(0, 500).map((c, idx) => {
-    const celdas = meses.map(m => `<td style="padding:7px 10px;text-align:right;">${fmtCelda(mcValorCelda(c.meses[m.key], metrica))}</td>`).join('');
-    const totalCliente = fmtCelda(mcValorCelda({ venta: c.totalVenta, costo: c.totalCosto }, metrica));
+    const celdas = meses.map(m => `<td style="padding:7px 10px;text-align:right;">${fmtCelda(c.meses[m.key])}</td>`).join('');
+    const totalCliente = fmtCelda({ venta: c.totalVenta, costo: c.totalCosto });
     const nitAttr = sselEsc(c.nit).replace(/"/g, '&quot;');
     return `<tr style="border-bottom:1px solid var(--b1);background:${idx % 2 ? 'var(--bg)' : ''};">
       <td style="padding:7px 6px;text-align:center;"><input type="checkbox" onchange="mcToggleComparar('${nitAttr}', this.checked); mcRenderMensual();" ${MC.comparar.has(c.nit) ? 'checked' : ''}></td>
@@ -18561,8 +18584,8 @@ function mcRenderMensual() {
 
   const filaTotal = `<tr style="border-top:2px solid var(--b1);font-weight:800;background:var(--bg);">
     <td style="padding:7px 10px;" colspan="3">Total general</td>
-    ${meses.map(m => `<td style="padding:7px 10px;text-align:right;">${fmtCelda(mcValorCelda(totalesMes[m.key], metrica))}</td>`).join('')}
-    <td style="padding:7px 10px;text-align:right;">${fmtCelda(mcValorCelda({ venta: totalVenta, costo: totalCosto }, metrica))}</td>
+    ${meses.map(m => `<td style="padding:7px 10px;text-align:right;">${fmtCelda(totalesMes[m.key])}</td>`).join('')}
+    <td style="padding:7px 10px;text-align:right;">${fmtCelda({ venta: totalVenta, costo: totalCosto })}</td>
   </tr>`;
 
   if (wrap) wrap.innerHTML = `
@@ -18579,6 +18602,337 @@ function mcRenderMensual() {
         <tfoot>${filaTotal}</tfoot>
       </table>
     </div>`;
+}
+
+// ─── Descargar informe HTML autocontenido (para compartir/revisar fuera del sistema) ───
+// Si hay clientes marcados con el checkbox (MC.comparar), el informe incluye
+// SOLO esos, con su detalle mes a mes. Si no hay ninguno marcado, incluye
+// todos los clientes que están filtrados en ese momento en el Ranking
+// (búsqueda + canal + mes), con una tabla resumen de totales por mes.
+function mcGenerarHTMLReporte() {
+  const soloSeleccionados = MC.comparar.size > 0;
+  const q        = (document.getElementById('mc-busq')?.value || '').toLowerCase();
+  const canalFil = document.getElementById('mc-fil-canal')?.value || '';
+  const meses    = mcListaMeses();
+
+  // Qué clientes van en el archivo: los marcados con el checkbox, o si no hay
+  // ninguno marcado, los que están filtrados en pantalla en ese momento
+  // (búsqueda + canal). El archivo descargado trae su PROPIO buscador/filtros
+  // interactivos por dentro, así que esto solo decide el universo de clientes
+  // que se incluyen, no lo que se ve al abrirlo.
+  let items = mcAgregarPorCliente(MC.datos); // totales del período completo, sin el filtro de mes de arriba
+  items = soloSeleccionados
+    ? items.filter(c => MC.comparar.has(c.nit))
+    : items.filter(c => {
+        const okQ = !q || c.nombre.toLowerCase().includes(q) || c.nit.toLowerCase().includes(q);
+        const okC = !canalFil || c.canal === canalFil;
+        return okQ && okC;
+      });
+
+  const { clientes: matriz } = mcMatrizMensual();
+  const porNitMatriz = {};
+  matriz.forEach(c => { porNitMatriz[c.nit] = c; });
+
+  const dataEmbed = items.map(c => {
+    const cm = porNitMatriz[c.nit];
+    const mesesObj = {};
+    meses.forEach(m => { mesesObj[m.key] = cm ? cm.meses[m.key] : { venta: 0, costo: 0 }; });
+    return { nit: c.nit, nombre: c.nombre, canal: c.canal, totalVenta: c.venta, totalCosto: c.costo, meses: mesesObj };
+  });
+  const canalesEmbed = [...new Set(items.map(c => c.canal))].filter(Boolean).sort();
+
+  // JSON.stringify escapa comillas dobles automáticamente, pero un cierre de
+  // etiqueta script dentro del JSON rompería el documento igual — se neutraliza el "<".
+  const jsonSeguro = (obj) => JSON.stringify(obj).replace(/</g, '\\u003c');
+  const dataJson    = jsonSeguro(dataEmbed);
+  const mesesJson   = jsonSeguro(meses);
+  const canalesJson = jsonSeguro(canalesEmbed);
+  const cctagJson   = jsonSeguro(CCTAG);
+
+  const generado = new Date().toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const rangoMeses = meses.length ? (meses[0].lbl + (meses.length > 1 ? ' a ' + meses[meses.length - 1].lbl : '')) : 'Total del archivo';
+  const alcance = soloSeleccionados
+    ? (items.length + ' cliente' + (items.length !== 1 ? 's' : '') + ' seleccionado' + (items.length !== 1 ? 's' : '') + ' manualmente')
+    : (items.length.toLocaleString('es-CO') + ' clientes' + (canalFil ? ' · Canal: ' + canalFil : '') + (q ? ' · Búsqueda: "' + q + '"' : ''));
+
+  const opcionesCanal = canalesEmbed.map(c => `<option value="${sselEsc(c)}">${sselEsc(c)}</option>`).join('');
+  const opcionesMes = meses.map(m => `<option value="${m.key}">${sselEsc(m.lbl)}</option>`).join('');
+  const multiAnio = new Set(meses.map(m => m.key.split('-')[0])).size > 1;
+  const theadMesesHtml = meses.map(m => `<th style="color:#fff;">${sselEsc(multiAnio ? m.lbl : m.lbl.split(' ')[0])}</th>`).join('');
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Margen x Cliente ILUMAX — ${rangoMeses}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f1f5f9;color:#0f172a;}
+  .wrap{max-width:960px;margin:0 auto;padding:16px;}
+  .sec{background:#fff;border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);}
+  table{width:100%;border-collapse:collapse;}
+  th{background:#0f172a;color:#fff;padding:9px 10px;font-size:10px;font-weight:700;text-align:right;white-space:nowrap;}
+  th:first-child{text-align:left;}
+  th.sortable{cursor:pointer;user-select:none;}
+  .scroll{overflow-x:auto;max-height:65vh;overflow-y:auto;}
+  .toolbar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;}
+  .toolbar input, .toolbar select{font-size:12px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-family:inherit;}
+  .toolbar input{flex:1;min-width:180px;border-radius:22px;}
+  .tabbtn{border:none;padding:9px 16px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;background:#e2e8f0;color:#0f172a;}
+  .tabbtn.on{background:#0f172a;color:#fff;}
+  @media(max-width:600px){.wrap{padding:10px;} .sec{padding:14px;}}
+  @media print { body{background:#fff;} .sec{box-shadow:none;border:1px solid #e2e8f0;} .toolbar,.tabbtn{display:none;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:16px;padding:24px 20px;margin-bottom:16px;color:#fff;text-align:center;">
+    <div style="font-size:30px;font-weight:900;letter-spacing:-1px;margin-bottom:4px;">ILU<span style="color:#f5c518;">MAX</span></div>
+    <div style="font-size:12px;color:rgba(255,255,255,.6);">Margen por Cliente</div>
+    <div style="display:inline-block;margin-top:8px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:4px 12px;font-size:10px;font-weight:700;letter-spacing:.3px;color:rgba(255,255,255,.75);">Informe Ejecutivo · Confidencial</div>
+    <div style="font-size:18px;font-weight:800;color:#f5c518;margin:10px 0;">📅 ${sselEsc(rangoMeses)}</div>
+    <div style="font-size:11px;color:rgba(255,255,255,.6);margin-bottom:6px;">${sselEsc(alcance)}</div>
+    <div style="display:flex;justify-content:center;gap:20px;flex-wrap:wrap;margin-top:8px;">
+      <div><div id="kpiVenta" style="font-size:20px;font-weight:800;color:#f5c518;">—</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Venta total</div></div>
+      <div><div id="kpiCosto" style="font-size:20px;font-weight:800;color:#93c5fd;">—</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Costo total</div></div>
+      <div><div id="kpiUtilidad" style="font-size:20px;font-weight:800;color:#6ee7b7;">—</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Utilidad total</div></div>
+      <div><div id="kpiMargen" style="font-size:20px;font-weight:800;color:#6ee7b7;">—</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Margen % prom.</div></div>
+      <div><div id="kpiClientes" style="font-size:20px;font-weight:800;color:#fff;">—</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Clientes</div></div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div style="display:flex;gap:6px;margin-bottom:14px;">
+      <button id="tabBtnRanking" class="tabbtn on" onclick="cambiarTab('ranking')">🏆 Ranking</button>
+      ${meses.length ? `<button id="tabBtnMensual" class="tabbtn" onclick="cambiarTab('mensual')">📅 Mes a mes</button>` : ''}
+    </div>
+
+    <div id="tabRanking">
+      <div class="toolbar">
+        <input id="busq" placeholder="🔍 Cliente o NIT..." oninput="render()" autocomplete="off">
+        <select id="filCanal" onchange="render()"><option value="">Todos los canales</option>${opcionesCanal}</select>
+        ${meses.length ? `<select id="filMes" onchange="render()"><option value="">Todos los meses</option>${opcionesMes}</select>` : ''}
+        <span id="cnt" style="font-size:11px;color:#64748b;margin-left:auto;"></span>
+      </div>
+      <div class="scroll"><table>
+        <thead><tr>
+          <th class="sortable" data-key="nombre" onclick="ordenar('nombre')" style="text-align:left;">Cliente <span class="ind"></span></th>
+          <th style="text-align:left;">Canal</th>
+          <th class="sortable" data-key="venta" onclick="ordenar('venta')" style="color:#f5c518;">Venta <span class="ind"></span></th>
+          <th class="sortable" data-key="costo" onclick="ordenar('costo')" style="color:#93c5fd;">Costo <span class="ind"></span></th>
+          <th class="sortable" data-key="utilidad" onclick="ordenar('utilidad')" style="color:#6ee7b7;">Utilidad <span class="ind">▼</span></th>
+          <th class="sortable" data-key="margen" onclick="ordenar('margen')" style="color:#fcd34d;">Margen % <span class="ind"></span></th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+        <tfoot id="tfoot"></tfoot>
+      </table></div>
+    </div>
+
+    ${meses.length ? `
+    <div id="tabMensual" style="display:none;">
+      <div class="toolbar">
+        <input id="busqMensual" placeholder="🔍 Cliente o NIT..." oninput="renderMensual()" autocomplete="off">
+        <select id="metricaMensual" onchange="renderMensual()">
+          <option value="venta">Venta</option>
+          <option value="costo">Costo</option>
+          <option value="utilidad">Utilidad</option>
+          <option value="margen">Margen %</option>
+        </select>
+        <span id="cntMensual" style="font-size:11px;color:#64748b;margin-left:auto;"></span>
+      </div>
+      <div class="scroll"><table>
+        <thead><tr>
+          <th style="text-align:left;">Cliente</th>
+          <th style="text-align:left;">Canal</th>
+          ${theadMesesHtml}
+          <th style="color:#f5c518;">Total</th>
+        </tr></thead>
+        <tbody id="tbodyMensual"></tbody>
+        <tfoot id="tfootMensual"></tfoot>
+      </table></div>
+    </div>` : ''}
+  </div>
+
+  <div style="text-align:center;padding:14px;font-size:10px;color:#94a3b8;">
+    Generado el ${generado} · ILUMAX — Portal de Automatizaciones<br>
+    Este informe es de uso interno y confidencial. Búsqueda y filtros funcionan sin conexión a internet.
+  </div>
+
+</div>
+<script>
+const DATA   = ${dataJson};
+const MESES  = ${mesesJson};
+const CCTAG  = ${cctagJson};
+
+function fmt(n){ return n ? '$' + Math.round(n).toLocaleString('es-CO') : '—'; }
+function fmtM(n){ return n ? '$' + (Math.abs(n)/1e6).toFixed(1) + 'M' : '—'; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function margenInfo(margen, venta) {
+  if (venta < 0) {
+    return { txt: '⚠ ' + margen.toFixed(1) + '%', color: '#7c3aed', titulo: 'Venta neta negativa en este período (las devoluciones/notas crédito superaron las ventas) — este % no es un margen real, revisa el detalle de esas líneas' };
+  }
+  return { txt: margen.toFixed(1) + '%', color: margen>=30?'#16a34a':margen>=15?'#ea580c':'#dc2626', titulo: '' };
+}
+
+let sortKey = 'utilidad', sortDir = -1;
+
+function valorMes(item, mesKey) {
+  if (!mesKey) return { venta: item.totalVenta, costo: item.totalCosto };
+  return item.meses[mesKey] || { venta: 0, costo: 0 };
+}
+function calcFila(item, mesKey) {
+  const v = valorMes(item, mesKey);
+  const utilidad = v.venta - v.costo;
+  const margen = v.venta !== 0 ? (utilidad / v.venta * 100) : 0;
+  return { nit: item.nit, nombre: item.nombre, canal: item.canal, venta: v.venta, costo: v.costo, utilidad: utilidad, margen: margen };
+}
+function itemsFiltrados() {
+  const q = (document.getElementById('busq').value || '').toLowerCase();
+  const canal = document.getElementById('filCanal').value;
+  const mesEl = document.getElementById('filMes');
+  const mes = mesEl ? mesEl.value : '';
+  let items = DATA.map(function(it){ return calcFila(it, mes); }).filter(function(c){
+    const okQ = !q || c.nombre.toLowerCase().indexOf(q) !== -1 || c.nit.toLowerCase().indexOf(q) !== -1;
+    const okC = !canal || c.canal === canal;
+    return okQ && okC;
+  });
+  items.sort(function(a,b){
+    const va = a[sortKey], vb = b[sortKey];
+    if (typeof va === 'string') return sortDir * va.localeCompare(vb);
+    return sortDir * ((va||0) - (vb||0));
+  });
+  return items;
+}
+function ordenar(key) {
+  if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = key === 'nombre' ? 1 : -1; }
+  render();
+}
+function badgeCanal(canal) {
+  const col = CCTAG[canal];
+  return '<span style="font-size:9px;background:' + (col ? col + '18' : '#f1f5f9') + ';color:' + (col || '#64748b') + ';padding:2px 7px;border-radius:8px;font-weight:700;">' + esc(canal || '—') + '</span>';
+}
+function render() {
+  const items = itemsFiltrados();
+  const totalVenta = items.reduce(function(a,c){ return a+c.venta; }, 0);
+  const totalCosto = items.reduce(function(a,c){ return a+c.costo; }, 0);
+  const totalUtilidad = totalVenta - totalCosto;
+  const margenProm = totalVenta !== 0 ? (totalUtilidad/totalVenta*100) : 0;
+
+  document.getElementById('kpiVenta').textContent = fmtM(totalVenta);
+  document.getElementById('kpiCosto').textContent = fmtM(totalCosto);
+  document.getElementById('kpiUtilidad').textContent = fmtM(totalUtilidad);
+  const kpiMargenEl = document.getElementById('kpiMargen');
+  kpiMargenEl.textContent = (totalVenta < 0 ? '⚠ ' : '') + margenProm.toFixed(1) + '%';
+  kpiMargenEl.style.color = totalVenta < 0 ? '#c4b5fd' : (margenProm >= 30 ? '#6ee7b7' : margenProm >= 15 ? '#fcd34d' : '#fca5a5');
+  document.getElementById('kpiClientes').textContent = items.length.toLocaleString('es-CO');
+  document.getElementById('cnt').textContent = items.length.toLocaleString('es-CO') + (items.length===1?' cliente':' clientes');
+
+  document.getElementById('tbody').innerHTML = items.slice(0,1000).map(function(c,idx){
+    const mi = margenInfo(c.margen, c.venta);
+    return '<tr style="background:' + (idx%2?'#f8fafc':'#fff') + ';">'
+      + '<td style="padding:8px 10px;font-weight:600;font-size:12px;border-bottom:1px solid #f1f5f9;">' + esc(c.nombre) + '</td>'
+      + '<td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">' + badgeCanal(c.canal) + '</td>'
+      + '<td style="padding:8px 10px;text-align:right;font-size:12px;border-bottom:1px solid #f1f5f9;">' + fmt(c.venta) + '</td>'
+      + '<td style="padding:8px 10px;text-align:right;font-size:12px;color:#64748b;border-bottom:1px solid #f1f5f9;">' + fmt(c.costo) + '</td>'
+      + '<td style="padding:8px 10px;text-align:right;font-weight:700;font-size:12px;color:' + (c.utilidad<0?'#dc2626':'#0f172a') + ';border-bottom:1px solid #f1f5f9;">' + fmt(c.utilidad) + '</td>'
+      + '<td style="padding:8px 10px;text-align:right;font-weight:800;font-size:12px;color:' + mi.color + ';border-bottom:1px solid #f1f5f9;" title="' + esc(mi.titulo) + '">' + mi.txt + '</td>'
+      + '</tr>';
+  }).join('') || '<tr><td colspan="6" style="padding:20px;text-align:center;color:#94a3b8;">Sin resultados</td></tr>';
+
+  document.getElementById('tfoot').innerHTML = '<tr style="background:#f1f5f9;border-top:2px solid #e2e8f0;">'
+    + '<td style="padding:9px 10px;font-weight:800;font-size:12px;" colspan="2">Total general</td>'
+    + '<td style="padding:9px 10px;text-align:right;font-weight:800;font-size:12px;">' + fmt(totalVenta) + '</td>'
+    + '<td style="padding:9px 10px;text-align:right;font-weight:800;font-size:12px;">' + fmt(totalCosto) + '</td>'
+    + '<td style="padding:9px 10px;text-align:right;font-weight:800;font-size:12px;">' + fmt(totalUtilidad) + '</td>'
+    + '<td style="padding:9px 10px;text-align:right;font-weight:800;font-size:12px;">' + (totalVenta<0?'⚠ ':'') + margenProm.toFixed(1) + '%</td>'
+    + '</tr>';
+
+  document.querySelectorAll('#tabRanking th.sortable').forEach(function(th){
+    const ind = th.querySelector('.ind');
+    if (ind) ind.textContent = th.getAttribute('data-key') === sortKey ? (sortDir>0?'▲':'▼') : '';
+  });
+}
+function cambiarTab(t) {
+  const bR = document.getElementById('tabBtnRanking'), bM = document.getElementById('tabBtnMensual');
+  const eR = document.getElementById('tabRanking'), eM = document.getElementById('tabMensual');
+  if (eR) eR.style.display = t==='ranking' ? '' : 'none';
+  if (eM) eM.style.display = t==='mensual' ? '' : 'none';
+  if (bR) bR.classList.toggle('on', t==='ranking');
+  if (bM) bM.classList.toggle('on', t==='mensual');
+  if (t === 'mensual') renderMensual();
+}
+function valorMetrica(venta, costo, metrica) {
+  if (metrica==='costo') return costo;
+  if (metrica==='utilidad') return venta-costo;
+  if (metrica==='margen') return venta!==0 ? ((venta-costo)/venta*100) : 0;
+  return venta;
+}
+function renderMensual() {
+  if (!MESES.length) return;
+  const q = (document.getElementById('busqMensual').value||'').toLowerCase();
+  const metrica = document.getElementById('metricaMensual').value;
+  const fmtCelda = function(obj){
+    const v = valorMetrica(obj.venta, obj.costo, metrica);
+    if (metrica !== 'margen') return fmt(v);
+    const mi = margenInfo(v, obj.venta);
+    return '<span style="color:' + mi.color + ';" title="' + esc(mi.titulo) + '">' + mi.txt + '</span>';
+  };
+
+  let items = DATA.filter(function(it){ return !q || it.nombre.toLowerCase().indexOf(q)!==-1 || it.nit.toLowerCase().indexOf(q)!==-1; });
+  items = items.map(function(it){ return Object.assign({}, it, { _tot: valorMetrica(it.totalVenta, it.totalCosto, metrica) }); });
+  items.sort(function(a,b){ return (b._tot||0)-(a._tot||0); });
+
+  document.getElementById('cntMensual').textContent = items.length.toLocaleString('es-CO') + (items.length===1?' cliente':' clientes');
+
+  const totalesMes = {}; MESES.forEach(function(m){ totalesMes[m.key] = {venta:0,costo:0}; });
+  let totVenta=0, totCosto=0;
+  DATA.forEach(function(it){
+    MESES.forEach(function(m){ const dm = it.meses[m.key]||{venta:0,costo:0}; totalesMes[m.key].venta+=dm.venta; totalesMes[m.key].costo+=dm.costo; });
+    totVenta += it.totalVenta; totCosto += it.totalCosto;
+  });
+
+  document.getElementById('tbodyMensual').innerHTML = items.slice(0,1000).map(function(c,idx){
+    const celdas = MESES.map(function(m){
+      const dm = c.meses[m.key]||{venta:0,costo:0};
+      return '<td style="padding:7px 10px;text-align:right;font-size:11px;border-bottom:1px solid #f1f5f9;">' + fmtCelda(dm) + '</td>';
+    }).join('');
+    return '<tr style="background:' + (idx%2?'#f8fafc':'#fff') + ';">'
+      + '<td style="padding:7px 10px;font-size:11px;font-weight:600;border-bottom:1px solid #f1f5f9;">' + esc(c.nombre) + '</td>'
+      + '<td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">' + badgeCanal(c.canal) + '</td>'
+      + celdas
+      + '<td style="padding:7px 10px;text-align:right;font-size:11px;font-weight:800;border-bottom:1px solid #f1f5f9;">' + fmtCelda({venta:c.totalVenta,costo:c.totalCosto}) + '</td>'
+      + '</tr>';
+  }).join('') || ('<tr><td colspan="' + (MESES.length+3) + '" style="padding:20px;text-align:center;color:#94a3b8;">Sin resultados</td></tr>');
+
+  document.getElementById('tfootMensual').innerHTML = '<tr style="background:#f1f5f9;border-top:2px solid #e2e8f0;">'
+    + '<td style="padding:8px 10px;font-weight:800;font-size:11px;" colspan="2">Total general</td>'
+    + MESES.map(function(m){ return '<td style="padding:8px 10px;text-align:right;font-weight:800;font-size:11px;">' + fmtCelda(totalesMes[m.key]) + '</td>'; }).join('')
+    + '<td style="padding:8px 10px;text-align:right;font-weight:800;font-size:11px;">' + fmtCelda({venta:totVenta,costo:totCosto}) + '</td>'
+    + '</tr>';
+}
+
+render();
+<\/script>
+</body>
+</html>`;
+}
+
+function mcDescargarReporte() {
+  if (!MC.cargado || !MC.datos.length) { toast('Primero carga un Excel de Margen x Cliente', 'err'); return; }
+  const html   = mcGenerarHTMLReporte();
+  const fecha  = new Date().toISOString().split('T')[0];
+  const nombre = `Margen_Cliente_ILUMAX_${fecha}.html`;
+  const blob   = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url    = URL.createObjectURL(blob);
+  const a      = document.createElement('a');
+  a.href = url; a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('✅ Reporte descargado — ábrelo en el navegador', 'ok');
 }
 </script>
 </body>
