@@ -18083,12 +18083,48 @@ function mcAgregarPorCliente(datos) {
   });
 }
 
+// Comprime MC.datos (que puede traer decenas de miles de líneas sueltas de
+// factura) a UNA fila por cliente+mes, sumando venta/costo. El módulo entero
+// solo necesita esos 5 campos (nit, nombre, canal, venta, costo) más el mes,
+// así que esto reconstruye el mismo resultado en todas las vistas pero con
+// muchísimas menos filas — necesario porque subir las ~46.000 líneas crudas
+// en un solo registro de Supabase excede el statement_timeout de Postgres
+// (el guardado fallaba con error 57014 "canceling statement due to statement
+// timeout" en archivos grandes).
+function mcCompactarDatos(datos) {
+  const map = {};
+  datos.forEach(r => {
+    const nit = String(r['Cliente factura'] || '').trim();
+    if (!nit) return;
+    const mesKey = r._mesKey || '';
+    const clave = nit + '|' + mesKey;
+    if (!map[clave]) {
+      map[clave] = {
+        'Cliente factura': nit,
+        'Razón social cliente factura': String(r['Razón social cliente factura'] || '').trim() || nit,
+        'Desc. tipo de cliente': String(r['Desc. tipo de cliente'] || '').trim(),
+        'Cantidad inv.': 0,
+        'Valor subtotal': 0,
+        'Costo promedio total': 0,
+        _mesKey: r._mesKey || null,
+        _mesLbl: r._mesLbl || null
+      };
+    }
+    const g = map[clave];
+    g['Cantidad inv.']        += parseFloat(r['Cantidad inv.']) || 0;
+    g['Valor subtotal']       += parseFloat(r['Valor subtotal']) || 0;
+    g['Costo promedio total'] += parseFloat(r['Costo promedio total']) || 0;
+  });
+  return Object.values(map);
+}
+
 async function mcGuardarSnapshot() {
   // Siempre se persiste el total del archivo completo, sin importar qué mes
   // esté seleccionado en el filtro en ese momento.
   const agregado = mcAgregarPorCliente(MC.datos);
   const totalVenta = agregado.reduce((a, c) => a + c.venta, 0);
   const totalCosto = agregado.reduce((a, c) => a + c.costo, 0);
+  const datosCompactos = mcCompactarDatos(MC.datos);
   try {
     await sb.upsert('margen_cliente_snapshots', {
       clave: 'actual',
@@ -18097,7 +18133,7 @@ async function mcGuardarSnapshot() {
       total_utilidad: totalVenta - totalCosto,
       num_lineas: MC.datos.length,
       num_clientes: agregado.length,
-      payload: { datos: MC.datos },
+      payload: { datos: datosCompactos },
       subido_por: MC.subidoPor,
       origen_archivo: MC.origenArchivo,
       actualizado: new Date().toISOString()
