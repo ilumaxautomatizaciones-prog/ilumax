@@ -13147,12 +13147,24 @@ async function acGuardarPermisosArea() {
   let ok=0, err=0;
   for(const [subCod, val] of entries) {
     try {
-      await sb.upsert('permisos_ppto',
-        { area, sub_codigo:subCod, puede_ver:val, puede_llenar:val, actualizado:new Date().toISOString() },
-        'area,sub_codigo'
-      );
+      // Upsert manual por (area, sub_codigo) con email_usuario=null: la restricción única
+      // real de la tabla es (area, sub_codigo, email_usuario), no (area, sub_codigo) solo,
+      // así que el upsert nativo de PostgREST con on_conflict='area,sub_codigo' fallaba
+      // siempre (no hay ningún índice único que calce con esas dos columnas) y por eso
+      // nunca se guardaba nada aquí. Se resuelve buscando la fila existente en caché y
+      // haciendo PATCH por id, o POST si es un permiso nuevo — igual que ppGuardar().
+      const existing = AC.perms.find(p => p.sub_codigo===subCod && p.area===area);
+      if(existing) {
+        await sb.patch('permisos_ppto', `id=eq.${existing.id}`,
+          { puede_ver: val, puede_llenar: val, actualizado: new Date().toISOString() });
+        existing.puede_ver = val; existing.puede_llenar = val;
+      } else {
+        const nuevo = await sb.post('permisos_ppto',
+          { area, sub_codigo: subCod, puede_ver: val, puede_llenar: val });
+        if(nuevo?.[0]) AC.perms.push(nuevo[0]);
+      }
       ok++;
-    } catch(e) { err++; }
+    } catch(e) { err++; console.warn('acGuardarPermisosArea err:', e); }
   }
 
   // Limpiar pendientes del área
@@ -15061,9 +15073,12 @@ async function paCrearSub() {
 
   try {
     await sb.upsert('subcategorias_ppto',{codigo:cod,cat_codigo:catCod,nombre:nom,centro_costo:cc,orden:PA.subs.length+1,activo:true},'codigo');
-    // Crear permisos para cada área
+    // Crear permisos para cada área. Como la subcategoría (cod) recién se creó, no puede
+    // existir todavía ningún permiso previo para ella, así que un POST simple basta — no
+    // hace falta upsert (que además fallaba: la restricción única real de la tabla es
+    // (area, sub_codigo, email_usuario), no (area, sub_codigo) solo).
     for(const area of chks){
-      await sb.upsert('permisos_ppto',{area,sub_codigo:cod,puede_ver:true,puede_llenar:true},'area,sub_codigo').catch(()=>{});
+      await sb.post('permisos_ppto',{area,sub_codigo:cod,puede_ver:true,puede_llenar:true}).catch(()=>{});
     }
     PA.subs.push({codigo:cod,cat_codigo:catCod,nombre:nom,centro_costo:cc});
     toast('✅ Subcategoría creada con permisos','ok');
