@@ -1864,7 +1864,7 @@ function sbToPres(r) {
     montoAprobado: r.monto_aprobado ? parseFloat(r.monto_aprobado) : undefined,
     obs: r.obs, obsContabilidad: r.obs_contabilidad,
     obsGerencia: r.obs_gerencia,
-    estado: r.estado, autor: r.autor,
+    estado: r.estado, autor: r.autor, autorEmail: r.autor_email,
     aprobadoPor: r.aprobado_por,
     cambioGerencia: r.cambio_gerencia,
     items: items,
@@ -1886,6 +1886,9 @@ function presToSb(p) {
     obs_gerencia: p.obsGerencia || null,
     estado: p.estado || 'borrador',
     autor: p.autor || (CU ? CU.nombre : ''),
+    // Identidad estable del creador (para permisos de borrado — ver eliminarPres): el
+    // nombre visible puede repetirse o cambiar, el email de la cuenta no.
+    autor_email: p.autorEmail || (CU ? CU.email : null),
     aprobado_por: p.aprobadoPor || null,
     cambio_gerencia: p.cambioGerencia || null,
     // Ítems detallados (Centro de Costo, descripción y valor por línea) — antes no se
@@ -5451,12 +5454,15 @@ function renderPresVistaLider(el, mes, anio) {
         ? '<div style="font-size:10px;color:var(--or);">Propuesto: ' + fmt(p.monto) + ' → Aprobado: ' + fmt(p.montoAprobado) + '</div>' : '';
 
       var puedeEditar = (!p.estado || p.estado==='borrador' || p.estado==='devuelto');
+      var esCreadorItem = p.autorEmail ? (p.autorEmail === CU.email) : (p.autor === CU.nombre);
+      var puedeBorrarItem = esAdmin() || (esCreadorItem && puedeEditar);
       html += '<div style="padding:10px 0;border-bottom:1px solid var(--b1);">'
         + '<div style="display:flex;align-items:flex-start;gap:10px;">'
         + '<div style="flex:1;">'
         + '<div style="font-size:12px;font-weight:600;margin-bottom:4px;">' + p.subNombre + '</div>'
         + renderItemsPresHtml(p)
         + (p.obs ? '<div style="font-size:11px;color:var(--mu);">📝 ' + p.obs + '</div>' : '')
+        + (p.autor ? '<div style="font-size:10px;color:var(--mu);margin-top:2px;">👤 Creado por: ' + p.autor + '</div>' : '')
         + obsGer + obsCont
         + '</div>'
         + '<div style="text-align:right;flex-shrink:0;">'
@@ -5465,10 +5471,10 @@ function renderPresVistaLider(el, mes, anio) {
         + '<div style="margin-top:4px;">' + estadoBdg + '</div>'
         + '</div>'
         + '</div>'
-        + (puedeEditar
+        + (puedeEditar || puedeBorrarItem
           ? '<div style="margin-top:6px;display:flex;gap:6px;">'
-            + '<button class="btn btn-g btn-xs" onclick="abrirEditarPres(\'' + p.id + '\')">✏️ Editar</button>'
-            + '<button class="btn btn-rd btn-xs" onclick="eliminarPres(\'' + p.id + '\')">🗑️ Borrar</button>'
+            + (puedeEditar ? '<button class="btn btn-g btn-xs" onclick="abrirEditarPres(\'' + p.id + '\')">✏️ Editar</button>' : '')
+            + (puedeBorrarItem ? '<button class="btn btn-rd btn-xs" onclick="eliminarPres(\'' + p.id + '\')">🗑️ Borrar</button>' : '')
             + '</div>' : '')
         + '</div>';
     });
@@ -5520,6 +5526,7 @@ function renderPresVistaAdmin(el, mes, anio) {
         + '<div style="flex:1;min-width:140px;">'
         + '<div style="font-size:12px;font-weight:700;margin-bottom:4px;"><span style="font-family:monospace;font-size:10px;color:var(--mu);">'+p.subCodigo+'</span> '+p.subNombre+'</div>'
         + renderItemsPresHtml(p)
+        + (p.autor?'<div style="font-size:10px;color:var(--mu);margin-bottom:4px;">👤 Creado por: '+p.autor+'</div>':'')
         + (p.obs?'<div style="font-size:11px;color:var(--mu);background:var(--s1);padding:5px 8px;border-radius:6px;border-left:3px solid var(--bl);margin-bottom:5px;">💬 '+p.obs+'</div>':'')
         + (p.obsContabilidad?'<div style="font-size:11px;color:var(--bl);background:var(--bld);padding:5px 8px;border-radius:6px;margin-bottom:4px;">🔍 '+p.obsContabilidad+'</div>':'')
         + '</div><div style="text-align:right;flex-shrink:0;">'
@@ -5696,9 +5703,12 @@ function accionesPresPorRol(p) {
       + '<button class="btn btn-bl btn-xs" onclick="accionPres(\''+p.id+'\',\'en_gerencia\')">📋 → Gerencia</button>'
       + '</div>';
   }
-  // Contabilidad (y admin) puede borrar un concepto en cualquier estado — por ejemplo
-  // para limpiar ítems de prueba que un área haya subido por error.
-  if (esContabilidad()) {
+  // Borrar: SOLO quien creó el concepto (comparando por email) o el admin del sistema —
+  // contabilidad ya NO puede borrar presupuestos de otras personas/áreas solo por ver la
+  // vista de revisión (a pedido de Duvier, para evitar borrados accidentales entre áreas).
+  var esCreadorAcc = p.autorEmail ? (p.autorEmail === CU.email) : (p.autor === CU.nombre);
+  var estadoEditableAcc = (!p.estado || p.estado==='borrador' || p.estado==='devuelto');
+  if (esAdmin() || (esCreadorAcc && estadoEditableAcc)) {
     html += '<div style="margin-top:6px;"><button class="btn btn-rd btn-xs" onclick="eliminarPres(\''+p.id+'\')">🗑️ Borrar</button></div>';
   }
   return html ? '<div style="border-top:1px solid var(--b1);margin-top:8px;padding-top:8px;">'+html+'</div>' : '';
@@ -6260,15 +6270,25 @@ function abrirModalPres(catCod, subCod) {
 }
 
 // Borra un concepto de presupuesto (una fila = una subcategoría/mes/área) tanto local
-// como en Supabase. El líder solo puede borrar sus borradores/devueltos (mismo permiso
-// que para editar); contabilidad/admin pueden borrar cualquiera desde su vista de
-// revisión (por ejemplo para limpiar un ítem de prueba subido por error).
+// como en Supabase. A pedido de Duvier: solo quien CREÓ el concepto puede borrarlo desde
+// su propia cuenta (comparando por email, no por nombre — más confiable) — ni siquiera
+// contabilidad puede borrar presupuestos de otra persona/área desde la vista de revisión.
+// El admin del sistema (esAdmin(), no esContabilidad()) sigue teniendo permiso total,
+// como respaldo para casos excepcionales.
 function eliminarPres(presId) {
   var presups = getPresupuestos();
   var p = presups.find(function(x){ return x.id===presId; });
   if(!p) { toast('No encontrado','er'); return; }
-  var puedeBorrar = esContabilidad() || (p.area===CU.area && (!p.estado || p.estado==='borrador' || p.estado==='devuelto'));
-  if(!puedeBorrar) { toast('No puedes borrar este concepto','wa'); return; }
+  var esCreador = p.autorEmail ? (p.autorEmail === CU.email) : (p.autor === CU.nombre);
+  var enEstadoEditable = (!p.estado || p.estado==='borrador' || p.estado==='devuelto');
+  var puedeBorrar = esAdmin() || (esCreador && enEstadoEditable);
+  if(!puedeBorrar) {
+    var motivo = !esCreador
+      ? 'Solo quien lo creó puede borrarlo (creado por ' + (p.autor||'—') + ')'
+      : 'Solo puedes borrar un presupuesto en borrador o devuelto';
+    toast(motivo, 'wa');
+    return;
+  }
   if(!confirm('¿Borrar "' + p.subNombre + '" (' + MESES[p.mes] + ' ' + p.anio + ', ' + fmt(p.monto) + ')? Esta acción no se puede deshacer.')) return;
 
   var restantes = presups.filter(function(x){ return x.id!==presId; });
@@ -6353,6 +6373,21 @@ function presWizardNext() {
   }
 }
 
+// Cuántos de los 12 meses de "anio" ya tienen presupuesto guardado para esta
+// subcategoría+área. Antes "tienePres"/"yaGuardado" solo miraban si EXISTÍA algún
+// registro (cualquier mes, incluso de años o combinaciones distintas a la que se está
+// viendo) — eso hacía que, por ejemplo, la categoría saliera con ⭐ aunque ninguna
+// subcategoría mostrara "✓ Listo" al entrar a verla, porque el criterio no era el mismo.
+// Ahora ambos indicadores usan este mismo cálculo: 12/12 = completo, 1-11 = parcial.
+function mesesConDatosPres(subCodigo, anio, area) {
+  var a = area !== undefined ? area : CU.area;
+  var meses = new Set();
+  getPresupuestos().forEach(function(p){
+    if(p.subCodigo===subCodigo && p.anio===anio && p.area===a) meses.add(p.mes);
+  });
+  return meses;
+}
+
 // ── PASO 1: Lista de categorías ──────────────────────────
 function renderPresCatList() {
   var el = document.getElementById('pres-cat-list');
@@ -6387,11 +6422,19 @@ function renderPresCatList() {
       + (cuentaLabel[cuenta] || cuenta)
       + '</div>';
     cats.forEach(function(cat) {
-      var nsubs = SUBS_ILUMAX.filter(function(s){ return s.codigo.startsWith(cat.codigo); }).length;
+      var subsDeCat = SUBS_ILUMAX.filter(function(s){ return s.codigo.startsWith(cat.codigo); });
+      var nsubs = subsDeCat.length;
       var esActivo = presWizardCat && presWizardCat.codigo === cat.codigo;
-      var tienePres = getPresupuestos().some(function(p){ return p.catCodigo && p.catCodigo.startsWith(cat.codigo) && p.area===CU.area; });
+      // ⭐ solo si AL MENOS UNA subcategoría de esta categoría tiene el año completo
+      // (12/12 meses); 🟡 si alguna tiene datos pero no está completa. Antes cualquier
+      // registro de cualquier mes/año encendía la ⭐, sin relación con lo que después se
+      // veía (o no) marcado como "✓ Listo" al entrar a la subcategoría — esa inconsistencia
+      // es justo lo que reportó Duvier.
+      var algunaCompleta = subsDeCat.some(function(s){ return mesesConDatosPres(s.codigo, presWizardAnio, CU.area).size === 12; });
+      var algunaParcial  = !algunaCompleta && subsDeCat.some(function(s){ var n = mesesConDatosPres(s.codigo, presWizardAnio, CU.area).size; return n>0 && n<12; });
+      var marca = algunaCompleta ? ' ⭐' : algunaParcial ? ' 🟡' : '';
       html += '<div class="cat-item' + (esActivo?' seleccionado':'') + '" onclick="seleccionarPresCat(this)" data-cod="' + cat.codigo + '" data-nom="' + encodeURIComponent(cat.nombre) + '">'
-        + '<div class="cat-item-nom">' + cat.nombre + (tienePres?' ⭐':'') + '</div>'
+        + '<div class="cat-item-nom">' + cat.nombre + marca + '</div>'
         + '<div style="font-size:10px;color:var(--mu);">' + nsubs + ' subcategorías</div>'
         + '<div class="cat-item-flecha">›</div>'
         + '</div>';
@@ -6445,11 +6488,17 @@ function renderPresSubcatList() {
       var labelSub = esContabilidad()
         ? '<span class="cat-item-cod">' + s.codigo + '</span>'
         : '';
-      // Chulito si ya tiene presupuesto guardado para este año/mes actual
-      var yaGuardado = getPresupuestos().some(function(p){
-        return p.subCodigo===s.codigo && p.anio===presWizardAnio && presWizardMeses.includes(p.mes) && p.area===CU.area;
-      });
-      var chulito = yaGuardado ? '<span style="background:var(--gr);color:#fff;border-radius:20px;font-size:9px;font-weight:700;padding:2px 7px;flex-shrink:0;">✓ Listo</span>' : '';
+      // "✓ Listo" solo si están los 12 meses del año cargados; "◐ Parcial (n/12)" si hay
+      // algunos meses pero no todos. Antes esto comparaba contra presWizardMeses (los meses
+      // que el usuario tiene tildados EN ESE MOMENTO en el wizard, no lo que ya estaba
+      // guardado), así que el chulito podía salir apagado aunque ya hubiera datos de otros
+      // meses — y por eso no cuadraba con la ⭐ de categoría (ver mesesConDatosPres arriba).
+      var nMeses = mesesConDatosPres(s.codigo, presWizardAnio, CU.area).size;
+      var chulito = nMeses===12
+        ? '<span style="background:var(--gr);color:#fff;border-radius:20px;font-size:9px;font-weight:700;padding:2px 7px;flex-shrink:0;">✓ Listo</span>'
+        : nMeses>0
+          ? '<span style="background:var(--or);color:#fff;border-radius:20px;font-size:9px;font-weight:700;padding:2px 7px;flex-shrink:0;">◐ Parcial ('+nMeses+'/12)</span>'
+          : '';
       html += '<div class="cat-item' + (esActivo?' seleccionado':'') + '" onclick="seleccionarPresSub(this)" data-cod="' + s.codigo + '" data-nom="' + encodeURIComponent(s.nombre) + '">'
         + labelSub
         + '<div class="cat-item-nom">' + s.nombre + '</div>'
@@ -6489,7 +6538,12 @@ function renderWizardMeses() {
       + 'border:1px solid ' + (esActivo ? 'var(--bl)' : 'transparent') + ';">'
       + '<div style="font-size:10px;font-weight:' + (esActivo?'800':'600') + ';'
       + 'color:' + (esActivo ? '#fff' : 'var(--tx)') + ';">' + nom + '</div>'
-      + (hayDatos ? '<div style="width:6px;height:6px;border-radius:50%;background:' + (esActivo?'#fff':'var(--gr)') + ';margin:2px auto 0;"></div>' : '<div style="height:8px;"></div>')
+      // Punto verde = ya tiene presupuesto guardado este mes; punto rojo = todavía falta.
+      // Antes los meses sin datos no mostraban nada, así que al entrar a editar no se
+      // distinguía a simple vista qué meses del año quedaban pendientes.
+      + '<div style="width:6px;height:6px;border-radius:50%;margin:2px auto 0;background:'
+      + (hayDatos ? (esActivo?'#fff':'var(--gr)') : (esActivo?'#fecaca':'var(--rd)')) + ';'
+      + (hayDatos ? '' : 'opacity:.75;') + '"></div>'
       + '</div>';
   });
   el.innerHTML = html;
@@ -7036,11 +7090,20 @@ async function guardarPresupuestoWizard() {
       centroCosto: siesaResolverCC(v.items && v.items[0] ? v.items[0].cc : ''),
       estado:     'borrador',
       autor:      CU.nombre,
+      autorEmail: CU.email,
       fecha:      new Date().toLocaleDateString('es-CO'),
       ts:         new Date().toISOString(),
     };
     var idx = presups.findIndex(function(p){ return p.id===nuevo.id; });
-    if(idx>=0) { nuevo.estado = presups[idx].estado || 'borrador'; presups[idx]=nuevo; }
+    if(idx>=0) {
+      // Al editar una fila existente se conserva el estado y la identidad del autor
+      // ORIGINAL — quien la creó sigue siendo el dueño (ver eliminarPres), aunque otra
+      // persona con permiso la haya modificado después.
+      nuevo.estado = presups[idx].estado || 'borrador';
+      nuevo.autor = presups[idx].autor || nuevo.autor;
+      nuevo.autorEmail = presups[idx].autorEmail || nuevo.autorEmail;
+      presups[idx]=nuevo;
+    }
     else presups.push(nuevo);
     nuevos.push(nuevo);
   });
