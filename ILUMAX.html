@@ -1745,6 +1745,11 @@ async function apiSupabase(action, data) {
     return { ok: true };
   }
 
+  if(action === 'eliminarPresupuesto') {
+    await sb.delete('presupuestos', 'id=eq.' + encodeURIComponent(data.id));
+    return { ok: true };
+  }
+
   // ── TAREAS ──
   if(action === 'rrhhGet') {
     const rows = await sb.get('tareas',
@@ -2192,6 +2197,11 @@ function presRol() {
 function esContabilidad() { var r=presRol(); return r==='contabilidad'||r==='admin'; }
 function esGerencia()     { return presRol()==='gerencia'; }
 function esLider()        { var r=presRol(); return r==='lider'||r==='admin'; }
+// Admin del sistema completo (Usuarios, Roles, Sistema, etc. en Admin Center).
+// esContabilidad() (rolPres==='contabilidad') es un permiso más chico: solo
+// da acceso al Catálogo de Presupuesto (categorías/subcategorías/permisos/formato),
+// no al Admin Center completo — ver acRenderShell/renderAdminCenter.
+function esAdmin() { return !!(CU && CU.rol === 'admin'); }
 function getDefaultCats(){
   // Usar el plan de cuentas real de ILUMAX
   if(typeof CATS_ILUMAX !== 'undefined' && CATS_ILUMAX.length > 0){
@@ -2597,6 +2607,10 @@ function buildNav(){
   const adminItems = [];
   if(esAdmin) adminItems.push({ id:'admin', lbl:'Admin', ico:'🛠️' });
   if(esAdmin) adminItems.push({ id:'admin-center', lbl:'Admin Center', ico:'🎛️' });
+  // Contabilidad (rolPres==='contabilidad': Olga, Alexandra, Zuly, Cartera) entra a la
+  // misma pantalla de Admin Center pero acRenderShell/acRenderTab le muestran solo las
+  // pestañas de presupuesto (Catálogo, Permisos, Personalizar formato) — no Usuarios/Sistema/etc.
+  else if(typeof esContabilidad==='function' && esContabilidad()) adminItems.push({ id:'admin-center', lbl:'Catálogo Presupuesto', ico:'🗂️' });
   if(esRRHH)  adminItems.push({ id:'rrhh',  lbl:'Mis Actividades', ico:'📋' });
   // Centro de trabajo — líder automatizaciones
   const esDuvier = CU.email === 'duduwxo50@gmail.com' || CU.email === 'liderautomatizaciones@ilumax.com.co' || CU.cargo?.toLowerCase().includes('automatiz') || CU.nombre?.toLowerCase().includes('duvier');
@@ -5190,6 +5204,21 @@ function savePresupuestos(p) {
   localStorage.setItem('ilx_presupuestos', JSON.stringify(p));
 }
 
+// El plan de cuentas (subCodigo) es COMPARTIDO entre áreas — la misma subcategoría
+// (ej. "Papelería") puede estar habilitada para varias áreas a la vez. Por eso el
+// presupuesto de cada área es una fila independiente aunque coincidan subCodigo+mes+año,
+// y el "área" tiene que hacer parte del identificador — de lo contrario el presupuesto
+// de un área pisa/se confunde con el de otra que use la misma subcategoría (bug reportado:
+// "entré con otro usuario y le sale lo que yo ya subí").
+function presAreaSlug(area) {
+  var s = String(area || 'SIN-AREA')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return s || 'SIN-AREA';
+}
+
 const MESES = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
 // ── ESTADOS DE PRESUPUESTO ─────────────────────────────────
@@ -5346,6 +5375,32 @@ function renderPresMiArea(mes, anio) {
 }
 
 // ── VISTA LÍDER (su área, sin códigos) ───────────────────
+// Nombre legible de un código de Centro de Costo (o el código tal cual si no se encuentra).
+function nombreCentroCostoCod(cod) {
+  if(!cod) return '';
+  var c = CENTROS_COSTO_ILUMAX.find(function(x){ return x.codigo===String(cod); });
+  return c ? (c.codigo + ' — ' + c.nombre) : String(cod);
+}
+
+// Detalle de ítems (Centro de Costo, Descripción, Valor) de un presupuesto. Antes las
+// tarjetas de presupuesto solo mostraban el nombre de la subcategoría y el total, así que
+// lo que había cargado adentro (ej. un ítem de prueba) quedaba invisible hasta abrir el
+// editar. Si el presupuesto es viejo y no tiene items[], se arma un solo renglón con los
+// campos planos (centroCosto/obs/monto) que sí existían antes, para no perder esa info.
+function renderItemsPresHtml(p) {
+  var items = (Array.isArray(p.items) && p.items.length) ? p.items : [{ cc: p.centroCosto||'', desc: p.obs||'', valor: p.monto }];
+  if(items.length < 2 && !items[0].cc && !items[0].desc) return '';
+  var filas = items.map(function(it){
+    return '<tr>'
+      + '<td style="padding:3px 8px 3px 0;font-size:10px;color:var(--mu);white-space:nowrap;vertical-align:top;">' + (nombreCentroCostoCod(it.cc) || '—') + '</td>'
+      + '<td style="padding:3px 8px 3px 0;font-size:11px;vertical-align:top;">' + (it.desc || '—') + '</td>'
+      + '<td style="padding:3px 0;font-size:11px;font-weight:700;text-align:right;white-space:nowrap;vertical-align:top;">' + fmt(parseFloat(it.valor) || 0) + '</td>'
+      + '</tr>';
+  }).join('');
+  return '<table style="width:100%;border-collapse:collapse;margin:6px 0;background:var(--s1);border-radius:6px;">'
+    + '<tbody>' + filas + '</tbody></table>';
+}
+
 function renderPresVistaLider(el, mes, anio) {
   var presups = getPresupuestos().filter(p => p.area===CU.area && p.mes===mes && p.anio===anio);
 
@@ -5395,10 +5450,12 @@ function renderPresVistaLider(el, mes, anio) {
       var diffHtml = (p.montoAprobado !== undefined && p.montoAprobado !== p.monto)
         ? '<div style="font-size:10px;color:var(--or);">Propuesto: ' + fmt(p.monto) + ' → Aprobado: ' + fmt(p.montoAprobado) + '</div>' : '';
 
+      var puedeEditar = (!p.estado || p.estado==='borrador' || p.estado==='devuelto');
       html += '<div style="padding:10px 0;border-bottom:1px solid var(--b1);">'
         + '<div style="display:flex;align-items:flex-start;gap:10px;">'
         + '<div style="flex:1;">'
         + '<div style="font-size:12px;font-weight:600;margin-bottom:4px;">' + p.subNombre + '</div>'
+        + renderItemsPresHtml(p)
         + (p.obs ? '<div style="font-size:11px;color:var(--mu);">📝 ' + p.obs + '</div>' : '')
         + obsGer + obsCont
         + '</div>'
@@ -5408,8 +5465,11 @@ function renderPresVistaLider(el, mes, anio) {
         + '<div style="margin-top:4px;">' + estadoBdg + '</div>'
         + '</div>'
         + '</div>'
-        + ((!p.estado || p.estado==='borrador' || p.estado==='devuelto')
-          ? '<div style="margin-top:6px;"><button class="btn btn-g btn-xs" onclick="abrirEditarPres(\'' + p.id + '\')">✏️ Editar</button></div>' : '')
+        + (puedeEditar
+          ? '<div style="margin-top:6px;display:flex;gap:6px;">'
+            + '<button class="btn btn-g btn-xs" onclick="abrirEditarPres(\'' + p.id + '\')">✏️ Editar</button>'
+            + '<button class="btn btn-rd btn-xs" onclick="eliminarPres(\'' + p.id + '\')">🗑️ Borrar</button>'
+            + '</div>' : '')
         + '</div>';
     });
     html += '</div>';
@@ -5459,6 +5519,7 @@ function renderPresVistaAdmin(el, mes, anio) {
         + '<div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;">'
         + '<div style="flex:1;min-width:140px;">'
         + '<div style="font-size:12px;font-weight:700;margin-bottom:4px;"><span style="font-family:monospace;font-size:10px;color:var(--mu);">'+p.subCodigo+'</span> '+p.subNombre+'</div>'
+        + renderItemsPresHtml(p)
         + (p.obs?'<div style="font-size:11px;color:var(--mu);background:var(--s1);padding:5px 8px;border-radius:6px;border-left:3px solid var(--bl);margin-bottom:5px;">💬 '+p.obs+'</div>':'')
         + (p.obsContabilidad?'<div style="font-size:11px;color:var(--bl);background:var(--bld);padding:5px 8px;border-radius:6px;margin-bottom:4px;">🔍 '+p.obsContabilidad+'</div>':'')
         + '</div><div style="text-align:right;flex-shrink:0;">'
@@ -5634,6 +5695,11 @@ function accionesPresPorRol(p) {
       + '<button class="btn btn-rd btn-xs" onclick="accionPres(\''+p.id+'\',\'devuelto\')">↩️ Devolver</button>'
       + '<button class="btn btn-bl btn-xs" onclick="accionPres(\''+p.id+'\',\'en_gerencia\')">📋 → Gerencia</button>'
       + '</div>';
+  }
+  // Contabilidad (y admin) puede borrar un concepto en cualquier estado — por ejemplo
+  // para limpiar ítems de prueba que un área haya subido por error.
+  if (esContabilidad()) {
+    html += '<div style="margin-top:6px;"><button class="btn btn-rd btn-xs" onclick="eliminarPres(\''+p.id+'\')">🗑️ Borrar</button></div>';
   }
   return html ? '<div style="border-top:1px solid var(--b1);margin-top:8px;padding-top:8px;">'+html+'</div>' : '';
 }
@@ -6177,9 +6243,10 @@ function abrirModalPres(catCod, subCod) {
   presWizardCamposInvalidos = {};
   EMPLEADOS_PRES_FILTRO = '';
 
-  // Si se pasa subCod (editar), pre-cargar
+  // Si se pasa subCod (editar), pre-cargar — SOLO del área del usuario actual, porque
+  // la misma subcategoría puede estar compartida con otras áreas (ver presAreaSlug).
   if(subCod) {
-    var p = getPresupuestos().find(function(x){ return x.subCodigo===subCod; });
+    var p = getPresupuestos().find(function(x){ return x.subCodigo===subCod && x.area===CU.area; });
     if(p) {
       presWizardCat = { codigo: p.catCodigo, nombre: p.catNombre };
       presWizardSub = { codigo: p.subCodigo, nombre: p.subNombre };
@@ -6190,6 +6257,29 @@ function abrirModalPres(catCod, subCod) {
   openMo('mo-pres');
   document.getElementById('pres-cat-list').innerHTML = '<div style="padding:20px;text-align:center;"><span class="spin-sm spin-bl"></span></div>';
   cargarCatsSubsPermisos().then(function(){ irPresStep(1); });
+}
+
+// Borra un concepto de presupuesto (una fila = una subcategoría/mes/área) tanto local
+// como en Supabase. El líder solo puede borrar sus borradores/devueltos (mismo permiso
+// que para editar); contabilidad/admin pueden borrar cualquiera desde su vista de
+// revisión (por ejemplo para limpiar un ítem de prueba subido por error).
+function eliminarPres(presId) {
+  var presups = getPresupuestos();
+  var p = presups.find(function(x){ return x.id===presId; });
+  if(!p) { toast('No encontrado','er'); return; }
+  var puedeBorrar = esContabilidad() || (p.area===CU.area && (!p.estado || p.estado==='borrador' || p.estado==='devuelto'));
+  if(!puedeBorrar) { toast('No puedes borrar este concepto','wa'); return; }
+  if(!confirm('¿Borrar "' + p.subNombre + '" (' + MESES[p.mes] + ' ' + p.anio + ', ' + fmt(p.monto) + ')? Esta acción no se puede deshacer.')) return;
+
+  var restantes = presups.filter(function(x){ return x.id!==presId; });
+  savePresupuestos(restantes);
+  toast('🗑️ Presupuesto borrado','ok');
+  renderPres();
+
+  api('eliminarPresupuesto', {id: presId}).catch(function(e){
+    console.warn('Eliminar pres en Supabase:', e);
+    toast('⚠️ Se borró local pero no en Supabase (vuelve a intentar): ' + e.message, 'err');
+  });
 }
 
 function abrirEditarPres(presId) {
@@ -6299,7 +6389,7 @@ function renderPresCatList() {
     cats.forEach(function(cat) {
       var nsubs = SUBS_ILUMAX.filter(function(s){ return s.codigo.startsWith(cat.codigo); }).length;
       var esActivo = presWizardCat && presWizardCat.codigo === cat.codigo;
-      var tienePres = getPresupuestos().some(function(p){ return p.catCodigo && p.catCodigo.startsWith(cat.codigo); });
+      var tienePres = getPresupuestos().some(function(p){ return p.catCodigo && p.catCodigo.startsWith(cat.codigo) && p.area===CU.area; });
       html += '<div class="cat-item' + (esActivo?' seleccionado':'') + '" onclick="seleccionarPresCat(this)" data-cod="' + cat.codigo + '" data-nom="' + encodeURIComponent(cat.nombre) + '">'
         + '<div class="cat-item-nom">' + cat.nombre + (tienePres?' ⭐':'') + '</div>'
         + '<div style="font-size:10px;color:var(--mu);">' + nsubs + ' subcategorías</div>'
@@ -6357,7 +6447,7 @@ function renderPresSubcatList() {
         : '';
       // Chulito si ya tiene presupuesto guardado para este año/mes actual
       var yaGuardado = getPresupuestos().some(function(p){
-        return p.subCodigo===s.codigo && p.anio===presWizardAnio && presWizardMeses.includes(p.mes);
+        return p.subCodigo===s.codigo && p.anio===presWizardAnio && presWizardMeses.includes(p.mes) && p.area===CU.area;
       });
       var chulito = yaGuardado ? '<span style="background:var(--gr);color:#fff;border-radius:20px;font-size:9px;font-weight:700;padding:2px 7px;flex-shrink:0;">✓ Listo</span>' : '';
       html += '<div class="cat-item' + (esActivo?' seleccionado':'') + '" onclick="seleccionarPresSub(this)" data-cod="' + s.codigo + '" data-nom="' + encodeURIComponent(s.nombre) + '">'
@@ -6471,7 +6561,7 @@ function renderCamposPorMes() {
   var centrosOpc = centrosCostoParaCategoria(presWizardCat ? presWizardCat.codigo : null);
 
   // Historial referencia
-  var hist = presWizardSub ? getPresupuestos().filter(function(p){ return p.subCodigo===presWizardSub.codigo && p.mes===numMes; }) : [];
+  var hist = presWizardSub ? getPresupuestos().filter(function(p){ return p.subCodigo===presWizardSub.codigo && p.mes===numMes && p.area===CU.area; }) : [];
   var refHtml = '';
   if(hist.length){
     var prom = hist.reduce(function(a,p){ return a+p.monto; },0) / hist.length;
@@ -6788,7 +6878,7 @@ function updRefMes(numMes) {
   if(!ref || !presWizardSub) return;
   if(!monto){ ref.innerHTML=''; return; }
 
-  var todos = getPresupuestos().filter(function(p){ return p.subCodigo===presWizardSub.codigo && p.mes===numMes; });
+  var todos = getPresupuestos().filter(function(p){ return p.subCodigo===presWizardSub.codigo && p.mes===numMes && p.area===CU.area; });
   if(!todos.length){ ref.innerHTML=''; return; }
 
   // Buscar el año inmediatamente anterior con dato
@@ -6853,10 +6943,11 @@ function cambiarAnioWizard(delta) {
   renderHistorialInline();
 }
 
-function getPresupuestosSubMes(subCodigo, mes, anio) {
+function getPresupuestosSubMes(subCodigo, mes, anio, area) {
   if(!subCodigo) return null;
+  var a = area !== undefined ? area : CU.area;
   return getPresupuestos().find(function(p){
-    return p.subCodigo===subCodigo && p.mes===mes && p.anio===anio;
+    return p.subCodigo===subCodigo && p.mes===mes && p.anio===anio && p.area===a;
   }) || null;
 }
 
@@ -6867,7 +6958,7 @@ function renderHistorialInline() {
   const el = document.getElementById('pres-historial-inline');
   if(!el || !presWizardSub) return;
   var hist = getPresupuestos()
-    .filter(function(p){ return p.subCodigo===presWizardSub.codigo; })
+    .filter(function(p){ return p.subCodigo===presWizardSub.codigo && p.area===CU.area; })
     .sort(function(a,b){ return b.anio!==a.anio?b.anio-a.anio:b.mes-a.mes; })
     .slice(0,8);
 
@@ -6929,7 +7020,7 @@ async function guardarPresupuestoWizard() {
     var v    = valores[mes];
     var obs  = document.getElementById('pres-obs-'+mes)?.value || v.items.map(function(it){return it.desc;}).filter(Boolean).join('; ') || '';
     var nuevo = {
-      id:         'PRES-'+presWizardSub.codigo+'-'+presWizardAnio+'-'+mes,
+      id:         'PRES-'+presAreaSlug(CU.area)+'-'+presWizardSub.codigo+'-'+presWizardAnio+'-'+mes,
       area:       CU.area,
       catCodigo:  presWizardCat ? presWizardCat.codigo : presWizardSub.codigo.substring(0,4),
       catNombre:  presWizardCat ? presWizardCat.nombre : '',
@@ -13522,13 +13613,21 @@ function moduloPermitido(id) {
   return CU.modulos.includes(id);
 }
 
+// Pestañas del Admin Center visibles para contabilidad (rolPres==='contabilidad':
+// Olga, Alexandra, Zuly, Cartera) — solo lo relacionado a presupuesto, nada de
+// Usuarios/Roles/Sistema/Permisos de Ventas/etc.
+const AC_TABS_CATALOGO = ['catalogo', 'permisos', 'permisos-pers', 'siesa'];
+
 async function renderAdminCenter() {
   const el = document.getElementById('ac-content');
   if(!el) return;
-  if(!(typeof esAdmin==='function' ? esAdmin() : CU?.rol==='admin')) {
-    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--rd);">⛔ Solo administradores pueden acceder a esta sección.</div>';
+  const puedeAdmin = typeof esAdmin==='function' ? esAdmin() : CU?.rol==='admin';
+  const puedeCatalogo = typeof esContabilidad==='function' && esContabilidad();
+  if(!puedeAdmin && !puedeCatalogo) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--rd);">⛔ No tienes acceso a esta sección.</div>';
     return;
   }
+  if(!puedeAdmin && !AC_TABS_CATALOGO.includes(AC.tab)) AC.tab = 'catalogo';
   el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:220px;"><span class="spin-sm spin-bl"></span></div>';
   await acCargarTodo();
   acRenderShell(el);
@@ -13569,13 +13668,17 @@ async function acCargarTodo() {
 
 function acRenderShell(el) {
   const esMovil = window.innerWidth < 700;
+  const puedeAdmin = typeof esAdmin==='function' ? esAdmin() : CU?.rol==='admin';
+  const tabsMostrar = puedeAdmin ? AC_TABS : AC_TABS.filter(t => AC_TABS_CATALOGO.includes(t.id));
+  const tituloShell = puedeAdmin ? '🎛️ Admin Center' : '🗂️ Catálogo de Presupuesto';
+  const subShell    = puedeAdmin ? 'Solo administradores' : 'Categorías, permisos y formato de presupuesto';
 
   el.innerHTML = `
   <!-- HEADER -->
   <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);padding:${esMovil?'12px 14px':'16px 20px'};display:flex;align-items:center;gap:12px;">
     <div style="flex:1;min-width:0;">
-      <div style="font-size:${esMovil?'14px':'16px'};font-weight:800;color:#fff;">🎛️ Admin Center</div>
-      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:1px;">Solo administradores</div>
+      <div style="font-size:${esMovil?'14px':'16px'};font-weight:800;color:#fff;">${tituloShell}</div>
+      <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:1px;">${subShell}</div>
     </div>
     <button class="btn btn-sm" style="background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.2);flex-shrink:0;" onclick="acCargarTodo().then(()=>acRenderTab())">🔄</button>
   </div>
@@ -13583,7 +13686,7 @@ function acRenderShell(el) {
   ${esMovil ? `
   <!-- MÓVIL: tabs horizontales con scroll -->
   <div style="display:flex;overflow-x:auto;border-bottom:2px solid var(--b1);background:var(--w);-webkit-overflow-scrolling:touch;scrollbar-width:none;">
-    ${AC_TABS.map(t=>`
+    ${tabsMostrar.map(t=>`
     <button onclick="AC.tab='${t.id}';acRenderTab()" id="ac-tab-${t.id}"
       style="flex-shrink:0;padding:11px 14px;border:none;border-bottom:3px solid ${AC.tab===t.id?'var(--bl)':'transparent'};
       background:none;color:${AC.tab===t.id?'var(--bl)':'var(--mu)'};font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;margin-bottom:-2px;">
@@ -13595,7 +13698,7 @@ function acRenderShell(el) {
   <!-- ESCRITORIO: sidebar lateral -->
   <div style="display:flex;min-height:calc(100vh - 120px);">
     <div style="width:200px;flex-shrink:0;background:#f8fafc;border-right:1px solid var(--b1);padding:10px 8px;">
-      ${AC_TABS.map(t=>`
+      ${tabsMostrar.map(t=>`
       <button onclick="AC.tab='${t.id}';acRenderTab()" id="ac-tab-${t.id}"
         style="width:100%;text-align:left;padding:10px 12px;border:none;border-radius:10px;cursor:pointer;margin-bottom:4px;
         background:${AC.tab===t.id?'var(--bl)':'transparent'};color:${AC.tab===t.id?'#fff':'var(--tx)'};transition:all .15s;">
@@ -13781,6 +13884,11 @@ function acRenderCatalogoMovil(el) {
 
 
 function acRenderTab() {
+  // Defensa en profundidad: si no es admin del sistema, solo puede quedar en las
+  // pestañas del Catálogo de Presupuesto (ver AC_TABS_CATALOGO / acRenderShell).
+  const puedeAdmin = typeof esAdmin==='function' ? esAdmin() : CU?.rol==='admin';
+  if(!puedeAdmin && !AC_TABS_CATALOGO.includes(AC.tab)) AC.tab = 'catalogo';
+
   // Update sidebar active state
   AC_TABS.forEach(t => {
     const btn = document.getElementById(`ac-tab-${t.id}`);
@@ -13791,7 +13899,7 @@ function acRenderTab() {
   });
   const el = document.getElementById('ac-tab-content');
   if(!el) return;
-  if(AC.tab==='usuarios')      acRenderUsuarios(el);
+  if(AC.tab==='usuarios' && puedeAdmin) acRenderUsuarios(el);
   if(AC.tab==='roles')         acRenderRoles(el);
   if(AC.tab==='solicitudes')   acRenderSolicitudes(el);
   if(AC.tab==='permisos')      acRenderPermisos(el);
