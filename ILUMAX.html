@@ -13588,7 +13588,9 @@ const AC_MODULOS_DISP = [
   { id:'notif',              lbl:'🔔 Notificaciones' },
   { id:'apro',               lbl:'✅ Aprobaciones' },
   { id:'admin',              lbl:'⚙️ Configuración' },
-  { id:'admin-center',       lbl:'🎛️ Admin Center' },
+  // Mismo ítem para admins (ven "🎛️ Admin Center" completo) y para contabilidad
+  // (rolPres==='contabilidad': ven solo "🗂️ Catálogo Presupuesto") — ver buildNav().
+  { id:'admin-center',       lbl:'🎛️ Admin Center / 🗂️ Catálogo Presupuesto' },
   { id:'rrhh',               lbl:'👔 Actividades RRHH' },
   { id:'reporte-ventas',     lbl:'📊 Reporte Diario Ventas' },
   { id:'margen-cliente',     lbl:'💹 Margen x Cliente' },
@@ -20009,15 +20011,26 @@ if(sc){
       startApp().then(async ()=>{
         // Refrescar perfil en background sin bloquear
         try {
-          const fresh = await sb.get('usuarios', `email=eq.${encodeURIComponent(CU.email)}&select=email,nombre,rol,area,color,aprueba`);
+          // Ojo: antes este select no traía rol_pres, así que si un admin le cambiaba a
+          // alguien su rol de presupuesto (ej. de "líder" a "contabilidad" para que vea
+          // Todas las Áreas / Catálogo Presupuesto) esa persona seguía viendo su sesión
+          // vieja (CU.rolPres cacheado) hasta que cerrara sesión manualmente — el refresh
+          // en background nunca lo corregía. Se agrega rol_pres al select y se mapea a
+          // CU.rolPres (la fila de Supabase usa snake_case, CU usa camelCase).
+          const fresh = await sb.get('usuarios', `email=eq.${encodeURIComponent(CU.email)}&select=email,nombre,rol,rol_pres,area,color,aprueba`);
           if(fresh && fresh[0]) {
-            const updated = {...CU, ...fresh[0]};
+            const f = fresh[0];
+            const updated = {...CU, ...f, rolPres: f.rol_pres || CU.rolPres};
+            delete updated.rol_pres; // no dejar el duplicado snake_case en CU
             // Solo actualizar si cambió algo
             if(JSON.stringify(updated) !== JSON.stringify(CU)) {
               CU = updated;
               sessionStorage.setItem('ilx_cu', JSON.stringify(CU));
               localStorage.setItem('ilx_cu', JSON.stringify(CU));
               buildNav();
+              // Si ya está viendo Presupuesto por Áreas, refrescar la vista para que un
+              // cambio de rol (ej. líder → contabilidad) se note sin recargar la página.
+              if(document.getElementById('pg-pres')?.classList.contains('on')) renderPres();
             }
           }
         } catch(e){ /* sin conexión — continúa con sesión local */ }
