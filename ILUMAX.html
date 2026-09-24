@@ -13594,6 +13594,30 @@ var RV = {
   compAnioAnterior: null
 };
 
+// ── Presupuesto de venta POR CANAL (mensual) ─────────────────────────────
+// Fuente: tabla de presupuesto por canal 2026 (Excel comercial). Llaves = "Desc. tipo de
+// cliente" tal como viene en las facturas de Siesa. FERROELECTRICO del presupuesto = canal
+// ESPECIALIZADO en facturación. Se puede sobrescribir sin tocar código guardando un JSON con
+// la misma forma en configuracion.clave = 'rv_ppto_canal' (se mezcla mes a mes).
+const RV_PPTO_CANAL_DEF = {
+  '2026-08': {'DISTRIBUIDOR':70000000,'ONLINE':58052349,'ESPECIALIZADO':1386618193,'HARD DISCOUNT':131590000,'CANAL HOMECENTER':649820207,'CANAL MIXTO':50498594,'CANAL MODERNO':19897960,'PROYECTOS':72655204},
+  '2026-09': {'DISTRIBUIDOR':70000000,'ONLINE':60721419,'ESPECIALIZADO':1460250063,'HARD DISCOUNT':133068000,'CANAL HOMECENTER':576722258,'CANAL MIXTO':50498594,'CANAL MODERNO':28586926,'PROYECTOS':73324274},
+  '2026-10': {'DISTRIBUIDOR':70000000,'ONLINE':60721419,'ESPECIALIZADO':1485023878,'HARD DISCOUNT':145269750,'CANAL HOMECENTER':699424075,'CANAL MIXTO':50640724,'CANAL MODERNO':23702269,'PROYECTOS':73956840},
+  '2026-11': {'DISTRIBUIDOR':70000000,'ONLINE':65055954,'ESPECIALIZADO':1495188542,'HARD DISCOUNT':145269750,'CANAL HOMECENTER':681302710,'CANAL MIXTO':50640724,'CANAL MODERNO':23851767,'PROYECTOS':74943670},
+  '2026-12': {'DISTRIBUIDOR':70000000,'ONLINE':58055954,'ESPECIALIZADO':1282324596,'HARD DISCOUNT':127156000,'CANAL HOMECENTER':653127563,'CANAL MIXTO':50640724,'CANAL MODERNO':25348529,'PROYECTOS':63519866}
+};
+// Presupuesto por canal del MES del reporte cargado (según la última fecha de facturas),
+// o null si no hay presupuesto por canal para ese mes (entonces se usa el de CONSOLIDADO).
+function rvPptoCanalMes() {
+  if(!RV.fechas.length) return null;
+  const d = rvFecha(RV.fechas[RV.fechas.length-1]);
+  const key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+  const cfg = (RV.pptoCanalCfg && RV.pptoCanalCfg[key]) || null;
+  const def = RV_PPTO_CANAL_DEF[key] || null;
+  if(!cfg && !def) return null;
+  return Object.assign({}, def||{}, cfg||{});
+}
+
 // Cargar config de correo guardada en Supabase
 async function rvCargarConfig() {
   if(RV.configCargada) return;
@@ -13604,6 +13628,9 @@ async function rvCargarConfig() {
       if(r.clave==='rv_asunto'        && r.valor) RV.asunto        = r.valor;
       if(r.clave==='rv_comp_anio_anterior' && r.valor) {
         try { RV.compAnioAnterior = JSON.parse(r.valor); } catch(e) { /* valor corrupto, se ignora */ }
+      }
+      if(r.clave==='rv_ppto_canal' && r.valor) {
+        try { RV.pptoCanalCfg = JSON.parse(r.valor); } catch(e) { /* valor corrupto, se ignora */ }
       }
     });
     RV.configCargada = true;
@@ -17907,9 +17934,21 @@ function rvRenderCumplimiento(el) {
     'PROYECTOS':     ejeF.reduce((a,[,c])=>a+c.pptoPro,0),
     'ONLINE':        ejeF.reduce((a,[,c])=>a+c.pptoOnl,0),
   };
+  // Si hay presupuesto POR CANAL para el mes del reporte (RV_PPTO_CANAL_DEF / config), ese
+  // reemplaza al derivado de CONSOLIDADO — prorrateado igual por el filtro de rango.
+  const pptoCanalMes = rvPptoCanalMes();
+  if(pptoCanalMes) {
+    const fct = rvFactorProrrateo();
+    Object.keys(pptoPorCanalNombre).forEach(k => delete pptoPorCanalNombre[k]);
+    Object.entries(pptoCanalMes).forEach(([k,v]) => { pptoPorCanalNombre[k] = (v||0)*fct; });
+  }
   const canales = {};
   Object.entries(rvVentaPorCanalFiltrado()).forEach(([nombre,v]) => {
     canales[nombre] = { v, p: pptoPorCanalNombre[nombre]||0, lbl: rvCanalLbl(nombre), ico: rvCanalIco(nombre) };
+  });
+  // Canales con meta pero sin venta todavía también se muestran (en 0%).
+  Object.entries(pptoPorCanalNombre).forEach(([nombre,p]) => {
+    if(p>0 && !canales[nombre]) canales[nombre] = { v:0, p, lbl: rvCanalLbl(nombre), ico: rvCanalIco(nombre) };
   });
 
   // Semáforo color
@@ -19130,6 +19169,7 @@ function rvGenerarHTMLInteractivo() {
     canal: (r['Desc. tipo de cliente']||'').trim(),
     cliente: r['Razon social cliente factura']||'',
     vendedor: r['Nombre vendedor']||'',
+    ciudad: (r['Ciudad']||'').trim(),
     valor: parseFloat(r['Valor subtotal local'])||0
   }));
 
@@ -19139,7 +19179,8 @@ function rvGenerarHTMLInteractivo() {
     detalle,                        // una fila por factura — esta sí tiene fecha, así que es la base del filtro
     semana: RV.semana,             // hoja "PRONÓSTICO SEMANAL" cruda — siempre mes completo
     recaudo: RV.recaudo,           // hoja "Recaudo" cruda — siempre mes completo
-    compAnioAnterior: RV.compAnioAnterior || null // comparativo interanual (dato manual, solo lectura acá)
+    compAnioAnterior: RV.compAnioAnterior || null, // comparativo interanual (dato manual, solo lectura acá)
+    pptoCanalMes: rvPptoCanalMes()  // presupuesto mensual por canal (null = usar el de CONSOLIDADO)
   };
 
   // Defensa: evitar que datos con backticks, comillas o etiquetas de cierre rompan el documento generado
@@ -19149,7 +19190,12 @@ function rvGenerarHTMLInteractivo() {
     .replace(/\$\{/g,'\\u0024{');
 
   const canalDistintos     = [...new Set(RV.datos.map(r=>(r['Desc. tipo de cliente']||'').trim()))].filter(Boolean).sort();
-  const detCanalOptionsHtml = canalDistintos.map(c=>`<option>${c}</option>`).join('');
+  const detCanalOptionsHtml = canalDistintos.map(c=>`<option>${sselEsc(c)}</option>`).join('');
+  // Mismos filtros que la pestaña Detalle en vivo (rvRenderDetalle): vendedor, ciudad y canal.
+  const vendDistintos       = [...new Set(RV.datos.map(r=>(r['Nombre vendedor']||'').trim()))].filter(Boolean).sort();
+  const detVendOptionsHtml  = vendDistintos.map(v=>`<option>${sselEsc(v)}</option>`).join('');
+  const ciudadDistintas     = [...new Set(RV.datos.map(r=>(r['Ciudad']||'').trim()))].filter(Boolean).sort();
+  const detCiudadOptionsHtml = ciudadDistintas.map(c=>`<option>${sselEsc(c)}</option>`).join('');
 
   const tieneSemana  = !!(RV.semana  && RV.semana.length);
   const tieneRecaudo = !!(RV.recaudo && RV.recaudo.length);
@@ -19266,6 +19312,7 @@ function rvGenerarHTMLInteractivo() {
           <th class="sortable" data-key="pptoTotal" onclick="ejeOrdenar('pptoTotal')">Ppto <span class="rv-sort-ind"></span></th>
           <th class="sortable" style="color:#f5c518;" data-key="ventaTotal" onclick="ejeOrdenar('ventaTotal')">Venta <span class="rv-sort-ind">▼</span></th>
           <th class="sortable" style="color:#6ee7b7;" data-key="pct" onclick="ejeOrdenar('pct')">% Cumpl. <span class="rv-sort-ind"></span></th>
+          <th class="sortable" data-key="dif" onclick="ejeOrdenar('dif')">Diferencia <span class="rv-sort-ind"></span></th>
           <th class="sortable" style="color:#93c5fd;" data-key="ventaEsp" onclick="ejeOrdenar('ventaEsp')">ESP <span class="rv-sort-ind"></span></th>
           <th class="sortable" style="color:#86efac;" data-key="ventaMix" onclick="ejeOrdenar('ventaMix')">MIX <span class="rv-sort-ind"></span></th>
           <th class="sortable" style="color:#fcd34d;" data-key="ventaPro" onclick="ejeOrdenar('ventaPro')">PRY <span class="rv-sort-ind"></span></th>
@@ -19279,6 +19326,7 @@ function rvGenerarHTMLInteractivo() {
   <!-- CANALES -->
   <div id="panel-canales" class="rv-panel" data-panel="canales">
     <div id="canales-nota"></div>
+    <div id="can-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px;"></div>
     <div class="rv-card">
       <table>
         <thead><tr>
@@ -19300,23 +19348,32 @@ function rvGenerarHTMLInteractivo() {
     <div class="rv-card">
       <div class="rv-toolbar">
         <input id="det-busq" class="rv-inp" placeholder="🔍 Buscar cliente o vendedor..." oninput="detFiltrar(true)" autocomplete="off">
+        <select id="det-vendedor" class="rv-sel" onchange="detFiltrar(true)">
+          <option value="">Todos los vendedores</option>
+          ${detVendOptionsHtml}
+        </select>
+        ${ciudadDistintas.length ? `<select id="det-ciudad" class="rv-sel" onchange="detFiltrar(true)">
+          <option value="">Todas las ciudades</option>
+          ${detCiudadOptionsHtml}
+        </select>` : ''}
         <select id="det-canal" class="rv-sel" onchange="detFiltrar(true)">
           <option value="">Todos los canales</option>
           ${detCanalOptionsHtml}
         </select>
+        <button class="rv-btn" onclick="detLimpiar()">✕ Limpiar</button>
         <button class="rv-btn" onclick="detCSV()">⬇ Exportar CSV</button>
       </div>
-      <div class="rv-cnt" id="det-cnt" style="margin-bottom:8px;"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <div style="display:flex;gap:4px;">
+          <button class="rv-chip on" id="det-vista-detallado" onclick="detSetVista('detallado')">Detallado</button>
+          <button class="rv-chip"    id="det-vista-agrupado"  onclick="detSetVista('agrupado')">Agrupado por cliente</button>
+        </div>
+        <span class="rv-cnt" id="det-cnt"></span>
+      </div>
+      <div id="det-tot" style="font-size:12px;font-weight:700;color:#2563eb;margin-bottom:8px;"></div>
       <div class="scroll" style="max-height:60vh;overflow-y:auto;">
         <table>
-          <thead><tr>
-            <th style="text-align:left;position:sticky;top:0;">Fecha</th>
-            <th style="text-align:left;position:sticky;top:0;">Doc.</th>
-            <th style="text-align:left;position:sticky;top:0;">Canal</th>
-            <th style="text-align:left;position:sticky;top:0;">Cliente</th>
-            <th style="text-align:left;position:sticky;top:0;">Vendedor</th>
-            <th style="color:#94a3b8;position:sticky;top:0;">Subtotal</th>
-          </tr></thead>
+          <thead id="det-thead"></thead>
           <tbody id="det-tbody"></tbody>
         </table>
       </div>
@@ -19503,6 +19560,17 @@ function canalLbl(nombre){
 }
 var AGRUP_DIA = 'canal';
 function setAgrupacionDia(campo){ AGRUP_DIA = campo; renderResumen(); }
+// 'ultimo' | 'mejor' | 'rango' — mismo selector que la app en vivo (rvSetModoVentaDia).
+var MODO_DIA = 'ultimo';
+function setModoVentaDia(modo){ MODO_DIA = modo; renderResumen(); }
+// Día con mayor venta total entre todo lo cargado (igual que rvDiaMasVendido en vivo).
+function diaMasVendido(){
+  var porDia = {};
+  DATA.detalle.forEach(function(r){ if(r.f!=null) porDia[r.f] = (porDia[r.f]||0) + (r.valor||0); });
+  var mejor = null, max = -Infinity;
+  Object.keys(porDia).forEach(function(f){ if(porDia[f]>max){ max=porDia[f]; mejor=Number(f); } });
+  return mejor;
+}
 function mostrarEditorComparativo(){
   var el = document.getElementById('rv-comp-editor');
   if(el) el.style.display = el.style.display==='none' ? 'flex' : 'none';
@@ -19608,11 +19676,33 @@ function renderResumen(){
   // canal o por vendedor (toggle), nunca de un dict que mezcle ambos niveles.
   // Usa el último día CERRADO (estrictamente anterior a hoy), no el máximo del archivo,
   // porque el día en que se sube el reporte normalmente sigue en curso.
-  var ultimoDiaF = ultimoDiaCerrado(DATA.detalle);
-  var fechaDiaCerradoTxt = ultimoDiaF!=null ? fmtD(ultimoDiaF) : '';
   var campoAgrup = AGRUP_DIA === 'canal' ? 'canal' : 'vendedor';
-  var datosUltimoDia = ultimoDiaF!=null ? DATA.detalle.filter(function(r){ return r.f===ultimoDiaF; }) : [];
-  var diaMap = agruparPorCampo(datosUltimoDia, campoAgrup);
+  var datosDia, tituloDia, fechaDiaCerradoTxt, vacioDia;
+  if(MODO_DIA === 'mejor'){
+    var mejorF = diaMasVendido();
+    datosDia = mejorF!=null ? DATA.detalle.filter(function(r){ return r.f===mejorF; }) : [];
+    tituloDia = '🏆 Venta del Día Más Vendido';
+    fechaDiaCerradoTxt = mejorF!=null ? fmtD(mejorF) : '';
+    vacioDia = 'Sin ventas cargadas todavía';
+  } else if(MODO_DIA === 'rango'){
+    datosDia = datosFiltrados();
+    if(filtroActivo()){
+      tituloDia = '📅 Venta del Rango Filtrado';
+      fechaDiaCerradoTxt = (FILTRO.desde!=null?fmtD(FILTRO.desde):'…') + ' – ' + (FILTRO.hasta!=null?fmtD(FILTRO.hasta):'…');
+    } else {
+      tituloDia = '📅 Venta de Todo el Mes Cargado';
+      var fs = {}; DATA.detalle.forEach(function(r){ fs[r.f]=1; });
+      fechaDiaCerradoTxt = Object.keys(fs).length + ' días cargados';
+    }
+    vacioDia = 'Sin ventas en este rango';
+  } else {
+    var ultimoDiaF = ultimoDiaCerrado(DATA.detalle);
+    datosDia = ultimoDiaF!=null ? DATA.detalle.filter(function(r){ return r.f===ultimoDiaF; }) : [];
+    tituloDia = '⚡ Venta del Último Día';
+    fechaDiaCerradoTxt = ultimoDiaF!=null ? fmtD(ultimoDiaF) : '';
+    vacioDia = 'Sin ventas el último día';
+  }
+  var diaMap = agruparPorCampo(datosDia, campoAgrup);
   var diaE = Object.keys(diaMap).map(function(k){ return [k,diaMap[k]]; }).filter(function(x){ return x[1]!==0; }).sort(function(a,b){ return b[1]-a[1]; });
 
   var diaCardsHtml = diaE.length ? diaE.map(function(x){
@@ -19620,7 +19710,7 @@ function renderResumen(){
     return '<div style="background:linear-gradient(135deg,#1e1b4b,#4c1d95);border-radius:10px;padding:12px;color:#fff;">'
       + '<div style="font-size:11px;font-weight:700;margin-bottom:4px;">'+esc(lbl)+'</div>'
       + '<div style="font-size:17px;font-weight:800;color:#f5c518;">'+fmtM(x[1])+'</div></div>';
-  }).join('') : '<div style="color:#64748b;font-size:12px;">Sin ventas el último día</div>';
+  }).join('') : '<div style="color:#64748b;font-size:12px;">'+esc(vacioDia)+'</div>';
 
   var rankingHtml = acumE.map(function(x,i){
     var nom=x[0], c=x[1];
@@ -19665,7 +19755,12 @@ function renderResumen(){
 
   el.innerHTML = notaProrrateado()
     + '<div class="rv-card"><div class="rv-card-t">📆 Comparativo Interanual</div>'+compHtml+'</div>'
-    + '<div class="rv-card"><div class="rv-card-t"><span>⚡ Venta del Último Día</span><span style="font-size:11px;font-weight:400;color:#64748b;">'+esc(fechaDiaCerradoTxt)+'</span></div>'
+    + '<div class="rv-card"><div class="rv-card-t"><span>'+tituloDia+'</span><span style="font-size:11px;font-weight:400;color:#64748b;">'+esc(fechaDiaCerradoTxt)+'</span></div>'
+    + '<div style="display:flex;gap:5px;margin-bottom:6px;flex-wrap:wrap;">'
+    +   '<button class="rv-chip'+(MODO_DIA==='ultimo'?' on':'')+'" onclick="setModoVentaDia(\\'ultimo\\')">⚡ Último día</button>'
+    +   '<button class="rv-chip'+(MODO_DIA==='mejor'?' on':'')+'" onclick="setModoVentaDia(\\'mejor\\')">🏆 Día más vendido</button>'
+    +   '<button class="rv-chip'+(MODO_DIA==='rango'?' on':'')+'" onclick="setModoVentaDia(\\'rango\\')">📅 Según filtro de rango</button>'
+    + '</div>'
     + '<div style="display:flex;gap:5px;margin-bottom:10px;flex-wrap:wrap;">'
     +   '<button class="rv-chip'+(AGRUP_DIA==='canal'?' on':'')+'" onclick="setAgrupacionDia(\\'canal\\')">📦 Por canal</button>'
     +   '<button class="rv-chip'+(AGRUP_DIA==='vendedor'?' on':'')+'" onclick="setAgrupacionDia(\\'vendedor\\')">👤 Por vendedor</button>'
@@ -19760,10 +19855,18 @@ function renderCumplimiento(){
     'PROYECTOS':     ejeF.reduce(function(a,x){return a+x[1].pptoPro;},0),
     'ONLINE':        ejeF.reduce(function(a,x){return a+x[1].pptoOnl;},0)
   };
+  if(DATA.pptoCanalMes){
+    var fct = factorProrrateo();
+    pptoPorCanalNombre = {};
+    Object.keys(DATA.pptoCanalMes).forEach(function(k){ pptoPorCanalNombre[k] = (DATA.pptoCanalMes[k]||0)*fct; });
+  }
   var ventaCanalMap = ventaPorCanalFiltrado();
   var canales = {};
   Object.keys(ventaCanalMap).forEach(function(nombre){
     canales[nombre] = { v: ventaCanalMap[nombre], p: pptoPorCanalNombre[nombre]||0, lbl: canalLbl(nombre), ico: canalIco(nombre) };
+  });
+  Object.keys(pptoPorCanalNombre).forEach(function(nombre){
+    if(pptoPorCanalNombre[nombre]>0 && !canales[nombre]) canales[nombre] = { v:0, p:pptoPorCanalNombre[nombre], lbl: canalLbl(nombre), ico: canalIco(nombre) };
   });
   // Los que no tienen meta van al final, ordenados entre ellos por venta descendente.
   var ejeSort = ejeF.slice().sort(function(a,b){
@@ -19823,6 +19926,7 @@ var ejeSort = { key:'ventaTotal', dir:-1 };
 function ejeValor(e, key){
   if(key==='nombre') return e.nombre;
   if(key==='pct') return e.pptoTotal>0 ? e.ventaTotal/e.pptoTotal : 0;
+  if(key==='dif') return e.pptoTotal>0 ? e.ventaTotal-e.pptoTotal : -Infinity;
   return e[key]||0;
 }
 function ejeRender(){
@@ -19855,13 +19959,31 @@ function ejeRender(){
       + '<td style="padding:10px 10px;text-align:right;font-size:11px;color:#64748b;border-bottom:1px solid #f1f5f9;">'+(mi.sinMeta?'—':fmtM(e.pptoTotal))+'</td>'
       + '<td style="padding:10px 10px;text-align:right;font-weight:800;font-size:12px;color:#2563eb;border-bottom:1px solid #f1f5f9;">'+fmtM(e.ventaTotal)+'</td>'
       + '<td style="padding:10px 10px;text-align:right;font-weight:800;font-size:12px;color:'+mi.color+';border-bottom:1px solid #f1f5f9;">'+(mi.sinMeta?'—':mi.label)+'</td>'
+      + (function(){ var d=e.ventaTotal-e.pptoTotal; return '<td style="padding:10px 10px;text-align:right;font-weight:700;font-size:11px;color:'+(mi.sinMeta?'#94a3b8':(d>=0?'#16a34a':'#dc2626'))+';border-bottom:1px solid #f1f5f9;">'+(mi.sinMeta?'—':(d>=0?'+':'-')+fmtM(d))+'</td>'; })()
       + '<td style="padding:10px 8px;text-align:right;font-size:11px;border-bottom:1px solid #f1f5f9;">'+(e.ventaEsp?fmtM(e.ventaEsp):'—')+'</td>'
       + '<td style="padding:10px 8px;text-align:right;font-size:11px;border-bottom:1px solid #f1f5f9;">'+(e.ventaMix?fmtM(e.ventaMix):'—')+'</td>'
       + '<td style="padding:10px 8px;text-align:right;font-size:11px;border-bottom:1px solid #f1f5f9;">'+(e.ventaPro?fmtM(e.ventaPro):'—')+'</td>'
       + '</tr>';
   });
+  // Fila TOTAL de lo que se está mostrando (respeta búsqueda y rango), igual que la app en vivo.
+  if(rows.length){
+    var totV=0, totP=0, totE=0, totM=0, totR=0;
+    rows.forEach(function(e){ totV+=e.ventaTotal; totP+=e.pptoTotal; totE+=e.ventaEsp; totM+=e.ventaMix; totR+=e.ventaPro; });
+    var pT = totP>0 ? totV/totP : 0, dT = totV-totP;
+    var cT = totP>0 ? (pT>=1?'#16a34a':(pT>=.7?'#ea580c':'#dc2626')) : '#94a3b8';
+    html += '<tr style="background:#f1f5f9;border-top:2px solid #e2e8f0;">'
+      + '<td style="padding:10px 14px;font-weight:800;font-size:12px;">TOTAL</td>'
+      + '<td style="padding:10px 10px;text-align:right;font-weight:800;font-size:11px;">'+fmtM(totP)+'</td>'
+      + '<td style="padding:10px 10px;text-align:right;font-weight:800;font-size:12px;color:#2563eb;">'+fmtM(totV)+'</td>'
+      + '<td style="padding:10px 10px;text-align:right;font-weight:800;font-size:12px;color:'+cT+';">'+(totP>0?pctF(pT):'—')+'</td>'
+      + '<td style="padding:10px 10px;text-align:right;font-weight:800;font-size:11px;color:'+(dT>=0?'#16a34a':'#dc2626')+';">'+(totP>0?(dT>=0?'+':'-')+fmtM(dT):'—')+'</td>'
+      + '<td style="padding:10px 8px;text-align:right;font-weight:800;font-size:11px;">'+fmtM(totE)+'</td>'
+      + '<td style="padding:10px 8px;text-align:right;font-weight:800;font-size:11px;">'+fmtM(totM)+'</td>'
+      + '<td style="padding:10px 8px;text-align:right;font-weight:800;font-size:11px;">'+fmtM(totR)+'</td>'
+      + '</tr>';
+  }
   var tbody = document.getElementById('eje-tbody');
-  if(tbody) tbody.innerHTML = html || '<tr><td colspan="7" style="padding:20px;text-align:center;color:#94a3b8;">Sin resultados</td></tr>';
+  if(tbody) tbody.innerHTML = html || '<tr><td colspan="8" style="padding:20px;text-align:center;color:#94a3b8;">Sin resultados</td></tr>';
   var cnt = document.getElementById('eje-cnt');
   if(cnt) cnt.textContent = rows.length + ' de ' + ejecutivos.length + ' ejecutivos';
 }
@@ -19911,6 +20033,17 @@ function renderCanales(){
   });
   var tbody = document.getElementById('can-tbody');
   if(tbody) tbody.innerHTML = html;
+  var cards = document.getElementById('can-cards');
+  if(cards){
+    cards.innerHTML = canales.slice().sort(function(a,b){ return b.valor-a.valor; }).slice(0,4).map(function(c){
+      var col = CCOL[c.canal] || '#2563eb';
+      return '<div class="rv-card" style="margin-bottom:0;padding:12px;">'
+        + '<div style="font-size:16px;font-weight:800;color:'+col+';">'+fmtM(c.valor)+'</div>'
+        + '<div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px;">'+esc(c.canal)+'</div>'
+        + '<div style="font-size:10px;font-weight:700;color:#64748b;margin-top:4px;">'+(total>0?(c.valor/total*100).toFixed(1):'0.0')+'%</div>'
+        + '</div>';
+    }).join('');
+  }
 }
 function canOrdenar(key){
   if(canSort.key===key){ canSort.dir *= -1; } else { canSort.key = key; canSort.dir = (key==='canal') ? 1 : -1; }
@@ -20034,41 +20167,109 @@ function renderRecaudo(){
 // ── DETALLE ── (respeta el rango de fechas del filtro global, además de su propia búsqueda/canal)
 var detLimit = 300;
 var CCTAG = {'ESPECIALIZADO':'#1e40af','CANAL MIXTO':'#15803d','PROYECTOS':'#b45309','ONLINE':'#7e22ce','DISTRIBUIDOR':'#0369a1','CANAL HOMECENTER':'#c2410c','HARD DISCOUNT':'#c2410c','CANAL MODERNO':'#be185d'};
+var DET_VISTA = 'detallado';
+function detSetVista(v){
+  DET_VISTA = v;
+  var bD = document.getElementById('det-vista-detallado'), bA = document.getElementById('det-vista-agrupado');
+  if(bD) bD.classList.toggle('on', v==='detallado');
+  if(bA) bA.classList.toggle('on', v==='agrupado');
+  detFiltrar(true);
+}
+function detLimpiar(){
+  ['det-busq','det-vendedor','det-ciudad','det-canal'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+  detFiltrar(true);
+}
+function detItems(){
+  var q = ((document.getElementById('det-busq')||{}).value||'').toLowerCase();
+  var vend = (document.getElementById('det-vendedor')||{}).value || '';
+  var ciudad = (document.getElementById('det-ciudad')||{}).value || '';
+  var canal = (document.getElementById('det-canal')||{}).value || '';
+  return datosFiltrados().filter(function(r){
+    var okQ = !q || (r.cliente||'').toLowerCase().indexOf(q)>=0 || (r.vendedor||'').toLowerCase().indexOf(q)>=0;
+    var okV = !vend || (r.vendedor||'').trim()===vend;
+    var okCi = !ciudad || (r.ciudad||'').trim()===ciudad;
+    var okC = !canal || r.canal===canal;
+    return okQ && okV && okCi && okC;
+  });
+}
+// Una fila por cliente+día sumando sus facturas (igual que "Agrupado por cliente" en vivo).
+function detAgrupar(items){
+  var grupos = {};
+  items.forEach(function(r){
+    var cliente = (r.cliente||'').trim() || '(sin cliente)';
+    var key = r.f + '||' + cliente;
+    if(!grupos[key]) grupos[key] = { f:r.f, cliente:cliente, canales:{}, vendedores:{}, facturas:0, valor:0 };
+    var g = grupos[key];
+    if(r.canal) g.canales[r.canal] = 1;
+    if((r.vendedor||'').trim()) g.vendedores[r.vendedor.trim()] = 1;
+    g.facturas++;
+    g.valor += r.valor||0;
+  });
+  return Object.keys(grupos).map(function(k){ return grupos[k]; }).sort(function(a,b){ return (b.f-a.f) || (b.valor-a.valor); });
+}
 function detFiltrar(reset){
   if(reset) detLimit = 300;
-  var q = ((document.getElementById('det-busq')||{}).value||'').toLowerCase();
-  var canal = (document.getElementById('det-canal')||{}).value || '';
-  var items = datosFiltrados().filter(function(r){
-    var okQ = !q || r.cliente.toLowerCase().indexOf(q)>=0 || r.vendedor.toLowerCase().indexOf(q)>=0;
-    var okC = !canal || r.canal===canal;
-    return okQ && okC;
-  });
+  var items = detItems();
   window._detFiltered = items;
-  var cnt = document.getElementById('det-cnt');
-  if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' registros' + (items.length>detLimit ? ' (mostrando '+detLimit+')' : '') + (filtroActivo() ? ' · rango filtrado arriba' : '');
-  var slice = items.slice(0, detLimit);
-  var html = '';
-  slice.forEach(function(r, idx){
-    var col = CCTAG[r.canal] || '#64748b';
-    html += '<tr style="border-bottom:1px solid #f1f5f9;background:'+(idx%2?'#f8fafc':'#fff')+';">'
-      + '<td style="padding:7px 10px;font-size:10px;white-space:nowrap;">'+fmtD(r.f)+'</td>'
-      + '<td style="padding:7px 10px;font-family:monospace;font-size:9px;color:#64748b;">'+esc(r.doc)+'</td>'
-      + '<td style="padding:7px 10px;"><span style="font-size:9px;background:'+col+'22;color:'+col+';padding:2px 6px;border-radius:8px;font-weight:700;">'+esc(r.canal)+'</span></td>'
-      + '<td style="padding:7px 10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;" title="'+esc(r.cliente)+'">'+esc(r.cliente.substring(0,34))+'</td>'
-      + '<td style="padding:7px 10px;font-size:10px;">'+esc(r.vendedor.split(' ').slice(0,2).join(' '))+'</td>'
-      + '<td style="padding:7px 10px;text-align:right;font-weight:700;color:'+(r.valor<0?'#dc2626':'#0f172a')+';">'+fmtM(r.valor)+'</td>'
-      + '</tr>';
-  });
+  var suma = 0; items.forEach(function(r){ suma += r.valor||0; });
+  var tot = document.getElementById('det-tot');
+  if(tot) tot.textContent = 'Total mostrado: ' + fmt(suma) + ' (' + items.length.toLocaleString('es-CO') + (items.length===1?' factura)':' facturas)');
+  var thead = document.getElementById('det-thead');
   var tbody = document.getElementById('det-tbody');
-  if(tbody) tbody.innerHTML = html || '<tr><td colspan="6" style="padding:20px;text-align:center;color:#94a3b8;">Sin resultados</td></tr>';
+  var cnt = document.getElementById('det-cnt');
   var mas = document.getElementById('det-mas');
-  if(mas) mas.style.display = items.length>detLimit ? 'block' : 'none';
+  var th = function(t, right){ return '<th style="text-align:'+(right?'right':'left')+';position:sticky;top:0;'+(right?'color:#94a3b8;':'')+'">'+t+'</th>'; };
+  var html = '';
+
+  if(DET_VISTA === 'agrupado'){
+    var filas = detAgrupar(items);
+    if(cnt) cnt.textContent = filas.length.toLocaleString('es-CO') + ' clientes/día' + (filas.length>detLimit ? ' (mostrando '+detLimit+')' : '') + (filtroActivo() ? ' · rango filtrado arriba' : '');
+    if(thead) thead.innerHTML = '<tr>'+th('Fecha')+th('Cliente')+th('Canal')+th('Vendedor')+th('Facturas',1)+th('Total día',1)+'</tr>';
+    filas.slice(0, detLimit).forEach(function(g, idx){
+      var cs = Object.keys(g.canales);
+      var c = cs.length===1 ? cs[0] : (cs.length + ' canales');
+      var col = CCTAG[c] || '#64748b';
+      var vs = Object.keys(g.vendedores);
+      var vTxt = vs.map(function(n){ return n.split(' ').slice(0,2).join(' '); }).join(', ') || '—';
+      html += '<tr style="border-bottom:1px solid #f1f5f9;background:'+(idx%2?'#f8fafc':'#fff')+';">'
+        + '<td style="padding:7px 10px;font-size:10px;white-space:nowrap;">'+fmtD(g.f)+'</td>'
+        + '<td style="padding:7px 10px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;" title="'+esc(g.cliente)+'">'+esc(g.cliente.substring(0,34))+'</td>'
+        + '<td style="padding:7px 10px;"><span style="font-size:9px;background:'+col+'22;color:'+col+';padding:2px 6px;border-radius:8px;font-weight:700;">'+esc(c)+'</span></td>'
+        + '<td style="padding:7px 10px;font-size:10px;" title="'+esc(vs.join(', '))+'">'+esc(vTxt)+'</td>'
+        + '<td style="padding:7px 10px;text-align:right;font-size:10px;color:#64748b;">'+g.facturas+'</td>'
+        + '<td style="padding:7px 10px;text-align:right;font-weight:700;color:'+(g.valor<0?'#dc2626':'#0f172a')+';">'+fmt(g.valor)+'</td>'
+        + '</tr>';
+    });
+    if(mas) mas.style.display = filas.length>detLimit ? 'block' : 'none';
+  } else {
+    if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' registros' + (items.length>detLimit ? ' (mostrando '+detLimit+')' : '') + (filtroActivo() ? ' · rango filtrado arriba' : '');
+    if(thead) thead.innerHTML = '<tr>'+th('Fecha')+th('Doc.')+th('Canal')+th('Cliente')+th('Vendedor')+th('Subtotal',1)+'</tr>';
+    items.slice(0, detLimit).forEach(function(r, idx){
+      var col = CCTAG[r.canal] || '#64748b';
+      html += '<tr style="border-bottom:1px solid #f1f5f9;background:'+(idx%2?'#f8fafc':'#fff')+';">'
+        + '<td style="padding:7px 10px;font-size:10px;white-space:nowrap;">'+fmtD(r.f)+'</td>'
+        + '<td style="padding:7px 10px;font-family:monospace;font-size:9px;color:#64748b;">'+esc(r.doc)+'</td>'
+        + '<td style="padding:7px 10px;"><span style="font-size:9px;background:'+col+'22;color:'+col+';padding:2px 6px;border-radius:8px;font-weight:700;">'+esc(r.canal)+'</span></td>'
+        + '<td style="padding:7px 10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;" title="'+esc(r.cliente)+'">'+esc(r.cliente.substring(0,34))+'</td>'
+        + '<td style="padding:7px 10px;font-size:10px;">'+esc(r.vendedor.split(' ').slice(0,2).join(' '))+'</td>'
+        + '<td style="padding:7px 10px;text-align:right;font-weight:700;color:'+(r.valor<0?'#dc2626':'#0f172a')+';">'+fmt(r.valor)+'</td>'
+        + '</tr>';
+    });
+    if(mas) mas.style.display = items.length>detLimit ? 'block' : 'none';
+  }
+  if(tbody) tbody.innerHTML = html || '<tr><td colspan="6" style="padding:20px;text-align:center;color:#94a3b8;">Sin resultados</td></tr>';
 }
 function detMas(){ detLimit += 300; detFiltrar(false); }
 function detCSV(){
   var items = window._detFiltered || DATA.detalle;
-  var rows = [['Fecha','Documento','Canal','Cliente','Vendedor','Subtotal']];
-  items.forEach(function(r){ rows.push([fmtD(r.f), r.doc, r.canal, r.cliente, r.vendedor, r.valor]); });
+  var rows;
+  if(DET_VISTA === 'agrupado'){
+    rows = [['Fecha','Cliente','Canal(es)','Vendedor(es)','Facturas','Total dia']];
+    detAgrupar(items).forEach(function(g){ rows.push([fmtD(g.f), g.cliente, Object.keys(g.canales).join(' / '), Object.keys(g.vendedores).join(' / '), g.facturas, g.valor]); });
+  } else {
+    rows = [['Fecha','Documento','Canal','Cliente','Vendedor','Ciudad','Subtotal']];
+    items.forEach(function(r){ rows.push([fmtD(r.f), r.doc, r.canal, r.cliente, r.vendedor, r.ciudad||'', r.valor]); });
+  }
   var csv = rows.map(function(row){
     return row.map(function(v){
       var s = String(v==null?'':v).replace(/"/g,'""');
