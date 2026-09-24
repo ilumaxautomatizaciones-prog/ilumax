@@ -8009,8 +8009,13 @@ function renderInvVista() {
       <button id="btn-siesa-sync" onclick="actualizarDesdeSiesa()" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
         🔄 Actualizar desde SIESA
       </button>
+      <label title="Sube el Excel 'INV - DUV' (Biable): actualiza inventario + ventas históricas + ventas por canal/mes" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        <input type="file" accept=".xlsx,.xlsm,.xls" style="display:none;" onchange="invduvSincronizar(this)">
+        🔄 Sincronizar INV - DUV
+      </label>
       <div id="inv-siesa-status" style="font-size:11px;color:var(--mu);">Sincroniza el inventario directo desde la API de SIESA</div>
     </div>
+    <div id="invduv-status" style="display:none;background:#0f172a;color:#e2e8f0;border-radius:10px;padding:10px 12px;font:11px/1.6 monospace;margin-bottom:12px;white-space:pre-wrap;max-height:220px;overflow:auto;"></div>
 
     <!-- Búsqueda y filtros -->
     <div style="background:var(--w);border-radius:10px;padding:10px 12px;margin-bottom:10px;box-shadow:var(--sh);display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
@@ -9539,6 +9544,122 @@ async function actualizarDesdeSiesa() {
 }
 
 // ── SUBIR EXCEL INVENTARIO ────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 🔄 SINCRONIZAR DESDE "INV - DUV.xlsx" (Excel que se refresca a diario desde Biable)
+// Hojas: INVENTARIO (existencias por referencia+bodega) y VENTAS (líneas de factura).
+// Hace lo mismo que el script programado C:\ILUMAX\sync_inv_duv.ps1 (7:30 a. m.):
+//  · inventario: actualiza existencia/costo/descripción de lo que ya existe (ref+bodega)
+//    y agrega lo nuevo — NO borra nada.
+//  · ventas_historico (año, mes, referencia, canal) y ventas_canal_mes (año, mes, canal): upsert.
+// Ojo: en el Excel, Costo_prom_uni viene con formato de hora; se lee el valor crudo (número).
+// ══════════════════════════════════════════════════════════════════════
+async function invduvSincronizar(inputEl) {
+  const file = inputEl && inputEl.files && inputEl.files[0];
+  if(inputEl) inputEl.value = '';
+  if(!file) return;
+  if(MODO_OFFLINE) { toast('Sin conexión a Supabase', 'er'); return; }
+  const box = document.getElementById('invduv-status');
+  const log = t => { if(box){ box.style.display='block'; box.textContent += (box.textContent?'\n':'') + t; box.scrollTop = box.scrollHeight; } };
+  if(box) box.textContent = '';
+  const H = {'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json'};
+  const req = async (method, path, body, prefer) => {
+    const h = {...H}; if(prefer) h['Prefer'] = prefer;
+    for(let intento=1; intento<=3; intento++) {
+      const r = await fetch(SB_URL + '/rest/v1/' + path, {method, headers:h, body: body ? JSON.stringify(body) : undefined});
+      if(r.ok) return method==='GET' ? r.json() : null;
+      const t = await r.text();
+      if(intento===3) throw new Error(r.status + ' ' + t.slice(0,300));
+      await new Promise(res => setTimeout(res, 1500*intento));
+    }
+  };
+  const str = v => v==null ? '' : String(v).trim();
+  const num = v => { if(v==null || v==='') return 0; const n = typeof v==='number' ? v : parseFloat(String(v).replace(/,/g,'')); return isFinite(n) ? n : 0; };
+  const r2 = n => Math.round(n*100)/100;
+  try {
+    log('📂 Leyendo ' + file.name + ' (' + (file.size/1048576).toFixed(1) + ' MB)… puede tardar unos segundos');
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array', sheets:['INVENTARIO','VENTAS'], cellDates:false, cellFormula:false, cellHTML:false, cellText:false});
+    const wsI = wb.Sheets['INVENTARIO'], wsV = wb.Sheets['VENTAS'];
+    if(!wsI || !wsV) throw new Error('El archivo no tiene las hojas INVENTARIO y VENTAS');
+
+    // ── INVENTARIO ──
+    const aI = XLSX.utils.sheet_to_json(wsI, {header:1, raw:true, blankrows:false, defval:null});
+    const hI = aI.findIndex(r => r && r.includes('Referencia Item'));
+    if(hI<0) throw new Error('No encontré el encabezado "Referencia Item" en INVENTARIO');
+    const cI = {}; aI[hI].forEach((h,i) => { if(h && !(h in cI)) cI[h]=i; });
+    const inv = {};
+    for(let i=hI+1;i<aI.length;i++){
+      const r = aI[i]; const ref = str(r[cI['Referencia Item']]); if(!ref) continue;
+      const bod = str(r[cI['Bodega']]); const k = ref+'|'+bod;
+      const ex = num(r[cI['Cant_existencia_actual']]);
+      if(inv[k]) { inv[k].existencia += ex; continue; }
+      inv[k] = {referencia:ref, bodega:bod, descripcion:str(r[cI['Nombre Item']]).slice(0,200), existencia:ex, costo_prom:r2(num(r[cI['Costo_prom_uni']])), um:str(r[cI['Unidad de Medida']])};
+    }
+    const invL = Object.values(inv); invL.forEach(x => x.existencia = r2(x.existencia));
+    log('📦 INVENTARIO: ' + invL.length + ' referencia+bodega');
+
+    // ── VENTAS ──
+    const aV = XLSX.utils.sheet_to_json(wsV, {header:1, raw:true, blankrows:false, defval:null});
+    const hV = aV.findIndex(r => r && r.includes('Periodo') && r.includes('Valor_subtotal_local'));
+    if(hV<0) throw new Error('No encontré el encabezado de VENTAS');
+    const cV = {}; aV[hV].forEach((h,i) => { if(h && !(h in cV)) cV[h]=i; });
+    const hist = {}, cm = {};
+    let lineas = 0;
+    for(let i=hV+1;i<aV.length;i++){
+      const r = aV[i]; const per = str(r[cV['Periodo']]); if(per.length<6) continue;
+      lineas++;
+      const anio = parseInt(per.slice(0,4)), mes = parseInt(per.slice(4,6));
+      const canal = str(r[cV['Desc Tipo_cliente']]), ref = str(r[cV['Referencia Item']]);
+      const val = num(r[cV['Valor_subtotal_local']]), u = num(r[cV['Cantidad_inventario']]);
+      const kh = anio+'|'+mes+'|'+ref+'|'+canal;
+      if(!hist[kh]) hist[kh] = {anio, mes, referencia:ref, canal, descripcion:str(r[cV['Nombre Item']]).slice(0,200), categoria:str(r[cV['Desc_Item2 Item']]), unidades:0, valor_cop:0};
+      hist[kh].unidades += u; hist[kh].valor_cop += val;
+      const kc = anio+'|'+mes+'|'+canal;
+      if(!cm[kc]) cm[kc] = {anio, mes, canal, unidades:0, valor_cop:0};
+      cm[kc].unidades += u; cm[kc].valor_cop += val;
+    }
+    const email = (CU && CU.email) || 'portal';
+    const histL = Object.values(hist).map(x => ({...x, unidades:r2(x.unidades), valor_cop:r2(x.valor_cop), subido_por:email}));
+    const cmL   = Object.values(cm).map(x => ({...x, unidades:r2(x.unidades), valor_cop:r2(x.valor_cop), subido_por:email, fuente:'excel INV - DUV'}));
+    log('📈 VENTAS: ' + lineas.toLocaleString('es-CO') + ' líneas → ' + histL.length + ' filas histórico · ' + cmL.length + ' filas canal/mes');
+
+    // ── Subir inventario (actualizar + agregar, sin borrar) ──
+    log('🔍 Comparando con el inventario de Supabase…');
+    let exist = [], off = 0;
+    while(true){ const rows = await req('GET','inventario?select=id,referencia,bodega&order=id.asc&limit=1000&offset='+off); exist = exist.concat(rows); if(rows.length<1000) break; off += 1000; }
+    const idx = {}; exist.forEach(r => { const k = r.referencia+'|'+(r.bodega||''); (idx[k]=idx[k]||[]).push(r.id); });
+    const hoy = new Date(); const periodo = hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0')+'-'+String(hoy.getDate()).padStart(2,'0');
+    const ahora = hoy.toISOString(); const quien = (CU && CU.nombre) || 'Portal';
+    const upd = [], ins = [];
+    invL.forEach(x => {
+      const f = {descripcion:x.descripcion, existencia:x.existencia, costo_prom:x.costo_prom, um:x.um, periodo, subido_por:quien, actualizado:ahora};
+      const ids = idx[x.referencia+'|'+x.bodega];
+      if(ids) ids.forEach(id => upd.push({id, referencia:x.referencia, bodega:x.bodega, ...f}));
+      else ins.push({referencia:x.referencia, bodega:x.bodega, ubicacion:'', lote:'', ...f});
+    });
+    log('⬆️ Inventario: ' + upd.length + ' a actualizar · ' + ins.length + ' nuevas');
+    for(let i=0;i<upd.length;i+=500) await req('POST','inventario?on_conflict=id', upd.slice(i,i+500), 'resolution=merge-duplicates,return=minimal');
+    for(let i=0;i<ins.length;i+=500) await req('POST','inventario', ins.slice(i,i+500), 'return=minimal');
+    log('⬆️ Ventas histórico…');
+    for(let i=0;i<histL.length;i+=500) await req('POST','ventas_historico?on_conflict=anio,mes,referencia,canal', histL.slice(i,i+500), 'resolution=merge-duplicates,return=minimal');
+    log('⬆️ Ventas por canal/mes…');
+    await req('POST','ventas_canal_mes?on_conflict=anio,mes,canal', cmL, 'resolution=merge-duplicates,return=minimal');
+    await req('POST','configuracion?on_conflict=clave', [
+      {clave:'inv_ultima_actualizacion', valor:ahora, tipo:'texto'},
+      {clave:'invduv_ultima_sync', valor:JSON.stringify({fecha:ahora, origen:'portal', por:quien, archivo:file.name, inv:invL.length, hist:histL.length, cm:cmL.length}), tipo:'json'}
+    ], 'resolution=merge-duplicates,return=minimal');
+    log('🎉 Listo: inventario, ventas histórico y ventas por canal actualizados.');
+    toast('✅ INV - DUV sincronizado', 'ok');
+    INV_ACTUALIZADO = ahora;
+    await cargarInventarioSupa();
+    renderInvVista();
+  } catch(e) {
+    console.error(e);
+    log('❌ ERROR: ' + e.message + '\n   Puedes volver a intentarlo: no duplica datos.');
+    toast('Error sincronizando: ' + e.message, 'er');
+  }
+}
+
 async function subirExcelInventario(inputEl) {
   const file = inputEl.files[0];
   if(!file) return;
