@@ -7914,6 +7914,47 @@ async function subirTodosAdjuntos(solicitudId) {
 // MÓDULO INVENTARIO
 // ══════════════════════════════════════════════════════════
 var INV_DATA = [];
+// Bodegas que SUMAN al inventario = bodegas DISPONIBLES (definido por Duvier, 24-sep-2026):
+// BA disponible, BS stocking, B2 disponible bodega 2 ("BB"), RE reservas especiales, RI reserva clientes.
+// No suman: averías, garantías, muestras, cuarentena, devoluciones, cambios, tránsito, etc.
+// Se puede cambiar sin tocar código con configuracion.clave='inv_bodegas_cuentan' (JSON ["BA",...]).
+const INV_BODEGAS_CUENTAN_DEF = ['BA','BS','B2','BB','RE','RI'];
+var INV_BODEGAS_CUENTAN = INV_BODEGAS_CUENTAN_DEF.slice();
+function invBodegaCuenta(b) { return INV_BODEGAS_CUENTAN.includes(String(b||'').trim().toUpperCase()); }
+// Una sola fila por referencia+bodega (la más reciente). En Supabase quedaron filas repetidas
+// de cargas viejas; sumarlas inflaba unidades y valor del inventario.
+function invDedup(rows) {
+  const m = {};
+  (rows||[]).forEach(r => {
+    const k = r.referencia + '|' + String(r.bodega||'').trim().toUpperCase();
+    const a = m[k];
+    if(!a || (r.id||0) > (a.id||0)) m[k] = r;
+  });
+  return Object.values(m);
+}
+// Trae TODAS las filas del inventario (paginado de a 1000). Antes se pedía limit=5000/3000 y,
+// con más filas que eso en Supabase, lo que quedaba por fuera se tomaba como "nuevo" y se
+// volvía a insertar → filas repetidas por referencia+bodega (visto el 2026-09-24).
+async function invTodasLasFilas(select) {
+  let out = [], off = 0;
+  for(;;) {
+    const rows = await sb.get('inventario', 'select=' + select + '&order=id.asc&limit=1000&offset=' + off);
+    out = out.concat(rows || []);
+    if(!rows || rows.length < 1000) break;
+    off += 1000;
+    if(off > 300000) break;
+  }
+  return out;
+}
+async function invCargarBodegasCuentan() {
+  try {
+    const cfg = await sb.get('configuracion', 'clave=eq.inv_bodegas_cuentan');
+    if(cfg && cfg[0] && cfg[0].valor) {
+      const arr = JSON.parse(cfg[0].valor);
+      if(Array.isArray(arr) && arr.length) INV_BODEGAS_CUENTAN = arr.map(x => String(x).trim().toUpperCase());
+    }
+  } catch(e) { /* se usa la lista por defecto */ }
+}
 var INV_PERIODO = '';
 var INV_SUBIDO_POR = '';
 var INV_ACTUALIZADO = ''; // fecha/hora ISO de la última sincronización exitosa (Excel o SIESA)
@@ -7958,7 +7999,7 @@ async function cargarInventarioSupa() {
       if(offset > 200000) { console.warn('Inventario: límite de seguridad 200k filas'); break; }
     }
     if(todas.length > 0) {
-      INV_DATA = todas;
+      INV_DATA = invDedup(todas);
       INV_PERIODO = todas[0].periodo || '';
       INV_SUBIDO_POR = todas[0].subido_por || '';
     }
@@ -7966,6 +8007,7 @@ async function cargarInventarioSupa() {
     console.warn('Error cargando inventario:', e.message);
   }
   try {
+    await invCargarBodegasCuentan();
     const cfg = await sb.get('configuracion', 'clave=eq.inv_ultima_actualizacion');
     if(cfg && cfg[0]) INV_ACTUALIZADO = cfg[0].valor;
   } catch(e) {
@@ -7977,10 +8019,12 @@ function renderInvVista() {
   const el = document.getElementById('inv-content');
   if(!el) return;
 
-  const totalRefs = new Set(INV_DATA.map(r => r.referencia)).size;
-  const totalExist = INV_DATA.reduce((a,r) => a + parseFloat(r.existencia||0), 0);
-  const valorTotal = INV_DATA.reduce((a,r) => a + parseFloat(r.costo_prom||0) * parseFloat(r.existencia||0), 0);
-  const conStock = INV_DATA.filter(r => parseFloat(r.existencia||0) > 0).length;
+  // Totales SOLO con las bodegas que suman (Grupo 001) — ver INV_BODEGAS_CUENTAN.
+  const invCuenta = INV_DATA.filter(r => invBodegaCuenta(r.bodega));
+  const totalRefs = new Set(invCuenta.map(r => r.referencia)).size;
+  const totalExist = invCuenta.reduce((a,r) => a + parseFloat(r.existencia||0), 0);
+  const valorTotal = invCuenta.reduce((a,r) => a + parseFloat(r.costo_prom||0) * parseFloat(r.existencia||0), 0);
+  const conStock = new Set(invCuenta.filter(r => parseFloat(r.existencia||0) > 0).map(r => r.referencia)).size;
 
   let html = `
   <div style="padding:14px;" id="inv-inner">
@@ -7998,6 +8042,9 @@ function renderInvVista() {
         <div><div style="font-size:16px;font-weight:800;color:#f5c518;">${valorTotal>=1e9?'$'+(valorTotal/1e9).toFixed(1)+'B':valorTotal>=1e6?'$'+(valorTotal/1e6).toFixed(1)+'M':'$'+Math.round(valorTotal).toLocaleString('es-CO')}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Valor inventario</div></div>
         <div><div style="font-size:20px;font-weight:800;color:#f5c518;">${conStock.toLocaleString('es-CO')}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Con stock</div></div>
       </div>
+      <div style="font-size:10px;color:rgba(255,255,255,.55);margin-top:10px;">
+        Solo suman las bodegas disponibles: <strong style="color:#fff;">${INV_BODEGAS_CUENTAN.filter(b => b !== 'BB').join(', ')}</strong> · no incluye averías, garantías, muestras, cuarentena, devoluciones, proyectos ni tránsito
+      </div>
     </div>
 
     <!-- Acciones -->
@@ -8009,7 +8056,7 @@ function renderInvVista() {
       <button id="btn-siesa-sync" onclick="actualizarDesdeSiesa()" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
         🔄 Actualizar desde SIESA
       </button>
-      <label title="Sube el Excel 'INV - DUV' (Biable): actualiza inventario + ventas históricas + ventas por canal/mes" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+      <label title="Sube el Excel 'INV - DUV' (Biable): actualiza inventario, ventas históricas y por canal, facturas del Reporte Diario y Margen por Cliente" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
         <input type="file" accept=".xlsx,.xlsm,.xls" style="display:none;" onchange="invduvSincronizar(this)">
         🔄 Sincronizar INV - DUV
       </label>
@@ -8024,8 +8071,9 @@ function renderInvVista() {
         <input class="inp" id="srch-inv-mod" placeholder="Buscar referencia o descripción..." 
           style="padding-left:32px;border-radius:22px;" oninput="filtrarInvMod()">
       </div>
-      <select class="inp" id="fil-inv-bod" style="width:120px;" onchange="filtrarInvMod()">
-        <option value="">Todas las bodegas</option>
+      <select class="inp" id="fil-inv-bod" style="width:190px;" onchange="filtrarInvMod()">
+        <option value="">Bodegas disponibles (suman)</option>
+        <option value="__todas">Todas las bodegas</option>
       </select>
       <select class="inp" id="fil-inv-stock" style="width:130px;" onchange="filtrarInvMod()">
         <option value="todos">Todo</option>
@@ -8094,7 +8142,7 @@ function poblarBodegas() {
   const bodegas = [...new Set(INV_DATA.map(r => r.bodega).filter(Boolean))].sort();
   bodegas.forEach(b => {
     const o = document.createElement('option');
-    o.value = b; o.textContent = b;
+    o.value = b; o.textContent = b + (invBodegaCuenta(b) ? '' : ' (no suma)');
     sel.appendChild(o);
   });
 }
@@ -8106,7 +8154,8 @@ async function filtrarInvMod() {
 
   // 1) Filtrar filas crudas (referencia+bodega) por texto y bodega seleccionada
   let filas = INV_DATA.filter(r => {
-    if(bod && r.bodega !== bod) return false;
+    if(bod === '' && !invBodegaCuenta(r.bodega)) return false;
+    if(bod && bod !== '__todas' && r.bodega !== bod) return false;
     if(q && !(r.referencia+' '+(r.descripcion||'')).toLowerCase().includes(q)) return false;
     return true;
   });
@@ -9361,7 +9410,7 @@ async function actualizarDesdeSiesa() {
 
     let existentes = {};
     try {
-      const rows = await sb.get('inventario', 'select=referencia,bodega,existencia,costo_prom&limit=5000');
+      const rows = await invTodasLasFilas('referencia,bodega,existencia,costo_prom');
       (rows||[]).forEach(r => {
         existentes[r.referencia + '_' + (r.bodega||'')] = r;
       });
@@ -9544,8 +9593,100 @@ async function actualizarDesdeSiesa() {
 }
 
 // ── SUBIR EXCEL INVENTARIO ────────────────────────────────
+// ── Lector de .xlsx por partes (streaming) ────────────────────────────────
+// Para Excels enormes como "INV - DUV.xlsx": 64 MB comprimido pero ~530 MB de XML por
+// dentro (las hojas traen formato hasta la fila 1.046.277). XLSX.read() intenta cargar
+// todo en memoria → la pestaña se congela y termina sin hojas. Esto descomprime cada
+// hoja con DecompressionStream y la recorre fila por fila, entregando solo las columnas
+// pedidas. onRow(fila) recibe un arreglo por fila (índice 0 = columna A).
+async function xlsxLeerHojasStream(file, hojas, onProgreso) {
+  const buf = await file.arrayBuffer();
+  const u8 = new Uint8Array(buf), dv = new DataView(buf);
+  const dec = new TextDecoder('utf-8');
+  // 1. Directorio central del zip
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 70000); i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
+  if (eocd < 0) throw new Error('El archivo no parece un .xlsx válido');
+  const nEnt = dv.getUint16(eocd + 10, true); let p = dv.getUint32(eocd + 16, true);
+  const ent = {};
+  for (let k = 0; k < nEnt; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const metodo = dv.getUint16(p + 10, true), comp = dv.getUint32(p + 20, true);
+    const nl = dv.getUint16(p + 28, true), xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true);
+    const loc = dv.getUint32(p + 42, true);
+    const nombre = dec.decode(u8.subarray(p + 46, p + 46 + nl));
+    const ini = loc + 30 + dv.getUint16(loc + 26, true) + dv.getUint16(loc + 28, true);
+    ent[nombre] = { metodo, ini, comp };
+    p += 46 + nl + xl + cl;
+  }
+  const flujo = e => {
+    let st = new Blob([u8.subarray(e.ini, e.ini + e.comp)]).stream();
+    if (e.metodo === 8) st = st.pipeThrough(new DecompressionStream('deflate-raw'));
+    return st.pipeThrough(new TextDecoderStream()).getReader();
+  };
+  const leerTexto = async ruta => {
+    const e = ent[ruta]; if (!e) return '';
+    const rd = flujo(e); let t = '';
+    for (;;) { const { value, done } = await rd.read(); if (done) break; t += value; }
+    return t;
+  };
+  const desXml = t => t.replace(/&(lt|gt|amp|quot|apos|#\d+|#x[0-9a-fA-F]+);/g, (m, g) =>
+    g === 'lt' ? '<' : g === 'gt' ? '>' : g === 'amp' ? '&' : g === 'quot' ? '"' : g === 'apos' ? "'" :
+    String.fromCodePoint(g[1] === 'x' ? parseInt(g.slice(2), 16) : parseInt(g.slice(1), 10)));
+  // 2. Hoja → archivo
+  const wbx = await leerTexto('xl/workbook.xml'), rels = await leerTexto('xl/_rels/workbook.xml.rels');
+  const relMap = {};
+  rels.replace(/<Relationship\b[^>]*>/g, m => { const id = (m.match(/Id="([^"]+)"/) || [])[1], tg = (m.match(/Target="([^"]+)"/) || [])[1]; if (id && tg) relMap[id] = tg; return m; });
+  const rutaHoja = {};
+  wbx.replace(/<sheet\b[^>]*>/g, m => {
+    const nom = desXml((m.match(/name="([^"]*)"/) || [])[1] || ''), rid = (m.match(/r:id="([^"]+)"/) || [])[1];
+    let tg = relMap[rid] || ''; tg = tg.startsWith('/') ? tg.slice(1) : 'xl/' + tg;
+    rutaHoja[nom.trim().toUpperCase()] = tg; return m;
+  });
+  // 3. Textos compartidos
+  const ssx = await leerTexto('xl/sharedStrings.xml');
+  const ss = [];
+  ssx.replace(/<si>([\s\S]*?)<\/si>/g, (m, si) => { let t = ''; si.replace(/<t\b[^>]*>([\s\S]*?)<\/t>/g, (mm, x) => { t += x; return mm; }); ss.push(desXml(t)); return m; });
+  // 4. Recorrer cada hoja fila por fila
+  const colIdx = letras => { let n = 0; for (let i = 0; i < letras.length; i++) n = n * 26 + (letras.charCodeAt(i) - 64); return n - 1; };
+  const reCel = /<c r="([A-Z]+)\d+"([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+  for (const [nombreHoja, onRow] of Object.entries(hojas)) {
+    const ruta = rutaHoja[nombreHoja.toUpperCase()];
+    if (!ruta || !ent[ruta]) throw new Error('El archivo no tiene la hoja ' + nombreHoja + ' (hojas: ' + Object.keys(rutaHoja).join(', ') + ')');
+    const rd = flujo(ent[ruta]); let resto = '', leidos = 0, ultimoAviso = 0;
+    for (;;) {
+      const { value, done } = await rd.read();
+      if (value) { resto += value; leidos += value.length; }
+      let fin = resto.lastIndexOf('</row>');
+      if (fin < 0 && !done) continue;
+      const bloque = fin >= 0 ? resto.slice(0, fin + 6) : resto;
+      resto = fin >= 0 ? resto.slice(fin + 6) : '';
+      let a = 0;
+      for (;;) {
+        const i = bloque.indexOf('<row', a); if (i < 0) break;
+        const j = bloque.indexOf('</row>', i); if (j < 0) break;
+        const fila = bloque.slice(i, j); a = j + 6;
+        if (fila.indexOf('<v>') < 0 && fila.indexOf('<t') < 0) continue;   // fila solo con formato
+        const vals = []; let hay = false; reCel.lastIndex = 0; let m;
+        while ((m = reCel.exec(fila))) {
+          const cuerpo = m[3]; if (!cuerpo) continue;
+          const tipo = (m[2].match(/\bt="([^"]+)"/) || [])[1] || 'n';
+          let v;
+          if (tipo === 'inlineStr') { const t = cuerpo.match(/<t\b[^>]*>([\s\S]*?)<\/t>/); v = t ? desXml(t[1]) : ''; }
+          else { const vv = cuerpo.match(/<v>([\s\S]*?)<\/v>/); if (!vv) continue; v = vv[1];
+            if (tipo === 's') v = ss[parseInt(v, 10)]; else if (tipo === 'str' || tipo === 'e') v = desXml(v); else if (tipo === 'b') v = v === '1'; else v = parseFloat(v); }
+          vals[colIdx(m[1])] = v; hay = true;
+        }
+        if (hay) onRow(vals);
+      }
+      if (onProgreso && leidos - ultimoAviso > 40e6) { ultimoAviso = leidos; onProgreso(nombreHoja, leidos); }
+      if (done) break;
+    }
+  }
+}
+
 // ══════════════════════════════════════════════════════════════════════
-// 🔄 SINCRONIZAR DESDE "INV - DUV.xlsx" (Excel que se refresca a diario desde Biable)
+// 🔄 SINCRONIZAR DESDE "INV - DUV.xlsx\" (Excel que se refresca a diario desde Biable)
 // Hojas: INVENTARIO (existencias por referencia+bodega) y VENTAS (líneas de factura).
 // Hace lo mismo que el script programado C:\ILUMAX\sync_inv_duv.ps1 (7:30 a. m.):
 //  · inventario: actualiza existencia/costo/descripción de lo que ya existe (ref+bodega)
@@ -9576,14 +9717,27 @@ async function invduvSincronizar(inputEl) {
   const num = v => { if(v==null || v==='') return 0; const n = typeof v==='number' ? v : parseFloat(String(v).replace(/,/g,'')); return isFinite(n) ? n : 0; };
   const r2 = n => Math.round(n*100)/100;
   try {
-    log('📂 Leyendo ' + file.name + ' (' + (file.size/1048576).toFixed(1) + ' MB)… puede tardar unos segundos');
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, {type:'array', sheets:['INVENTARIO','VENTAS'], cellDates:false, cellFormula:false, cellHTML:false, cellText:false});
-    const wsI = wb.Sheets['INVENTARIO'], wsV = wb.Sheets['VENTAS'];
-    if(!wsI || !wsV) throw new Error('El archivo no tiene las hojas INVENTARIO y VENTAS');
+    log('📂 Leyendo ' + file.name + ' (' + (file.size/1048576).toFixed(1) + ' MB)… puede tardar 20-60 segundos');
+    if(typeof DecompressionStream === 'undefined') throw new Error('Este navegador no soporta la lectura del archivo; usa Chrome o Edge actualizados');
+    // Se guardan filas completas de INVENTARIO (pocas columnas) y, de VENTAS, solo las
+    // columnas que se usan (la hoja trae ~295 columnas × 46.000 filas).
+    const aI = [], aV = [];
+    const colsV = ['Periodo','Desc Tipo_cliente','Referencia Item','Valor_subtotal_local','Cantidad_inventario','Nombre Item','Desc_Item2 Item',
+                   'Tipo de Documento','Numero_documento','Fecha','Nombre Vendedor','Nombre Cliente_factura','Cliente_factura','Ciudad Factura Desc','Costo_prom_tot'];
+    let idxV = null;
+    await xlsxLeerHojasStream(file, {
+      'INVENTARIO': fila => aI.push(fila),
+      'VENTAS': fila => {
+        if(!idxV) {
+          aV.push(fila);
+          if(fila.includes('Periodo') && fila.includes('Valor_subtotal_local')) { idxV = colsV.map(c => fila.indexOf(c)).filter(i => i >= 0); }
+          return;
+        }
+        const f = []; idxV.forEach(i => { f[i] = fila[i]; }); aV.push(f);
+      }
+    }, (hoja, bytes) => log('   … ' + hoja + ': ' + Math.round(bytes/1048576) + ' MB procesados'));
 
     // ── INVENTARIO ──
-    const aI = XLSX.utils.sheet_to_json(wsI, {header:1, raw:true, blankrows:false, defval:null});
     const hI = aI.findIndex(r => r && r.includes('Referencia Item'));
     if(hI<0) throw new Error('No encontré el encabezado "Referencia Item" en INVENTARIO');
     const cI = {}; aI[hI].forEach((h,i) => { if(h && !(h in cI)) cI[h]=i; });
@@ -9599,12 +9753,16 @@ async function invduvSincronizar(inputEl) {
     log('📦 INVENTARIO: ' + invL.length + ' referencia+bodega');
 
     // ── VENTAS ──
-    const aV = XLSX.utils.sheet_to_json(wsV, {header:1, raw:true, blankrows:false, defval:null});
     const hV = aV.findIndex(r => r && r.includes('Periodo') && r.includes('Valor_subtotal_local'));
     if(hV<0) throw new Error('No encontré el encabezado de VENTAS');
     const cV = {}; aV[hV].forEach((h,i) => { if(h && !(h in cV)) cV[h]=i; });
-    const hist = {}, cm = {};
+    const hist = {}, cm = {}, mcMap = {}, rvDocs = {};
     let lineas = 0;
+    const serialDe = f => {
+      if(typeof f === 'number') return Math.round(f);
+      const t = str(f); if(t.length < 8) return 0;
+      return Math.round((Date.UTC(+t.slice(0,4), +t.slice(4,6)-1, +t.slice(6,8)) - Date.UTC(1899,11,30)) / 86400000);
+    };
     for(let i=hV+1;i<aV.length;i++){
       const r = aV[i]; const per = str(r[cV['Periodo']]); if(per.length<6) continue;
       lineas++;
@@ -9617,7 +9775,32 @@ async function invduvSincronizar(inputEl) {
       const kc = anio+'|'+mes+'|'+canal;
       if(!cm[kc]) cm[kc] = {anio, mes, canal, unidades:0, valor_cop:0};
       cm[kc].unidades += u; cm[kc].valor_cop += val;
+      // Margen por Cliente — una fila por cliente (NIT) + mes, mismo formato que el módulo
+      const nit = str(r[cV['Cliente_factura']]);
+      if(nit) {
+        const mk = anio + '-' + String(mes).padStart(2,'0'), km = nit + '|' + mk;
+        if(!mcMap[km]) mcMap[km] = {'Cliente factura':nit, 'Razón social cliente factura':str(r[cV['Nombre Cliente_factura']]) || nit,
+          'Desc. tipo de cliente':canal, 'Cantidad inv.':0, 'Valor subtotal':0, 'Costo promedio total':0, _mesKey:mk, _mesLbl:MC_MESES[mes-1] + ' ' + anio};
+        const g = mcMap[km];
+        g['Cantidad inv.'] += u; g['Valor subtotal'] += val; g['Costo promedio total'] += num(r[cV['Costo_prom_tot']]);
+      }
+      // Reporte Diario — una fila por factura (documento), agrupada por periodo
+      const tipoDoc = str(r[cV['Tipo de Documento']]), nroDoc = num(r[cV['Numero_documento']]);
+      if(tipoDoc && nroDoc) {
+        const perN = anio*100 + mes, doc = tipoDoc + '-' + String(Math.round(nroDoc)).padStart(8,'0');
+        const docs = rvDocs[perN] = rvDocs[perN] || {};
+        if(!docs[doc]) docs[doc] = {Fecha:serialDe(r[cV['Fecha']]), 'Nro documento':doc,
+          'Razon social cliente factura':str(r[cV['Nombre Cliente_factura']]), 'Nombre vendedor':str(r[cV['Nombre Vendedor']]),
+          'Desc. tipo de cliente':canal, 'Ciudad':str(r[cV['Ciudad Factura Desc']]), 'Valor subtotal local':0};
+        docs[doc]['Valor subtotal local'] += val;
+      }
     }
+    const mcL = Object.values(mcMap).map(g => ({...g, 'Cantidad inv.':r2(g['Cantidad inv.']), 'Valor subtotal':r2(g['Valor subtotal']), 'Costo promedio total':r2(g['Costo promedio total'])}));
+    const perMax = Math.max(...Object.keys(rvDocs).map(Number));
+    const rvDatos = Object.values(rvDocs[perMax] || {}).map(d => ({...d, 'Valor subtotal local':r2(d['Valor subtotal local'])}));
+    const rvFechas = [...new Set(rvDatos.map(d => d.Fecha).filter(Boolean))].sort((a,b) => a-b);
+    const rvTotal = r2(rvDatos.reduce((a,d) => a + d['Valor subtotal local'], 0));
+    const rvFechaISO = rvFechas.length ? (() => { const d = rvFecha(rvFechas[rvFechas.length-1]); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })() : null;
     const email = (CU && CU.email) || 'portal';
     const histL = Object.values(hist).map(x => ({...x, unidades:r2(x.unidades), valor_cop:r2(x.valor_cop), subido_por:email}));
     const cmL   = Object.values(cm).map(x => ({...x, unidades:r2(x.unidades), valor_cop:r2(x.valor_cop), subido_por:email, fuente:'excel INV - DUV'}));
@@ -9638,17 +9821,26 @@ async function invduvSincronizar(inputEl) {
       else ins.push({referencia:x.referencia, bodega:x.bodega, ubicacion:'', lote:'', ...f});
     });
     log('⬆️ Inventario: ' + upd.length + ' a actualizar · ' + ins.length + ' nuevas');
+    if(exist.length > 1000 && upd.length === 0 && ins.length > 500) throw new Error('Ninguna fila del Excel coincidió con el inventario de Supabase; se cancela para no duplicar.');
     for(let i=0;i<upd.length;i+=500) await req('POST','inventario?on_conflict=id', upd.slice(i,i+500), 'resolution=merge-duplicates,return=minimal');
     for(let i=0;i<ins.length;i+=500) await req('POST','inventario', ins.slice(i,i+500), 'return=minimal');
     log('⬆️ Ventas histórico…');
     for(let i=0;i<histL.length;i+=500) await req('POST','ventas_historico?on_conflict=anio,mes,referencia,canal', histL.slice(i,i+500), 'resolution=merge-duplicates,return=minimal');
     log('⬆️ Ventas por canal/mes…');
     await req('POST','ventas_canal_mes?on_conflict=anio,mes,canal', cmL, 'resolution=merge-duplicates,return=minimal');
+    if(rvFechaISO) {
+      log('⬆️ Reporte Diario: ' + rvDatos.length + ' facturas del mes (hasta ' + rvFechaISO + ') · $' + Math.round(rvTotal).toLocaleString('es-CO'));
+      await req('POST','rpc/invduv_actualizar_reporte', {p_fecha:rvFechaISO, p_datos:rvDatos, p_fechas:rvFechas, p_total:rvTotal, p_subido:email});
+    }
+    log('⬆️ Margen por Cliente: ' + mcL.length + ' filas cliente/mes');
+    await req('POST','rpc/invduv_actualizar_margen', {p_datos:mcL, p_subido:email, p_origen:'🔄 INV - DUV (Biable)'});
     await req('POST','configuracion?on_conflict=clave', [
       {clave:'inv_ultima_actualizacion', valor:ahora, tipo:'texto'},
       {clave:'invduv_ultima_sync', valor:JSON.stringify({fecha:ahora, origen:'portal', por:quien, archivo:file.name, inv:invL.length, hist:histL.length, cm:cmL.length}), tipo:'json'}
     ], 'resolution=merge-duplicates,return=minimal');
-    log('🎉 Listo: inventario, ventas histórico y ventas por canal actualizados.');
+    log('🎉 Listo: inventario, ventas, Reporte Diario (facturas) y Margen por Cliente actualizados.');
+    // Que el Reporte Diario vuelva a leer el snapshot nuevo la próxima vez que se abra.
+    if(typeof RV !== 'undefined') { RV.cargado = false; RV.autoIntentado = false; }
     toast('✅ INV - DUV sincronizado', 'ok');
     INV_ACTUALIZADO = ahora;
     await cargarInventarioSupa();
@@ -9727,7 +9919,7 @@ async function subirExcelInventario(inputEl) {
       toast('🔍 Comparando con inventario anterior...', 'inf');
       let existentes = {};
       try {
-        const rows = await sb.get('inventario', 'select=referencia,bodega,existencia,costo_prom&limit=3000');
+        const rows = await invTodasLasFilas('referencia,bodega,existencia,costo_prom');
         rows.forEach(function(r){
           existentes[r.referencia + '_' + (r.bodega||'')] = r;
         });
@@ -11078,6 +11270,7 @@ async function pvActualizarStock() {
     const rows = await sb.get('inventario', `referencia=in.(${refs})&select=referencia,bodega,existencia`);
     const porRefBodega = {};
     (rows||[]).forEach(function(r){
+      if(!invBodegaCuenta(r.bodega)) return;   // averías, garantías, muestras… no son stock vendible
       porRefBodega[r.referencia+'||'+(r.bodega||'')] = { ref: r.referencia, existencia: parseFloat(r.existencia)||0 };
     });
     const map = {};
@@ -11524,7 +11717,7 @@ async function pvCargarExistencias(ref) {
       porBodega[b] = parseFloat(r.existencia) || 0;
       if(r.um) um = r.um;
     });
-    const total = Object.values(porBodega).reduce(function(a,b){ return a+b; }, 0);
+    const total = Object.keys(porBodega).filter(invBodegaCuenta).reduce(function(a,b){ return a+porBodega[b]; }, 0);
     // Solo bodegas con stock disponible, de mayor a menor
     const conStock = Object.keys(porBodega)
       .filter(function(b){ return porBodega[b] > 0; })
@@ -11537,8 +11730,9 @@ async function pvCargarExistencias(ref) {
 
     let html = '<div style="display:flex;flex-wrap:wrap;gap:5px;max-height:80px;overflow-y:auto;margin-bottom:6px;">'
       + conStock.map(function(b){
-          return '<span style="background:var(--bld);color:var(--bl);border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;white-space:nowrap;">'
-            + b + ': ' + porBodega[b].toLocaleString('es-CO') + '</span>';
+          const suma = invBodegaCuenta(b);
+          return '<span title="' + (suma ? 'Suma al inventario' : 'No suma al inventario (avería, garantía, muestra, tránsito…)') + '" style="background:' + (suma ? 'var(--bld)' : '#f1f5f9') + ';color:' + (suma ? 'var(--bl)' : 'var(--mu)') + ';border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;white-space:nowrap;">'
+            + b + ': ' + porBodega[b].toLocaleString('es-CO') + (suma ? '' : ' ✕') + '</span>';
         }).join('')
       + '</div>'
       + '<div style="display:flex;justify-content:space-between;padding-top:6px;border-top:1px solid var(--b1);font-size:11px;">'
