@@ -131,6 +131,9 @@ textarea.inp{resize:vertical;min-height:75px;}
 
 .fg2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .fsec{font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 9px;padding-bottom:5px;border-bottom:1px solid var(--b1);}
+.ref-tabs{display:flex;flex-wrap:wrap;gap:6px;position:sticky;top:-1px;background:var(--w);z-index:2;padding:2px 0 12px;margin-bottom:6px;border-bottom:1px solid var(--b1);}
+.ref-tab{padding:7px 11px;border-radius:8px;border:1px solid var(--b1);background:var(--bg,#f8fafc);font-size:11px;font-weight:600;cursor:pointer;color:var(--mu);white-space:nowrap;}
+.ref-tab.on{background:var(--bl);color:#fff;border-color:var(--bl);}
 .req{color:var(--rd);}
 
 .dd-wrap{position:relative;}
@@ -176,6 +179,20 @@ tr{border-bottom:1px solid var(--b1);transition:background .1s;}
 tr:last-child{border-bottom:none;}
 tr:hover{background:var(--s1);}
 td{padding:9px 12px;font-size:12px;vertical-align:middle;}
+
+.ref-tw{overflow:auto;max-height:68vh;border:1px solid var(--b1);border-radius:10px;}
+.ref-tw table{width:auto;min-width:100%;border-collapse:separate;border-spacing:0;}
+.ref-tw thead tr:nth-child(1) th{position:sticky;top:0;z-index:3;background:var(--s1);font-size:10.5px;padding:9px 10px;border-bottom:1px solid var(--b1);}
+.ref-tw thead tr:nth-child(2) th{position:sticky;top:32px;z-index:3;background:var(--w);padding:4px 5px;border-bottom:1.5px solid var(--b1);}
+.ref-tw tbody td{padding:7px 10px;font-size:11.5px;white-space:nowrap;border-bottom:1px solid var(--b1);}
+.ref-tw tbody tr:nth-child(even){background:#fafbfc;}
+.ref-tw tbody tr:hover{background:var(--s1);}
+.ref-tw th:first-child,.ref-tw td:first-child{position:sticky;left:0;z-index:2;box-shadow:1px 0 0 var(--b1);}
+.ref-tw thead tr:nth-child(1) th:first-child{z-index:5;background:var(--s1);}
+.ref-tw thead tr:nth-child(2) th:first-child{z-index:5;background:var(--w);}
+.ref-tw tbody td:first-child{background:var(--w);font-weight:700;}
+.ref-tw tbody tr:nth-child(even) td:first-child{background:#fafbfc;}
+.ref-tw tbody tr:hover td:first-child{background:var(--s1);}
 
 .ov{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;display:none;align-items:center;justify-content:center;padding:14px;}
 .ov.on{display:flex;}
@@ -1662,6 +1679,13 @@ const sbReabast = {
     });
     if(!r.ok) throw new Error('Supabase PATCH error: ' + r.status);
     return r.json();
+  },
+  async delete(tabla, filtro) {
+    const r = await fetch(SB_REABAST_URL + '/rest/v1/' + tabla + '?' + filtro, {
+      method: 'DELETE', headers: this.headers
+    });
+    if(!r.ok) throw new Error('Supabase DELETE error: ' + r.status);
+    return true;
   }
 };
 
@@ -8404,14 +8428,25 @@ function reabastPromedioPresupuestado(referencia){
 // - "requiereAdjunto": al marcar "OK" pide subir una foto/comprobante antes de completarla.
 // - "tienePago": además del adjunto, pide el valor pagado en COP y USD y calcula el saldo
 //   pendiente contra el total de la OC.
+// - "soloSi": 'nuevo' | 'existente' → esta etapa solo se crea para la OC si al menos un ítem
+//   viene marcado como "SKU nuevo" ('nuevo') o si ninguno lo está ('existente'). Sin "soloSi",
+//   la etapa se crea siempre. Así la OC sigue uno de los dos caminos de solicitud de arte:
+//   el corto (reimpresión al proveedor) o el largo (Calidad → Diseño → proveedor).
 const OC_ETAPAS_TEMPLATE = [
   {id:'oc_creada',              nombre:'Creación de OC',                 dias:2,    area:'Compras'},
-  {id:'diseno_arte_recibido',   nombre:'Diseño de arte — Recibido',      dias:0.25, area:'Diseño',   independiente:true},
-  {id:'diseno_arte_terminado',  nombre:'Diseño de arte — Terminado',     dias:6,    area:'Diseño',   independiente:true, dependeDe:'diseno_arte_recibido', requiereAdjunto:true},
-  {id:'aprobacion_gerencia',    nombre:'Aprobación Gerencia',            dias:2,    area:'Gerencia',  independiente:true},
-  {id:'pi_confirmada',          nombre:'PI confirmada con proveedor',    dias:3,    area:'Compras',   independiente:true},
-  {id:'anticipo_pagado',        nombre:'Pago de anticipo',               dias:2,    area:'Cartera',   independiente:true, requiereAdjunto:true, tienePago:true},
-  {id:'produccion',             nombre:'Producción',                     dias:48,   area:'Compras',  requiere:['diseno_arte_terminado','anticipo_pagado','pi_confirmada']},
+  // Camino corto: SKU existente sin actualización reciente — se pide la reimpresión directo al proveedor.
+  {id:'arte_reimpresion_solicitada', nombre:'Solicitud de reimpresión al proveedor', dias:5, area:'Compras', independiente:true, soloSi:'existente'},
+  {id:'arte_preprensa_corta',   nombre:'Preprensa recibida del proveedor', dias:1,  area:'Compras',   independiente:true, dependeDe:'arte_reimpresion_solicitada', requiereAdjunto:true, soloSi:'existente'},
+  // Camino largo: SKU nuevo — pasa por Calidad y Diseño antes de ir al proveedor.
+  {id:'arte_solicitud_calidad', nombre:'Solicitud de arte a Calidad',    dias:1,    area:'Compras',   independiente:true, soloSi:'nuevo'},
+  {id:'arte_revision_calidad',  nombre:'Revisión de Calidad (pide info si falta)', dias:2, area:'Calidad', independiente:true, dependeDe:'arte_solicitud_calidad', soloSi:'nuevo'},
+  {id:'arte_diseno_elaborado',  nombre:'Diseño elabora el arte y comparte el link', dias:6, area:'Diseño', independiente:true, dependeDe:'arte_revision_calidad', requiereAdjunto:true, soloSi:'nuevo'},
+  {id:'arte_enviado_proveedor', nombre:'Link enviado al proveedor',      dias:1,    area:'Compras',   independiente:true, dependeDe:'arte_diseno_elaborado', soloSi:'nuevo'},
+  {id:'arte_aprobado_proveedor',nombre:'Proveedor aprueba o pide cambios', dias:3,  area:'Compras',   independiente:true, dependeDe:'arte_enviado_proveedor', soloSi:'nuevo'},
+  {id:'arte_preprensa_larga',   nombre:'Preprensa recibida del proveedor', dias:1,  area:'Compras',   independiente:true, dependeDe:'arte_aprobado_proveedor', requiereAdjunto:true, soloSi:'nuevo'},
+  {id:'pi_confirmada',          nombre:'PI confirmada con proveedor',    dias:5,    area:'Compras',   independiente:true},
+  {id:'anticipo_pagado',        nombre:'Pago de anticipo',               dias:7,    area:'Cartera',   independiente:true, requiereAdjunto:true, tienePago:true},
+  {id:'produccion',             nombre:'Producción',                     dias:48,   area:'Compras',  requiere:['arte_preprensa_corta','arte_preprensa_larga','anticipo_pagado','pi_confirmada']},
   {id:'inspeccion_calidad',     nombre:'Inspección de calidad',          dias:3,    area:'Calidad',   dependeDe:'produccion'},
   {id:'booking',                nombre:'Reserva naviera (booking)',      dias:3,    area:'Comercio Exterior', dependeDe:'inspeccion_calidad'},
   {id:'embarque',               nombre:'Embarque',                       dias:2,    area:'Comercio Exterior', dependeDe:'booking'},
@@ -8465,16 +8500,20 @@ async function ocSubirAdjunto(file){
 }
 
 async function cargarOC(){
-  const [ordenes, etapasRows, itemsRows, proveedores] = await Promise.all([
+  const [ordenes, etapasRows, itemsRows, proveedores, fichasRows, refsRows] = await Promise.all([
     sbReabast.get('ordenes_compra', 'select=*&order=creado_en.desc&limit=200').catch(e=>{ console.warn('Error cargando OC:', e.message); return []; }),
     sbReabast.get('oc_etapas', 'select=*&order=orden.asc').catch(e=>{ console.warn('Error cargando etapas OC:', e.message); return []; }),
     sbReabast.get('oc_items', 'select=*').catch(e=>{ console.warn('Error cargando ítems OC:', e.message); return []; }),
     sbReabast.get('proveedores', 'select=*&order=nombre.asc').catch(e=>{ console.warn('Error cargando proveedores:', e.message); return []; }),
+    sbReabast.get('fichas_tecnicas', 'select=*').catch(e=>{ console.warn('Error cargando fichas técnicas:', e.message); return []; }),
+    sbReabast.get('referencias_maestro', 'select=*').catch(e=>{ console.warn('Error cargando catálogo de referencias:', e.message); return []; }),
   ]);
   REABAST.ordenesCompra = ordenes||[];
   REABAST.ocEtapas = {}; (etapasRows||[]).forEach(e => { (REABAST.ocEtapas[e.oc_id]=REABAST.ocEtapas[e.oc_id]||[]).push(e); });
   REABAST.ocItems = {}; (itemsRows||[]).forEach(it => { (REABAST.ocItems[it.oc_id]=REABAST.ocItems[it.oc_id]||[]).push(it); });
   REABAST.proveedores = proveedores||[];
+  REABAST.fichasTecnicas = {}; (fichasRows||[]).forEach(f => { REABAST.fichasTecnicas[f.referencia] = f.datos||{}; });
+  REABAST.referenciasMaestro = {}; (refsRows||[]).forEach(r => { REABAST.referenciasMaestro[r.referencia] = r; });
   await ocRepararEtapasHuerfanas();
 }
 
@@ -8660,6 +8699,7 @@ function reabastPintar(){
     {id:'solicitudes', lbl:'📋 Solicitudes'},
     {id:'dashboard', lbl:'📊 Dashboard'},
   ];
+  if(esAdmin) tabs.push({id:'referencias', lbl:'🧩 Referencias (SKU)'});
   if(esAdmin) tabs.push({id:'politica', lbl:'⚙️ Política por referencia'});
 
   let html = `<div style="padding:14px;">
@@ -8690,6 +8730,7 @@ function reabastPintar(){
   else if(REABAST.tab==='vendidos'){ body.innerHTML = reabastHtmlVendidosShell(); reabastRepintarVendidos(); }
   else if(REABAST.tab==='abc'){ body.innerHTML = reabastHtmlAbcShell(); reabastRepintarAbc(); }
   else if(REABAST.tab==='proveedores'){ body.innerHTML = reabastHtmlProveedores(); }
+  else if(REABAST.tab==='referencias'){ body.innerHTML = reabastHtmlReferenciasShell(); reabastRepintarReferencias(); }
   else if(REABAST.tab==='dashboard') body.innerHTML = reabastHtmlDashboard();
   else if(REABAST.tab==='politica'){ REABAST._combinados = null; body.innerHTML = reabastHtmlPolitica(); reabastRepintarPolitica(); }
   else { body.innerHTML = reabastHtmlSolicitudesShell(esApro); reabastRepintarSolicitudes(esApro); }
@@ -9070,7 +9111,7 @@ function reabastHtmlDashboard(){
 }
 
 // ═══ Tab: Órdenes de Compra (importaciones) ═══
-const OC_ETAPAS_CRITICAS = new Set(['anticipo_pagado', 'diseno_arte_recibido', 'diseno_arte_terminado', 'aprobacion_gerencia']);
+const OC_ETAPAS_CRITICAS = new Set(['anticipo_pagado', 'arte_preprensa_corta', 'arte_preprensa_larga']);
 
 function reabastActividadReciente(){
   const eventos = [];
@@ -9146,7 +9187,7 @@ function reabastOcCardHtml(o){
     ${paralelas.length?`<div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;">${paralelas.map(p=>{
       const cls = p.estado==='completada'?'ba':p.estado==='en_curso'?'bp':'bdg-gris';
       const icono = p.estado==='completada'?'✅':p.estado==='en_curso'?'🔔':'⏳';
-      return `<span class="bdg ${cls}" style="font-size:9px;">${icono} ${reabastEsc(OC_ETAPAS_POR_ID[p.etapa_id]?.nombre.replace('Diseño de arte — ','Diseño: '))}</span>`;
+      return `<span class="bdg ${cls}" style="font-size:9px;">${icono} ${reabastEsc(OC_ETAPAS_POR_ID[p.etapa_id]?.nombre||'')}</span>`;
     }).join('')}</div>`:''}
     <div class="prog-bar" style="margin-top:8px;"><div class="prog-fill" style="width:${pctProgreso}%;background:${colorBarra};"></div></div>
     <div style="font-size:10px;color:var(--mu);margin-top:4px;">${completadas} de ${etapas.length} etapas completadas</div>
@@ -9342,6 +9383,726 @@ async function guardarProveedor(){
   }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
 }
 
+// ═══ Tab: Referencias (SKU) — catálogo maestro de productos (solo admin) ═══
+// Mismos campos que la hoja "Referencias" de la base de proveedores/OC que se usó para poblar
+// referencias_maestro: código/referencia, descripción, empaque, EAN, CBM, referencia interna
+// ILUMAX y observaciones. Crear o editar aquí actualiza directo esa tabla en Supabase.
+// Mismo orden y mismos encabezados que la hoja "Referencias" del Excel, columna por columna
+// (CODIGO y REFERENCIA se guardan en un solo campo porque en el Excel siempre llevan el mismo
+// valor). Los 3 marcados con * no existen en el Excel de origen — son campos propios del
+// catálogo ILUMAX y van al final, antes de "Actualizado".
+const TABLA_REF_COLUMNAS = [
+  {campo:'referencia',              th:'Referencia (Codigo)',       mono:true, compacta:true},
+  {campo:'nombre_comercial',        th:'Nombre Comercial *',        compacta:true},
+  {campo:'descripcion_en',          th:'English Description'},
+  {campo:'temperatura_color',       th:'Temperature Color'},
+  {campo:'quantity',                th:'Quantity',                  num:true},
+  {campo:'fob_usd',                 th:'US$',                       num:true, compacta:true},
+  {campo:'amount',                  th:'Amount',                    num:true},
+  {campo:'tipo_empaque',            th:'Type Of Packaging'},
+  {campo:'horas',                   th:'# Hours',                   num:true},
+  {campo:'tipo_tapa',               th:'Cap Type'},
+  {campo:'marca_caja',              th:'Marca (Color Card / Box Brand)'},
+  {campo:'ean13',                   th:'EAN 13',                    mono:true},
+  {campo:'master_packaging',        th:'Master Packaging'},
+  {campo:'ean14_master',            th:'EAN 14 Master Packaging',   mono:true},
+  {campo:'internal_packaging',      th:'Internal Packaging'},
+  {campo:'ean14_internal',          th:'EAN 14 Internal Packaging', mono:true},
+  {campo:'ean14_adicionales',       th:'EAN 14 Adicionales *',      mono:true},
+  {campo:'proveedor_predeterminado',th:'Proveedor',                 compacta:true},
+  {campo:'ficha_tecnica_compra_url',th:'Ficha Técnica de Compra'},
+  {campo:'moq',                     th:'MOQ',                       num:true},
+  {campo:'cbm',                     th:'CBM',                       num:true},
+  {campo:'canal',                   th:'Canal',                     compacta:true},
+  {campo:'clasificacion_abc_manual',th:'Clasificación ABC',         compacta:true},
+  {campo:'fecha_creacion',          th:'Fecha Creación',            fecha:true},
+  {campo:'fecha_inicio_ventas',     th:'Fecha Inicio de Ventas',    fecha:true},
+  {campo:'categoria',               th:'Categoría *',               compacta:true},
+  {campo:'linea',                   th:'Línea *'},
+  {campo:'subcategoria',            th:'Subcategoría *'},
+  {campo:'potencia',                th:'Potencia *'},
+  {campo:'marca_producto',          th:'Marca de producto *'},
+  {campo:'referencia_ilumax',       th:'Referencia ILUMAX *',       mono:true, compacta:true},
+  {campo:'actualizado',             th:'Actualizado',               fecha:true},
+  {campo:'observaciones',           th:'Observaciones',             ancho:true},
+];
+// Vista amigable por defecto: solo las columnas más usadas, para no tener que desplazar la
+// pantalla hacia la derecha. "Ver todas las columnas" muestra la tabla completa tipo Excel.
+const TABLA_REF_COLUMNAS_COMPACTA = TABLA_REF_COLUMNAS.filter(c=>c.compacta);
+function reabastHtmlReferenciasShell(){
+  const f = reabastFiltro('referencias', {q:'', col:{}});
+  return `
+    <div class="toolbar" style="margin-bottom:8px;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <input class="inp" style="flex:1;min-width:180px;" id="ref-q" placeholder="Buscar referencia, nombre o categoría…" value="${reabastEsc(f.q)}" oninput="REABAST.filtros.referencias.q=this.value;reabastRepintarReferencias()">
+      <div style="display:flex;gap:6px;align-items:center;">
+        <label class="btn btn-g btn-sm" style="cursor:pointer;margin:0;">📤 Importar desde Excel<input type="file" accept=".xlsx,.xls,.csv" style="display:none;" onchange="refImportarExcel(this)"></label>
+        <button class="btn btn-bl btn-sm" onclick="abrirModalReferencia()">+ Nueva referencia</button>
+      </div>
+    </div>
+    <div id="ref-import-estado" style="font-size:11px;margin-bottom:8px;"></div>
+    <div style="font-size:10px;color:var(--mu);margin:-4px 0 10px;">El Excel puede tener el mismo formato de la hoja "Referencias" (encabezados en cualquier fila, no tiene que ser la 1). Sube el archivo completo — el que no coincida con ninguna referencia existente crea una nueva; el resto se actualiza.</div>
+    <div id="ref-wrap"></div>`;
+}
+function reabastLimpiarFiltrosReferencias(){
+  const f = reabastFiltro('referencias', {q:'', col:{}});
+  f.q = ''; f.col = {};
+  const qEl = document.getElementById('ref-q'); if(qEl) qEl.value = '';
+  reabastRepintarReferencias();
+}
+function reabastToggleVistaReferencias(){
+  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false});
+  f.vistaCompleta = !f.vistaCompleta;
+  reabastRepintarReferencias();
+}
+function reabastRepintarReferencias(){
+  const wrap = document.getElementById('ref-wrap'); if(!wrap) return;
+  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false});
+  if(!f.col) f.col = {};
+  const vistaCompleta = !!f.vistaCompleta;
+  const cols = vistaCompleta ? TABLA_REF_COLUMNAS : TABLA_REF_COLUMNAS_COMPACTA;
+  const hayFiltrosCol = Object.values(f.col).some(v=>v);
+  wrap.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:4px 0 6px;flex-wrap:wrap;">
+      <div style="font-size:10.5px;color:var(--mu);">${vistaCompleta?'Todas las columnas del Excel — puede requerir desplazar hacia los lados.':'Vista compacta con las columnas más usadas — sin necesidad de desplazar la pantalla.'} · escribe en la fila de filtros para buscar dentro de cada columna.</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${hayFiltrosCol?'<button class="btn btn-g btn-sm" onclick="reabastLimpiarFiltrosReferencias()">✕ Limpiar filtros de columna</button>':''}
+        <button class="btn btn-bl btn-sm" onclick="reabastToggleVistaReferencias()">${vistaCompleta?'↙ Vista compacta':'↗ Ver todas las columnas'}</button>
+      </div>
+    </div>
+    <div class="ref-tw"><table>
+      <thead>
+        <tr><th>Estado</th>${cols.map(c=>`<th>${reabastEsc(c.th)}</th>`).join('')}<th>&nbsp;</th></tr>
+        <tr><th>&nbsp;</th>${cols.map(c=>`<th><input class="inp" style="width:100%;min-width:90px;font-size:10.5px;padding:4px 6px;border-radius:6px;" placeholder="Filtrar…" value="${reabastEsc(f.col[c.campo]||'')}" oninput="REABAST.filtros.referencias.col['${c.campo}']=this.value;reabastActualizarTbodyReferencias()"></th>`).join('')}<th>&nbsp;</th></tr>
+      </thead>
+      <tbody id="ref-tbody"></tbody>
+    </table></div>`;
+  reabastActualizarTbodyReferencias();
+}
+function reabastActualizarTbodyReferencias(){
+  const tbody = document.getElementById('ref-tbody'); if(!tbody) return;
+  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false});
+  const qq = (f.q||'').toLowerCase();
+  const col = f.col||{};
+  const cols = f.vistaCompleta ? TABLA_REF_COLUMNAS : TABLA_REF_COLUMNAS_COMPACTA;
+  let filas = Object.values(REABAST.referenciasMaestro||{}).sort((a,b)=>String(a.referencia).localeCompare(String(b.referencia)));
+  if(qq){
+    filas = filas.filter(r => String(r.referencia||'').toLowerCase().includes(qq)
+      || (r.nombre_comercial||'').toLowerCase().includes(qq)
+      || (r.categoria||'').toLowerCase().includes(qq)
+      || (r.referencia_ilumax||'').toLowerCase().includes(qq));
+  }
+  cols.forEach(c=>{
+    const v = (col[c.campo]||'').trim().toLowerCase();
+    if(!v) return;
+    filas = filas.filter(r=>{
+      let val = r[c.campo];
+      if(c.fecha && val) val = new Date(val).toLocaleDateString('es-CO');
+      return String(val==null?'':val).toLowerCase().includes(v);
+    });
+  });
+  if(!filas.length){ tbody.innerHTML = `<tr><td colspan="${cols.length+2}" style="padding:16px;text-align:center;color:var(--mu);">Sin referencias que coincidan con los filtros.</td></tr>`; return; }
+  tbody.innerHTML = filas.map(r=>{
+    const activo = r.activo!==false; // por defecto activo (dato viejo sin la columna aún)
+    const estadoTd = `<td style="white-space:nowrap;">
+      <label class="sw" title="${activo?'Activo — clic para desactivar':'Inactivo — clic para activar'}">
+        <input type="checkbox" ${activo?'checked':''} onchange="reabastToggleActivoReferencia('${r.id}',this.checked)"><span class="sw-sl"></span>
+      </label>
+    </td>`;
+    const filaTds = cols.map(c=>{
+      let val = r[c.campo];
+      if(c.fecha) val = val ? new Date(val).toLocaleDateString('es-CO') : null;
+      const txt = (val!=null && val!=='') ? reabastEsc(val) : '<span style="color:var(--mu);">—</span>';
+      const anchoCss = c.ancho ? 'max-width:280px;white-space:normal;word-break:break-word;' : 'white-space:nowrap;';
+      return `<td style="${c.mono?'font-family:monospace;':''}${c.num?'text-align:right;':''}${anchoCss}${activo?'':'opacity:.5;'}">${txt}</td>`;
+    }).join('');
+    const accionesTd = `<td style="white-space:nowrap;">
+      <button class="btn btn-g btn-sm" data-r='${JSON.stringify(r).replace(/'/g,"&#39;")}' onclick="abrirModalReferencia(JSON.parse(this.dataset.r))" title="Editar">✎</button>
+      <button class="btn btn-g btn-sm" style="color:var(--rd);" onclick="reabastEliminarReferencia('${r.id}','${String(r.referencia).replace(/'/g,"\\'")}')" title="Eliminar">🗑</button>
+    </td>`;
+    return `<tr>${estadoTd}${filaTds}${accionesTd}</tr>`;
+  }).join('');
+}
+// Activa/desactiva una referencia sin tener que abrir el formulario.
+async function reabastToggleActivoReferencia(id, activo){
+  try{
+    await sbReabast.patch('referencias_maestro', 'id=eq.'+id, {activo, actualizado:new Date().toISOString()});
+    Object.values(REABAST.referenciasMaestro||{}).forEach(r=>{ if(String(r.id)===String(id)) r.activo = activo; });
+    reabastActualizarTbodyReferencias();
+    if(typeof toast==='function') toast(activo?'Referencia activada':'Referencia desactivada','ok');
+  }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
+}
+// Elimina una referencia por completo (irreversible) — pide confirmación explícita.
+async function reabastEliminarReferencia(id, referencia){
+  if(!confirm('¿Eliminar definitivamente la referencia '+referencia+'? Esta acción no se puede deshacer.')) return;
+  try{
+    await sbReabast.delete('referencias_maestro', 'id=eq.'+id);
+    Object.keys(REABAST.referenciasMaestro||{}).forEach(k=>{ if(REABAST.referenciasMaestro[k] && String(REABAST.referenciasMaestro[k].id)===String(id)) delete REABAST.referenciasMaestro[k]; });
+    reabastActualizarTbodyReferencias();
+    if(typeof toast==='function') toast('Referencia '+referencia+' eliminada','ok');
+  }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
+}
+
+// Categorías oficiales del árbol de producto ILUMAX (hoja MAESTROS, columna CATEGORIA).
+const CATEGORIAS_ILUMAX = ['ACCESORIOS ILUMINACION','BOMBILLERIA','UNDERCABINET','LINTERNAS','PLAFON','BALAS DE TECHO','LUMINARIAS LINEALES','ESTACAS','APLIQUES','EMERGENCIA','TUBOS','COLGANTES','PAÑITOS HUMEDOS','TRACK LIGHT','CINTAS LED','PANELES','ALUMBRADO INDUSTRIAL','BAÑADOR','LUZ DE NOCHE','BALAS DE PISO','ALUMBRADO PUBLICO','BALAS SUMERGIBLES','INTERRUPTORES Y TOMACORRIENTES','INSTALACIONES ELECTRICAS','REFLECTORES','VENTILADORES','PRODUCTOS VARIOS','TAPABOCAS','ALCOHOL','CINTAS AISLANTES','DISEÑOS DE ILUMINACION','CERTIFICACIONES','HUMYDRY','LAMPARAS MESA','SMART','OTROS ELECTRICOS','SOLAR','SENSORES','CARETAS','TERMOMETROS','GEL ANTIBACTERIAL','SERVICIOS','MATERIAL POP','DRIVER','FLETES','ELECTRODOMESTICOS','CAMARAS','LUZ DE TRABAJO','PUNTOS ELECTRICOS'];
+// Datos del arbol de producto ILUMAX (hoja MAESTROS): listas oficiales + su codigo interno.
+// El codigo se guarda en la BD (columna *_cod) pero nunca se muestra en el formulario.
+const POTENCIAS_ILUMAX = ["NO APLICA", "0.06W", "0.3W", "0.35W", "0.4W", "0.5W", "0.6W", "0.65W", "0.7W", "0.8W", "0.9W", "1W", "1.2W", "1.5W", "1.7W", "2W", "2.4W", "2.5W", "3W", "3.2W", "3.5W", "3.6W", "4W", "4.5W", "4.8W", "5W", "6W", "6.5W", "6.8W", "7W", "7.5W", "8W", "9W", "9.6W", "10W", "11W", "12W", "12.4W", "13W", "13.5W", "14W", "15W", "16W", "17W", "18W", "19W", "20W", "21W", "22W", "24W", "24.5W", "25W", "26W", "27W", "28W", "30W", "32W", "33W", "35W", "36W", "37W", "38W", "40W", "42W", "44W", "45W", "48W", "50W", "53W", "54W", "60W", "65W", "66W", "70W", "80W", "85W", "90W", "96W", "100W", "105W", "110W", "115W", "120W", "130W", "150W", "152W", "180W", "200W", "300W", "400W", "500W", "800W", "1000W"];
+const POTENCIAS_ILUMAX_COD = {"NO APLICA": "0001", "0.06W": "0002", "0.35W": "0003", "0.3W": "0004", "0.4W": "0005", "0.5W": "0006", "0.6W": "0007", "0.7W": "0008", "0.8W": "0009", "0.9W": "0010", "1.2W": "0011", "1.5W": "0012", "1.7W": "0013", "1000W": "0014", "100W": "0015", "105W": "0016", "10W": "0017", "110W": "0018", "115W": "0019", "11W": "0020", "12.4W": "0021", "120W": "0022", "12W": "0023", "13.5W": "0024", "130W": "0025", "13W": "0026", "14W": "0027", "150W": "0028", "15W": "0029", "16W": "0030", "17W": "0031", "180W": "0032", "18W": "0033", "1W": "0034", "2.4W": "0035", "2.5W": "0036", "200W": "0037", "20W": "0038", "21W": "0039", "22W": "0040", "24.5W": "0041", "24W": "0042", "25W": "0043", "26W": "0044", "27W": "0045", "28W": "0046", "2W": "0047", "3.2W": "0048", "3.5W": "0049", "3.6W": "0050", "300W": "0051", "30W": "0052", "32W": "0053", "33W": "0054", "35W": "0055", "36W": "0056", "37W": "0057", "38W": "0058", "3W": "0059", "4.5W": "0060", "4.8W": "0061", "400W": "0062", "40W": "0063", "42W": "0064", "44W": "0065", "45W": "0066", "48W": "0067", "4W": "0068", "500W": "0069", "50W": "0070", "53W": "0071", "54W": "0072", "5W": "0073", "6.8W": "0074", "60W": "0075", "65W": "0076", "66W": "0077", "6W": "0078", "7.5W": "0079", "70W": "0080", "7W": "0081", "800W": "0082", "80W": "0083", "85W": "0084", "8W": "0085", "9.6W": "0086", "90W": "0087", "96W": "0088", "9W": "0089", "6.5W": "0090", "0.65W": "0091", "19W": "0092", "152W": "0093"};
+const LINEAS_ILUMAX = ["ILUMINACION INTERIOR", "ILUMINACION EXTERIOR", "ILUMINACION DECORATIVA", "ILUMINACION SUMERGIBLE", "ASEO PERSONAL", "SERVICIOS", "ELECTRODOMESTICOS", "ELECTRICOS", "MATERIAL POP", "FLETES", "PRODUCTO DE CONSUMO", "INTERIOR"];
+const LINEAS_ILUMAX_COD = {"ILUMINACION INTERIOR": "0001", "ILUMINACION EXTERIOR": "0002", "ILUMINACION DECORATIVA": "0003", "ILUMINACION SUMERGIBLE": "0004", "ASEO PERSONAL": "0005", "SERVICIOS": "0006", "ELECTRODOMESTICOS": "0007", "ELECTRICOS": "0008", "MATERIAL POP": "0009", "FLETES": "0010", "PRODUCTO DE CONSUMO": "0011", "INTERIOR": "0012"};
+const CATEGORIAS_ILUMAX_COD = {"ACCESORIOS ILUMINACION": "0001", "BOMBILLERIA": "0002", "UNDERCABINET": "0003", "LINTERNAS": "0004", "PLAFON": "0005", "BALAS DE TECHO": "0006", "LUMINARIAS LINEALES": "0007", "ESTACAS": "0008", "APLIQUES": "0009", "EMERGENCIA": "0010", "TUBOS": "0011", "COLGANTES": "0012", "PAÑITOS HUMEDOS": "0013", "TRACK LIGHT": "0014", "CINTAS LED": "0015", "PANELES": "0016", "ALUMBRADO INDUSTRIAL": "0017", "BAÑADOR": "0018", "LUZ DE NOCHE": "0019", "BALAS DE PISO": "0020", "ALUMBRADO PUBLICO": "0021", "BALAS SUMERGIBLES": "0022", "INTERRUPTORES Y TOMACORRIENTES": "0023", "INSTALACIONES ELECTRICAS": "0024", "REFLECTORES": "0025", "VENTILADORES": "0026", "PRODUCTOS VARIOS": "0027", "TAPABOCAS": "0028", "ALCOHOL": "0029", "CINTAS AISLANTES": "0030", "DISEÑOS DE ILUMINACION": "0031", "CERTIFICACIONES": "0032", "HUMYDRY": "0033", "LAMPARAS MESA": "0034", "SMART": "0035", "OTROS ELECTRICOS": "0036", "SOLAR": "0037", "SENSORES": "0038", "CARETAS": "0039", "TERMOMETROS": "0040", "GEL ANTIBACTERIAL": "0041", "SERVICIOS": "0042", "MATERIAL POP": "0043", "DRIVER": "0044", "FLETES": "0045", "ELECTRODOMESTICOS": "0046", "CAMARAS": "0047", "LUZ DE TRABAJO": "0048", "PUNTOS ELECTRICOS": "0049"};
+const SUBCATEGORIAS_ILUMAX = ["CONECTORES", "AHORRADORES", "UNDERCABINET", "DECORATIVOS", "LINTERNAS", "DICROICO", "PLAFON", "BALAS DE TECHO", "PAR LED", "HERMETICA", "UFO", "LUMINARIAS LINEALES", "ESTACAS", "APLIQUES", "OJOS DE BUEY", "EMERGENCIA", "TUBO LED", "COLGANTES", "PAÑITOS HUMEDOS", "SPOTS", "RIELES", "CINTA LED", "ACCESORIOS ILUMINACION", "GRANFORMATO", "SOCKET", "HIGHBAY", "BAÑADOR", "LUZ DE NOCHE", "BALAS DE PISO", "ALUMBRADO PUBLICO", "ACCESORIOS REFLECTORES", "KARDAN", "BALAS SUMERGIBLES", "INTERRUPTORES", "INSTALACIONES ELECTRICAS", "REFLECTORES", "BALA PISO GU10", "VENTILADORES", "OTROS ELECTRICOS", "TOMACORRIENTES", "PRODUCTOS VARIOS", "TAPABOCAS", "ALCOHOL", "REPUESTOS", "ESTACA GU10", "TRACK LIGHT", "CINTAS AISLANTES", "DISEÑOS DE ILUMINACION", "HALOGENO", "BOMBILLOS BAJA POTENCIA", "CERTIFICACIONES", "HUMYDRY", "LAMPARAS MESA", "PANELES", "INTERRUPTOR+TOMACORRIENTE", "INCRUSTAR", "BOMBILLOS ALTA POTENCIA", "FLUORESCENTE", "SENSORES", "ESPECIALIZADO", "SOBREPONER", "ALUMBRADO INDUSTRIAL", "SOPORTES", "LUMINARIA", "CARETAS", "TERMOMETROS", "GEL ANTIBACTERIAL", "INCANDESCENTE", "EXTENSION", "SERVICIOS", "MATERIAL POP", "DRIVER", "FLETES", "ELECTRODOMESTICOS", "CAMARAS", "LUZ DE TRABAJO"];
+const SUBCATEGORIAS_ILUMAX_COD = {"CONECTORES": "0001", "AHORRADORES": "0002", "UNDERCABINET": "0003", "DECORATIVOS": "0004", "LINTERNAS": "0005", "DICROICO": "0006", "PLAFON": "0007", "BALAS DE TECHO": "0008", "PAR LED": "0009", "HERMETICA": "0010", "UFO": "0011", "LUMINARIAS LINEALES": "0012", "ESTACAS": "0013", "APLIQUES": "0014", "OJOS DE BUEY": "0015", "EMERGENCIA": "0016", "TUBO LED": "0017", "COLGANTES": "0018", "PAÑITOS HUMEDOS": "0019", "SPOTS": "0020", "RIELES": "0021", "CINTA LED": "0022", "ACCESORIOS ILUMINACION": "0023", "GRANFORMATO": "0024", "SOCKET": "0025", "HIGHBAY": "0026", "BAÑADOR": "0027", "LUZ DE NOCHE": "0028", "BALAS DE PISO": "0029", "ALUMBRADO PUBLICO": "0030", "ACCESORIOS REFLECTORES": "0031", "KARDAN": "0032", "BALAS SUMERGIBLES": "0033", "INTERRUPTORES": "0034", "INSTALACIONES ELECTRICAS": "0035", "REFLECTORES": "0036", "BALA PISO GU10": "0037", "VENTILADORES": "0038", "OTROS ELECTRICOS": "0039", "TOMACORRIENTES": "0040", "PRODUCTOS VARIOS": "0041", "TAPABOCAS": "0042", "ALCOHOL": "0043", "REPUESTOS": "0044", "ESTACA GU10": "0045", "TRACK LIGHT": "0046", "CINTAS AISLANTES": "0047", "DISEÑOS DE ILUMINACION": "0048", "HALOGENO": "0049", "BOMBILLOS BAJA POTENCIA": "0050", "CERTIFICACIONES": "0051", "HUMYDRY": "0052", "LAMPARAS MESA": "0053", "PANELES": "0054", "INTERRUPTOR+TOMACORRIENTE": "0055", "INCRUSTAR": "0056", "BOMBILLOS ALTA POTENCIA": "0057", "FLUORESCENTE": "0058", "SENSORES": "0059", "ESPECIALIZADO": "0060", "SOBREPONER": "0061", "ALUMBRADO INDUSTRIAL": "0062", "SOPORTES": "0063", "LUMINARIA": "0064", "CARETAS": "0065", "TERMOMETROS": "0066", "GEL ANTIBACTERIAL": "0067", "INCANDESCENTE": "0068", "EXTENSION": "0069", "SERVICIOS": "0070", "MATERIAL POP": "0071", "DRIVER": "0072", "FLETES": "0073", "ELECTRODOMESTICOS": "0074", "CAMARAS": "0075", "LUZ DE TRABAJO": "0076"};
+const MARCAS_PRODUCTO_ILUMAX = ["ILUMAX", "ILUMAX PRO", "ILUMAX ECO", "PLUSLITE", "ESSENTIAL", "ALKOSTO", "BIA", "CLARK", "COLSUBSIDIO", "ENERGYLITE", "GALAXY", "GOLDEN", "LUMINUS", "MAKRO", "OLIMPICA", "TCP", "AMPM", "GERMISEP", "VETO", "NOVA", "S/C", "ARO", "CARREFOUR", "OLIMPO", "ÉXITO", "CARULLA", "TASCHIBRA", "DISNEY", "KLEINE", "KUIDEX", "YEP", "DESCONTINUADO", "CAUTIVIA", "MATERIAL POP"];
+const MARCAS_PRODUCTO_ILUMAX_COD = {"ILUMAX": "0001", "ILUMAX PRO": "0002", "ILUMAX ECO": "0003", "PLUSLITE": "0004", "ESSENTIAL": "0005", "ALKOSTO": "0006", "BIA": "0007", "CLARK": "0008", "COLSUBSIDIO": "0009", "ENERGYLITE": "0010", "GALAXY": "0011", "GOLDEN": "0012", "LUMINUS": "0013", "MAKRO": "0014", "OLIMPICA": "0015", "TCP": "0016", "AMPM": "0017", "GERMISEP": "0018", "VETO": "0019", "NOVA": "0020", "S/C": "0021", "ARO": "0022", "CARREFOUR": "0023", "OLIMPO": "0024", "ÉXITO": "0025", "CARULLA": "0026", "TASCHIBRA": "0027", "DISNEY": "0028", "KLEINE": "0029", "KUIDEX": "0030", "YEP": "0031", "DESCONTINUADO": "0032", "CAUTIVIA": "0033", "MATERIAL POP": "0034"};
+// Mismos canales comerciales que ya se usan en Presupuesto/Ventas (CANALES_DEFAULT), + MULTICANAL.
+const CANALES_REFERENCIA = ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara','Proyectos','MULTICANAL'];
+let REFERENCIA_EDIT_ID = null;
+const REFERENCIA_CAMPOS = [
+  {id:'rf-referencia',        campo:'referencia',              label:'Referencia (código / SKU)', req:true},
+  {id:'rf-nombre-comercial',  campo:'nombre_comercial',         label:'Nombre comercial'},
+  {id:'rf-descripcion',       campo:'descripcion_en',           label:'Descripción (EN)', tipo:'textarea'},
+  {id:'rf-categoria',         campo:'categoria',                label:'Categoría', tipo:'select', opciones:CATEGORIAS_ILUMAX, codigos:CATEGORIAS_ILUMAX_COD, campoCod:'categoria_cod'},
+  {id:'rf-linea',              campo:'linea',                    label:'Línea', tipo:'select', opciones:LINEAS_ILUMAX, codigos:LINEAS_ILUMAX_COD, campoCod:'linea_cod'},
+  {id:'rf-subcategoria',      campo:'subcategoria',             label:'Subcategoría', tipo:'select', opciones:SUBCATEGORIAS_ILUMAX, codigos:SUBCATEGORIAS_ILUMAX_COD, campoCod:'subcategoria_cod'},
+  {id:'rf-potencia',          campo:'potencia',                 label:'Potencia', tipo:'select', opciones:POTENCIAS_ILUMAX, codigos:POTENCIAS_ILUMAX_COD, campoCod:'potencia_cod'},
+  {id:'rf-marca-producto',    campo:'marca_producto',           label:'Marca de producto (árbol de producto)', tipo:'select', opciones:MARCAS_PRODUCTO_ILUMAX, codigos:MARCAS_PRODUCTO_ILUMAX_COD, campoCod:'marca_producto_cod'},
+  {id:'rf-proveedor',         campo:'proveedor_predeterminado', label:'Proveedor predeterminado (nombre — o escribe la sigla y se completa solo)', datalist:'dl-ref-proveedor', normalizarProveedor:true, sync:'nombre'},
+  {id:'rf-proveedor-siglas',  campo:'_siglas_proveedor',        label:'Siglas del proveedor', datalist:'dl-ref-proveedor-siglas', sync:'siglas', transient:true},
+  {id:'rf-temp-color',        campo:'temperatura_color',        label:'Temperature Color'},
+  {id:'rf-fob',                campo:'fob_usd',                  label:'FOB US$', tipo:'number'},
+  {id:'rf-tipo-empaque',      campo:'tipo_empaque',             label:'Type of Packaging', datalist:'dl-ref-empaque', placeholder:'COLOR BOX'},
+  {id:'rf-horas',              campo:'horas',                    label:'Número de horas', tipo:'number'},
+  {id:'rf-tipo-tapa',         campo:'tipo_tapa',                label:'Cap Type'},
+  {id:'rf-marca-caja',        campo:'marca_caja',               label:'Marca', datalist:'dl-ref-marca'},
+  {id:'rf-ean13',              campo:'ean13',                    label:'EAN 13 (escribe los 12 dígitos — el último se genera)', generarPropio:true},
+  {id:'rf-internal-pack',     campo:'internal_packaging',       label:'Internal Packaging — PCS por caja interna (solo el número, ej: 6)'},
+  {id:'rf-ean14-internal',    campo:'ean14_internal',           label:'EAN 14 Internal Packaging (empieza en 1)', generar:'1'},
+  {id:'rf-master-pack',       campo:'master_packaging',         label:'Master Packaging — PCS por caja master (solo el número, ej: 24)'},
+  {id:'rf-ean14-master',      campo:'ean14_master',             label:'EAN 14 Master Packaging (empieza en 2)', generar:'2'},
+  {id:'rf-cbm',                campo:'cbm',                      label:'CBM (metro cúbico)', tipo:'number'},
+  {id:'rf-referencia-ilumax', campo:'referencia_ilumax',        label:'Referencia ILUMAX (la asigna Calidad al certificar — normalmente vacía al crear el SKU)'},
+  {id:'rf-ficha-compra',      campo:'ficha_tecnica_compra_url', label:'Ficha técnica de compra (link)'},
+  {id:'rf-moq',                campo:'moq',                      label:'MOQ (mínima cantidad de orden)', tipo:'number'},
+  {id:'rf-canal',              campo:'canal',                    label:'Canal', tipo:'select', opciones:CANALES_REFERENCIA},
+  {id:'rf-abc-manual',        campo:'clasificacion_abc_manual', label:'Clasificación ABC', tipo:'select', opciones:['A','B','C']},
+];
+// Fecha creación: automática (se asigna sola al crear el SKU, no es un campo del formulario).
+// Fecha inicio de ventas: automática también — la llena el proceso diario de ventas cuando
+// la referencia registra su primera venta, no se edita a mano aquí.
+// Organiza el formulario en secciones/módulos (para que se llene por partes, no todo de corrido).
+// Cada fila es un arreglo de 1 o 2 ids de REFERENCIA_CAMPOS (para que salgan en pareja en la misma
+// línea), o uno de los bloques especiales __FOTO__ / __EAN14_ADICIONALES__.
+const REFERENCIA_SECCIONES = [
+  {titulo:'1. Información general', filas:[
+    ['rf-referencia','__FOTO__'],
+    ['rf-referencia-ilumax'],
+    ['rf-nombre-comercial'],
+    ['rf-descripcion'],
+    ['rf-ean13'],
+    ['rf-internal-pack','rf-ean14-internal'],
+    ['rf-master-pack','rf-ean14-master'],
+    ['__CBM__'],
+    ['rf-abc-manual','rf-canal'],
+    ['__EAN14_ADICIONALES__'],
+  ]},
+  {titulo:'2. Árbol de producto', filas:[
+    ['rf-potencia','rf-linea'],
+    ['rf-categoria','rf-subcategoria'],
+    ['rf-marca-producto'],
+  ]},
+  {titulo:'3. Información técnica', filas:[
+    ['rf-temp-color','rf-tipo-empaque'],
+    ['rf-horas','rf-tipo-tapa'],
+    ['rf-ficha-compra'],
+  ]},
+  {titulo:'4. Proveedor', filas:[
+    ['rf-proveedor','rf-proveedor-siglas'],
+    ['rf-moq','rf-fob'],
+  ]},
+  {titulo:'5. Otros', filas:[
+    ['__OBSERVACIONES__'],
+    ['__HISTORIAL__'],
+  ]},
+];
+// Checksum GS1 estándar (mod10, pesos 3/1 alternados desde la derecha) — usado para calcular
+// el dígito de control del EAN 14 a partir del EAN 13, igual que en la hoja de Excel.
+function gs1DigitoControl(digits){
+  let suma = 0, peso = 3;
+  for(let i=digits.length-1;i>=0;i--){ suma += Number(digits[i])*peso; peso = peso===3?1:3; }
+  return (10 - (suma % 10)) % 10;
+}
+// Estructura del EAN 13 propio de ILUMAX: 8 dígitos fijos (prefijo de la marca) + 4 dígitos que
+// son la referencia (rellenada con ceros a la izquierda) + 1 dígito de control GS1.
+const EAN13_PREFIJO_ILUMAX = '77068510';
+function reabastComponerEAN13(referencia){
+  const soloDigitos = String(referencia||'').replace(/\D/g,'');
+  if(!soloDigitos) return '';
+  const refPart = soloDigitos.length<=4 ? soloDigitos.padStart(4,'0') : soloDigitos.slice(-4);
+  const base = EAN13_PREFIJO_ILUMAX + refPart;
+  return base + gs1DigitoControl(base);
+}
+function reabastGenerarEAN14(indicador, targetId){
+  const ean13 = (document.getElementById('rf-ean13').value||'').trim();
+  if(!/^\d{13}$/.test(ean13)){ if(typeof toast==='function') toast('Escribe primero un EAN 13 válido (13 dígitos)','wa'); return; }
+  const base = indicador + ean13.slice(0,12); // indicador + los primeros 12 dígitos del EAN13 (sin su dígito de control)
+  const ean14 = base + gs1DigitoControl(base);
+  document.getElementById(targetId).value = ean14;
+}
+function reabastGenerarEAN13(){
+  const el = document.getElementById('rf-ean13');
+  const actual = (el.value||'').trim();
+  // Si ya escribiste 12 dígitos a mano (ej: un código que llegó del proveedor), solo le calculamos
+  // el dígito de control. Si no, lo componemos automático: 77068510 + la referencia + control.
+  if(/^\d{12}$/.test(actual)){ el.value = actual + gs1DigitoControl(actual); return; }
+  const auto = reabastComponerEAN13(document.getElementById('rf-referencia').value);
+  if(!auto){ if(typeof toast==='function') toast('Escribe los 12 dígitos del EAN 13, o primero completa la referencia para generarlo automático','wa'); return; }
+  el.value = auto;
+}
+function reabastActualizarDatalistsReferencia(){
+  const setOpts = (id, valores) => {
+    const el = document.getElementById(id); if(!el) return;
+    el.innerHTML = [...new Set(valores.filter(Boolean))].sort().map(v=>`<option value="${reabastEsc(v)}">`).join('');
+  };
+  const refs = Object.values(REABAST.referenciasMaestro||{});
+  setOpts('dl-ref-empaque', ['COLOR BOX','BROWN BOX','WINDOW COLORBOX','ZIP LOCK BAG', ...refs.map(r=>r.tipo_empaque)]);
+  setOpts('dl-ref-marca', ['ILUMAX','ILUMAX SELECT','ILUMAX ECO','ILUMAX PRO', ...refs.map(r=>r.marca_caja)]);
+  setOpts('dl-ref-proveedor', (REABAST.proveedores||[]).map(p=>p.siglas).concat((REABAST.proveedores||[]).map(p=>p.nombre)));
+  setOpts('dl-ref-proveedor-siglas', (REABAST.proveedores||[]).map(p=>p.siglas));
+}
+function reabastRenderHistorialCompras(referencia){
+  const cont = document.getElementById('rf-historial'); if(!cont) return;
+  if(!referencia){ cont.innerHTML = ''; return; }
+  const filas = [];
+  (REABAST.ordenesCompra||[]).forEach(oc=>{
+    (REABAST.ocItems[oc.id]||[]).forEach(it=>{
+      if(it.referencia===referencia) filas.push({numero:oc.numero_oc, proveedor:oc.proveedor, fecha:oc.creado_en, cantidad:it.cantidad, precio:it.precio_fob_usd, estado:oc.estado_general});
+    });
+  });
+  filas.sort((a,b)=> new Date(b.fecha||0) - new Date(a.fecha||0));
+  if(!filas.length){ cont.innerHTML = '<div style="font-size:11px;color:var(--mu);">Sin compras registradas todavía para esta referencia.</div>'; return; }
+  cont.innerHTML = `<div class="tw" style="max-height:160px;"><table>
+    <thead><tr><th>OC</th><th>Proveedor</th><th>Fecha</th><th>Cantidad</th><th>FOB US$</th><th>Estado</th></tr></thead>
+    <tbody>${filas.slice(0,15).map(f=>`<tr>
+      <td>${reabastEsc(f.numero||'—')}</td>
+      <td>${reabastEsc(f.proveedor||'—')}</td>
+      <td>${f.fecha?new Date(f.fecha).toLocaleDateString('es-CO'):'—'}</td>
+      <td style="text-align:right;">${f.cantidad!=null?f.cantidad:'—'}</td>
+      <td style="text-align:right;">${f.precio!=null?f.precio:'—'}</td>
+      <td>${reabastEsc(REABAST_ESTADO_LBL?.[f.estado]||f.estado||'—')}</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+function abrirModalReferencia(r){
+  REFERENCIA_EDIT_ID = r ? r.id : null;
+  if(!document.getElementById('modal-referencia')) reabastInjectModalReferencia();
+  reabastCambiarSeccionReferencia(0); // siempre abre en el primer módulo
+  REFERENCIA_CAMPOS.forEach(c=>{
+    const el = document.getElementById(c.id); if(!el) return;
+    const valor = r && r[c.campo]!=null ? r[c.campo] : '';
+    // Si es un <select> (ej. Categoría) y el valor guardado no está en las opciones oficiales
+    // (dato viejo / distinto), lo agregamos igual para no perderlo al guardar.
+    if(el.tagName==='SELECT' && valor && ![...el.options].some(o=>o.value===valor)){
+      const opt = document.createElement('option');
+      opt.value = valor; opt.textContent = valor+' (no está en el árbol oficial)';
+      el.appendChild(opt);
+    }
+    el.value = valor;
+  });
+  // Completa las siglas del proveedor a partir del nombre ya guardado (campo transitorio, no se guarda en la BD).
+  const proveedorEl = document.getElementById('rf-proveedor');
+  const siglasEl = document.getElementById('rf-proveedor-siglas');
+  if(siglasEl){
+    const nombreProv = proveedorEl ? proveedorEl.value : '';
+    const matchProv = nombreProv ? (REABAST.proveedores||[]).find(p=>(p.nombre||'').toLowerCase()===nombreProv.toLowerCase()) : null;
+    siglasEl.value = matchProv ? (matchProv.siglas||'') : '';
+  }
+  document.getElementById('rf-observaciones').value = r ? (r.observaciones||'') : '';
+  document.getElementById('rf-ean14-adicionales').value = r ? (r.ean14_adicionales||'') : '';
+  // Foto del producto (si ya tiene una guardada).
+  const fotoPrev = document.getElementById('rf-foto-preview');
+  const fotoInput = document.getElementById('rf-foto-file');
+  const fotoQuitar = document.getElementById('rf-foto-quitar');
+  if(fotoInput) fotoInput.value = '';
+  if(fotoPrev){
+    const url = r ? (r.foto_url||'') : '';
+    fotoPrev.src = url;
+    fotoPrev.dataset.valor = url;
+    fotoPrev.style.display = url ? 'inline-block' : 'none';
+    if(fotoQuitar) fotoQuitar.style.display = url ? 'inline-block' : 'none';
+  }
+  document.getElementById('rf-titulo').textContent = r ? ('Editar referencia · '+r.referencia) : 'Nueva referencia (SKU)';
+  const campoRef = document.getElementById('rf-referencia');
+  const nota = document.getElementById('rf-referencia-nota');
+  if(r){
+    campoRef.readOnly = true; // no se cambia el código de una referencia existente
+    nota.innerHTML = 'El código de una referencia existente no se puede cambiar.';
+  } else {
+    campoRef.value = reabastSiguienteReferencia();
+    campoRef.readOnly = true; // se asigna automático y consecutivo
+    nota.innerHTML = 'Código asignado automático (consecutivo). <a href="#" onclick="document.getElementById(\'rf-referencia\').readOnly=false;document.getElementById(\'rf-referencia\').focus();return false;" style="color:var(--bl);">Usar otro código</a>';
+    document.getElementById('rf-ean13').value = reabastComponerEAN13(campoRef.value); // 77068510 + referencia + dígito de control
+    reabastGenerarEAN14('1','rf-ean14-internal'); // EAN 14 Internal Packaging también se arma solo
+  }
+  // Calculadora de CBM: siempre arranca en modo "m³ directo" con las medidas vacías.
+  ['rf-cbm-largo','rf-cbm-ancho','rf-cbm-alto'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+  reabastCambiarUnidadCBM('m3');
+  reabastActualizarDatalistsReferencia();
+  reabastRenderHistorialCompras(r ? r.referencia : null);
+  document.getElementById('modal-referencia').classList.add('on');
+}
+// Sincroniza Proveedor (nombre) <-> Siglas del proveedor: escribe en cualquiera de los dos campos
+// y el otro se completa solo, buscando en REABAST.proveedores.
+function reabastSincronizarProveedor(origen, el){
+  const v = (el.value||'').trim();
+  const otroEl = document.getElementById(origen==='siglas' ? 'rf-proveedor' : 'rf-proveedor-siglas');
+  if(!v) return;
+  let match;
+  if(origen==='siglas'){
+    match = (REABAST.proveedores||[]).find(p=> (p.siglas||'').toLowerCase()===v.toLowerCase());
+    if(match){ el.value = match.siglas || v; if(otroEl) otroEl.value = match.nombre || ''; }
+  } else {
+    match = (REABAST.proveedores||[]).find(p=> (p.siglas||'').toLowerCase()===v.toLowerCase() || (p.nombre||'').toLowerCase()===v.toLowerCase());
+    if(match){ el.value = match.nombre || v; if(otroEl) otroEl.value = match.siglas || ''; }
+  }
+}
+// Mantiene compatibilidad: si buscaron el proveedor por sigla en el campo "nombre", lo cambia por el nombre completo.
+function reabastNormalizarProveedor(el){ reabastSincronizarProveedor('nombre', el); }
+// Siguiente código consecutivo: toma la longitud de dígitos más usada entre las referencias
+// existentes (así ignora códigos viejos/especiales de otra longitud) y suma 1 al máximo de esa serie.
+function reabastSiguienteReferencia(){
+  const codigos = Object.keys(REABAST.referenciasMaestro||{}).filter(c=>/^\d+$/.test(c));
+  if(!codigos.length) return '1';
+  const porLongitud = {};
+  codigos.forEach(c=>{ (porLongitud[c.length]=porLongitud[c.length]||[]).push(Number(c)); });
+  const longitudPrincipal = Object.keys(porLongitud).sort((a,b)=>porLongitud[b].length-porLongitud[a].length)[0];
+  const maximo = Math.max(...porLongitud[longitudPrincipal]);
+  return String(maximo+1).padStart(Number(longitudPrincipal), '0');
+}
+function cerrarModalReferencia(){ document.getElementById('modal-referencia').classList.remove('on'); }
+function reabastInjectModalReferencia(){
+  const wrap = document.createElement('div');
+  const porId = {}; REFERENCIA_CAMPOS.forEach(c=>{ porId[c.id]=c; });
+  const campo = c => `<div class="fg"><label class="fl">${c.label}${c.req?' *':''}</label>
+    <div style="display:flex;gap:4px;">
+      ${c.tipo==='select'
+        ? `<select class="inp" id="${c.id}"><option value="">— Selecciona —</option>${(c.opciones||[]).map(o=>`<option value="${reabastEsc(o)}">${reabastEsc(o)}</option>`).join('')}</select>`
+        : c.tipo==='textarea'
+        ? `<textarea class="inp" id="${c.id}" style="min-height:96px;" ${c.placeholder?`placeholder="${reabastEsc(c.placeholder)}"`:''}></textarea>`
+        : `<input class="inp" id="${c.id}" type="${c.tipo||'text'}" ${c.tipo==='number'?'step="0.01"':''} ${c.datalist?`list="${c.datalist}"`:''} ${c.placeholder?`placeholder="${reabastEsc(c.placeholder)}"`:''} ${c.sync?`onchange="reabastSincronizarProveedor('${c.sync}',this)"`:''}>`}
+      ${c.generar?`<button type="button" class="btn btn-g btn-sm" style="white-space:nowrap;" title="Calcular a partir del EAN 13" onclick="reabastGenerarEAN14('${c.generar}','${c.id}')">Generar</button>`:''}
+      ${c.generarPropio?`<button type="button" class="btn btn-g btn-sm" style="white-space:nowrap;" title="Calcular el dígito de control (últimos 12 dígitos → 13)" onclick="reabastGenerarEAN13()">Generar</button>`:''}
+    </div>
+  </div>`;
+  const fotoHtml = `<div class="fg"><label class="fl">Foto del producto</label>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <img id="rf-foto-preview" style="width:60px;height:60px;object-fit:cover;border-radius:8px;border:1px solid var(--b1);display:none;">
+      <input type="file" accept="image/*" id="rf-foto-file" style="max-width:190px;" onchange="reabastCargarFotoArchivo(this)">
+      <button type="button" class="btn btn-g btn-sm" id="rf-foto-quitar" style="display:none;" onclick="reabastQuitarFoto()">Quitar foto</button>
+    </div>
+    <div style="font-size:10px;color:var(--mu);margin-top:4px;">Sube un archivo, o copia una imagen y pégala con Ctrl+V en cualquier parte de este formulario.</div>
+  </div>`;
+  const ean14AdicionalesHtml = `<div class="fg"><label class="fl">EAN 14 adicionales (opcional — uno por línea, por si el producto tiene más presentaciones de empaque)</label><textarea class="inp" id="rf-ean14-adicionales" style="min-height:50px;" placeholder="Ej: presentación especial · 37706851026768"></textarea></div>`;
+  const observacionesHtml = `<div class="fg"><label class="fl">Observaciones (texto libre para recordatorios al proveedor — importante que el proveedor también las conozca)</label><textarea class="inp" id="rf-observaciones"></textarea></div>`;
+  const historialHtml = `<div class="fg"><label class="fl">Historial de compras de esta referencia</label><div id="rf-historial"></div></div>`;
+  const cbmHtml = `<div class="fg"><label class="fl">CBM (metro cúbico)</label>
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+      <button type="button" class="ref-tab on" id="cbm-btn-m3" onclick="reabastCambiarUnidadCBM('m3')">Escribir m³ directo</button>
+      <button type="button" class="ref-tab" id="cbm-btn-cm" onclick="reabastCambiarUnidadCBM('cm')">Medidas en cm</button>
+      <button type="button" class="ref-tab" id="cbm-btn-mm" onclick="reabastCambiarUnidadCBM('mm')">Medidas en mm</button>
+    </div>
+    <div id="cbm-dims" style="display:none;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
+      <div><label class="fl" style="font-size:9.5px;">Largo</label><input class="inp" type="number" step="0.01" id="rf-cbm-largo" oninput="reabastCalcularCBM()"></div>
+      <div><label class="fl" style="font-size:9.5px;">Ancho</label><input class="inp" type="number" step="0.01" id="rf-cbm-ancho" oninput="reabastCalcularCBM()"></div>
+      <div><label class="fl" style="font-size:9.5px;">Alto</label><input class="inp" type="number" step="0.01" id="rf-cbm-alto" oninput="reabastCalcularCBM()"></div>
+    </div>
+    <input class="inp" id="rf-cbm" type="number" step="0.000001" placeholder="m³">
+  </div>`;
+  const filaHtml = fila => {
+    if(fila[0]==='__FOTO__') return fotoHtml;
+    if(fila[0]==='__EAN14_ADICIONALES__') return ean14AdicionalesHtml;
+    if(fila[0]==='__OBSERVACIONES__') return observacionesHtml;
+    if(fila[0]==='__HISTORIAL__') return historialHtml;
+    if(fila[0]==='__CBM__') return cbmHtml;
+    if(fila.length===1 && fila[0]==='rf-referencia'){
+      return campo(porId['rf-referencia']) + `<div id="rf-referencia-nota" style="margin:-10px 0 14px;font-size:10.5px;color:var(--mu);"></div>`;
+    }
+    // Fila especial: código de referencia a la izquierda, foto del producto a la derecha.
+    if(fila[0]==='rf-referencia' && fila[1]==='__FOTO__'){
+      return `<div class="fg2">
+        <div>${campo(porId['rf-referencia'])}<div id="rf-referencia-nota" style="margin:-10px 0 0;font-size:10.5px;color:var(--mu);"></div></div>
+        ${fotoHtml}
+      </div>`;
+    }
+    const camposFila = fila.map(id=>porId[id]).filter(Boolean);
+    if(!camposFila.length) return '';
+    return `<div class="fg2">${camposFila.map(campo).join('')}</div>`;
+  };
+  const tabs = `<div class="ref-tabs">${REFERENCIA_SECCIONES.map((sec,i)=>
+    `<button type="button" class="ref-tab${i===0?' on':''}" id="ref-tab-${i}" onclick="reabastCambiarSeccionReferencia(${i})">${sec.titulo}</button>`
+  ).join('')}</div>`;
+  const secciones = REFERENCIA_SECCIONES.map((sec,i) => `
+    <div class="ref-sec-panel" id="ref-sec-${i}" style="${i===0?'':'display:none;'}">
+      ${sec.filas.map(filaHtml).join('')}
+    </div>
+  `).join('');
+  wrap.innerHTML = `<div class="ov" id="modal-referencia">
+    <div class="mo" style="max-width:1040px;width:94vw;max-height:90vh;overflow-y:auto;">
+      <div class="mh"><div class="mt" id="rf-titulo">Nueva referencia (SKU)</div><div class="mx" onclick="cerrarModalReferencia()">✕</div></div>
+      <div class="mb">
+        ${tabs}
+        ${secciones}
+        <datalist id="dl-ref-proveedor"></datalist>
+        <datalist id="dl-ref-proveedor-siglas"></datalist>
+        <datalist id="dl-ref-empaque"></datalist>
+        <datalist id="dl-ref-marca"></datalist>
+      </div>
+      <div class="mf">
+        <button class="btn btn-g" onclick="cerrarModalReferencia()">Cancelar</button>
+        <button class="btn btn-p" onclick="guardarReferencia()">Guardar</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap.firstElementChild);
+  // Pegar imagen (Ctrl+V) en cualquier parte del formulario mientras el modal está abierto.
+  document.addEventListener('paste', function(e){
+    const modal = document.getElementById('modal-referencia');
+    if(!modal || !modal.classList.contains('on')) return;
+    const items = (e.clipboardData || window.clipboardData) ? (e.clipboardData || window.clipboardData).items : null;
+    if(!items) return;
+    for(const item of items){
+      if(item.type && item.type.startsWith('image/')){
+        const file = item.getAsFile();
+        if(file) reabastLeerFotoArchivo(file);
+        e.preventDefault();
+        break;
+      }
+    }
+  });
+}
+function reabastCambiarSeccionReferencia(idx){
+  REFERENCIA_SECCIONES.forEach((sec,i)=>{
+    const panel = document.getElementById('ref-sec-'+i);
+    const tab = document.getElementById('ref-tab-'+i);
+    if(panel) panel.style.display = (i===idx) ? '' : 'none';
+    if(tab) tab.classList.toggle('on', i===idx);
+  });
+}
+// Calculadora de CBM: se puede escribir el m³ directo, o dar Largo x Ancho x Alto en cm o mm
+// y se calcula solo (cm³ y mm³ a m³).
+let REABAST_CBM_UNIDAD = 'm3';
+function reabastCambiarUnidadCBM(u){
+  REABAST_CBM_UNIDAD = u;
+  ['m3','cm','mm'].forEach(k=>{ const b=document.getElementById('cbm-btn-'+k); if(b) b.classList.toggle('on', k===u); });
+  const dims = document.getElementById('cbm-dims');
+  const cbmInput = document.getElementById('rf-cbm');
+  // El campo de m³ nunca queda bloqueado — si eliges cm/mm se calcula solo apenas escribes las
+  // medidas, pero también puedes editarlo directo en cualquier momento sin que se quede "pegado".
+  if(u==='m3'){
+    if(dims) dims.style.display = 'none';
+    if(cbmInput) cbmInput.placeholder = 'm³';
+  } else {
+    if(dims) dims.style.display = 'grid';
+    if(cbmInput) cbmInput.placeholder = 'Se calcula solo con Largo x Ancho x Alto (o escríbelo tú)';
+    reabastCalcularCBM();
+  }
+}
+function reabastCalcularCBM(){
+  if(REABAST_CBM_UNIDAD==='m3') return;
+  const l = parseFloat(document.getElementById('rf-cbm-largo').value)||0;
+  const a = parseFloat(document.getElementById('rf-cbm-ancho').value)||0;
+  const h = parseFloat(document.getElementById('rf-cbm-alto').value)||0;
+  // Si todavía no ha escrito ninguna medida, no borramos un CBM que ya tuviera (ej. al editar
+  // una referencia existente, o si cambió de cm a mm sin volver a escribir las medidas).
+  if(!l && !a && !h) return;
+  const divisor = REABAST_CBM_UNIDAD==='cm' ? 1000000 : 1000000000; // cm³→m³ : mm³→m³
+  const cbm = (l*a*h)/divisor;
+  const cbmInput = document.getElementById('rf-cbm');
+  if(cbmInput) cbmInput.value = cbm ? cbm.toFixed(6) : '';
+}
+function reabastCargarFotoArchivo(input){ const file = input.files[0]; if(file) reabastLeerFotoArchivo(file); }
+function reabastLeerFotoArchivo(file){
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const prev = document.getElementById('rf-foto-preview'); if(!prev) return;
+    prev.src = ev.target.result;
+    prev.style.display = 'inline-block';
+    prev.dataset.valor = ev.target.result;
+    const btn = document.getElementById('rf-foto-quitar'); if(btn) btn.style.display = 'inline-block';
+  };
+  reader.readAsDataURL(file);
+}
+function reabastQuitarFoto(){
+  const prev = document.getElementById('rf-foto-preview'); if(prev){ prev.src=''; prev.style.display='none'; prev.dataset.valor=''; }
+  const inp = document.getElementById('rf-foto-file'); if(inp) inp.value='';
+  const btn = document.getElementById('rf-foto-quitar'); if(btn) btn.style.display='none';
+}
+async function guardarReferencia(){
+  const referencia = document.getElementById('rf-referencia').value.trim();
+  if(!referencia){ if(typeof toast==='function') toast('La referencia (código/SKU) es obligatoria','wa'); return; }
+  const payload = { referencia, actualizado: new Date().toISOString() };
+  const PAQUETES_AUTOFORMATO = new Set(['master_packaging','internal_packaging']); // si solo escriben el número, se completa "N pcs/ctn"
+  REFERENCIA_CAMPOS.slice(1).forEach(c=>{
+    if(c.transient) return; // campo solo de UI (ej: siglas del proveedor) — no existe en la BD
+    let v = document.getElementById(c.id).value.trim();
+    if(v && PAQUETES_AUTOFORMATO.has(c.campo) && /^\d+(\.\d+)?$/.test(v)) v = v+' pcs/ctn';
+    // Si buscaron el proveedor por sigla, guardamos el nombre completo (no la sigla).
+    if(v && c.normalizarProveedor){
+      const match = (REABAST.proveedores||[]).find(p=> (p.siglas||'').toLowerCase()===v.toLowerCase());
+      if(match && match.nombre) v = match.nombre;
+    }
+    payload[c.campo] = v ? (c.tipo==='number' ? Number(v) : v) : null;
+    // Campos del árbol de producto (categoría, línea, subcategoría, potencia, marca): el código
+    // interno se guarda aparte, nunca se muestra en el formulario.
+    if(c.campoCod) payload[c.campoCod] = (v && c.codigos && c.codigos[v]) ? c.codigos[v] : null;
+  });
+  payload.observaciones = document.getElementById('rf-observaciones').value.trim() || null;
+  payload.ean14_adicionales = document.getElementById('rf-ean14-adicionales').value.trim() || null;
+  const fotoPrev = document.getElementById('rf-foto-preview');
+  payload.foto_url = (fotoPrev && fotoPrev.dataset.valor) ? fotoPrev.dataset.valor : null;
+  try{
+    if(REFERENCIA_EDIT_ID){
+      await sbReabast.patch('referencias_maestro', 'id=eq.'+REFERENCIA_EDIT_ID, payload);
+    } else {
+      // Si ya existe una referencia con ese código, actualízala en vez de duplicarla.
+      const existente = REABAST.referenciasMaestro && REABAST.referenciasMaestro[referencia];
+      if(existente){
+        await sbReabast.patch('referencias_maestro', 'id=eq.'+existente.id, payload);
+      } else {
+        // Solo un SKU nuevo de verdad recibe la fecha de creación automática (no se pisa al editar).
+        payload.fecha_creacion = new Date().toISOString().slice(0,10);
+        await sbReabast.post('referencias_maestro', payload);
+      }
+    }
+    cerrarModalReferencia();
+    if(typeof toast==='function') toast('Referencia guardada — ya cae directo en el catálogo de referencias reales','ok');
+    await cargarOC();
+    reabastPintar();
+  }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
+}
+
+// Sube un Excel/CSV completo de la hoja "Referencias" y hace upsert masivo en referencias_maestro
+// (por código de referencia — el que ya existe se actualiza, el que no, se crea). No asume que
+// el encabezado esté en la fila 1: lo busca por la columna "REFERENCIA"/"CODIGO", igual que viene
+// en la hoja original (con filas en blanco arriba y encabezados desde la fila 4).
+async function refImportarExcel(input){
+  const file = input.files[0]; if(!file) return;
+  const estado = document.getElementById('ref-import-estado');
+  estado.innerHTML = '⏳ Leyendo archivo…';
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array', cellDates:true});
+    const nombreHoja = wb.SheetNames.find(n=>n.trim().toLowerCase()==='referencias') || wb.SheetNames[0];
+    const filas = XLSX.utils.sheet_to_json(wb.Sheets[nombreHoja], {header:1, defval:null});
+
+    const MAPA = {
+      'REFERENCIA':'referencia', 'CODIGO':'referencia',
+      'ENGLISH DESCRIPTION':'descripcion_en',
+      'TEMPERATURE COLOR':'temperatura_color',
+      'QUANTITY':'quantity',
+      'US':'fob_usd',
+      'AMOUNT':'amount',
+      'TYPE OF PACKAGING':'tipo_empaque',
+      '# HOURS':'horas',
+      'CAP TYPE':'tipo_tapa',
+      'COLOR CARD / BOX BRAND':'marca_caja',
+      'EAN 13':'ean13',
+      'MASTER PACKAGING':'master_packaging',
+      'EAN 14 MASTER PACKAGING':'ean14_master',
+      'INTERNAL PACKAGING':'internal_packaging',
+      'EAN 14 INTERNAL PACKAGING':'ean14_internal',
+      'OBSERVACIONES':'observaciones',
+      'PROVEEDOR':'proveedor_predeterminado',
+      'FICHA TECNICA DE COMPRA':'ficha_tecnica_compra_url',
+      'MOQ':'moq',
+      'CBM':'cbm',
+      'CANAL':'canal',
+      'CLASIFICACION ABC':'clasificacion_abc_manual',
+      'FEHCA CREACION':'fecha_creacion', 'FECHA CREACION':'fecha_creacion',
+      'FECHA INICIO DE VENTAS':'fecha_inicio_ventas',
+      'NOMBRE COMERCIAL':'nombre_comercial',
+      'CATEGORIA':'categoria',
+      'REFERENCIA ILUMAX':'referencia_ilumax', 'REF ILUMAX':'referencia_ilumax', 'REFERENCIA INTERNA':'referencia_ilumax', 'REFERENCIA INTERNA ILUMAX':'referencia_ilumax',
+      'CBM (M3)':'cbm', 'CBM M3':'cbm',
+      'FICHA TECNICA':'ficha_tecnica_compra_url',
+    };
+    const norm = s => String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
+
+    let headerIdx = -1, headerRow = null;
+    for(let i=0;i<filas.length;i++){
+      const f = filas[i]||[];
+      if(f.some(c=>norm(c)==='REFERENCIA' || norm(c)==='CODIGO')){ headerIdx = i; headerRow = f; break; }
+    }
+    if(headerIdx<0){ estado.innerHTML = '<span style="color:var(--rd);">No encontré una columna "REFERENCIA" o "CODIGO" en ninguna fila — revisa que sea la hoja correcta.</span>'; return; }
+
+    const colMap = {};
+    headerRow.forEach((h,i)=>{ const campo = MAPA[norm(h)]; if(campo && colMap[campo]==null) colMap[campo]=i; });
+    if(colMap.referencia==null){ estado.innerHTML = '<span style="color:var(--rd);">No pude ubicar la columna de referencia.</span>'; return; }
+
+    // Diagnóstico: qué encabezados del Excel no se reconocieron (para detectar nombres de columna distintos a los esperados)
+    const encabezadosNoReconocidos = [...new Set(headerRow.map(h=>norm(h)).filter(h=>h && !MAPA[h] && h!=='REFERENCIA' && h!=='CODIGO'))];
+    const camposNoEncontrados = [...new Set(Object.values(MAPA))].filter(campo=>colMap[campo]==null && campo!=='referencia');
+
+    const NUMERICOS = new Set(['fob_usd','horas','cbm','moq','quantity','amount']);
+    const FECHAS = new Set(['fecha_creacion','fecha_inicio_ventas']);
+    const aFechaISO = v => {
+      if(v instanceof Date && !isNaN(v)) return v.toISOString().slice(0,10);
+      const d = new Date(v);
+      return isNaN(d) ? null : d.toISOString().slice(0,10);
+    };
+    const registros = [];
+    for(let i=headerIdx+1;i<filas.length;i++){
+      const f = filas[i]||[];
+      const refVal = f[colMap.referencia];
+      if(refVal==null || String(refVal).trim()==='') continue;
+      const rec = { referencia: String(refVal).trim(), actualizado: new Date().toISOString() };
+      Object.keys(colMap).forEach(campo=>{
+        if(campo==='referencia') return;
+        let v = f[colMap[campo]];
+        if(v==null || v===''){ rec[campo]=null; return; }
+        if(FECHAS.has(campo)){ rec[campo] = aFechaISO(v); }
+        else if(NUMERICOS.has(campo)){ v = Number(v); rec[campo] = isNaN(v)?null:v; }
+        else rec[campo] = String(v).trim();
+      });
+      // El Excel trae el proveedor por sigla (ej: WLX) — lo cambiamos al nombre completo del proveedor.
+      if(rec.proveedor_predeterminado){
+        const match = (REABAST.proveedores||[]).find(p=>(p.siglas||'').toLowerCase()===rec.proveedor_predeterminado.toLowerCase());
+        if(match && match.nombre) rec.proveedor_predeterminado = match.nombre;
+      }
+      registros.push(rec);
+    }
+    if(!registros.length){ estado.innerHTML = '<span style="color:var(--rd);">No encontré filas con referencia después del encabezado.</span>'; return; }
+    // Si la misma referencia aparece varias veces en el Excel, Postgres rechaza el upsert
+    // ("no puede afectar la misma fila dos veces" en un solo INSERT) — nos quedamos con la
+    // última aparición de cada una antes de subir.
+    const porReferencia = new Map();
+    registros.forEach(r => porReferencia.set(r.referencia, r));
+    const registrosUnicos = [...porReferencia.values()];
+    const duplicadas = registros.length - registrosUnicos.length;
+
+    estado.innerHTML = '⏳ Subiendo '+registrosUnicos.length+' referencias…';
+    const BATCH = 200;
+    for(let i=0;i<registrosUnicos.length;i+=BATCH){
+      const r = await fetch(SB_REABAST_URL+'/rest/v1/referencias_maestro?on_conflict=referencia', {
+        method:'POST', headers:{...sbReabast.headers, 'Prefer':'resolution=merge-duplicates,return=minimal'},
+        body: JSON.stringify(registrosUnicos.slice(i,i+BATCH))
+      });
+      if(!r.ok) throw new Error(await r.text());
+    }
+    await cargarOC();
+    let msg = '<span style="color:var(--gr);">✅ '+registrosUnicos.length+' referencias cargadas/actualizadas desde el Excel.'+(duplicadas?' ('+duplicadas+' filas repetían una referencia — se usó la última de cada una.)':'')+'</span>';
+    if(camposNoEncontrados.length){
+      msg += '<br><span style="color:#b8860b;">⚠️ No encontré columna para: '+camposNoEncontrados.join(', ')+' — esos campos quedaron vacíos.</span>';
+    }
+    if(encabezadosNoReconocidos.length){
+      msg += '<br><span style="color:var(--mu);font-size:10px;">Columnas del Excel que no usé (nombre no reconocido): '+encabezadosNoReconocidos.join(' · ')+'</span>';
+    }
+    estado.innerHTML = msg;
+    input.value = '';
+    reabastRepintarReferencias();
+  }catch(e){ estado.innerHTML = '<span style="color:var(--rd);">Error: '+e.message+'</span>'; }
+}
+
 // ═══ Exportar reporte (Excel: Urgentes, ABC, Estado de OC) ═══
 function ocExportarReporte(){
   try{
@@ -9398,7 +10159,7 @@ function reabastAbrirDetalleOC(ocId){
         <td style="text-align:right;">${it.costo_unitario_cop!=null?'$'+reabastFmtN(it.costo_unitario_cop):'—'}</td>
         <td style="text-align:right;">${it.precio_venta_cop!=null?'$'+reabastFmtN(it.precio_venta_cop):'—'}</td>
         <td style="text-align:right;">${it.margen_pct!=null?`<span style="color:${it.margen_pct<20?'var(--rd)':'var(--gr)'};font-weight:700;">${it.margen_pct}%</span>`:'—'}</td>
-        <td>${it.ficha_tecnica_url?`<a href="${it.ficha_tecnica_url}" target="_blank" style="color:var(--bl);">📄 ficha</a>`:''}</td>
+        <td>${it.ficha_tecnica_url?`<a href="${it.ficha_tecnica_url}" target="_blank" style="color:var(--bl);">📄 ficha</a>`:(REABAST.fichasTecnicas&&REABAST.fichasTecnicas[it.referencia]?`<span onclick="ftAbrirFicha('${reabastEsc(it.referencia)}')" style="color:var(--bl);cursor:pointer;text-decoration:underline;">📄 catálogo</span>`:'')}</td>
       </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;padding:12px;color:var(--mu);">Sin ítems</td></tr>'}</tbody>
     </table></div>
     ${totalCop>0?`<div style="font-size:11.5px;margin-bottom:14px;padding:8px 10px;background:var(--s1);border-radius:8px;"><strong>Total costo landeado:</strong> $${reabastFmtN(totalCop)} COP${margenTotal!=null?` · <strong>Margen promedio ponderado: ${margenTotal}%</strong>`:''}</div>`:''}
@@ -9462,8 +10223,10 @@ async function ocActivarDependientes(ocId, etapasActualizadas){
     if(x.estado!=='pendiente') continue;
     const t = OC_ETAPAS_POR_ID[x.etapa_id];
     if(!t) continue;
+    // Para "requiere": un id que no exista entre las etapas de ESTA oc (porque tomó el otro
+    // camino de arte) se considera satisfecho — solo bloquean los ids que sí aplican a esta OC.
     const listo = t.dependeDe ? estadoPorEtapaId[t.dependeDe]==='completada'
-                : t.requiere ? t.requiere.every(id=>estadoPorEtapaId[id]==='completada')
+                : t.requiere ? t.requiere.every(id=> !(id in estadoPorEtapaId) || estadoPorEtapaId[id]==='completada')
                 : false;
     if(listo){
       await sbReabast.patch('oc_etapas', 'id=eq.'+x.id, {estado:'en_curso', fecha_inicio: ahora});
@@ -9500,7 +10263,7 @@ function ocContenidoPorArea(oc, tpl, items){
           <td style="font-family:monospace;">${reabastEsc(it.referencia)}</td>
           <td>${reabastEsc(it.lote||'—')}</td>
           <td style="text-align:right;">${reabastFmtN(it.cantidad)}</td>
-          <td>${it.ficha_tecnica_url?`<a href="${it.ficha_tecnica_url}" target="_blank" style="color:var(--bl);">📄 ficha</a>`:'<span style="color:var(--or);">sin ficha</span>'}</td>
+          <td>${it.ficha_tecnica_url?`<a href="${it.ficha_tecnica_url}" target="_blank" style="color:var(--bl);">📄 ficha</a>`:(REABAST.fichasTecnicas&&REABAST.fichasTecnicas[it.referencia]?`<span onclick="ftAbrirFicha('${reabastEsc(it.referencia)}')" style="color:var(--bl);cursor:pointer;text-decoration:underline;">📄 catálogo</span>`:'<span style="color:var(--or);">sin ficha</span>')}</td>
         </tr>`).join('')}</tbody>
       </table></div>`;
   }
@@ -9791,6 +10554,34 @@ const OC_LISTA_PRECIO_MARGEN = '1'; // P1 — Ferroeléctrico, la lista más usa
 // FOB simulado (mientras no tengas los precios reales de fábrica): determinístico por
 // referencia, para que cada vez que abras el formulario te salga el mismo número simulado
 // y puedas comparar. En cuanto tengas el precio real, edítalo en el campo y deja de ser "simulado".
+// ── Generador de EAN13/EAN14 para referencias nuevas ──
+// Prefijo fijo 77068510 + 4 dígitos de la referencia + dígito de control (algoritmo GS1
+// estándar, verificado contra tus propios ejemplos: ref 2601 → EAN13 7706851026017,
+// EAN14 (indicador 1) → 17706851026014).
+function gtinDigitoControl(base){
+  let suma = 0, peso = 3;
+  for(let i=base.length-1; i>=0; i--){ suma += Number(base[i])*peso; peso = (peso===3)?1:3; }
+  return (10 - (suma%10)) % 10;
+}
+function ocGenerarEAN(referencia){
+  const ref4 = String(referencia).replace(/\D/g,'').padStart(4,'0').slice(-4);
+  const base13 = '77068510'+ref4;
+  const ean13 = base13 + gtinDigitoControl(base13);
+  const gen14 = (indicador) => { const b = String(indicador)+'77068510'+ref4; return b + gtinDigitoControl(b); };
+  return { ean13, ean14_master: gen14(1), ean14_internal: gen14(2) };
+}
+
+function eanGenerarPreview(){
+  const ref = document.getElementById('ean-ref').value.trim();
+  const el = document.getElementById('ean-resultado');
+  if(!ref){ el.innerHTML = ''; return; }
+  const r = ocGenerarEAN(ref);
+  el.innerHTML = `
+    <div style="padding:3px 0;">EAN13: <strong style="font-family:monospace;">${r.ean13}</strong></div>
+    <div style="padding:3px 0;">EAN14 (empaque master, indicador 1): <strong style="font-family:monospace;">${r.ean14_master}</strong></div>
+    <div style="padding:3px 0;">EAN14 (empaque interno, indicador 2): <strong style="font-family:monospace;">${r.ean14_internal}</strong></div>`;
+}
+
 function ocSimularFOB(referencia){
   let hash = 0;
   for(let i=0;i<referencia.length;i++){ hash = (hash*31 + referencia.charCodeAt(i)) % 1000000; }
@@ -9798,21 +10589,27 @@ function ocSimularFOB(referencia){
 }
 
 // Consulta la TRM (USD→COP) en vivo desde una API pública y gratuita, sin necesidad de llave.
+// Consulta la TRM oficial (certificada por la Superintendencia Financiera de Colombia) desde
+// el portal de datos abiertos del Estado — es el mismo dato que replica cualquier sitio como
+// icap.com.co, pero esta fuente sí es una API pública en JSON que se puede leer desde el navegador
+// (icap.com.co es una página web normal, sin API pública, y bloquea el acceso automatizado).
 async function ocObtenerTRM(){
   const estado = document.getElementById('oc-trm-estado');
-  if(estado) estado.innerHTML = '⏳ Consultando TRM en vivo…';
+  if(estado) estado.innerHTML = '⏳ Consultando TRM oficial…';
   try{
-    const r = await fetch('https://open.er-api.com/v6/latest/USD');
+    const r = await fetch('https://www.datos.gov.co/resource/mcec-87by.json?$order=vigenciadesde%20DESC&$limit=1');
     const j = await r.json();
-    const cop = j && j.rates && j.rates.COP;
-    if(!cop) throw new Error('sin dato');
-    document.getElementById('oc-trm').value = Math.round(cop*100)/100;
-    if(estado) estado.innerHTML = '🟢 TRM en vivo · actualizada '+new Date().toLocaleTimeString('es-CO');
+    const fila = j && j[0];
+    const valor = fila && parseFloat(String(fila.valor).replace(',','.'));
+    if(!valor) throw new Error('sin dato');
+    document.getElementById('oc-trm').value = Math.round(valor*100)/100;
+    const vigencia = fila.vigenciadesde ? new Date(fila.vigenciadesde).toLocaleDateString('es-CO') : '';
+    if(estado) estado.innerHTML = '🟢 TRM oficial (Superfinanciera) vigente desde '+vigencia;
     ocRecalcularTodasFilas();
     const q = document.getElementById('oc-sug-q');
     ocRepintarSugerencias(q?q.value:'');
   }catch(e){
-    if(estado) estado.innerHTML = '🟡 No se pudo obtener la TRM en vivo — quedó el valor aproximado, ajústalo si sabes el real.';
+    if(estado) estado.innerHTML = '🟡 No se pudo obtener la TRM oficial — quedó el valor aproximado, ajústalo si sabes el real.';
   }
 }
 
@@ -9859,7 +10656,7 @@ function reabastInjectModalOC(){
         <div id="oc-items-wrap"></div>
         <button class="btn btn-g btn-sm" onclick="ocAgregarItemRow()" style="margin-top:6px;">+ Agregar ítem</button>
         <div id="oc-totales" style="font-size:11.5px;margin-top:10px;padding:8px 10px;background:var(--s1);border-radius:8px;"></div>
-        <div style="font-size:10.5px;color:var(--mu);margin-top:10px;">Al crear, se genera automáticamente el paso a paso completo del proceso de importación (${OC_ETAPAS_TEMPLATE.length} etapas, ~${OC_ETAPAS_TEMPLATE.reduce((a,e)=>a+e.dias,0)} días esperados en total) y arranca el cronómetro de la primera etapa.</div>
+        <div style="font-size:10.5px;color:var(--mu);margin-top:10px;">Al crear, se genera automáticamente el paso a paso del proceso de importación y arranca el cronómetro de la primera etapa. Si marcas algún ítem como "SKU nuevo", la solicitud de arte pasa por Calidad y Diseño; si no, se le pide la reimpresión directo al proveedor.</div>
       </div>
       <div class="mf">
         <button class="btn btn-g" onclick="document.getElementById('modal-oc').classList.remove('on')">Cancelar</button>
@@ -9897,9 +10694,12 @@ function ocAgregarItemRow(){
     </div>
     <div class="oc-item-desc" style="font-size:10.5px;color:var(--mu);margin:2px 0 0 2px;"></div>
     <div class="oc-item-costeo" style="font-size:10.5px;color:var(--tx);margin:2px 0 0 2px;"></div>
-    <div style="display:flex;gap:6px;margin-top:5px;">
+    <div style="display:flex;gap:6px;margin-top:5px;align-items:center;">
       <input class="inp oc-item-lote" placeholder="Lote (opcional)" style="flex:1;padding:5px 8px;font-size:11px;">
       <input class="inp oc-item-ficha" type="file" accept="image/*,.pdf" style="flex:1;font-size:10.5px;" title="Ficha técnica (opcional)">
+      <label style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--mu);white-space:nowrap;cursor:pointer;" title="Si el SKU es nuevo, la solicitud de arte pasa por Calidad y Diseño antes del proveedor. Si no, se le pide la reimpresión directo al proveedor.">
+        <input type="checkbox" class="oc-item-nuevo"> SKU nuevo
+      </label>
     </div>`;
   wrap.appendChild(row);
 }
@@ -9925,11 +10725,24 @@ async function ocLlenarFilaDesdeReferencia(row, referencia){
   row.querySelector('.oc-item-ref').value = referencia;
   const dd = row.querySelector('.dd-list'); if(dd){ dd.classList.remove('on'); dd.innerHTML=''; }
   const sug = ocCalcularSugerido(referencia);
-  row.querySelector('.oc-item-desc').textContent = sug ? sug.descripcion + ' · existencia actual: '+reabastFmtN(sug.existencia) : 'Sin datos de inventario para esta referencia';
+  const tieneFicha = REABAST.fichasTecnicas && REABAST.fichasTecnicas[referencia];
+  const refMaestro = REABAST.referenciasMaestro && REABAST.referenciasMaestro[referencia];
+  row.querySelector('.oc-item-desc').innerHTML = (sug ? reabastEsc(sug.descripcion) + ' · existencia actual: '+reabastFmtN(sug.existencia) : 'Sin datos de inventario para esta referencia')
+    + (refMaestro && refMaestro.ean13 ? ' · EAN13: '+reabastEsc(refMaestro.ean13) : '')
+    + (tieneFicha ? ` · <span onclick="ftAbrirFicha('${reabastEsc(referencia)}')" style="color:var(--bl);cursor:pointer;text-decoration:underline;">📄 Ver ficha técnica (catálogo)</span>` : '');
   row.querySelector('.oc-item-cant').value = sug ? sug.sugerido : 1;
   row.querySelector('.oc-item-rot').innerHTML = sug ? `<span class="bdg ${sug.rot.cls}">${sug.rot.lbl}</span>`+(sug.rot.lbl!=='Alta'?' ⚠️':'') : '';
+  // Si ya hay ficha técnica en el catálogo (subida por Excel), no hace falta volver a adjuntar archivo
+  const fichaWrap = row.querySelector('.oc-item-ficha');
+  if(fichaWrap) fichaWrap.style.display = tieneFicha ? 'none' : '';
+  row.dataset.tieneFichaCatalogo = tieneFicha ? '1' : '';
   const fobInput = row.querySelector('.oc-item-fob');
-  if(!fobInput.value){ fobInput.value = ocSimularFOB(referencia); row.dataset.fobSimulado = '1'; }
+  if(refMaestro && refMaestro.fob_usd!=null){
+    fobInput.value = refMaestro.fob_usd;
+    row.dataset.fobSimulado = '';
+  } else if(!fobInput.value){
+    fobInput.value = ocSimularFOB(referencia); row.dataset.fobSimulado = '1';
+  }
   row.dataset.precioVenta = '';
   try{
     const precios = await sb.get('precios_lista', `lista=eq.${OC_LISTA_PRECIO_MARGEN}&referencia=eq.${encodeURIComponent(referencia)}&select=precio&limit=1`);
@@ -9937,6 +10750,32 @@ async function ocLlenarFilaDesdeReferencia(row, referencia){
   }catch(e){ console.warn('Error consultando precio de lista:', e.message); }
   ocRecalcularFila(row);
 }
+// ── Visor simple de una ficha técnica del catálogo ──
+function ftAbrirFicha(referencia){
+  const datos = (REABAST.fichasTecnicas && REABAST.fichasTecnicas[referencia]) || {};
+  if(!document.getElementById('modal-ficha-ver')){
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `<div class="ov" id="modal-ficha-ver">
+      <div class="mo">
+        <div class="mh"><div class="mt" id="ftv-titulo">Ficha técnica</div><div class="mx" onclick="document.getElementById('modal-ficha-ver').classList.remove('on')">✕</div></div>
+        <div class="mb" id="ftv-body"></div>
+      </div>
+    </div>`;
+    document.body.appendChild(wrap.firstElementChild);
+  }
+  document.getElementById('ftv-titulo').textContent = 'Ficha técnica · ' + referencia;
+  const claves = Object.keys(datos);
+  document.getElementById('ftv-body').innerHTML = claves.length ? claves.map(k=>{
+    const v = datos[k];
+    const esLink = typeof v === 'string' && /^https?:\/\//i.test(v);
+    return `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--b1);font-size:12.5px;">
+      <span style="color:var(--mu);">${reabastEsc(k)}</span>
+      <span style="text-align:right;">${esLink ? `<a href="${v}" target="_blank" style="color:var(--bl);">Abrir ↗</a>` : reabastEsc(String(v))}</span>
+    </div>`;
+  }).join('') : '<div class="empty"><div class="empty-t">Sin datos</div></div>';
+  document.getElementById('modal-ficha-ver').classList.add('on');
+}
+
 function ocSeleccionarReferencia(el, referencia){ ocLlenarFilaDesdeReferencia(el.closest('.oc-item-row'), referencia); }
 function ocAgregarSugerido(referencia){
   const wrap = document.getElementById('oc-items-wrap');
@@ -10001,6 +10840,7 @@ async function crearOC(){
       cantidad: Number(f.querySelector('.oc-item-cant').value)||0,
       precio_fob_usd: fob, costo_unitario_cop: costoUnitCop, precio_venta_cop: precioVenta, margen_pct: margen,
       lote: f.querySelector('.oc-item-lote').value.trim() || null,
+      sku_nuevo: !!f.querySelector('.oc-item-nuevo')?.checked,
       _fichaFile: f.querySelector('.oc-item-ficha').files[0] || null
     };
   }).filter(it=>it.referencia && it.cantidad>0);
@@ -10016,7 +10856,15 @@ async function crearOC(){
     const ocCreada = await sbReabast.post('ordenes_compra', {numero_oc:numero, proveedor: proveedor||null, creado_por: CU.nombre, trm, factor_landeo: factor});
     const oc = ocCreada[0];
     await sbReabast.post('oc_items', items.map(it=>({oc_id:oc.id, ...it})));
-    const etapasFilas = OC_ETAPAS_TEMPLATE.map((et,i)=>{
+    // Si al menos un ítem es SKU nuevo, la OC toma el camino largo de arte (Calidad → Diseño →
+    // proveedor); si no, el corto (reimpresión directo al proveedor). Nunca los dos a la vez.
+    const requiereArteNuevo = items.some(it=>it.sku_nuevo);
+    const plantillaOC = OC_ETAPAS_TEMPLATE.filter(et => {
+      if(et.soloSi==='nuevo') return requiereArteNuevo;
+      if(et.soloSi==='existente') return !requiereArteNuevo;
+      return true;
+    });
+    const etapasFilas = plantillaOC.map((et,i)=>{
       const arrancaSola = !et.dependeDe && !et.requiere;
       return { oc_id: oc.id, etapa_id: et.id, nombre: et.nombre, orden: i+1, dias_esperado: et.dias,
         estado: arrancaSola?'en_curso':'pendiente', fecha_inicio: arrancaSola?ahora:null };
@@ -10045,6 +10893,26 @@ function reabastHtmlPolitica(){
   if(!REABAST._combinados) REABAST._combinados = reabastCombinarInventarioPolitica();
   if(!REABAST.politicaFiltro) REABAST.politicaFiltro = { q:'', soloSinConfig:true };
   return `
+    <div class="hist-inline" style="margin-bottom:14px;">
+      <div style="font-size:11.5px;font-weight:700;margin-bottom:6px;">🏷️ Generador de EAN13/EAN14 para referencias nuevas</div>
+      <div style="font-size:10.5px;color:var(--mu);margin-bottom:8px;">Prefijo fijo 77068510 + los 4 dígitos de la referencia + dígito de control calculado (mismo algoritmo GS1 de gs1co.org — no hace falta ir a esa página).</div>
+      <div class="fg"><label class="fl">Referencia (SKU nuevo)</label><input class="inp" id="ean-ref" style="width:140px;" placeholder="Ej: 2701" oninput="eanGenerarPreview()"></div>
+      <div id="ean-resultado" style="font-size:12px;margin-top:10px;"></div>
+    </div>
+    <div class="hist-inline" style="margin-bottom:14px;">
+      <div style="font-size:11.5px;font-weight:700;margin-bottom:6px;">📋 Ficha técnica PTS (una por producto, tu formato ILUMAX)</div>
+      <div style="font-size:10.5px;color:var(--mu);margin-bottom:8px;">El archivo tipo "PTS-XXXX-OCI-YYY.xlsx" con la hoja PROCUREMENT SPECS — detecta solo la referencia (celda "Code:") y toma los campos que sí tengan valor (ignora los que digan MISSING o estén vacíos).</div>
+      <input type="file" id="pts-file" accept=".xlsx,.xls" style="display:none" onchange="ptsSubirExcel(this)">
+      <button class="btn btn-bl btn-sm" onclick="document.getElementById('pts-file').click()">⬆️ Subir ficha PTS</button>
+      <div id="pts-estado" style="font-size:11px;margin-top:8px;"></div>
+    </div>
+    <div class="hist-inline" style="margin-bottom:14px;">
+      <div style="font-size:11.5px;font-weight:700;margin-bottom:6px;">📄 Fichas técnicas — carga masiva desde Excel (varias referencias a la vez)</div>
+      <div style="font-size:10.5px;color:var(--mu);margin-bottom:8px;">Primera columna REFERENCIA, y las demás columnas que quieras (potencia, voltaje, medidas, link a PDF, lo que manejes) — se guardan tal cual vengan, sin formato fijo. ${Object.keys(REABAST.fichasTecnicas||{}).length} referencia(s) ya tienen ficha cargada.</div>
+      <input type="file" id="ft-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="ftSubirExcel(this)">
+      <button class="btn btn-g btn-sm" onclick="document.getElementById('ft-file').click()">⬆️ Subir Excel de varias referencias</button>
+      <div id="ft-estado" style="font-size:11px;margin-top:8px;"></div>
+    </div>
     <div style="font-size:11px;color:var(--mu);margin-bottom:10px;">
       El mínimo y máximo se calculan <strong>automáticamente</strong> con el promedio de venta mensual, el tiempo de entrega y el margen de seguridad.
       Solo necesitas configurar proveedor, tiempo de entrega, MOQ y margen; si quieres forzar un mínimo/máximo distinto, edítalo directamente y queda como manual.
@@ -10056,6 +10924,89 @@ function reabastHtmlPolitica(){
       </label>
     </div>
     <div id="pol-tabla-wrap"></div>`;
+}
+
+// Lee el formato PTS de ILUMAX: una ficha por producto, hoja "PROCUREMENT SPECS",
+// referencia en la celda junto a "Code:", y filas Español/valor con secciones intercaladas.
+async function ptsSubirExcel(input){
+  const file = input.files[0]; if(!file) return;
+  const estado = document.getElementById('pts-estado');
+  estado.innerHTML = '⏳ Leyendo PTS…';
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array'});
+    const nombreHoja = wb.SheetNames.find(n=>/procure/i.test(n)) || wb.SheetNames[wb.SheetNames.length-1];
+    const filas = XLSX.utils.sheet_to_json(wb.Sheets[nombreHoja], {header:1, defval:null});
+
+    let referencia = null;
+    for(const fila of filas){
+      const idx = (fila||[]).findIndex(c=>typeof c==='string' && c.trim().toUpperCase()==='CODE:');
+      if(idx>=0 && fila[idx+1]!=null){ referencia = String(fila[idx+1]).trim(); break; }
+    }
+    if(!referencia){ estado.innerHTML = '<span style="color:var(--rd);">No encontré la celda "Code:" con la referencia — ¿es el formato PTS de Ilumax?</span>'; return; }
+
+    const SECCIONES = new Set(['Características','Datos Eléctricos','Datos Ópticos','Datos Físicos','Datos Logísticos','Datos de Sensor','Datos Batería','Datos Panel Solar']);
+    const BLOQUEADOS = new Set(['MISSING','N/A','NA','']);
+    const datos = {};
+    let dentroTabla = false;
+    for(const fila of filas){
+      const a = fila && fila[0], c = fila && fila[2];
+      if(a==null) continue;
+      const aTxt = String(a).trim();
+      if(aTxt==='Español'){ dentroTabla = true; continue; }
+      if(!dentroTabla) continue;
+      if(SECCIONES.has(aTxt)) continue;
+      if(c==null) continue;
+      const cTxt = String(c).trim();
+      if(BLOQUEADOS.has(cTxt.toUpperCase())) continue;
+      datos[aTxt.replace(/\n/g,' ')] = cTxt.replace(/\n/g,' / ');
+    }
+    if(!Object.keys(datos).length){ estado.innerHTML = '<span style="color:var(--rd);">No encontré campos con valor en el archivo</span>'; return; }
+
+    const r = await fetch(SB_REABAST_URL+'/rest/v1/fichas_tecnicas?on_conflict=referencia', {
+      method:'POST', headers:{...sbReabast.headers, 'Prefer':'resolution=merge-duplicates,return=minimal'},
+      body: JSON.stringify([{referencia, datos, actualizado:new Date().toISOString()}])
+    });
+    if(!r.ok) throw new Error(await r.text());
+    await cargarOC();
+    estado.innerHTML = '<span style="color:var(--gr);">✅ Ficha técnica de la referencia '+referencia+' cargada ('+Object.keys(datos).length+' campos).</span>';
+    input.value = '';
+    reabastPintar();
+  }catch(e){ estado.innerHTML = '<span style="color:var(--rd);">Error: '+e.message+'</span>'; }
+}
+
+async function ftSubirExcel(input){
+  const file = input.files[0]; if(!file) return;
+  const estado = document.getElementById('ft-estado');
+  estado.innerHTML = '⏳ Leyendo archivo…';
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array'});
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval:null});
+    if(!rows.length){ estado.innerHTML = '<span style="color:var(--rd);">El archivo está vacío</span>'; return; }
+    const columnas = Object.keys(rows[0]);
+    const colRef = columnas.find(c=>c.trim().toUpperCase().startsWith('REFEREN')) || columnas[0];
+    const filas = rows.map(r=>{
+      const referencia = String(r[colRef]||'').trim();
+      if(!referencia) return null;
+      const datos = {};
+      columnas.forEach(c=>{ if(c!==colRef && r[c]!=null && r[c]!=='') datos[c] = r[c]; });
+      return { referencia, datos, actualizado: new Date().toISOString() };
+    }).filter(Boolean);
+    if(!filas.length){ estado.innerHTML = '<span style="color:var(--rd);">No se encontraron referencias válidas en la primera columna</span>'; return; }
+    estado.innerHTML = '⏳ Subiendo '+filas.length+' fichas…';
+    const BATCH = 300;
+    for(let i=0;i<filas.length;i+=BATCH){
+      await fetch(SB_REABAST_URL+'/rest/v1/fichas_tecnicas?on_conflict=referencia', {
+        method:'POST', headers:{...sbReabast.headers, 'Prefer':'resolution=merge-duplicates,return=minimal'},
+        body: JSON.stringify(filas.slice(i,i+BATCH))
+      });
+    }
+    await cargarOC();
+    estado.innerHTML = '<span style="color:var(--gr);">✅ '+filas.length+' fichas técnicas cargadas/actualizadas.</span>';
+    input.value = '';
+    reabastPintar();
+  }catch(e){ estado.innerHTML = '<span style="color:var(--rd);">Error: '+e.message+'</span>'; }
 }
 
 function reabastFilasPolitica(){
@@ -12338,7 +13289,7 @@ var PV = {
   stockMap: {}             // {referencia: existencia total en todas las bodegas} — ver pvActualizarStock()
 };
 
-const CANALES_DEFAULT = ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara'];
+const CANALES_DEFAULT = ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara','Proyectos'];
 
 // ── Control de acceso por canal (permisos_ventas_canal) ────────────────
 // admin → todo, edición. rolPres contabilidad/gerencia → todo, solo lectura
@@ -18219,7 +19170,7 @@ const EX_TABLAS = {
       { id:'estado',      lbl:'Estado',        tipo:'texto',  requerido:false, desc:'borrador / aprobado' },
     ],
     ejemplo: (cols) => {
-      return ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara'].map(canal => {
+      return ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara','Proyectos'].map(canal => {
         const row = {};
         if(cols.includes('anio'))       row.anio       = 2026;
         if(cols.includes('canal'))      row.canal      = canal;
@@ -18230,7 +19181,7 @@ const EX_TABLAS = {
       });
     },
     generarDatos: async (cols, cfg) => {
-      const canales = cfg.canales || ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara'];
+      const canales = cfg.canales || ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara','Proyectos'];
       return canales.map(canal => {
         const row = {};
         if(cols.includes('anio'))       row.anio       = cfg.anio||2026;
@@ -18393,7 +19344,7 @@ function acRenderExportador(el) {
         ${EX.tablaActiva==='presupuesto_ventas'||EX.tablaActiva==='presupuesto_detalle'||EX.tablaActiva==='ventas_historico' ? `
         <label style="font-size:9px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">CANALES</label>
         <div style="display:flex;flex-direction:column;gap:3px;border:1px solid var(--b1);border-radius:8px;padding:6px;margin-bottom:6px;">
-          ${['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara'].map(canal=>`
+          ${['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara','Proyectos'].map(canal=>`
           <label style="display:flex;align-items:center;gap:6px;font-size:10px;cursor:pointer;">
             <input type="checkbox" ${EX.cfg.canales.length===0||EX.cfg.canales.includes(canal)?'checked':''}
               onchange="if(this.checked){if(!EX.cfg.canales.includes('${canal}'))EX.cfg.canales.push('${canal}');}else{EX.cfg.canales=EX.cfg.canales.filter(x=>x!=='${canal}');}"
@@ -18466,7 +19417,7 @@ async function exGenerarPreview() {
         ...EX.cfg,
         areas:   EX.cfg.areas.length   ? EX.cfg.areas   : [...new Set(AC.usuarios.map(u=>u.area).filter(Boolean))],
         meses:   EX.cfg.meses.length   ? EX.cfg.meses   : [1,2,3,4,5,6,7,8,9,10,11,12],
-        canales: EX.cfg.canales.length ? EX.cfg.canales : ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara'],
+        canales: EX.cfg.canales.length ? EX.cfg.canales : ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara','Proyectos'],
       };
       rowsCompletas = await tabla.generarDatos(EX.colsSel, cfg);
     }
@@ -18555,7 +19506,7 @@ async function exDescargarTxt() {
       ...EX.cfg,
       areas:   EX.cfg.areas.length   ? EX.cfg.areas   : [...new Set(AC.usuarios.map(u=>u.area).filter(Boolean))],
       meses:   EX.cfg.meses.length   ? EX.cfg.meses   : [1,2,3,4,5,6,7,8,9,10,11,12],
-      canales: EX.cfg.canales.length ? EX.cfg.canales : ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara'],
+      canales: EX.cfg.canales.length ? EX.cfg.canales : ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara','Proyectos'],
     };
     const rows = await tabla.generarDatos(EX.colsSel, cfg);
 
