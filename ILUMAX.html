@@ -10629,15 +10629,27 @@ function reabastAbrirDetalleOC(ocId){
     <div class="admin-sec" style="margin-bottom:14px;padding:10px;background:var(--s1);border-radius:8px;">
       <div class="admin-sec-t" style="margin-bottom:8px;">📄 Datos para el documento de la orden de compra</div>
       <div class="fg2">
+        <div class="fg"><label class="fl">Fecha de la orden</label><input class="inp" type="date" id="ocd-fecha" value="${reabastEsc(o.fecha_orden||(o.creado_en?new Date(o.creado_en).toISOString().slice(0,10):''))}"></div>
         <div class="fg"><label class="fl">Batch / Lote</label><input class="inp" id="ocd-lote" value="${reabastEsc(o.lote||'')}"></div>
+      </div>
+      <div class="fg2">
         <div class="fg"><label class="fl">Incoterm</label><input class="inp" id="ocd-incoterm" value="${reabastEsc(o.incoterm||prov?.incoterm||'')}"></div>
+        <div class="fg"><label class="fl">Payment Terms</label><input class="inp" id="ocd-pago" value="${reabastEsc(o.terminos_pago||prov?.termino_pago||'')}"></div>
       </div>
       <div class="fg"><label class="fl">Delivery date must be</label><input class="inp" id="ocd-entrega" value="${reabastEsc(o.terminos_entrega||'')}" placeholder="Ej: 30 Days order date"></div>
-      <div class="fg"><label class="fl">Payment Terms</label><input class="inp" id="ocd-pago" value="${reabastEsc(o.terminos_pago||prov?.termino_pago||'')}"></div>
       <div class="fg2">
         <div class="fg"><label class="fl">Destino (To:)</label><input class="inp" id="ocd-destino" value="${reabastEsc(o.destino||'To: Buenaventura (COL) final destination: Cali (COL).')}"></div>
         <div class="fg"><label class="fl">% Depósito</label><input class="inp" type="number" step="0.01" id="ocd-deposito" value="${o.deposito_pct!=null?o.deposito_pct:(prov?.porcentaje_anticipo!=null?prov.porcentaje_anticipo:'')}"></div>
       </div>
+      <div style="font-size:10.5px;color:var(--mu);margin:2px 0 10px;">
+        📇 Contacto del proveedor: ${prov ? [prov.nombre_contacto&&('Contacto: '+reabastEsc(prov.nombre_contacto)), prov.telefono&&('Tel: '+reabastEsc(prov.telefono)), prov.whatsapp&&('WhatsApp: '+reabastEsc(prov.whatsapp)), prov.correo&&('Correo: '+reabastEsc(prov.correo))].filter(Boolean).join(' · ')||'sin datos guardados' : '—'}
+      </div>
+      <div class="admin-sec-t" style="margin-bottom:8px;">🧑‍💼 Comprador (sale en el documento)</div>
+      <div class="fg2">
+        <div class="fg"><label class="fl">Nombre</label><input class="inp" id="ocd-comprador-nombre" value="${reabastEsc(o.comprador_nombre||o.creado_por||'')}"></div>
+        <div class="fg"><label class="fl">Correo</label><input class="inp" type="email" id="ocd-comprador-correo" value="${reabastEsc(o.comprador_correo||'')}"></div>
+      </div>
+      <div class="fg"><label class="fl">Teléfono</label><input class="inp" id="ocd-comprador-telefono" value="${reabastEsc(o.comprador_telefono||'')}"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn btn-g btn-sm" onclick="reabastGuardarDatosDocOC('${ocId}')">💾 Guardar datos</button>
         <button class="btn btn-bl btn-sm" onclick="reabastVerDocumentoOC('${ocId}')">🖨️ Ver / imprimir orden de compra</button>
@@ -10709,12 +10721,16 @@ function reabastInjectModalOCDetalle(){
 // Guarda los datos propios del documento (batch, incoterm, términos, destino, % depósito) en la OC.
 async function reabastGuardarDatosDocOC(ocId){
   const payload = {
-    lote:              (document.getElementById('ocd-lote').value||'').trim() || null,
-    incoterm:          (document.getElementById('ocd-incoterm').value||'').trim() || null,
-    terminos_entrega:  (document.getElementById('ocd-entrega').value||'').trim() || null,
-    terminos_pago:     (document.getElementById('ocd-pago').value||'').trim() || null,
-    destino:           (document.getElementById('ocd-destino').value||'').trim() || null,
-    deposito_pct:      document.getElementById('ocd-deposito').value!=='' ? Number(document.getElementById('ocd-deposito').value) : null,
+    lote:                (document.getElementById('ocd-lote').value||'').trim() || null,
+    incoterm:            (document.getElementById('ocd-incoterm').value||'').trim() || null,
+    terminos_entrega:    (document.getElementById('ocd-entrega').value||'').trim() || null,
+    terminos_pago:       (document.getElementById('ocd-pago').value||'').trim() || null,
+    destino:             (document.getElementById('ocd-destino').value||'').trim() || null,
+    deposito_pct:        document.getElementById('ocd-deposito').value!=='' ? Number(document.getElementById('ocd-deposito').value) : null,
+    fecha_orden:         document.getElementById('ocd-fecha').value || null,
+    comprador_nombre:    (document.getElementById('ocd-comprador-nombre').value||'').trim() || null,
+    comprador_correo:    (document.getElementById('ocd-comprador-correo').value||'').trim() || null,
+    comprador_telefono:  (document.getElementById('ocd-comprador-telefono').value||'').trim() || null,
   };
   try{
     await sbReabast.patch('ordenes_compra', 'id=eq.'+ocId, payload);
@@ -10731,7 +10747,7 @@ function reabastVerDocumentoOC(ocId){
   const items = REABAST.ocItems[ocId]||[];
   const prov = (REABAST.proveedores||[]).find(p=>(p.nombre||'').toLowerCase()===(o.proveedor||'').toLowerCase()) || {};
   const refPorCodigo = REABAST.referenciasMaestro||{};
-  const fecha = o.creado_en ? new Date(o.creado_en) : new Date();
+  const fecha = o.fecha_orden ? new Date(o.fecha_orden+'T12:00:00') : (o.creado_en ? new Date(o.creado_en) : new Date());
   const fechaTxt = fecha.toLocaleDateString('es-CO', {day:'2-digit', month:'2-digit', year:'numeric'});
   const fmtMoney = n => n==null ? '' : Number(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
   const filas = items.map(it=>{
@@ -10746,6 +10762,12 @@ function reabastVerDocumentoOC(ocId){
   const depositoPct = o.deposito_pct!=null ? o.deposito_pct : 0;
   const deposito = totalAmount * depositoPct;
   const balance = totalAmount - deposito;
+  // Mismo cálculo pero en pesos colombianos (costo landeado: FOB × factor × TRM), para que se vea
+  // cuánto hay que pagar de anticipo y de saldo en ambas monedas.
+  const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*(Number(it.cantidad)||0),0);
+  const depositoCop = totalCop * depositoPct;
+  const balanceCop = totalCop - depositoCop;
+  const fmtCop = n => n==null ? '' : Math.round(n).toLocaleString('es-CO');
   const celda = 'padding:4px 6px;border:1px solid #999;font-size:10.5px;vertical-align:middle;';
   const celdaC = celda+'text-align:center;';
   const celdaN = celda+'text-align:right;';
@@ -10766,9 +10788,9 @@ function reabastVerDocumentoOC(ocId){
       <div style="margin-top:8px;font-size:10.5px;line-height:1.5;">
         ILUMAX TRADING CORP<br>
         1860 N Pine Island Rd Suite 106 Plantation Fl 33322<br>
-        Phone number: +57-3104348478<br>
-        Contact person: Luisa Jaramillo<br>
-        email: comercioexterior@ilumax.com.co
+        ${o.comprador_telefono?'Phone number: '+reabastEsc(o.comprador_telefono)+'<br>':''}
+        Buyer: ${reabastEsc(o.comprador_nombre||o.creado_por||'')}<br>
+        ${o.comprador_correo?'email: '+reabastEsc(o.comprador_correo):''}
       </div>
     </td>
     <td style="width:30%;text-align:center;vertical-align:top;">
@@ -10778,7 +10800,7 @@ function reabastVerDocumentoOC(ocId){
       <table>
         <tr><td style="${etiqueta}">Acronym</td><td style="${celda}">${reabastEsc(prov.siglas||'')}</td></tr>
         <tr><td style="${etiqueta}">Supplier:</td><td style="${celda}">${reabastEsc(prov.nombre||o.proveedor||'')}</td></tr>
-        <tr><td colspan="2" style="${celda}">${reabastEsc(prov.direccion||'')}${prov.correo?'<br>'+reabastEsc(prov.correo).replace(/\n/g,'<br>'):''}${prov.whatsapp?'<br>'+reabastEsc(prov.whatsapp):''}</td></tr>
+        <tr><td colspan="2" style="${celda}">${reabastEsc(prov.direccion||'')}${prov.nombre_contacto?'<br>Contact: '+reabastEsc(prov.nombre_contacto):''}${prov.telefono?'<br>Tel: '+reabastEsc(prov.telefono):''}${prov.correo?'<br>'+reabastEsc(prov.correo).replace(/\n/g,'<br>'):''}${prov.whatsapp?'<br>WhatsApp: '+reabastEsc(prov.whatsapp):''}</td></tr>
       </table>
     </td>
   </tr></table>
@@ -10829,11 +10851,11 @@ function reabastVerDocumentoOC(ocId){
       </tr>`).join('') || `<tr><td colspan="17" style="${celdaC}">Sin ítems</td></tr>`}
     </tbody>
   </table>
-  <table style="width:40%;margin-left:auto;margin-bottom:14px;">
-    <tr><td style="${etiqueta}">TOTAL QTY</td><td style="${celdaN}">${reabastFmtN(totalQty)}</td><td style="${celdaN}">$ ${fmtMoney(totalAmount)}</td></tr>
-    <tr><td style="${etiqueta}">TOTAL</td><td></td><td style="${celdaN}">$ ${fmtMoney(totalAmount)}</td></tr>
-    <tr><td style="${etiqueta}">DEPOSIT</td><td style="${celdaC}">${depositoPct?Math.round(depositoPct*100)+'%':'0%'}</td><td style="${celdaN}">$ ${fmtMoney(deposito)}</td></tr>
-    <tr><td style="${etiqueta}">BALANCE</td><td></td><td style="${celdaN}">$ ${fmtMoney(balance)}</td></tr>
+  <table style="width:56%;margin-left:auto;margin-bottom:14px;">
+    <tr><td style="${etiqueta}">TOTAL QTY</td><td style="${celdaN}">${reabastFmtN(totalQty)}</td><td style="${celdaN}">US$ ${fmtMoney(totalAmount)}</td><td style="${celdaN}">COP $${fmtCop(totalCop)}</td></tr>
+    <tr><td style="${etiqueta}">TOTAL</td><td></td><td style="${celdaN}">US$ ${fmtMoney(totalAmount)}</td><td style="${celdaN}">COP $${fmtCop(totalCop)}</td></tr>
+    <tr><td style="${etiqueta}">DEPOSIT (Anticipo)</td><td style="${celdaC}">${depositoPct?Math.round(depositoPct*100)+'%':'0%'}</td><td style="${celdaN}">US$ ${fmtMoney(deposito)}</td><td style="${celdaN}">COP $${fmtCop(depositoCop)}</td></tr>
+    <tr><td style="${etiqueta}">BALANCE (Saldo)</td><td></td><td style="${celdaN}">US$ ${fmtMoney(balance)}</td><td style="${celdaN}">COP $${fmtCop(balanceCop)}</td></tr>
   </table>
   <table class="box"><tr><td style="${etiqueta}">ADDITIONAL INFORMATION:</td></tr></table>
   <div style="margin-top:6px;line-height:1.6;font-size:10.5px;">
@@ -11271,16 +11293,23 @@ async function ocObtenerTRM(){
 async function abrirModalOC(){
   if(!document.getElementById('modal-oc')) reabastInjectModalOC();
   document.getElementById('oc-numero').value = 'calculando…';
+  document.getElementById('oc-fecha').value = new Date().toISOString().slice(0,10);
   document.getElementById('oc-proveedor').value = '';
+  document.getElementById('oc-proveedor-siglas').value = '';
+  document.getElementById('oc-proveedor-contacto').innerHTML = '';
+  ocActualizarDatalistProveedor();
   document.getElementById('oc-trm').value = OC_TRM_APROX;
   document.getElementById('oc-trm-estado').textContent = '';
   document.getElementById('oc-factor').value = OC_FACTOR_LANDEO_DEFECTO;
-  document.getElementById('oc-lote').value = '';
+  const loteEl = document.getElementById('oc-lote'); loteEl.value = ''; loteEl.dataset.auto = '1';
   document.getElementById('oc-incoterm').value = 'FOB MAIN PORT (SHANGHAI, NINGBO, SHEZHEN)';
   document.getElementById('oc-entrega').value = '';
   document.getElementById('oc-pago').value = '';
   document.getElementById('oc-destino').value = 'To: Buenaventura (COL) final destination: Cali (COL).';
   document.getElementById('oc-deposito').value = '';
+  document.getElementById('oc-comprador-nombre').value = (typeof CU!=='undefined' && CU ? CU.nombre : '') || '';
+  document.getElementById('oc-comprador-correo').value = (typeof CU!=='undefined' && CU ? (CU.email||CU.notifEmail) : '') || '';
+  document.getElementById('oc-comprador-telefono').value = '';
   document.getElementById('oc-sugerencias').innerHTML = ocPanelSugerencias();
   ocRepintarSugerencias('');
   document.getElementById('oc-items-tbody').innerHTML = '';
@@ -11289,16 +11318,68 @@ async function abrirModalOC(){
   document.getElementById('modal-oc').classList.add('on');
   ocObtenerTRM();
   document.getElementById('oc-numero').value = await ocProximoNumero();
+  ocActualizarLote();
+}
+// Llena los <datalist> de Nombre/Siglas del proveedor para la OC (mismo patrón que en el
+// formulario de Referencias/SKU) — con ids propios para no chocar con los datalist de ese modal.
+function ocActualizarDatalistProveedor(){
+  const setOpts = (id, valores) => {
+    const el = document.getElementById(id); if(!el) return;
+    el.innerHTML = [...new Set(valores.filter(Boolean))].sort().map(v=>`<option value="${reabastEsc(v)}">`).join('');
+  };
+  setOpts('dl-oc-proveedor', (REABAST.proveedores||[]).map(p=>p.nombre));
+  setOpts('dl-oc-proveedor-siglas', (REABAST.proveedores||[]).map(p=>p.siglas));
+}
+// Campo Nombre y campo Siglas se completan uno al otro en cuanto reconoce el proveedor —
+// igual que reabastSincronizarProveedor en Referencias, pero con los ids propios de la OC.
+function ocSincronizarProveedor(origen, el){
+  const v = (el.value||'').trim();
+  const otroEl = document.getElementById(origen==='siglas' ? 'oc-proveedor' : 'oc-proveedor-siglas');
+  if(!v) return;
+  let match;
+  if(origen==='siglas'){
+    match = (REABAST.proveedores||[]).find(p=> (p.siglas||'').toLowerCase()===v.toLowerCase());
+    if(match){ el.value = match.siglas || v; if(otroEl) otroEl.value = match.nombre || ''; }
+  } else {
+    match = (REABAST.proveedores||[]).find(p=> (p.siglas||'').toLowerCase()===v.toLowerCase() || (p.nombre||'').toLowerCase()===v.toLowerCase());
+    if(match){ el.value = match.nombre || v; if(otroEl) otroEl.value = match.siglas || ''; }
+  }
+}
+// Compone el Batch/Lote automáticamente: ILM + siglas del proveedor + # de OC + año corto
+// (ej: ILM+HLE+OCI199+26). Si el usuario ya lo editó a mano (oninput en #oc-lote) no lo pisamos.
+function ocActualizarLote(){
+  const loteEl = document.getElementById('oc-lote');
+  if(!loteEl || loteEl.dataset.auto==='0') return;
+  const siglas = (document.getElementById('oc-proveedor-siglas').value||'').trim().toUpperCase();
+  const numero = (document.getElementById('oc-numero').value||'').trim();
+  if(!siglas || !numero || numero==='calculando…') return;
+  const anioCorto = String(new Date().getFullYear()).slice(-2);
+  loteEl.value = 'ILM' + siglas + numero + anioCorto;
+  loteEl.dataset.auto = '1';
 }
 // Cuando se elige/escribe el proveedor, precarga Incoterm/Payment Terms/% depósito desde su ficha
-// (si ya están en blanco) — igual que hace el documento de la OC — para no repetir el dato dos veces.
+// (si ya están en blanco), muestra sus datos de contacto y recompone el Batch/Lote — igual que
+// hace el documento de la OC — para no repetir el dato dos veces.
 function ocProveedorSeleccionado(){
   const nombre = (document.getElementById('oc-proveedor').value||'').trim().toLowerCase();
   const prov = (REABAST.proveedores||[]).find(p=>(p.nombre||'').toLowerCase()===nombre);
-  if(!prov) return;
+  const contactoEl = document.getElementById('oc-proveedor-contacto');
+  if(!prov){ if(contactoEl) contactoEl.innerHTML = ''; return; }
   const incoEl = document.getElementById('oc-incoterm'); if(incoEl && prov.incoterm) incoEl.value = prov.incoterm;
   const pagoEl = document.getElementById('oc-pago'); if(pagoEl && !pagoEl.value && prov.termino_pago) pagoEl.value = prov.termino_pago;
-  const depEl = document.getElementById('oc-deposito'); if(depEl && !depEl.value && prov.porcentaje_anticipo!=null) depEl.value = prov.porcentaje_anticipo;
+  // El % de depósito siempre viene del proveedor (su "% de anticipo" guardado en su ficha) —
+  // se trae automático cada vez que se elige/cambia el proveedor, no solo si está vacío.
+  const depEl = document.getElementById('oc-deposito'); if(depEl && prov.porcentaje_anticipo!=null) depEl.value = prov.porcentaje_anticipo;
+  if(typeof ocRecalcularTotales==='function') ocRecalcularTotales();
+  if(contactoEl){
+    const partes = [];
+    if(prov.nombre_contacto) partes.push('Contacto: '+reabastEsc(prov.nombre_contacto));
+    if(prov.telefono) partes.push('Tel: '+reabastEsc(prov.telefono));
+    if(prov.whatsapp) partes.push('WhatsApp: '+reabastEsc(prov.whatsapp));
+    if(prov.correo) partes.push('Correo: '+reabastEsc(prov.correo));
+    contactoEl.innerHTML = partes.length ? '📇 '+partes.join(' · ') : '<span style="color:var(--or);">Este proveedor no tiene datos de contacto guardados — agrégalos en 🏭 Proveedores.</span>';
+  }
+  ocActualizarLote();
 }
 function reabastInjectModalOC(){
   const wrap = document.createElement('div');
@@ -11308,16 +11389,25 @@ function reabastInjectModalOC(){
       <div class="mb">
         <div class="fg2">
           <div class="fg"><label class="fl"># OC (consecutivo automático)</label><input class="inp" id="oc-numero" readonly style="background:var(--s1);color:var(--mu);"></div>
-          <div class="fg dd-wrap">
-            <label class="fl">Proveedor</label>
-            <input class="inp" id="oc-proveedor" placeholder="Buscar o escribir uno nuevo…" oninput="ocBuscarProveedor(this)" onfocus="ocBuscarProveedor(this)" onchange="ocProveedorSeleccionado()" onblur="setTimeout(()=>{const d=this.closest('.dd-wrap').querySelector('.dd-list'); if(d) d.classList.remove('on');},150)">
-            <div class="dd-list"></div>
+          <div class="fg"><label class="fl">Fecha de la orden</label><input class="inp" type="date" id="oc-fecha"></div>
+        </div>
+        <div class="fg2">
+          <div class="fg">
+            <label class="fl">Proveedor (nombre — o escribe la sigla y se completa solo)</label>
+            <input class="inp" id="oc-proveedor" list="dl-oc-proveedor" placeholder="Buscar o escribir uno nuevo…" onchange="ocSincronizarProveedor('nombre',this);ocProveedorSeleccionado();">
+            <datalist id="dl-oc-proveedor"></datalist>
+          </div>
+          <div class="fg">
+            <label class="fl">Siglas del proveedor</label>
+            <input class="inp" id="oc-proveedor-siglas" list="dl-oc-proveedor-siglas" placeholder="Ej: HZ-LED" onchange="ocSincronizarProveedor('siglas',this);ocProveedorSeleccionado();">
+            <datalist id="dl-oc-proveedor-siglas"></datalist>
           </div>
         </div>
+        <div id="oc-proveedor-contacto" style="font-size:10.5px;color:var(--mu);margin:-6px 0 10px;"></div>
         <div class="admin-sec" style="margin:4px 0 12px;padding:10px;background:var(--s1);border-radius:8px;">
           <div class="admin-sec-t" style="margin-bottom:8px;">📄 Datos del documento (igual que la plantilla de la orden de compra)</div>
           <div class="fg2">
-            <div class="fg"><label class="fl">Batch / Lote</label><input class="inp" id="oc-lote"></div>
+            <div class="fg"><label class="fl">Batch / Lote <span style="font-weight:400;color:var(--mu);">(auto: ILM+siglas+#OC+año — edítalo si hace falta)</span></label><input class="inp" id="oc-lote" oninput="this.dataset.auto='0'"></div>
             <div class="fg"><label class="fl">Incoterm</label><input class="inp" id="oc-incoterm"></div>
           </div>
           <div class="fg2">
@@ -11326,8 +11416,16 @@ function reabastInjectModalOC(){
           </div>
           <div class="fg2">
             <div class="fg"><label class="fl">Destino (To:)</label><input class="inp" id="oc-destino"></div>
-            <div class="fg"><label class="fl">% Depósito</label><input class="inp" type="number" step="0.01" id="oc-deposito"></div>
+            <div class="fg"><label class="fl">% Depósito</label><input class="inp" type="number" step="0.01" id="oc-deposito" oninput="ocRecalcularTotales()"></div>
           </div>
+        </div>
+        <div class="admin-sec" style="margin:4px 0 12px;padding:10px;background:var(--s1);border-radius:8px;">
+          <div class="admin-sec-t" style="margin-bottom:8px;">🧑‍💼 Comprador (quien hace la orden — sale en el documento)</div>
+          <div class="fg2">
+            <div class="fg"><label class="fl">Nombre</label><input class="inp" id="oc-comprador-nombre"></div>
+            <div class="fg"><label class="fl">Correo</label><input class="inp" type="email" id="oc-comprador-correo"></div>
+          </div>
+          <div class="fg"><label class="fl">Teléfono</label><input class="inp" id="oc-comprador-telefono"></div>
         </div>
         <div class="fg2">
           <div class="fg">
@@ -11571,7 +11669,12 @@ function ocRecalcularTotales(){
   });
   if(!n){ el.innerHTML = '<span style="color:var(--mu);">Agrega FOB, TRM y factor de landeo para ver el costo total y el margen.</span>'; return; }
   const margenTotal = totalVenta ? Math.round((1-totalCop/totalVenta)*1000)/10 : null;
-  el.innerHTML = `<strong>Total OC:</strong> US$${totalFob.toFixed(2)} FOB · $${reabastFmtN(totalCop)} COP landeado` + (margenTotal!=null ? ` · Margen promedio ponderado: <strong>${margenTotal}%</strong>` : '');
+  const depositoPct = Number(document.getElementById('oc-deposito')?.value)||0;
+  const anticipoFob = totalFob*depositoPct, anticipoCop = totalCop*depositoPct;
+  const saldoFob = totalFob-anticipoFob, saldoCop = totalCop-anticipoCop;
+  el.innerHTML = `<div><strong>Total OC:</strong> US$${totalFob.toFixed(2)} FOB · $${reabastFmtN(totalCop)} COP landeado` + (margenTotal!=null ? ` · Margen promedio ponderado: <strong>${margenTotal}%</strong>` : '') + `</div>`
+    + (depositoPct ? `<div style="margin-top:4px;">💰 <strong>Total anticipo (${Math.round(depositoPct*100)}%):</strong> US$${anticipoFob.toFixed(2)} · $${reabastFmtN(anticipoCop)} COP</div>
+       <div><strong>Total saldo:</strong> US$${saldoFob.toFixed(2)} · $${reabastFmtN(saldoCop)} COP</div>` : `<div style="margin-top:4px;color:var(--mu);">Define el % Depósito para ver cuánto es el anticipo y el saldo.</div>`);
 }
 
 async function crearOC(){
@@ -11582,12 +11685,16 @@ async function crearOC(){
   const factor = Number(document.getElementById('oc-factor').value)||null;
   if(!proveedor){ if(typeof toast==='function') toast('Selecciona o escribe un proveedor','wa'); return; }
   const datosDoc = {
-    lote:             (document.getElementById('oc-lote').value||'').trim() || null,
-    incoterm:         (document.getElementById('oc-incoterm').value||'').trim() || null,
-    terminos_entrega: (document.getElementById('oc-entrega').value||'').trim() || null,
-    terminos_pago:    (document.getElementById('oc-pago').value||'').trim() || null,
-    destino:          (document.getElementById('oc-destino').value||'').trim() || null,
-    deposito_pct:     document.getElementById('oc-deposito').value!=='' ? Number(document.getElementById('oc-deposito').value) : null,
+    lote:               (document.getElementById('oc-lote').value||'').trim() || null,
+    incoterm:           (document.getElementById('oc-incoterm').value||'').trim() || null,
+    terminos_entrega:   (document.getElementById('oc-entrega').value||'').trim() || null,
+    terminos_pago:      (document.getElementById('oc-pago').value||'').trim() || null,
+    destino:            (document.getElementById('oc-destino').value||'').trim() || null,
+    deposito_pct:       document.getElementById('oc-deposito').value!=='' ? Number(document.getElementById('oc-deposito').value) : null,
+    fecha_orden:        document.getElementById('oc-fecha').value || null,
+    comprador_nombre:   (document.getElementById('oc-comprador-nombre').value||'').trim() || null,
+    comprador_correo:   (document.getElementById('oc-comprador-correo').value||'').trim() || null,
+    comprador_telefono: (document.getElementById('oc-comprador-telefono').value||'').trim() || null,
   };
   const filas = [...document.querySelectorAll('#oc-items-tbody .oc-item-row')];
   const items = filas.map(f=>{
