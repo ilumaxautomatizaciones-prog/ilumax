@@ -1109,6 +1109,7 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
   <div id="inv-content"></div>
 </div>
 
+<div class="page" id="pg-reabast"><div id="reabast-content"></div></div>
 <div class="page" id="pg-inv-ti">
   <div id="inv-ti-content"></div>
 </div>
@@ -1565,6 +1566,10 @@ const ILUMAX_LOGO_DATAURI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAM8AA
 const SB_URL  = 'https://vgjsfbudhrytvcgptdij.supabase.co';
 const SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZnanNmYnVkaHJ5dHZjZ3B0ZGlqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNDkyNzAsImV4cCI6MjEwNDkyNTI3MH0.ydwMto8p_p2DGW3v_beTF02o6mqTSrz_T8hnroKsEpU';
 
+// Base separada solo para el módulo de Reabastecimiento (solicitudes de reposición)
+const SB_REABAST_URL = 'https://zddbublmydtwdiozcpmd.supabase.co';
+const SB_REABAST_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpkZGJ1YmxteWR0d2Rpb3pjcG1kIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAyODA3NDUsImV4cCI6MjEwNTg1Njc0NX0.WBGNaY5XDwa5-_AB5QWPbJs4EQG-3u0oR0w_XdSmDwo';
+
 // Modo offline automático si no hay Supabase configurado
 const MODO_OFFLINE = !SB_URL || !SB_KEY;
 
@@ -1625,6 +1630,37 @@ const sb = {
       body: JSON.stringify(Array.isArray(data) ? data : [data])
     });
     if(!r.ok) { const e = await r.text(); throw new Error(e); }
+    return r.json();
+  }
+};
+
+// ── Cliente hacia la base separada de Reabastecimiento ─────
+const sbReabast = {
+  headers: {
+    'apikey':        SB_REABAST_KEY,
+    'Authorization': 'Bearer ' + SB_REABAST_KEY,
+    'Content-Type':  'application/json',
+    'Prefer':        'return=representation'
+  },
+  async get(tabla, params) {
+    let url = SB_REABAST_URL + '/rest/v1/' + tabla;
+    if(params) url += '?' + params;
+    const r = await fetch(url, { headers: this.headers });
+    if(!r.ok) throw new Error('Supabase GET error: ' + r.status);
+    return r.json();
+  },
+  async post(tabla, data) {
+    const r = await fetch(SB_REABAST_URL + '/rest/v1/' + tabla, {
+      method: 'POST', headers: this.headers, body: JSON.stringify(data)
+    });
+    if(!r.ok) { const e = await r.text(); throw new Error(e); }
+    return r.json();
+  },
+  async patch(tabla, filtro, data) {
+    const r = await fetch(SB_REABAST_URL + '/rest/v1/' + tabla + '?' + filtro, {
+      method: 'PATCH', headers: this.headers, body: JSON.stringify(data)
+    });
+    if(!r.ok) throw new Error('Supabase PATCH error: ' + r.status);
     return r.json();
   }
 };
@@ -2590,6 +2626,7 @@ function buildNav(){
       { id:'pres', lbl:'Presupuesto', ico:'📊' },
       { id:'inv',  lbl:'Inventario',  ico:'📦' },
       { id:'inv-ti', lbl:'Inventario TI', ico:'💻' },
+      { id:'reabast', lbl:'Abastecimiento', ico:'🔁' },
     ]},
 
     { tipo:'grupo', id:'g-comercial', lbl:'🛒 Comercial', header:'Ventas', items:[
@@ -2800,7 +2837,7 @@ function renderNavFav() {
       }).join('');
 }
 
-const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'inv-ti':renderInvTiMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas,centro:renderCentro,'reporte-ventas':renderReporteVentas,'margen-cliente':function(){renderMargenCliente();},'ppto-areas':renderPptoAreas,'admin-center':renderAdminCenter,'mi-equipo':renderMiEquipo};
+const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'inv-ti':renderInvTiMod,reabast:renderReabastMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas,centro:renderCentro,'reporte-ventas':renderReporteVentas,'margen-cliente':function(){renderMargenCliente();},'ppto-areas':renderPptoAreas,'admin-center':renderAdminCenter,'mi-equipo':renderMiEquipo};
 function goPage(id, el){
   // Candado real, no solo cosmético: si el módulo está en el catálogo de 🧩 Módulos por Rol
   // y el usuario no tiene acceso, no lo dejamos entrar aunque lo invoque directo (consola, etc.)
@@ -8080,6 +8117,11 @@ function renderInvVista() {
         <option value="stock">Con stock</option>
         <option value="nostock">Sin stock</option>
       </select>
+      <select class="inp" id="fil-inv-edad" style="width:150px;" onchange="filtrarInvMod()">
+        <option value="">Nuevos y antiguos</option>
+        <option value="nuevo">🆕 Solo nuevos (&lt;1 año)</option>
+        <option value="antiguo">Solo antiguos (≥1 año)</option>
+      </select>
       <select class="inp" id="fil-inv-lista" style="width:180px;" onchange="INV_LISTA_SEL=this.value;filtrarInvMod()">
         <option value="">Sin precio de lista</option>
       </select>
@@ -8104,6 +8146,7 @@ function renderInvVista() {
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Bodega</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Valor total</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">U.M.</th>
+              <th style="background:var(--bg);padding:9px 12px;position:sticky;top:0;border-bottom:1px solid var(--b1);"></th>
               <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);" id="th-inv-precio-lista">Precio lista</th>
             </tr>
           </thead>
@@ -8151,6 +8194,7 @@ async function filtrarInvMod() {
   const q     = (document.getElementById('srch-inv-mod')||{value:''}).value.trim().toLowerCase();
   const bod   = (document.getElementById('fil-inv-bod')||{value:''}).value;
   const stock = (document.getElementById('fil-inv-stock')||{value:'todos'}).value;
+  const edad  = (document.getElementById('fil-inv-edad')||{value:''}).value;
 
   // 1) Filtrar filas crudas (referencia+bodega) por texto y bodega seleccionada
   let filas = INV_DATA.filter(r => {
@@ -8168,13 +8212,14 @@ async function filtrarInvMod() {
     if(!porRef[ref]) {
       porRef[ref] = {
         referencia: ref, descripcion: r.descripcion||'', categoria: r.categoria||'',
-        um: r.um||'', existencia: 0, valorTotal: 0, bodegas: [],
+        um: r.um||'', existencia: 0, valorTotal: 0, bodegas: [], fecha_creacion: r.fecha_creacion||null,
       };
     }
     const g = porRef[ref];
     if(!g.descripcion && r.descripcion) g.descripcion = r.descripcion;
     if(!g.categoria   && r.categoria)   g.categoria   = r.categoria;
     if(!g.um          && r.um)          g.um          = r.um;
+    if(r.fecha_creacion && (!g.fecha_creacion || r.fecha_creacion < g.fecha_creacion)) g.fecha_creacion = r.fecha_creacion;
     const exist = parseFloat(r.existencia||0) || 0;
     const costo = parseFloat(r.costo_prom||0) || 0;
     g.existencia += exist;
@@ -8190,6 +8235,7 @@ async function filtrarInvMod() {
     existencia:  g.existencia,
     costo_prom:  g.existencia > 0 ? (g.valorTotal / g.existencia) : 0,
     bodega:      [...new Set(g.bodegas)].sort().join(', '),
+    fecha_creacion: g.fecha_creacion,
   }));
 
   // 3) Filtro de stock sobre el total ya consolidado
@@ -8198,6 +8244,17 @@ async function filtrarInvMod() {
     if(stock === 'nostock' && r.existencia > 0)     return false;
     return true;
   });
+
+  // 3b) Filtro por antigüedad (fecha de creación): nuevo = menos de 1 año
+  if(edad){
+    const haceUnAnio = new Date(); haceUnAnio.setFullYear(haceUnAnio.getFullYear()-1);
+    const haceUnAnioISO = haceUnAnio.toISOString().slice(0,10);
+    items = items.filter(r => {
+      if(!r.fecha_creacion) return false; // sin fecha conocida, no entra en ninguno de los dos filtros
+      const esNuevo = r.fecha_creacion > haceUnAnioISO;
+      return edad === 'nuevo' ? esNuevo : !esNuevo;
+    });
+  }
 
   // Ordenar: primero las recién actualizadas por SIESA, luego por existencia desc
   items.sort((a,b) => {
@@ -8214,7 +8271,7 @@ async function filtrarInvMod() {
   if(!tbody) return;
 
   if(!items.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--mu);">Sin resultados</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--mu);">Sin resultados</td></tr>';
     return;
   }
 
@@ -8240,6 +8297,12 @@ async function filtrarInvMod() {
   }
 }
 
+function esItemNuevo(fechaCreacionISO){
+  if(!fechaCreacionISO) return false;
+  const haceUnAnio = new Date(); haceUnAnio.setFullYear(haceUnAnio.getFullYear()-1);
+  return fechaCreacionISO > haceUnAnio.toISOString().slice(0,10);
+}
+
 function _renderFilasInv(mostrar, preciosMap) {
   const fmtCOP = n => n ? '$' + Math.round(n).toLocaleString('es-CO') : '—';
   const fmtN   = n => n ? Math.round(n).toLocaleString('es-CO') : '0';
@@ -8255,7 +8318,7 @@ function _renderFilasInv(mostrar, preciosMap) {
       : 'border-bottom:1px solid var(--b1);';
     const precioLista = INV_LISTA_SEL ? preciosMap[r.referencia] : undefined;
     return `<tr style="${rowStyle}" ${resaltada ? 'data-resaltada="1"' : ''}>
-      <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${r.referencia||''}${resaltada?' <span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">SIESA</span>':''}</td>
+      <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${r.referencia||''}${resaltada?' <span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">SIESA</span>':''}${esItemNuevo(r.fecha_creacion)?' <span style="background:#0891b2;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">🆕 NUEVO</span>':''}</td>
       <td style="padding:9px 12px;max-width:220px;font-weight:600;font-size:11px;">${(r.descripcion||'').substring(0,50)}</td>
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.categoria||''}</td>
       <td style="padding:9px 12px;text-align:right;${existColor}">${fmtN(exist)}</td>
@@ -8264,8 +8327,1895 @@ function _renderFilasInv(mostrar, preciosMap) {
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.bodega||''}</td>
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.um||''}</td>
       <td style="padding:9px 12px;text-align:right;font-size:11px;color:var(--bl);font-weight:700;">${INV_LISTA_SEL ? fmtCOP(precioLista) : '—'}</td>
+      <td style="padding:9px 12px;"><button class="btn btn-g btn-sm" data-item='${JSON.stringify({referencia:r.referencia,descripcion:r.descripcion,bodega:r.bodega,existencia:exist}).replace(/'/g,"&#39;")}' onclick="abrirModalReabast(JSON.parse(this.dataset.item))">🔁 Solicitar</button></td>
     </tr>`;
   }).join('');
+}
+
+// ══════════════════════════════════════════════════════════
+// ABASTECIMIENTO — punto de reorden AUTOMÁTICO (según ventas reales),
+// rotación, más vendidos, MOQ, solicitudes y tránsito.
+// Cualquier usuario logueado puede solicitar; aprobador/admin deciden;
+// solo admin define proveedor/MOQ/margen de seguridad por referencia.
+// Datos propios en base separada (sbReabast); inventario y ventas en vivo
+// desde la base principal de Ilumax (sb / INV_DATA / vista ventas_promedio_mensual).
+// ══════════════════════════════════════════════════════════
+let REABAST = { lista: [], politica: [], ventas: {}, abc: {}, clientesPorRef: {}, filtros: {}, tab: 'urgentes' };
+
+function reabastPuedeAprobar(){ return !!(CU && (CU.rol==='aprobador'||CU.rol==='admin')); }
+function reabastEsAdmin(){ return !!(CU && CU.rol==='admin'); }
+function reabastEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function reabastFmtN(n){ return n==null?'—':Math.round(n).toLocaleString('es-CO'); }
+
+const REABAST_ESTADO_BDG = { pendiente:'bp', aprobada:'ba', rechazada:'br', en_transito:'bpu', recibida:'bor' };
+const REABAST_ESTADO_LBL = { pendiente:'Pendiente', aprobada:'Aprobada', rechazada:'Rechazada', en_transito:'En tránsito', recibida:'Recibida' };
+
+async function cargarReabast(){
+  const ocPromise = cargarOC(); // dispara ya mismo, en paralelo con todo lo de abajo
+  const esApro = reabastPuedeAprobar();
+  const qSolic = esApro
+    ? 'select=*&order=fecha_solicitud.desc&limit=400'
+    : `select=*&solicitante_email=eq.${encodeURIComponent(CU.email)}&order=fecha_solicitud.desc&limit=200`;
+  // Todas estas consultas son independientes entre sí — se disparan en paralelo (junto con
+  // las de cargarOC arriba) en vez de una detrás de otra, así la carga tarda lo que tarda
+  // la más lenta de las diez, no la suma de todas.
+  const [lista, politica, ventasRows, abcRows, clientesRows, presuRows] = await Promise.all([
+    sbReabast.get('solicitudes_reabastecimiento', qSolic).catch(e=>{ console.warn('Error cargando reabastecimiento:', e.message); return []; }),
+    sbReabast.get('politica_inventario', 'select=*&order=referencia.asc&limit=5000').catch(e=>{ console.warn('Error cargando política de inventario:', e.message); return []; }),
+    sb.get('ventas_promedio_mensual', 'select=*').catch(e=>{ console.warn('Error cargando ventas promedio:', e.message); return []; }),
+    sb.get('ventas_abc', 'select=*').catch(e=>{ console.warn('Error cargando ABC:', e.message); return []; }),
+    sb.get('ventas_cliente_producto', 'select=*&order=valor_cop.desc').catch(e=>{ console.warn('Error cargando clientes por producto:', e.message); return []; }),
+    sb.get('presupuesto_mensual_referencia', 'select=*').catch(e=>{ console.warn('Error cargando presupuesto de ventas:', e.message); return []; }),
+  ]);
+  REABAST.lista = lista||[];
+  REABAST.politica = politica||[];
+  REABAST.ventas = {}; (ventasRows||[]).forEach(v => { REABAST.ventas[v.referencia] = v; });
+  REABAST.abc = {}; (abcRows||[]).forEach(v => { REABAST.abc[v.referencia] = v; });
+  REABAST.clientesPorRef = {}; (clientesRows||[]).forEach(v => { (REABAST.clientesPorRef[v.referencia] = REABAST.clientesPorRef[v.referencia]||[]).push(v); });
+  REABAST.presupuesto = {}; (presuRows||[]).forEach(p => { (REABAST.presupuesto[p.referencia] = REABAST.presupuesto[p.referencia]||[]).push(p); });
+  await ocPromise;
+}
+
+// Promedio mensual esperado según el PRESUPUESTO DE VENTAS de comercial (no el histórico),
+// tomando los meses que faltan del año en curso para esa referencia (suma de todos los canales).
+function reabastPromedioPresupuestado(referencia){
+  const filas = REABAST.presupuesto && REABAST.presupuesto[referencia];
+  if(!filas || !filas.length) return null;
+  const hoy = new Date();
+  const anioActual = hoy.getFullYear(), mesActual = hoy.getMonth()+1;
+  let futuras = filas.filter(f => f.anio===anioActual && f.mes>=mesActual);
+  if(!futuras.length) futuras = filas.filter(f => f.anio===anioActual);
+  if(!futuras.length) return null;
+  const total = futuras.reduce((a,f)=>a+Number(f.unidades||0),0);
+  return { promedio: total/futuras.length, meses: futuras.length };
+}
+
+// ══════════════════════════════════════════════════════════
+// ÓRDENES DE COMPRA — seguimiento del proceso de importación
+// Etapas estándar de una importación (China → bodega Ilumax), con sus
+// tiempos esperados. Ajusta los días aquí si tu proceso real difiere.
+// ══════════════════════════════════════════════════════════
+// Modelo de dependencias (no todo es una fila estricta):
+// - Sin "dependeDe" ni "requiere": arranca sola desde el momento en que se crea la OC.
+// - "dependeDe": 'x' → arranca en cuanto x se completa.
+// - "requiere": ['x','y','z'] → arranca solo cuando TODAS esas ya están completadas
+//   (ej. Producción no arranca hasta que Diseño, Anticipo y PI estén listos, sin importar
+//   el orden en que se hagan).
+// - "requiereAdjunto": al marcar "OK" pide subir una foto/comprobante antes de completarla.
+// - "tienePago": además del adjunto, pide el valor pagado en COP y USD y calcula el saldo
+//   pendiente contra el total de la OC.
+const OC_ETAPAS_TEMPLATE = [
+  {id:'oc_creada',              nombre:'Creación de OC',                 dias:2,    area:'Compras'},
+  {id:'diseno_arte_recibido',   nombre:'Diseño de arte — Recibido',      dias:0.25, area:'Diseño',   independiente:true},
+  {id:'diseno_arte_terminado',  nombre:'Diseño de arte — Terminado',     dias:6,    area:'Diseño',   independiente:true, dependeDe:'diseno_arte_recibido', requiereAdjunto:true},
+  {id:'aprobacion_gerencia',    nombre:'Aprobación Gerencia',            dias:2,    area:'Gerencia',  independiente:true},
+  {id:'pi_confirmada',          nombre:'PI confirmada con proveedor',    dias:3,    area:'Compras',   independiente:true},
+  {id:'anticipo_pagado',        nombre:'Pago de anticipo',               dias:2,    area:'Cartera',   independiente:true, requiereAdjunto:true, tienePago:true},
+  {id:'produccion',             nombre:'Producción',                     dias:48,   area:'Compras',  requiere:['diseno_arte_terminado','anticipo_pagado','pi_confirmada']},
+  {id:'inspeccion_calidad',     nombre:'Inspección de calidad',          dias:3,    area:'Calidad',   dependeDe:'produccion'},
+  {id:'booking',                nombre:'Reserva naviera (booking)',      dias:3,    area:'Comercio Exterior', dependeDe:'inspeccion_calidad'},
+  {id:'embarque',               nombre:'Embarque',                       dias:2,    area:'Comercio Exterior', dependeDe:'booking'},
+  {id:'transito_maritimo',      nombre:'Tránsito marítimo',              dias:35,   area:'Comercio Exterior', dependeDe:'embarque'},
+  {id:'arribo_puerto',          nombre:'Arribo a puerto',                dias:1,    area:'Comercio Exterior', dependeDe:'transito_maritimo'},
+  {id:'nacionalizacion',        nombre:'Nacionalización (aduana)',       dias:9,    area:'Comercio Exterior', dependeDe:'arribo_puerto'},
+  {id:'transporte_nacional',    nombre:'Transporte a bodega',            dias:4,    area:'Bodega',    dependeDe:'nacionalizacion'},
+  {id:'recepcion_bodega',       nombre:'Recepción en bodega',            dias:1,    area:'Bodega',    dependeDe:'transporte_nacional'},
+];
+const OC_ETAPAS_POR_ID = {}; OC_ETAPAS_TEMPLATE.forEach(e=>{ OC_ETAPAS_POR_ID[e.id]=e; });
+const OC_ETAPAS_PRINCIPALES = OC_ETAPAS_TEMPLATE.filter(e=>!e.independiente);
+const OC_AREAS = [...new Set(OC_ETAPAS_TEMPLATE.map(e=>e.area))];
+
+// Quién puede marcar una etapa como completa: el admin siempre puede (comodín); además,
+// cualquiera cuya área (CU.area) coincida con el área responsable de esa etapa. Si ningún
+// usuario tiene todavía esa área asignada, solo el admin podrá marcarla — no bloquea nada,
+// simplemente no delega hasta que exista alguien en esa área.
+function reabastPuedeMarcarEtapa(etapa){
+  if(reabastEsAdmin()) return true;
+  const plantilla = OC_ETAPAS_POR_ID[etapa.etapa_id];
+  if(!plantilla) return reabastPuedeAprobar();
+  return !!(CU && CU.area && CU.area.toLowerCase()===plantilla.area.toLowerCase());
+}
+
+// Duración legible: si es menos de un día la muestra en horas (útil para "Diseño recibido",
+// que puede quedar listo en un par de horas en vez de un día completo).
+function reabastFmtDuracion(dias){
+  if(dias==null || isNaN(dias)) return '—';
+  if(dias < 1) return Math.max(0,Math.round(dias*24))+' h';
+  const enteros = Math.floor(dias);
+  const horas = Math.round((dias-enteros)*24);
+  return horas>0 ? enteros+' d '+horas+' h' : enteros+' d';
+}
+
+function ocSemaforo(diasTranscurridos, diasEsperado){
+  if(diasTranscurridos <= diasEsperado) return {cls:'ba', lbl:'En tiempo'};
+  if(diasTranscurridos <= diasEsperado*1.5) return {cls:'bp', lbl:'Atrasado'};
+  return {cls:'br', lbl:'Muy atrasado'};
+}
+
+// Sube un archivo (foto/comprobante) al bucket público "oc-adjuntos" y devuelve su URL pública.
+async function ocSubirAdjunto(file){
+  const nombre = Date.now()+'_'+file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+  const r = await fetch(`${SB_REABAST_URL}/storage/v1/object/oc-adjuntos/${nombre}`, {
+    method:'POST',
+    headers:{ 'apikey':SB_REABAST_KEY, 'Authorization':'Bearer '+SB_REABAST_KEY, 'Content-Type':file.type||'application/octet-stream' },
+    body:file
+  });
+  if(!r.ok) throw new Error(await r.text());
+  return `${SB_REABAST_URL}/storage/v1/object/public/oc-adjuntos/${nombre}`;
+}
+
+async function cargarOC(){
+  const [ordenes, etapasRows, itemsRows, proveedores] = await Promise.all([
+    sbReabast.get('ordenes_compra', 'select=*&order=creado_en.desc&limit=200').catch(e=>{ console.warn('Error cargando OC:', e.message); return []; }),
+    sbReabast.get('oc_etapas', 'select=*&order=orden.asc').catch(e=>{ console.warn('Error cargando etapas OC:', e.message); return []; }),
+    sbReabast.get('oc_items', 'select=*').catch(e=>{ console.warn('Error cargando ítems OC:', e.message); return []; }),
+    sbReabast.get('proveedores', 'select=*&order=nombre.asc').catch(e=>{ console.warn('Error cargando proveedores:', e.message); return []; }),
+  ]);
+  REABAST.ordenesCompra = ordenes||[];
+  REABAST.ocEtapas = {}; (etapasRows||[]).forEach(e => { (REABAST.ocEtapas[e.oc_id]=REABAST.ocEtapas[e.oc_id]||[]).push(e); });
+  REABAST.ocItems = {}; (itemsRows||[]).forEach(it => { (REABAST.ocItems[it.oc_id]=REABAST.ocItems[it.oc_id]||[]).push(it); });
+  REABAST.proveedores = proveedores||[];
+  await ocRepararEtapasHuerfanas();
+}
+
+// Autocorrección: si una etapa quedó "pendiente" pero según la plantilla ACTUAL no depende de
+// nada (debería haber arrancado sola desde el día 1), la despierta. Esto pasa cuando una OC se
+// creó con una versión anterior de la plantilla y luego esta cambió — sin esto, esa etapa se
+// queda esperando un turno que nunca le va a llegar.
+async function ocRepararEtapasHuerfanas(){
+  const ahora = new Date().toISOString();
+  for(const ocId in REABAST.ocEtapas){
+    for(const e of REABAST.ocEtapas[ocId]){
+      if(e.estado!=='pendiente') continue;
+      const t = OC_ETAPAS_POR_ID[e.etapa_id];
+      if(!t || t.dependeDe || t.requiere) continue;
+      try{
+        await sbReabast.patch('oc_etapas', 'id=eq.'+e.id, {estado:'en_curso', fecha_inicio: ahora});
+        e.estado = 'en_curso'; e.fecha_inicio = ahora;
+      }catch(err){ console.warn('Error reparando etapa huérfana:', err.message); }
+    }
+  }
+}
+
+// Tiempo de entrega por defecto cuando no está configurado por referencia: 180 días
+// (lo que en promedio se demoran en llegar los productos importados de Ilumax).
+const REABAST_DIAS_ENTREGA_DEFECTO = 180;
+
+async function renderReabastMod(){
+  const el = document.getElementById('reabast-content');
+  if(!el) return;
+  const fresco = REABAST._cargadoEn && (Date.now()-REABAST._cargadoEn) < 60000; // 60s
+  if(!fresco) el.innerHTML = '<div style="padding:14px;text-align:center;color:var(--mu);">⏳ Cargando…</div>';
+  if(!INV_DATA || !INV_DATA.length){ try{ await cargarInventarioSupa(); }catch(e){} }
+  if(!fresco){
+    await cargarReabast();
+    REABAST._cargadoEn = Date.now();
+  }
+  reabastGoTab(REABAST.tab || 'urgentes');
+}
+
+function reabastGoTab(tab){ REABAST.tab = tab; reabastPintar(); }
+
+// ── Punto de reorden automático ──
+// mínimo = demanda durante el tiempo de entrega + STOCK DE SEGURIDAD
+// El "promedio mensual esperado" prioriza el PRESUPUESTO DE VENTAS de comercial (lo que
+// proyectaron vender por SKU en los meses que faltan del año); si esa referencia no tiene
+// presupuesto cargado, se usa el promedio histórico real de ventas como respaldo.
+// El stock de seguridad NO es un % fijo: depende de la clase ABC (los A pesan más porque
+// duelen más si se agotan) y de qué tan pareja o irregular es la venta mes a mes (variación
+// real del histórico) — mientras más varía, más colchón necesita. Si el admin define un
+// margen_seguridad_pct manual, ese reemplaza el cálculo automático (control humano por encima).
+// Si el admin puso un valor manual de mínimo/máximo, ese manda sobre cualquier cálculo.
+function reabastDiasSeguridad(referencia, pctVariacion){
+  const abc = REABAST.abc && REABAST.abc[referencia];
+  const clase = abc ? abc.clase : null;
+  const base = clase==='A' ? 15 : clase==='B' ? 10 : clase==='C' ? 5 : 10;
+  const variacion = pctVariacion!=null ? pctVariacion : 30; // sin dato de variación: se asume moderada
+  const factor = 1 + Math.min(variacion,150)/100;
+  return { dias: Math.round(base*factor), clase: clase||'sin clase', base, variacion, factor };
+}
+
+function reabastCalcularPunto(referencia, pol){
+  const v = REABAST.ventas[referencia];
+  const promedioHistorico = v ? parseFloat(v.promedio_mensual)||0 : 0;
+  const presu = reabastPromedioPresupuestado(referencia);
+  const promedio = presu ? presu.promedio : promedioHistorico;
+  const fuentePromedio = presu ? 'presupuesto' : (v ? 'historico' : 'sin_datos');
+  const pctVariacion = v && v.pct_variacion!=null ? parseFloat(v.pct_variacion) : null;
+  const dias = (pol && pol.tiempo_entrega_dias) || REABAST_DIAS_ENTREGA_DEFECTO;
+  const seg = reabastDiasSeguridad(referencia, pctVariacion);
+  const margenManual = (pol && pol.margen_seguridad_pct!=null) ? parseFloat(pol.margen_seguridad_pct) : null;
+  let minimoAuto = null, maximoAuto = null, demandaLeadTime = null, stockSeguridadUnid = null, diasSeguridad = seg.dias;
+  if(promedio > 0){
+    demandaLeadTime = Math.ceil((promedio/30) * dias);
+    if(margenManual!=null){
+      minimoAuto = Math.ceil(demandaLeadTime * (1 + margenManual/100));
+      stockSeguridadUnid = minimoAuto - demandaLeadTime;
+      diasSeguridad = Math.round((stockSeguridadUnid/promedio)*30);
+    } else {
+      stockSeguridadUnid = Math.ceil((promedio/30) * seg.dias);
+      minimoAuto = demandaLeadTime + stockSeguridadUnid;
+    }
+    maximoAuto = Math.ceil(minimoAuto + promedio);
+  }
+  const minimo = (pol && pol.stock_minimo_manual!=null) ? Number(pol.stock_minimo_manual) : minimoAuto;
+  const maximo = (pol && pol.stock_maximo_manual!=null) ? Number(pol.stock_maximo_manual) : maximoAuto;
+  return {
+    minimo, maximo, minimoAuto, maximoAuto, promedio, promedioHistorico, fuentePromedio,
+    mesesPresupuestados: presu?presu.meses:null, pctVariacion, diasEntregaUsados: dias,
+    demandaLeadTime, stockSeguridadUnid, diasSeguridad, claseAbc: seg.clase, margenManual,
+    esManual: !!(pol && pol.stock_minimo_manual!=null)
+  };
+}
+
+// Cobertura: cuántos días/meses dura lo que hay en existencia al ritmo de venta actual
+function reabastCobertura(existencia, promedioMensual){
+  if(!promedioMensual) return { dias:null, meses:null, lbl:'Sin ventas' };
+  const diasCobertura = Math.round((existencia / promedioMensual) * 30);
+  const mesesCobertura = Math.round((existencia/promedioMensual)*10)/10;
+  return { dias:diasCobertura, meses:mesesCobertura, lbl: mesesCobertura+' mes(es) · '+diasCobertura+' días' };
+}
+
+function reabastRotacion(promedio){
+  if(!promedio) return {lbl:'Sin ventas', cls:'bdg-gris'};
+  if(promedio >= 50) return {lbl:'Alta', cls:'ba'};
+  if(promedio >= 10) return {lbl:'Media', cls:'bp'};
+  return {lbl:'Baja', cls:'br'};
+}
+
+// ── Inventario consolidado por REFERENCIA (las ventas no se registran por bodega) ──
+let _invPorRefCache = null, _invPorRefCacheSrc = null;
+function reabastInventarioPorReferencia(){
+  if(_invPorRefCache && _invPorRefCacheSrc === INV_DATA) return _invPorRefCache; // evita recalcular sobre miles de filas en cada llamada
+  const invCuenta = (INV_DATA||[]).filter(r => invBodegaCuenta(r.bodega));
+  const porRef = {};
+  invCuenta.forEach(r=>{
+    const k = r.referencia;
+    if(!porRef[k]) porRef[k] = { referencia:k, descripcion:r.descripcion||'', existencia:0, bodegas:[] };
+    porRef[k].existencia += parseFloat(r.existencia||0)||0;
+    if(parseFloat(r.existencia||0)>0 && r.bodega) porRef[k].bodegas.push(r.bodega.trim());
+  });
+  _invPorRefCache = Object.values(porRef).map(g => ({...g, bodega: [...new Set(g.bodegas)].sort().join(', ')}));
+  _invPorRefCacheSrc = INV_DATA;
+  return _invPorRefCache;
+}
+
+function reabastCalcularUrgentes(){
+  const polMap = {}; REABAST.politica.forEach(p => { polMap[p.referencia] = p; });
+  const inv = reabastInventarioPorReferencia();
+  const urgentes = [];
+  inv.forEach(g=>{
+    const pol = polMap[g.referencia];
+    const punto = reabastCalcularPunto(g.referencia, pol);
+    if(punto.minimo!=null && g.existencia < punto.minimo){
+      urgentes.push({...g, ...punto, proveedor: pol?.proveedor||null, tiempo_entrega_dias: pol?.tiempo_entrega_dias||null, moq: pol?.moq||null});
+    }
+  });
+  urgentes.sort((a,b)=> (a.existencia/(a.minimo||1)) - (b.existencia/(b.minimo||1)));
+  return urgentes;
+}
+
+function reabastCalcularAgotados(){
+  const inv = reabastInventarioPorReferencia();
+  return inv.filter(g => g.existencia <= 0)
+    .map(g => ({...g, ventas: REABAST.ventas[g.referencia]||null}))
+    .sort((a,b)=> (b.ventas?.promedio_mensual||0) - (a.ventas?.promedio_mensual||0));
+}
+
+function reabastCalcularSobrestock(){
+  const polMap = {}; REABAST.politica.forEach(p => { polMap[p.referencia] = p; });
+  const inv = reabastInventarioPorReferencia();
+  const sobre = [];
+  inv.forEach(g=>{
+    const pol = polMap[g.referencia];
+    const punto = reabastCalcularPunto(g.referencia, pol);
+    if(punto.maximo!=null && g.existencia > punto.maximo && punto.maximo > 0){
+      sobre.push({...g, ...punto, cobertura: reabastCobertura(g.existencia, punto.promedio)});
+    }
+  });
+  sobre.sort((a,b)=> (b.existencia/(b.maximo||1)) - (a.existencia/(a.maximo||1)));
+  return sobre;
+}
+
+function reabastPintar(){
+  const el = document.getElementById('reabast-content');
+  if(!el) return;
+  const esApro = reabastPuedeAprobar();
+  const esAdmin = reabastEsAdmin();
+  const pendientes = REABAST.lista.filter(s=>s.estado==='pendiente');
+  REABAST._urgentes = reabastCalcularUrgentes();
+  REABAST._agotados = reabastCalcularAgotados();
+  REABAST._sobrestock = reabastCalcularSobrestock();
+
+  const tabs = [
+    {id:'kanban', lbl:'🗂️ Tablero por área'},
+    {id:'urgentes', lbl:'🚨 Urgentes ('+REABAST._urgentes.length+')'},
+    {id:'oc', lbl:'📑 Órdenes de compra ('+(REABAST.ordenesCompra||[]).filter(o=>o.estado_general==='activa').length+')'},
+    {id:'calendario', lbl:'📅 Calendario de llegadas'},
+    {id:'agotados', lbl:'📦 Agotados ('+REABAST._agotados.length+')'},
+    {id:'sobrestock', lbl:'📈 Sobrestock ('+REABAST._sobrestock.length+')'},
+    {id:'vendidos', lbl:'🏆 Más vendidos'},
+    {id:'abc', lbl:'🔤 Clasificación ABC'},
+    {id:'proveedores', lbl:'🏭 Proveedores'},
+    {id:'solicitudes', lbl:'📋 Solicitudes'},
+    {id:'dashboard', lbl:'📊 Dashboard'},
+  ];
+  if(esAdmin) tabs.push({id:'politica', lbl:'⚙️ Política por referencia'});
+
+  let html = `<div style="padding:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+      <div>
+        <div style="font-size:15px;font-weight:800;">🔁 Abastecimiento</div>
+        <div style="font-size:11px;color:var(--mu);">${esApro ? pendientes.length+' pendiente(s) por aprobar' : 'Tus solicitudes de reposición de inventario'}</div>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-g" onclick="ocExportarReporte()">⬇️ Exportar reporte</button>
+        <button class="btn btn-bl" onclick="abrirModalReabast()">+ Nueva solicitud</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:4px;border-bottom:1px solid var(--b1);margin-bottom:14px;overflow-x:auto;">
+      ${tabs.map(t=>`<div onclick="reabastGoTab('${t.id}')" style="padding:9px 13px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;border-bottom:2px solid ${REABAST.tab===t.id?'var(--bl)':'transparent'};color:${REABAST.tab===t.id?'var(--bl)':'var(--mu)'};">${t.lbl}</div>`).join('')}
+    </div>
+    <div id="reabast-tab-body"></div>
+  </div>`;
+  el.innerHTML = html;
+
+  const body = document.getElementById('reabast-tab-body');
+  if(REABAST.tab==='kanban') body.innerHTML = reabastHtmlKanban();
+  else if(REABAST.tab==='urgentes'){ body.innerHTML = reabastHtmlUrgentesShell(); reabastRepintarUrgentes(); }
+  else if(REABAST.tab==='oc'){ body.innerHTML = reabastHtmlOcShell(); reabastRepintarOC(); }
+  else if(REABAST.tab==='calendario'){ body.innerHTML = reabastHtmlCalendario(); }
+  else if(REABAST.tab==='agotados'){ body.innerHTML = reabastHtmlAgotadosShell(); reabastRepintarAgotados(); }
+  else if(REABAST.tab==='sobrestock'){ body.innerHTML = reabastHtmlSobrestockShell(); reabastRepintarSobrestock(); }
+  else if(REABAST.tab==='vendidos'){ body.innerHTML = reabastHtmlVendidosShell(); reabastRepintarVendidos(); }
+  else if(REABAST.tab==='abc'){ body.innerHTML = reabastHtmlAbcShell(); reabastRepintarAbc(); }
+  else if(REABAST.tab==='proveedores'){ body.innerHTML = reabastHtmlProveedores(); }
+  else if(REABAST.tab==='dashboard') body.innerHTML = reabastHtmlDashboard();
+  else if(REABAST.tab==='politica'){ REABAST._combinados = null; body.innerHTML = reabastHtmlPolitica(); reabastRepintarPolitica(); }
+  else { body.innerHTML = reabastHtmlSolicitudesShell(esApro); reabastRepintarSolicitudes(esApro); }
+}
+
+function reabastFiltro(tab, defecto){ return REABAST.filtros[tab] || (REABAST.filtros[tab] = defecto); }
+function reabastChip(activo, label, onclick){ return `<span class="chip ${activo?'on':''}" onclick="${onclick}" style="margin-right:6px;">${label}</span>`; }
+
+// ═══ Tab: Urgentes ═══
+function reabastHtmlUrgentesShell(){
+  const f = reabastFiltro('urgentes', {q:'', rot:''});
+  return `
+    <div class="toolbar" style="margin-bottom:8px;">
+      <input class="inp" style="flex:1;min-width:180px;" id="urg-q" placeholder="Buscar referencia o descripción…" value="${reabastEsc(f.q)}" oninput="REABAST.filtros.urgentes.q=this.value;reabastRepintarUrgentes()">
+    </div>
+    <div id="urg-wrap"></div>`;
+}
+function reabastRepintarUrgentes(){
+  const wrap = document.getElementById('urg-wrap'); if(!wrap) return;
+  const f = reabastFiltro('urgentes', {q:'', rot:''});
+  const qq = (f.q||'').toLowerCase();
+  let filas = REABAST._urgentes.filter(u => !qq || u.referencia.toLowerCase().includes(qq) || (u.descripcion||'').toLowerCase().includes(qq));
+  if(f.rot) filas = filas.filter(u => reabastRotacion(u.promedio).lbl === f.rot);
+  const chips = ['','Alta','Media','Baja'].map(r => reabastChip(f.rot===r, r||'Todas', `REABAST.filtros.urgentes.rot='${r}';reabastRepintarUrgentes()`)).join('');
+  wrap.innerHTML = `<div style="margin-bottom:10px;">${chips}</div>` + (filas.length ? reabastFilasUrgentesHtml(filas) : '<div class="empty"><div class="empty-t">Sin resultados con ese filtro</div></div>');
+}
+function reabastFilasUrgentesHtml(urgentes){
+  return urgentes.map(u=>{
+    const sugeridoCalc = Math.max(1, Math.round((u.maximo||u.minimo) - u.existencia));
+    const sugerido = u.moq ? Math.max(sugeridoCalc, Number(u.moq)) : sugeridoCalc;
+    const rot = reabastRotacion(u.promedio);
+    const cob = reabastCobertura(u.existencia, u.promedio);
+    return `<div class="sc2" style="border-left:4px solid var(--rd);">
+      <div class="sc2-head">
+        <div><span style="font-family:monospace;font-weight:700;">${reabastEsc(u.referencia)}</span> <span style="color:var(--mu)">· ${reabastEsc(u.bodega)}</span></div>
+        <span class="bdg br">${reabastFmtN(u.existencia)} / mín. ${reabastFmtN(u.minimo)}</span>
+      </div>
+      <div class="sc2-body">
+        ${reabastEsc(u.descripcion||'')}<br>
+        Rotación: <span class="bdg ${rot.cls}">${rot.lbl}</span> (${reabastFmtN(u.promedio)}/mes${u.fuentePromedio==='presupuesto'?' · según presupuesto de ventas':u.fuentePromedio==='historico'?' · según histórico':''})
+        ${u.pctVariacion!=null?' · Variación: '+u.pctVariacion+'%':''} · Cobertura actual: ${cob.lbl}
+        ${u.proveedor?' · Proveedor: '+reabastEsc(u.proveedor):' · <span style="color:var(--or)">sin proveedor configurado</span>'}
+        · Entrega usada: ${u.diasEntregaUsados} día(s)${!u.tiempo_entrega_dias?' (valor por defecto)':''}
+        ${u.moq?' · MOQ: '+reabastFmtN(u.moq):''}
+        ${u.esManual?' · <span style="color:var(--mu)">mínimo manual</span>':' · <span style="color:var(--mu)">mínimo automático</span>'}
+      </div>
+      <div class="sc2-foot"><div class="sc2-acts">
+        <button class="btn btn-bl btn-sm" data-item='${JSON.stringify(u).replace(/'/g,"&#39;")}' data-sug="${sugerido}" onclick="const it=JSON.parse(this.dataset.item); it.sugerido=Number(this.dataset.sug); abrirModalReabast(it)">🔁 Solicitar ${sugerido}</button>
+        <button class="btn btn-g btn-sm" onclick="reabastVerClientes('${reabastEsc(u.referencia)}', this)">👥 Ver clientes</button>
+        <button class="btn btn-g btn-sm" data-item2='${JSON.stringify({...u,sugerido}).replace(/'/g,"&#39;")}' onclick="reabastVerJustificacion(JSON.parse(this.dataset.item2), this)">📊 ¿Por qué?</button>
+        <button class="btn btn-g btn-sm" onclick="reabastVerPresupuesto('${reabastEsc(u.referencia)}', this)">📆 Presupuesto mes a mes</button>
+      </div></div>
+      <div class="reabast-clientes" style="display:none;margin-top:8px;"></div>
+      <div class="reabast-justificacion" style="display:none;margin-top:8px;"></div>
+      <div class="reabast-presupuesto" style="display:none;margin-top:8px;"></div>
+    </div>`;
+  }).join('');
+}
+
+// Presupuesto mes a mes de una referencia y cuánto de eso cubre el inventario disponible
+// (existencia + lo que ya está en camino en OC activas), mes por mes, hasta que se agote.
+function reabastPresupuestoMensualHtml(referencia){
+  const filas = REABAST.presupuesto && REABAST.presupuesto[referencia];
+  if(!filas || !filas.length){
+    return `<div class="hist-inline">Comercial no ha cargado presupuesto de ventas para esta referencia todavía — el cálculo de arriba está usando el promedio histórico real como respaldo.</div>`;
+  }
+  const MESES_LBL = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const hoy = new Date(); const anioActual = hoy.getFullYear(); const mesActual = hoy.getMonth()+1;
+  let usar = filas.filter(f=>f.anio===anioActual && f.mes>=mesActual).sort((a,b)=>a.mes-b.mes);
+  if(!usar.length) usar = filas.filter(f=>f.anio===anioActual).sort((a,b)=>a.mes-b.mes);
+  const inv = reabastInventarioPorReferencia().find(g=>g.referencia===referencia);
+  const existencia = inv ? inv.existencia : 0;
+  const enCamino = reabastCantidadEnCamino(referencia);
+  let disponible = existencia + enCamino;
+  let mesAgota = null;
+  const filasHtml = usar.map(f=>{
+    disponible -= Number(f.unidades||0);
+    if(disponible<0 && mesAgota===null) mesAgota = MESES_LBL[f.mes-1]+' '+f.anio;
+    return `<tr>
+      <td>${MESES_LBL[f.mes-1]} ${f.anio}</td>
+      <td style="text-align:right;">${reabastFmtN(f.unidades)}</td>
+      <td style="text-align:right;${disponible<0?'color:var(--rd);font-weight:700;':'color:var(--gr);'}">${reabastFmtN(disponible)}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="hist-inline">
+    <div style="font-size:11px;margin-bottom:8px;">Inventario disponible hoy: <strong>${reabastFmtN(existencia)}</strong>${enCamino>0?' + '+reabastFmtN(enCamino)+' en camino (OC activas) = <strong>'+reabastFmtN(existencia+enCamino)+'</strong> total':''}</div>
+    <table style="width:100%;font-size:11.5px;border-collapse:collapse;">
+      <thead><tr><th style="text-align:left;">Mes</th><th style="text-align:right;">Presupuestado</th><th style="text-align:right;">Saldo proyectado</th></tr></thead>
+      <tbody>${filasHtml}</tbody>
+    </table>
+    ${mesAgota
+      ? `<div style="margin-top:8px;color:var(--rd);font-weight:700;">⚠️ Con lo que tienes hoy (y lo que ya está en camino), se agotaría en <strong>${mesAgota}</strong> si no llega nada más.</div>`
+      : `<div style="margin-top:8px;color:var(--gr);font-weight:700;">✅ Con lo que tienes hoy alcanza para cubrir todo el presupuesto de estos meses.</div>`}
+  </div>`;
+}
+
+function reabastVerPresupuesto(referencia, btn){
+  const cont = btn.closest('.sc2').querySelector('.reabast-presupuesto');
+  if(cont.style.display==='block'){ cont.style.display='none'; return; }
+  cont.innerHTML = reabastPresupuestoMensualHtml(referencia);
+  cont.style.display = 'block';
+}
+
+// Explicación en lenguaje llano de por qué el mínimo/máximo/sugerido son los que son
+function reabastExplicacionHtml(u){
+  const fuenteTxt = u.fuentePromedio==='presupuesto'
+    ? `Comercial presupuestó vender en promedio <strong>${reabastFmtN(u.promedio)}</strong> unidades/mes en lo que queda del año (${u.mesesPresupuestados} mes${u.mesesPresupuestados===1?'':'es'}).`
+    : u.fuentePromedio==='historico'
+      ? `Según tu histórico real de ventas, esta referencia se vende en promedio <strong>${reabastFmtN(u.promedio)}</strong> unidades/mes.`
+      : 'No hay ventas ni presupuesto registrado, así que no se pudo calcular una demanda esperada.';
+  if(u.promedio<=0) return `<div class="hist-inline">${fuenteTxt}</div>`;
+  const cob = reabastCobertura(u.existencia, u.promedio);
+  let seguridadTxt;
+  if(u.margenManual!=null){
+    seguridadTxt = `Le pusiste un margen de seguridad manual del <strong>${u.margenManual}%</strong> sobre la demanda del tiempo de entrega (tú decidiste este número, no el sistema).`;
+  } else {
+    seguridadTxt = `Se le suma un stock de seguridad de <strong>${reabastFmtN(u.stockSeguridadUnid)} unidades</strong> (${u.diasSeguridad} días de venta) porque es clase <strong>${u.claseAbc.toUpperCase()}</strong> y su venta mensual varía <strong>${u.pctVariacion!=null?u.pctVariacion+'%':'~30% (sin dato exacto)'}</strong> de un mes a otro — mientras más varía la venta, más colchón necesita para no quedarte corto en un mes pico.`;
+  }
+  return `<div class="hist-inline">
+    ${fuenteTxt}<br><br>
+    Con tu inventario actual (<strong>${reabastFmtN(u.existencia)}</strong> unidades) cubres <strong>${cob.lbl}</strong> de esa demanda.<br><br>
+    El proveedor se demora <strong>${u.diasEntregaUsados} día(s)</strong> en entregar${!u.tiempoEntrega&&!u.diasEntregaUsados?'':''}, así que necesitas <strong>${reabastFmtN(u.demandaLeadTime)} unidades</strong> solo para aguantar esa espera.<br><br>
+    ${seguridadTxt}<br><br>
+    Por eso el <strong>mínimo</strong> es ${reabastFmtN(u.minimo)} (${reabastFmtN(u.demandaLeadTime)} de espera + ${reabastFmtN(u.stockSeguridadUnid)} de seguridad) y el <strong>máximo</strong> ${reabastFmtN(u.maximo)}. Como tienes ${reabastFmtN(u.existencia)}, se sugiere pedir <strong>${reabastFmtN(u.sugerido)}</strong> para volver a un nivel saludable.
+  </div>`;
+}
+
+function reabastVerJustificacion(u, btn){
+  const cont = btn.closest('.sc2').querySelector('.reabast-justificacion');
+  if(cont.style.display==='block'){ cont.style.display='none'; return; }
+  cont.innerHTML = reabastExplicacionHtml(u);
+  cont.style.display = 'block';
+}
+
+function reabastVerClientes(referencia, btn){
+  let cont = null;
+  const card = btn.closest('.sc2');
+  if(card) cont = card.querySelector('.reabast-clientes');
+  else {
+    const tr = btn.closest('tr');
+    const nextTr = tr && tr.nextElementSibling;
+    cont = nextTr ? nextTr.querySelector('.reabast-clientes') : null;
+  }
+  if(!cont) return;
+  if(cont.style.display==='block'){ cont.style.display='none'; return; }
+  const clientes = (REABAST.clientesPorRef[referencia]||[]).slice(0,8);
+  cont.innerHTML = clientes.length
+    ? '<div class="hist-inline">' + clientes.map(c=>`<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11.5px;"><span>${reabastEsc(c.cliente_nombre)}</span><strong>${reabastFmtN(c.unidades)} und · $${reabastFmtN(c.valor_cop)}</strong></div>`).join('') + '</div>'
+    : '<div class="hist-inline" style="color:var(--mu);">Sin clientes registrados para esta referencia</div>';
+  cont.style.display = 'block';
+}
+
+// ═══ Tab: Agotados ═══
+function reabastHtmlAgotadosShell(){
+  const f = reabastFiltro('agotados', {q:''});
+  return `<div class="toolbar" style="margin-bottom:8px;">
+      <input class="inp" style="flex:1;min-width:180px;" id="ago-q" placeholder="Buscar referencia o descripción…" value="${reabastEsc(f.q)}" oninput="REABAST.filtros.agotados.q=this.value;reabastRepintarAgotados()">
+    </div><div id="ago-wrap"></div>`;
+}
+function reabastRepintarAgotados(){
+  const wrap = document.getElementById('ago-wrap'); if(!wrap) return;
+  const f = reabastFiltro('agotados', {q:''});
+  const qq = (f.q||'').toLowerCase();
+  const filas = REABAST._agotados.filter(a => !qq || a.referencia.toLowerCase().includes(qq) || (a.descripcion||'').toLowerCase().includes(qq));
+  if(!filas.length){ wrap.innerHTML = '<div class="empty"><div class="empty-t">✅ No hay referencias agotadas</div></div>'; return; }
+  wrap.innerHTML = `<div class="tw"><table>
+    <thead><tr><th>Referencia</th><th>Descripción</th><th>Prom. mensual</th><th>Rotación</th><th></th></tr></thead>
+    <tbody>${filas.map(a=>{
+      const prom = a.ventas ? a.ventas.promedio_mensual : 0;
+      const rot = reabastRotacion(prom);
+      return `<tr>
+        <td style="font-family:monospace;">${reabastEsc(a.referencia)}</td>
+        <td>${reabastEsc((a.descripcion||'').slice(0,60))}</td>
+        <td style="text-align:right;">${reabastFmtN(prom)}</td>
+        <td><span class="bdg ${rot.cls}">${rot.lbl}</span></td>
+        <td><button class="btn btn-bl btn-sm" onclick="abrirModalReabast({referencia:'${reabastEsc(a.referencia)}', descripcion:${JSON.stringify(a.descripcion||'')}, existencia:0})">🔁 Solicitar</button></td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+// ═══ Tab: Sobrestock ═══
+function reabastHtmlSobrestockShell(){
+  const f = reabastFiltro('sobrestock', {q:''});
+  return `<div style="font-size:11px;color:var(--mu);margin-bottom:8px;">Referencias con más existencia de la que necesitan según su venta y ciclo de reposición.</div>
+    <div class="toolbar" style="margin-bottom:8px;">
+      <input class="inp" style="flex:1;min-width:180px;" id="sob-q" placeholder="Buscar referencia…" value="${reabastEsc(f.q)}" oninput="REABAST.filtros.sobrestock.q=this.value;reabastRepintarSobrestock()">
+    </div><div id="sob-wrap"></div>`;
+}
+function reabastRepintarSobrestock(){
+  const wrap = document.getElementById('sob-wrap'); if(!wrap) return;
+  const f = reabastFiltro('sobrestock', {q:''});
+  const qq = (f.q||'').toLowerCase();
+  const filas = REABAST._sobrestock.filter(s => !qq || s.referencia.toLowerCase().includes(qq) || (s.descripcion||'').toLowerCase().includes(qq));
+  if(!filas.length){ wrap.innerHTML = '<div class="empty"><div class="empty-t">✅ Nada por encima del máximo</div></div>'; return; }
+  wrap.innerHTML = `<div class="tw"><table>
+    <thead><tr><th>Referencia</th><th>Existencia</th><th>Máximo</th><th>Cobertura actual</th></tr></thead>
+    <tbody>${filas.map(s=>`<tr>
+      <td style="font-family:monospace;">${reabastEsc(s.referencia)}</td>
+      <td style="text-align:right;">${reabastFmtN(s.existencia)}</td>
+      <td style="text-align:right;">${reabastFmtN(s.maximo)}</td>
+      <td style="text-align:right;color:var(--or);font-weight:700;">${s.cobertura.lbl}</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+// ═══ Tab: Más vendidos ═══
+function reabastHtmlVendidosShell(){
+  const f = reabastFiltro('vendidos', {q:'', rot:''});
+  return `<div style="font-size:11px;color:var(--mu);margin-bottom:8px;">Top 100 por promedio de unidades vendidas al mes (histórico cargado hasta ahora)</div>
+    <div class="toolbar" style="margin-bottom:8px;">
+      <input class="inp" style="flex:1;min-width:180px;" id="ven-q" placeholder="Buscar referencia o descripción…" value="${reabastEsc(f.q)}" oninput="REABAST.filtros.vendidos.q=this.value;reabastRepintarVendidos()">
+    </div><div id="ven-wrap"></div>`;
+}
+function reabastRepintarVendidos(){
+  const wrap = document.getElementById('ven-wrap'); if(!wrap) return;
+  const f = reabastFiltro('vendidos', {q:'', rot:''});
+  const qq = (f.q||'').toLowerCase();
+  const inv = reabastInventarioPorReferencia();
+  const invMap = {}; inv.forEach(g=>{ invMap[g.referencia]=g; });
+  let filas = Object.values(REABAST.ventas)
+    .map(v=>({...v, existencia: invMap[v.referencia]?.existencia ?? null, descripcion: invMap[v.referencia]?.descripcion || ''}))
+    .filter(v => !qq || v.referencia.toLowerCase().includes(qq) || (v.descripcion||'').toLowerCase().includes(qq))
+    .sort((a,b)=> (b.promedio_mensual||0) - (a.promedio_mensual||0));
+  if(f.rot) filas = filas.filter(v => reabastRotacion(v.promedio_mensual).lbl === f.rot);
+  filas = filas.slice(0, 100);
+  const chips = ['','Alta','Media','Baja'].map(r => reabastChip(f.rot===r, r||'Todas', `REABAST.filtros.vendidos.rot='${r}';reabastRepintarVendidos()`)).join('');
+  if(!filas.length){ wrap.innerHTML = `<div style="margin-bottom:10px;">${chips}</div><div class="empty"><div class="empty-t">Sin resultados</div></div>`; return; }
+  wrap.innerHTML = `<div style="margin-bottom:10px;">${chips}</div><div class="tw"><table>
+    <thead><tr><th>#</th><th>Referencia</th><th>Descripción</th><th>Prom. mensual</th><th>Variación</th><th>Rotación</th><th>Existencia</th><th>Cobertura</th><th></th></tr></thead>
+    <tbody>${filas.map((f2,i)=>{
+      const rot = reabastRotacion(f2.promedio_mensual);
+      const cob = reabastCobertura(f2.existencia, f2.promedio_mensual);
+      return `<tr>
+        <td style="color:var(--mu);">${i+1}</td>
+        <td style="font-family:monospace;">${reabastEsc(f2.referencia)}</td>
+        <td>${reabastEsc((f2.descripcion||'').slice(0,45))}</td>
+        <td style="text-align:right;font-weight:700;">${reabastFmtN(f2.promedio_mensual)}</td>
+        <td style="text-align:right;">${f2.pct_variacion!=null?f2.pct_variacion+'%':'—'}</td>
+        <td><span class="bdg ${rot.cls}">${rot.lbl}</span></td>
+        <td style="text-align:right;">${f2.existencia!=null?reabastFmtN(f2.existencia):'—'}</td>
+        <td style="text-align:right;font-size:11px;">${cob.lbl}</td>
+        <td><button class="btn btn-g btn-sm" onclick="reabastVerClientes('${reabastEsc(f2.referencia)}', this)">👥</button></td>
+      </tr>
+      <tr><td colspan="9" style="padding:0;"><div class="reabast-clientes" style="display:none;padding:6px 12px;"></div></td></tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+// ═══ Tab: Clasificación ABC ═══
+function reabastHtmlAbcShell(){
+  const f = reabastFiltro('abc', {q:'', clase:''});
+  return `<div class="toolbar" style="margin-bottom:8px;">
+      <input class="inp" style="flex:1;min-width:180px;" id="abc-q" placeholder="Buscar referencia…" value="${reabastEsc(f.q)}" oninput="REABAST.filtros.abc.q=this.value;reabastRepintarAbc()">
+    </div><div id="abc-wrap"></div>`;
+}
+function reabastRepintarAbc(){
+  const wrap = document.getElementById('abc-wrap'); if(!wrap) return;
+  const todas = Object.values(REABAST.abc||{});
+  if(!todas.length){ wrap.innerHTML = '<div class="empty"><div class="empty-t">Aún no hay histórico de ventas cargado</div></div>'; return; }
+  const f = reabastFiltro('abc', {q:'', clase:''});
+  const conteoClase = {A:0,B:0,C:0};
+  todas.forEach(x=>{ conteoClase[x.clase] = (conteoClase[x.clase]||0)+1; });
+  const claseColor = {A:'ba', B:'bp', C:'bdg-gris'};
+  const qq = (f.q||'').toLowerCase();
+  let filas = todas.filter(x => !qq || x.referencia.toLowerCase().includes(qq));
+  if(f.clase) filas = filas.filter(x => x.clase === f.clase);
+
+  const tarjeta = (clase, color, pct) => {
+    const activa = f.clase===clase;
+    return `<div class="sc2" onclick="REABAST.filtros.abc.clase='${activa?'':clase}';reabastRepintarAbc()" style="flex:1;min-width:100px;text-align:center;cursor:pointer;${activa?'border:2px solid '+color+';':''}">
+      <div style="font-size:20px;font-weight:800;color:${color};">${conteoClase[clase]||0}</div>
+      <div style="font-size:10px;color:var(--mu);">Clase ${clase} (${pct} del valor)</div>
+    </div>`;
+  };
+  wrap.innerHTML = `
+    <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+      ${tarjeta('A','var(--gr)','80%')}
+      ${tarjeta('B','#ca8a04','15%')}
+      ${tarjeta('C','var(--mu)','5%')}
+    </div>
+    ${f.clase?`<div style="font-size:11px;color:var(--mu);margin-bottom:8px;">Filtrando por clase ${f.clase} — toca la tarjeta de nuevo para quitar el filtro</div>`:''}
+    <div class="tw"><table>
+      <thead><tr><th>Clase</th><th>Referencia</th><th>Valor vendido</th><th>% del total</th><th>% acumulado</th><th>Unidades</th></tr></thead>
+      <tbody>${filas.slice(0,300).map(x=>`<tr>
+        <td><span class="bdg ${claseColor[x.clase]}">${x.clase}</span></td>
+        <td style="font-family:monospace;">${reabastEsc(x.referencia)}</td>
+        <td style="text-align:right;">$${reabastFmtN(x.valor_total)}</td>
+        <td style="text-align:right;">${x.pct_valor}%</td>
+        <td style="text-align:right;color:var(--mu);">${x.pct_acumulado}%</td>
+        <td style="text-align:right;">${reabastFmtN(x.unidades_total)}</td>
+      </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--mu);">Sin resultados</td></tr>'}</tbody>
+    </table></div>`;
+}
+
+// ═══ Tab: Solicitudes ═══
+function reabastHtmlSolicitudesShell(esApro){
+  const f = reabastFiltro('solicitudes', {q:'', estado:''});
+  return `<div class="toolbar" style="margin-bottom:8px;">
+      <input class="inp" style="flex:1;min-width:180px;" id="sol-q" placeholder="Buscar referencia${esApro?' o solicitante':''}…" value="${reabastEsc(f.q)}" oninput="REABAST.filtros.solicitudes.q=this.value;reabastRepintarSolicitudes(${esApro})">
+    </div>
+    <div id="sol-chips" style="margin-bottom:10px;"></div>
+    <div id="sol-wrap"></div>`;
+}
+function reabastRepintarSolicitudes(esApro){
+  const wrapChips = document.getElementById('sol-chips');
+  const wrap = document.getElementById('sol-wrap');
+  if(!wrap) return;
+  const f = reabastFiltro('solicitudes', {q:'', estado:''});
+  const estados = ['','pendiente','aprobada','en_transito','recibida','rechazada'];
+  if(wrapChips) wrapChips.innerHTML = estados.map(e => reabastChip(f.estado===e, e?REABAST_ESTADO_LBL[e]:'Todas', `REABAST.filtros.solicitudes.estado='${e}';reabastRepintarSolicitudes(${esApro})`)).join('');
+  const qq = (f.q||'').toLowerCase();
+  let filas = REABAST.lista.filter(s => !qq || s.referencia.toLowerCase().includes(qq) || (s.solicitante_nombre||'').toLowerCase().includes(qq));
+  if(f.estado) filas = filas.filter(s => s.estado === f.estado);
+  if(!filas.length){ wrap.innerHTML = '<div class="empty"><div class="empty-t">Sin solicitudes con este filtro</div></div>'; return; }
+  wrap.innerHTML = filas.map(s=>{
+    const bdg = REABAST_ESTADO_BDG[s.estado]||'bp';
+    const lbl = REABAST_ESTADO_LBL[s.estado]||s.estado;
+    const puedeDecidir = esApro && s.estado==='pendiente';
+    const puedeTransito = esApro && s.estado==='aprobada';
+    const puedeRecibir  = esApro && s.estado==='en_transito';
+    return `<div class="sc2">
+      <div class="sc2-head">
+        <div><span style="font-family:monospace;font-weight:700;">${reabastEsc(s.referencia)}</span> <span style="color:var(--mu)">· ${reabastEsc(s.bodega||'')}</span></div>
+        <span class="bdg ${bdg}">${lbl}</span>
+      </div>
+      <div class="sc2-body">
+        Cantidad solicitada: <strong>${s.cantidad_solicitada}</strong> · disponible al pedir: ${s.cantidad_disponible ?? '—'}
+        ${s.proveedor?' · Proveedor: '+reabastEsc(s.proveedor):''}${s.fecha_estimada_llegada?' · Llega aprox.: '+s.fecha_estimada_llegada:''}${s.fecha_llegada_real?' · Recibido: '+new Date(s.fecha_llegada_real).toLocaleDateString('es-CO'):''}<br>
+        ${esApro?('Solicitó: '+reabastEsc(s.solicitante_nombre||s.solicitante_email)+' · '):''}${new Date(s.fecha_solicitud).toLocaleString('es-CO')}
+      </div>
+      ${s.comentario_solicitante?`<div class="hist-inline" style="margin-top:6px;padding:8px 10px;">"${reabastEsc(s.comentario_solicitante)}"</div>`:''}
+      ${s.comentario_aprobador?`<div class="hist-inline" style="margin-top:6px;padding:8px 10px;">Respuesta: "${reabastEsc(s.comentario_aprobador)}"</div>`:''}
+      ${puedeDecidir?`<div class="sc2-foot"><div class="sc2-acts">
+        <button class="btn btn-gr btn-sm" onclick="decidirReabast('${s.id}','aprobada')">✔ Aprobar</button>
+        <button class="btn btn-rd btn-sm" onclick="decidirReabast('${s.id}','rechazada')">✕ Rechazar</button>
+      </div></div>`:''}
+      ${puedeTransito?`<div class="sc2-foot"><div class="sc2-acts">
+        <button class="btn btn-pu btn-sm" onclick="marcarEnTransito('${s.id}', ${s.tiempo_entrega_dias||0})">🚚 Marcar en tránsito</button>
+      </div></div>`:''}
+      ${puedeRecibir?`<div class="sc2-foot"><div class="sc2-acts">
+        <button class="btn btn-gr btn-sm" onclick="marcarRecibido('${s.id}', ${s.cantidad_solicitada})">📦 Marcar recibido</button>
+      </div></div>`:''}
+    </div>`;
+  }).join('');
+}
+
+// ═══ Tab: Dashboard (las tarjetas son accesos rápidos a Solicitudes filtrado) ═══
+function reabastHtmlDashboard(){
+  const L = REABAST.lista;
+  const conteo = e => L.filter(s=>s.estado===e).length;
+  const decididas = L.filter(s=>s.fecha_decision);
+  const horasProm = decididas.length
+    ? decididas.reduce((a,s)=> a + (new Date(s.fecha_decision)-new Date(s.fecha_solicitud))/3600000, 0) / decididas.length
+    : null;
+  const porRef = {};
+  L.forEach(s=>{ porRef[s.referencia] = (porRef[s.referencia]||0)+1; });
+  const topRefs = Object.entries(porRef).sort((a,b)=>b[1]-a[1]).slice(0,6);
+
+  const tarjeta = (estado, color, lbl) => `<div class="sc2" onclick="REABAST.filtros.solicitudes={q:'',estado:'${estado}'};reabastGoTab('solicitudes')" style="text-align:center;cursor:pointer;">
+      <div style="font-size:22px;font-weight:800;color:${color};">${conteo(estado)}</div><div style="font-size:10px;color:var(--mu);">${lbl}</div>
+    </div>`;
+
+  return `
+    <div style="font-size:11px;color:var(--mu);margin-bottom:8px;">Toca cualquier tarjeta para ver esas solicitudes</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:16px;">
+      ${tarjeta('pendiente','#ca8a04','Pendientes')}
+      ${tarjeta('aprobada','var(--gr)','Aprobadas')}
+      ${tarjeta('en_transito','var(--pu)','En tránsito')}
+      ${tarjeta('recibida','var(--or)','Recibidas')}
+      ${tarjeta('rechazada','var(--rd)','Rechazadas')}
+      <div class="sc2" style="text-align:center;"><div style="font-size:18px;font-weight:800;">${horasProm!=null?(horasProm<48?Math.round(horasProm)+'h':Math.round(horasProm/24)+'d'):'—'}</div><div style="font-size:10px;color:var(--mu);">Tiempo prom. aprobación</div></div>
+    </div>
+    <div class="admin-sec">
+      <div class="admin-sec-t">🏆 Referencias más solicitadas (por número de solicitudes)</div>
+      ${topRefs.length ? topRefs.map(([ref,n])=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--b1);font-size:12px;cursor:pointer;" onclick="REABAST.filtros.solicitudes={q:'${reabastEsc(ref)}',estado:''};reabastGoTab('solicitudes')"><span style="font-family:monospace;">${reabastEsc(ref)}</span><strong>${n}</strong></div>`).join('') : '<div style="font-size:12px;color:var(--mu);">Sin datos aún</div>'}
+    </div>`;
+}
+
+// ═══ Tab: Órdenes de Compra (importaciones) ═══
+const OC_ETAPAS_CRITICAS = new Set(['anticipo_pagado', 'diseno_arte_recibido', 'diseno_arte_terminado', 'aprobacion_gerencia']);
+
+function reabastActividadReciente(){
+  const eventos = [];
+  Object.keys(REABAST.ocEtapas||{}).forEach(ocId=>{
+    const oc = (REABAST.ordenesCompra||[]).find(o=>o.id===ocId);
+    (REABAST.ocEtapas[ocId]||[]).forEach(e=>{
+      if(e.estado==='completada' && e.fecha_fin) eventos.push({...e, numero_oc: oc?oc.numero_oc:'—'});
+    });
+  });
+  eventos.sort((a,b)=> new Date(b.fecha_fin)-new Date(a.fecha_fin));
+  return eventos.slice(0,20);
+}
+
+function reabastHtmlActividad(){
+  const eventos = reabastActividadReciente();
+  if(!eventos.length) return '';
+  return `<div class="admin-sec" style="margin-bottom:14px;">
+    <div class="admin-sec-t">📢 Actividad reciente en Órdenes de Compra</div>
+    ${eventos.map(e=>{
+      const sem = ocSemaforo(e.dias_reales, e.dias_esperado);
+      const critica = OC_ETAPAS_CRITICAS.has(e.etapa_id);
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--b1);font-size:11.5px;gap:8px;flex-wrap:wrap;">
+        <span>${critica?'🔑 ':'✅ '}<strong>${reabastEsc(e.nombre)}</strong>${critica?' <span class="bdg bpu" style="font-size:9px;">punto crítico</span>':''} completada en <strong>OC ${reabastEsc(e.numero_oc)}</strong> por <strong>${reabastEsc(e.completado_por||'—')}</strong></span>
+        <span style="white-space:nowrap;">
+          <span class="bdg ${sem.cls}" style="font-size:9px;">${e.dias_reales} d (esp. ${e.dias_esperado} d)</span>
+          <span style="color:var(--mu);margin-left:4px;">${new Date(e.fecha_fin).toLocaleString('es-CO')}</span>
+        </span>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function reabastHtmlOcShell(){
+  const f = reabastFiltro('oc', {q:''});
+  return reabastHtmlActividad() + `<div class="toolbar" style="margin-bottom:8px;justify-content:space-between;">
+      <input class="inp" style="flex:1;min-width:180px;" id="oc-q" placeholder="Buscar # OC o proveedor…" value="${reabastEsc(f.q)}" oninput="REABAST.filtros.oc.q=this.value;reabastRepintarOC()">
+      <button class="btn btn-bl btn-sm" onclick="abrirModalOC()">+ Nueva OC</button>
+    </div><div id="oc-wrap"></div>`;
+}
+
+function reabastRepintarOC(){
+  const wrap = document.getElementById('oc-wrap'); if(!wrap) return;
+  const f = reabastFiltro('oc', {q:''});
+  const qq = (f.q||'').toLowerCase();
+  const filas = (REABAST.ordenesCompra||[]).filter(o => !qq || o.numero_oc.toLowerCase().includes(qq) || (o.proveedor||'').toLowerCase().includes(qq));
+  if(!filas.length){ wrap.innerHTML = '<div class="empty"><div class="empty-t">Aún no hay órdenes de compra</div>Crea la primera con "+ Nueva OC".</div>'; return; }
+  wrap.innerHTML = filas.map(o => reabastOcCardHtml(o)).join('');
+}
+
+function reabastOcCardHtml(o){
+  const etapas = (REABAST.ocEtapas[o.id]||[]).slice().sort((a,b)=>a.orden-b.orden);
+  const items = REABAST.ocItems[o.id]||[];
+  const actual = etapas.find(e=>e.estado==='en_curso' && !OC_ETAPAS_POR_ID[e.etapa_id]?.independiente);
+  let sem = {cls:'bdg-gris', lbl:'—'}, diasTranscurridos = 0;
+  if(o.estado_general==='completada'){ sem = {cls:'ba', lbl:'Completada'}; }
+  else if(actual && actual.fecha_inicio){
+    diasTranscurridos = (Date.now() - new Date(actual.fecha_inicio))/86400000;
+    sem = ocSemaforo(diasTranscurridos, actual.dias_esperado);
+  }
+  const completadas = etapas.filter(e=>e.estado==='completada').length;
+  const pctProgreso = etapas.length ? Math.round(100*completadas/etapas.length) : 0;
+  const colorBarra = sem.cls==='br'?'var(--rd)':sem.cls==='bp'?'#ca8a04':'var(--gr)';
+  const paralelas = etapas.filter(e=>OC_ETAPAS_POR_ID[e.etapa_id]?.independiente);
+  return `<div class="sc2" style="cursor:pointer;" onclick="reabastAbrirDetalleOC('${o.id}')">
+    <div class="sc2-head">
+      <div><strong>OC ${reabastEsc(o.numero_oc)}</strong> <span style="color:var(--mu)">· ${reabastEsc(o.proveedor||'sin proveedor')}</span></div>
+      <span class="bdg ${sem.cls}">${actual?actual.nombre:'—'} · ${sem.lbl}</span>
+    </div>
+    <div class="sc2-body">
+      ${items.length} ítem(s) · creada ${new Date(o.creado_en).toLocaleDateString('es-CO')} por ${reabastEsc(o.creado_por||'')}
+      ${actual ? ' · '+reabastFmtDuracion(diasTranscurridos)+' de '+reabastFmtDuracion(actual.dias_esperado)+' esperados en esta etapa' : ''}
+    </div>
+    ${paralelas.length?`<div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;">${paralelas.map(p=>{
+      const cls = p.estado==='completada'?'ba':p.estado==='en_curso'?'bp':'bdg-gris';
+      const icono = p.estado==='completada'?'✅':p.estado==='en_curso'?'🔔':'⏳';
+      return `<span class="bdg ${cls}" style="font-size:9px;">${icono} ${reabastEsc(OC_ETAPAS_POR_ID[p.etapa_id]?.nombre.replace('Diseño de arte — ','Diseño: '))}</span>`;
+    }).join('')}</div>`:''}
+    <div class="prog-bar" style="margin-top:8px;"><div class="prog-fill" style="width:${pctProgreso}%;background:${colorBarra};"></div></div>
+    <div style="font-size:10px;color:var(--mu);margin-top:4px;">${completadas} de ${etapas.length} etapas completadas</div>
+  </div>`;
+}
+
+// ═══ Tab: Calendario consolidado de llegadas ═══
+// Fecha estimada = hoy + (días que faltan de la etapa en curso) + (días esperados de las
+// etapas siguientes que aún no empiezan). Es una proyección con los tiempos estándar, no
+// una fecha garantizada — se ajusta sola a medida que van marcando etapas.
+function ocFechaEstimadaLlegada(oc){
+  const etapas = REABAST.ocEtapas[oc.id]||[];
+  const principales = OC_ETAPAS_PRINCIPALES.map(t => etapas.find(e=>e.etapa_id===t.id)).filter(Boolean);
+  const idx = principales.findIndex(e=>e.estado==='en_curso');
+  if(idx<0) return null;
+  const actual = principales[idx];
+  const transcurrido = actual.fecha_inicio ? (Date.now()-new Date(actual.fecha_inicio))/86400000 : 0;
+  let diasRestantes = Math.max(0, actual.dias_esperado - transcurrido);
+  for(let i=idx+1;i<principales.length;i++) diasRestantes += Number(principales[i].dias_esperado||0);
+  return new Date(Date.now() + diasRestantes*86400000);
+}
+
+// ═══ Tablero por área (kanban) — un submódulo por departamento ═══
+// Cada columna es un área (Compras, Diseño, Gerencia, Cartera, Calidad, Comercio Exterior,
+// Bodega); las tarjetas son las etapas de TODAS las OC activas que le tocan a esa área ahora
+// mismo (en curso, se puede marcar) o que están esperando su turno (pendiente, en gris).
+function reabastHtmlKanban(){
+  const activas = (REABAST.ordenesCompra||[]).filter(o=>o.estado_general==='activa');
+  if(!activas.length) return '<div class="empty"><div class="empty-t">No hay órdenes de compra activas</div></div>';
+  const porArea = {}; OC_AREAS.forEach(a=>{ porArea[a] = {enCurso:[], pendiente:[]}; });
+  activas.forEach(o=>{
+    (REABAST.ocEtapas[o.id]||[]).forEach(e=>{
+      const t = OC_ETAPAS_POR_ID[e.etapa_id]; if(!t) return;
+      if(e.estado==='en_curso') porArea[t.area].enCurso.push({oc:o, etapa:e, tpl:t});
+      else if(e.estado==='pendiente') porArea[t.area].pendiente.push({oc:o, etapa:e, tpl:t});
+    });
+  });
+  return `<div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:8px;">
+    ${OC_AREAS.map(area=>{
+      const d = porArea[area];
+      return `<div style="min-width:220px;max-width:240px;flex-shrink:0;background:var(--s1);border-radius:10px;padding:10px;">
+        <div style="font-size:12.5px;font-weight:800;margin-bottom:8px;display:flex;justify-content:space-between;">
+          <span>${reabastEsc(area)}</span><span class="bdg bpu" style="font-size:9px;">${d.enCurso.length}</span>
+        </div>
+        ${d.enCurso.map(x=>{
+          const puede = reabastPuedeMarcarEtapa(x.etapa);
+          const dt = (Date.now()-new Date(x.etapa.fecha_inicio))/86400000;
+          const sem = ocSemaforo(dt, x.etapa.dias_esperado);
+          return `<div class="sc2" style="padding:9px;margin-bottom:8px;cursor:pointer;" onclick="ocAbrirTarjetaEtapa('${x.oc.id}','${x.etapa.id}')">
+            <div style="font-size:11px;font-weight:700;">OC ${reabastEsc(x.oc.numero_oc)}</div>
+            <div style="font-size:10.5px;margin:3px 0;">${reabastEsc(x.tpl.nombre)}${OC_ETAPAS_CRITICAS.has(x.tpl.id)?' 🔑':''}</div>
+            <span class="bdg ${sem.cls}" style="font-size:9px;">${reabastFmtDuracion(dt)} / ${reabastFmtDuracion(x.etapa.dias_esperado)}</span>
+            ${puede?`<div style="font-size:9.5px;color:var(--bl);margin-top:6px;">👆 Toca para ver qué pide esta etapa y marcarla</div>`:''}
+          </div>`;
+        }).join('') || '<div style="font-size:10.5px;color:var(--mu);padding:6px 0;">Nada pendiente ahora</div>'}
+        ${d.pendiente.length?`<div style="font-size:9.5px;color:var(--mu);margin-top:4px;">⏳ ${d.pendiente.length} esperando turno</div>`:''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function reabastHtmlCalendario(){
+  const activas = (REABAST.ordenesCompra||[]).filter(o=>o.estado_general==='activa');
+  const conFecha = activas.map(o=>({oc:o, fecha: ocFechaEstimadaLlegada(o)})).filter(x=>x.fecha);
+  conFecha.sort((a,b)=> a.fecha-b.fecha);
+  if(!conFecha.length) return '<div class="empty"><div class="empty-t">No hay órdenes de compra activas con fecha estimada</div></div>';
+  const hoy = new Date();
+  const grupos = { 'Esta semana':[], 'Próximas 2 semanas':[], 'Este mes':[], 'Más adelante':[] };
+  conFecha.forEach(x=>{
+    const dias = Math.round((x.fecha-hoy)/86400000);
+    if(dias<=7) grupos['Esta semana'].push(x);
+    else if(dias<=14) grupos['Próximas 2 semanas'].push(x);
+    else if(dias<=30) grupos['Este mes'].push(x);
+    else grupos['Más adelante'].push(x);
+  });
+  return Object.entries(grupos).filter(([,arr])=>arr.length).map(([grupo,arr])=>`
+    <div class="admin-sec" style="margin-bottom:14px;">
+      <div class="admin-sec-t">${grupo} (${arr.length})</div>
+      ${arr.map(x=>{
+        const etapas = REABAST.ocEtapas[x.oc.id]||[];
+        const actual = etapas.find(e=>e.estado==='en_curso' && !OC_ETAPAS_POR_ID[e.etapa_id]?.independiente);
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--b1);font-size:12px;gap:8px;cursor:pointer;" onclick="reabastAbrirDetalleOC('${x.oc.id}')">
+          <span><strong>OC ${reabastEsc(x.oc.numero_oc)}</strong> · ${reabastEsc(x.oc.proveedor||'—')} <span style="color:var(--mu);">— etapa actual: ${actual?reabastEsc(actual.nombre):'—'}</span></span>
+          <span style="white-space:nowrap;font-weight:700;">${x.fecha.toLocaleDateString('es-CO')}</span>
+        </div>`;
+      }).join('')}
+    </div>`).join('');
+}
+
+// ═══ Tab: Proveedores (maestro + desempeño) ═══
+function reabastHtmlProveedores(){
+  const esAdmin = reabastEsAdmin();
+  const provs = REABAST.proveedores||[];
+  return `
+    ${esAdmin?`<div style="margin-bottom:12px;"><button class="btn btn-bl btn-sm" onclick="abrirModalProveedor()">+ Nuevo proveedor</button></div>`:''}
+    <div class="tw" style="margin-bottom:20px;"><table>
+      <thead><tr><th>Siglas</th><th>Nombre</th><th>NIT</th><th>Correo</th>${esAdmin?'<th></th>':''}</tr></thead>
+      <tbody>${provs.map(p=>`<tr>
+        <td style="font-family:monospace;font-weight:700;">${reabastEsc(p.siglas||'—')}</td>
+        <td>${reabastEsc(p.nombre)}</td>
+        <td>${reabastEsc(p.nit||'—')}</td>
+        <td>${reabastEsc(p.correo||'—')}</td>
+        ${esAdmin?`<td><button class="btn btn-g btn-sm" data-p='${JSON.stringify(p).replace(/'/g,"&#39;")}' onclick="abrirModalProveedor(JSON.parse(this.dataset.p))">✎</button></td>`:''}
+      </tr>`).join('') || `<tr><td colspan="${esAdmin?5:4}" style="text-align:center;padding:16px;color:var(--mu);">Aún no has registrado proveedores</td></tr>`}</tbody>
+    </table></div>
+    <div class="admin-sec-t" style="margin-bottom:8px;">📊 Desempeño por proveedor (tiempos reales vs. esperados en sus OC)</div>
+    ${reabastHtmlDesempenoProveedores()}`;
+}
+
+function reabastHtmlDesempenoProveedores(){
+  const porProveedor = {};
+  (REABAST.ordenesCompra||[]).forEach(o=>{
+    const key = o.proveedor || '(sin proveedor)';
+    if(!porProveedor[key]) porProveedor[key] = { ocs:0, etapasCompletadas:0, enTiempo:0, sumaDiasReales:0, sumaDiasEsperados:0 };
+    porProveedor[key].ocs++;
+    (REABAST.ocEtapas[o.id]||[]).forEach(e=>{
+      if(e.estado==='completada'){
+        porProveedor[key].etapasCompletadas++;
+        porProveedor[key].sumaDiasReales += Number(e.dias_reales||0);
+        porProveedor[key].sumaDiasEsperados += Number(e.dias_esperado||0);
+        if(ocSemaforo(e.dias_reales, e.dias_esperado).cls==='ba') porProveedor[key].enTiempo++;
+      }
+    });
+  });
+  const filas = Object.entries(porProveedor);
+  if(!filas.length) return '<div class="empty"><div class="empty-t">Aún no hay historial de OC para medir desempeño</div></div>';
+  return `<div class="tw"><table>
+    <thead><tr><th>Proveedor</th><th>OC</th><th>Etapas completadas</th><th>% en tiempo</th><th>Desviación promedio</th></tr></thead>
+    <tbody>${filas.map(([nombre,d])=>{
+      const pctEnTiempo = d.etapasCompletadas ? Math.round(100*d.enTiempo/d.etapasCompletadas) : null;
+      const desviacion = d.etapasCompletadas ? Math.round((d.sumaDiasReales-d.sumaDiasEsperados)/d.etapasCompletadas*10)/10 : null;
+      return `<tr>
+        <td>${reabastEsc(nombre)}</td>
+        <td style="text-align:right;">${d.ocs}</td>
+        <td style="text-align:right;">${d.etapasCompletadas}</td>
+        <td style="text-align:right;">${pctEnTiempo!=null?`<span style="color:${pctEnTiempo>=80?'var(--gr)':pctEnTiempo>=50?'#ca8a04':'var(--rd)'};font-weight:700;">${pctEnTiempo}%</span>`:'—'}</td>
+        <td style="text-align:right;">${desviacion!=null?(desviacion>0?'+':'')+desviacion+' d':'—'}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+let PROVEEDOR_EDIT_ID = null;
+function abrirModalProveedor(p){
+  PROVEEDOR_EDIT_ID = p ? p.id : null;
+  if(!document.getElementById('modal-proveedor')) reabastInjectModalProveedor();
+  document.getElementById('pv-siglas').value = p ? (p.siglas||'') : '';
+  document.getElementById('pv-nombre').value = p ? p.nombre : '';
+  document.getElementById('pv-nit').value = p ? (p.nit||'') : '';
+  document.getElementById('pv-correo').value = p ? (p.correo||'') : '';
+  document.getElementById('modal-proveedor').classList.add('on');
+}
+function cerrarModalProveedor(){ document.getElementById('modal-proveedor').classList.remove('on'); }
+function reabastInjectModalProveedor(){
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="ov" id="modal-proveedor">
+    <div class="mo">
+      <div class="mh"><div class="mt">Proveedor</div><div class="mx" onclick="cerrarModalProveedor()">✕</div></div>
+      <div class="mb">
+        <div class="fg2">
+          <div class="fg"><label class="fl">Siglas</label><input class="inp" id="pv-siglas" placeholder="Ej: HZ-LED"></div>
+          <div class="fg"><label class="fl">NIT</label><input class="inp" id="pv-nit"></div>
+        </div>
+        <div class="fg"><label class="fl">Nombre</label><input class="inp" id="pv-nombre"></div>
+        <div class="fg"><label class="fl">Correo</label><input class="inp" type="email" id="pv-correo"></div>
+      </div>
+      <div class="mf">
+        <button class="btn btn-g" onclick="cerrarModalProveedor()">Cancelar</button>
+        <button class="btn btn-p" onclick="guardarProveedor()">Guardar</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap.firstElementChild);
+}
+async function guardarProveedor(){
+  const nombre = document.getElementById('pv-nombre').value.trim();
+  if(!nombre){ if(typeof toast==='function') toast('El nombre es obligatorio','wa'); return; }
+  const payload = {
+    siglas: document.getElementById('pv-siglas').value.trim() || null,
+    nombre, nit: document.getElementById('pv-nit').value.trim() || null,
+    correo: document.getElementById('pv-correo').value.trim() || null
+  };
+  try{
+    if(PROVEEDOR_EDIT_ID){
+      await sbReabast.patch('proveedores', 'id=eq.'+PROVEEDOR_EDIT_ID, payload);
+    } else {
+      await sbReabast.post('proveedores', payload);
+    }
+    cerrarModalProveedor();
+    if(typeof toast==='function') toast('Proveedor guardado','ok');
+    await cargarOC();
+    reabastPintar();
+  }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
+}
+
+// ═══ Exportar reporte (Excel: Urgentes, ABC, Estado de OC) ═══
+function ocExportarReporte(){
+  try{
+    const wb = XLSX.utils.book_new();
+
+    const urgentes = (REABAST._urgentes||reabastCalcularUrgentes()).map(u=>({
+      Referencia:u.referencia, Descripcion:u.descripcion, Existencia:u.existencia, Minimo:u.minimo, Maximo:u.maximo,
+      'Prom. mensual':u.promedio, 'Rotación':reabastRotacion(u.promedio).lbl, 'Fuente':u.fuentePromedio,
+      Proveedor:u.proveedor||'', 'Días entrega':u.diasEntregaUsados
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(urgentes.length?urgentes:[{Referencia:'Sin datos'}]), 'Urgentes');
+
+    const abc = Object.values(REABAST.abc||{}).map(a=>({
+      Referencia:a.referencia, Clase:a.clase, 'Valor vendido':a.valor_total, '% del total':a.pct_valor, '% acumulado':a.pct_acumulado, Unidades:a.unidades_total
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(abc.length?abc:[{Referencia:'Sin datos'}]), 'Clasificacion ABC');
+
+    const ocRows = [];
+    (REABAST.ordenesCompra||[]).forEach(o=>{
+      const etapas = (REABAST.ocEtapas[o.id]||[]).slice().sort((a,b)=>a.orden-b.orden);
+      const actual = etapas.find(e=>e.estado==='en_curso');
+      ocRows.push({
+        'OC':o.numero_oc, Proveedor:o.proveedor||'', Estado:o.estado_general, 'Etapa actual':actual?actual.nombre:'Completada',
+        'Creada':o.creado_en?new Date(o.creado_en).toLocaleDateString('es-CO'):'', 'Creado por':o.creado_por||'',
+        'Ítems':(REABAST.ocItems[o.id]||[]).length
+      });
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ocRows.length?ocRows:[{OC:'Sin datos'}]), 'Ordenes de Compra');
+
+    XLSX.writeFile(wb, 'Abastecimiento_Ilumax_'+new Date().toISOString().slice(0,10)+'.xlsx');
+    if(typeof toast==='function') toast('Reporte descargado','ok');
+  }catch(e){ if(typeof toast==='function') toast('Error exportando: '+e.message,'er'); }
+}
+
+function reabastAbrirDetalleOC(ocId){
+  const o = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId); if(!o) return;
+  const etapas = (REABAST.ocEtapas[ocId]||[]).slice().sort((a,b)=>a.orden-b.orden);
+  const items = REABAST.ocItems[ocId]||[];
+  if(!document.getElementById('modal-oc-detalle')) reabastInjectModalOCDetalle();
+  document.getElementById('ocd-titulo').textContent = 'OC ' + o.numero_oc;
+  const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*it.cantidad,0);
+  const totalVenta = items.reduce((a,it)=>a+(it.precio_venta_cop||0)*it.cantidad,0);
+  const margenTotal = totalVenta ? Math.round((1-totalCop/totalVenta)*1000)/10 : null;
+  document.getElementById('ocd-body').innerHTML = `
+    <div style="margin-bottom:10px;font-size:12.5px;"><strong>Proveedor:</strong> ${reabastEsc(o.proveedor||'—')} · <strong>Creada:</strong> ${new Date(o.creado_en).toLocaleDateString('es-CO')} por ${reabastEsc(o.creado_por||'')}</div>
+    ${o.trm?`<div style="margin-bottom:10px;font-size:11px;color:var(--mu);">TRM usada: $${reabastFmtN(o.trm)} · Factor de landeo: ${o.factor_landeo}×</div>`:''}
+    <div class="tw" style="margin-bottom:14px;"><table>
+      <thead><tr><th>Referencia</th><th>Lote</th><th>Cant.</th><th>FOB US$</th><th>Costo unit. COP</th><th>Venta P1</th><th>Margen</th><th></th></tr></thead>
+      <tbody>${items.map(it=>`<tr>
+        <td style="font-family:monospace;">${reabastEsc(it.referencia)}</td>
+        <td>${reabastEsc(it.lote||'—')}</td>
+        <td style="text-align:right;">${reabastFmtN(it.cantidad)}</td>
+        <td style="text-align:right;">${it.precio_fob_usd!=null?'US$'+it.precio_fob_usd:'—'}</td>
+        <td style="text-align:right;">${it.costo_unitario_cop!=null?'$'+reabastFmtN(it.costo_unitario_cop):'—'}</td>
+        <td style="text-align:right;">${it.precio_venta_cop!=null?'$'+reabastFmtN(it.precio_venta_cop):'—'}</td>
+        <td style="text-align:right;">${it.margen_pct!=null?`<span style="color:${it.margen_pct<20?'var(--rd)':'var(--gr)'};font-weight:700;">${it.margen_pct}%</span>`:'—'}</td>
+        <td>${it.ficha_tecnica_url?`<a href="${it.ficha_tecnica_url}" target="_blank" style="color:var(--bl);">📄 ficha</a>`:''}</td>
+      </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;padding:12px;color:var(--mu);">Sin ítems</td></tr>'}</tbody>
+    </table></div>
+    ${totalCop>0?`<div style="font-size:11.5px;margin-bottom:14px;padding:8px 10px;background:var(--s1);border-radius:8px;"><strong>Total costo landeado:</strong> $${reabastFmtN(totalCop)} COP${margenTotal!=null?` · <strong>Margen promedio ponderado: ${margenTotal}%</strong>`:''}</div>`:''}
+    <div>${etapas.map(e=>{
+      let icono = '⚪', semC = 'bdg-gris', dias = '—';
+      if(e.estado==='completada'){
+        icono='✅'; dias = reabastFmtDuracion(e.dias_reales);
+        semC = ocSemaforo(e.dias_reales, e.dias_esperado).cls;
+      } else if(e.estado==='en_curso'){
+        icono='🔵';
+        const dt = (Date.now()-new Date(e.fecha_inicio))/86400000;
+        dias = reabastFmtDuracion(dt)+' (en curso)';
+        semC = ocSemaforo(dt, e.dias_esperado).cls;
+      }
+      const puede = e.estado==='en_curso' && reabastPuedeMarcarEtapa(e);
+      const area = OC_ETAPAS_POR_ID[e.etapa_id]?.area||'—';
+      const esParalela = !!OC_ETAPAS_POR_ID[e.etapa_id]?.independiente;
+      return `<div style="padding:9px 0;border-bottom:1px solid var(--b1);${esParalela?'background:'+ (e.estado==='pendiente'?'transparent':'#faf5ff')+';':''}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <div style="min-width:0;">
+            <div style="font-size:12.5px;font-weight:600;">${icono} ${reabastEsc(e.nombre)}${OC_ETAPAS_CRITICAS.has(e.etapa_id)?' 🔑':''}${esParalela?' <span style="font-size:9px;color:var(--pu);font-weight:400;">(independiente)</span>':''}</div>
+            <div style="font-size:10.5px;color:var(--mu);margin-top:2px;">
+              Área: ${reabastEsc(area)} · Esperado: ${reabastFmtDuracion(e.dias_esperado)} · Real: <span class="bdg ${semC}" style="font-size:9px;">${dias}</span>
+              ${e.completado_por?' · Completó: '+reabastEsc(e.completado_por):''}
+              ${e.fecha_fin?' · '+new Date(e.fecha_fin).toLocaleString('es-CO'):(e.fecha_inicio?' · inició '+new Date(e.fecha_inicio).toLocaleDateString('es-CO'):'')}
+            </div>
+          </div>
+          ${puede?`<button class="btn btn-gr btn-sm" style="flex-shrink:0;" onclick="ocMarcarEtapaCompleta('${ocId}','${e.id}')">✔ OK</button>`
+            : (e.estado==='en_curso' ? `<span style="font-size:9.5px;color:var(--mu);flex-shrink:0;white-space:nowrap;">solo ${reabastEsc(area)}/admin</span>`
+            : (e.estado==='completada' && reabastPuedeMarcarEtapa(e) ? `<button class="btn btn-g btn-sm" style="flex-shrink:0;" onclick="ocDeshacerEtapa('${ocId}','${e.id}')">↩ Deshacer</button>` : ''))}
+        </div>
+        ${e.adjunto_url||e.monto_pagado_cop!=null?`<div style="font-size:10.5px;margin-top:5px;padding:6px 8px;background:var(--s1);border-radius:6px;">
+          ${e.adjunto_url?`<a href="${e.adjunto_url}" target="_blank" style="color:var(--bl);">📎 Ver comprobante</a>`:''}
+          ${e.monto_pagado_cop!=null?` · Pagado: $${reabastFmtN(e.monto_pagado_cop)} COP${e.monto_pagado_usd?' (US$'+e.monto_pagado_usd+')':''}`:''}
+          ${e.saldo_pendiente_cop!=null?` · <strong style="color:${e.saldo_pendiente_cop>0?'var(--rd)':'var(--gr)'};">Saldo pendiente: $${reabastFmtN(e.saldo_pendiente_cop)}</strong>`:''}
+          ${e.comentario_extra?`<br>"${reabastEsc(e.comentario_extra)}"`:''}
+        </div>`:''}
+      </div>`;
+    }).join('')}</div>`;
+  document.getElementById('modal-oc-detalle').classList.add('on');
+}
+
+function reabastInjectModalOCDetalle(){
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="ov" id="modal-oc-detalle">
+    <div class="mo" style="max-width:640px;">
+      <div class="mh"><div class="mt" id="ocd-titulo">Detalle OC</div><div class="mx" onclick="document.getElementById('modal-oc-detalle').classList.remove('on')">✕</div></div>
+      <div class="mb" id="ocd-body"></div>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap.firstElementChild);
+}
+
+// Revisa todas las etapas 'pendiente' de la OC y activa (en_curso) las que ya cumplen
+// su condición: sin dependencia (no debería pasar aquí, ya arrancan solas al crear), con
+// "dependeDe" ya completado, o con "requiere" donde TODAS las requeridas ya están completadas.
+async function ocActivarDependientes(ocId, etapasActualizadas){
+  const ahora = new Date().toISOString();
+  const estadoPorEtapaId = {}; etapasActualizadas.forEach(x=>{ estadoPorEtapaId[x.etapa_id] = x.estado; });
+  for(const x of etapasActualizadas){
+    if(x.estado!=='pendiente') continue;
+    const t = OC_ETAPAS_POR_ID[x.etapa_id];
+    if(!t) continue;
+    const listo = t.dependeDe ? estadoPorEtapaId[t.dependeDe]==='completada'
+                : t.requiere ? t.requiere.every(id=>estadoPorEtapaId[id]==='completada')
+                : false;
+    if(listo){
+      await sbReabast.patch('oc_etapas', 'id=eq.'+x.id, {estado:'en_curso', fecha_inicio: ahora});
+      x.estado = 'en_curso'; // reflejar en la copia local para que encadene si hay más de un nivel
+    }
+  }
+}
+
+// ── Modal de acción por etapa: contenido enfocado según el área + adjunto/pago cuando aplica ──
+let ETAPA_ADJUNTO_CTX = null;
+
+// Qué necesita ver cada área antes de decidir — no todo el mundo necesita ver lo mismo.
+function ocContenidoPorArea(oc, tpl, items){
+  const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*it.cantidad,0);
+  const totalVenta = items.reduce((a,it)=>a+(it.precio_venta_cop||0)*it.cantidad,0);
+  const utilidad = totalVenta - totalCop;
+  const margen = totalVenta ? Math.round((utilidad/totalVenta)*1000)/10 : null;
+
+  if(tpl.area==='Cartera' || tpl.area==='Gerencia'){
+    return `<div style="font-size:11px;color:var(--mu);margin-bottom:8px;">${tpl.area==='Cartera'?'Lo que le importa a Cartera antes de pagar:':'Resumen financiero para aprobar:'}</div>
+      <div style="background:var(--s1);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;line-height:1.9;">
+        <strong>Costo total landeado:</strong> $${reabastFmtN(totalCop)} COP<br>
+        <strong>Valor de venta (P1):</strong> $${reabastFmtN(totalVenta)} COP<br>
+        <strong>Utilidad estimada:</strong> $${reabastFmtN(utilidad)} COP<br>
+        <strong>Margen:</strong> <span style="color:${margen!=null&&margen<20?'var(--rd)':'var(--gr)'};font-weight:700;">${margen!=null?margen+'%':'—'}</span><br>
+        <strong>Proveedor:</strong> ${reabastEsc(oc.proveedor||'—')} · <strong>TRM:</strong> $${reabastFmtN(oc.trm)}
+      </div>`;
+  }
+  if(tpl.area==='Diseño'){
+    return `<div style="font-size:11px;color:var(--mu);margin-bottom:8px;">Ítems que necesita Diseño (referencia, lote, ficha técnica):</div>
+      <div class="tw" style="margin-bottom:12px;"><table>
+        <thead><tr><th>Referencia</th><th>Lote</th><th>Cant.</th><th></th></tr></thead>
+        <tbody>${items.map(it=>`<tr>
+          <td style="font-family:monospace;">${reabastEsc(it.referencia)}</td>
+          <td>${reabastEsc(it.lote||'—')}</td>
+          <td style="text-align:right;">${reabastFmtN(it.cantidad)}</td>
+          <td>${it.ficha_tecnica_url?`<a href="${it.ficha_tecnica_url}" target="_blank" style="color:var(--bl);">📄 ficha</a>`:'<span style="color:var(--or);">sin ficha</span>'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`;
+  }
+  // Compras, Calidad, Comercio Exterior, Bodega: lo básico operativo
+  return `<div style="font-size:11px;color:var(--mu);margin-bottom:8px;">Ítems de esta orden:</div>
+    <div class="tw" style="margin-bottom:12px;"><table>
+      <thead><tr><th>Referencia</th><th>Lote</th><th>Cant.</th></tr></thead>
+      <tbody>${items.map(it=>`<tr>
+        <td style="font-family:monospace;">${reabastEsc(it.referencia)}</td>
+        <td>${reabastEsc(it.lote||'—')}</td>
+        <td style="text-align:right;">${reabastFmtN(it.cantidad)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+}
+
+function ocAbrirTarjetaEtapa(ocId, etapaId){
+  const oc = (REABAST.ordenesCompra||[]).find(o=>o.id===ocId); if(!oc) return;
+  const etapas = REABAST.ocEtapas[ocId]||[];
+  const e = etapas.find(x=>x.id===etapaId); if(!e) return;
+  const tpl = OC_ETAPAS_POR_ID[e.etapa_id] || {id:e.etapa_id, area:'—', nombre:e.nombre, requiereAdjunto:false};
+  const items = REABAST.ocItems[ocId]||[];
+  ETAPA_ADJUNTO_CTX = {ocId, etapaId, plantilla:tpl};
+  if(!document.getElementById('modal-etapa-adjunto')) reabastInjectModalEtapaAdjunto();
+  document.getElementById('ea-titulo').textContent = tpl.nombre + ' · OC ' + oc.numero_oc;
+  document.getElementById('ea-contenido').innerHTML = ocContenidoPorArea(oc, tpl, items);
+  document.getElementById('ea-file-wrap').style.display = tpl.requiereAdjunto ? 'block' : 'none';
+  document.getElementById('ea-file').value = '';
+  document.getElementById('ea-estado').innerHTML = '';
+  document.getElementById('ea-comentario').value = '';
+  document.getElementById('ea-pago-wrap').style.display = tpl.tienePago ? 'block' : 'none';
+  if(tpl.tienePago){
+    const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*it.cantidad,0);
+    const trm = oc.trm || OC_TRM_APROX;
+    document.getElementById('ea-total-oc').textContent = 'Total OC: $'+reabastFmtN(totalCop)+' COP · TRM usada para convertir: $'+reabastFmtN(trm);
+    document.getElementById('ea-monto-cop').value = '';
+    document.getElementById('ea-monto-usd').value = '';
+    ETAPA_ADJUNTO_CTX.totalCop = totalCop;
+    ETAPA_ADJUNTO_CTX.trm = trm;
+  }
+  document.getElementById('ea-confirmar').style.display = e.estado==='en_curso' ? 'inline-flex' : 'none';
+  document.getElementById('ea-vertodo').setAttribute('onclick', `cerrarModalEtapaAdjunto();reabastAbrirDetalleOC('${ocId}')`);
+  document.getElementById('modal-etapa-adjunto').classList.add('on');
+}
+function cerrarModalEtapaAdjunto(){ document.getElementById('modal-etapa-adjunto').classList.remove('on'); }
+
+// Si escribes en un campo, calcula el otro al instante usando la TRM de la OC.
+function eaSincronizarMonto(origen){
+  const trm = (ETAPA_ADJUNTO_CTX && ETAPA_ADJUNTO_CTX.trm) || OC_TRM_APROX;
+  const cop = document.getElementById('ea-monto-cop');
+  const usd = document.getElementById('ea-monto-usd');
+  if(origen==='cop'){
+    const v = Number(cop.value);
+    usd.value = v ? Math.round((v/trm)*100)/100 : '';
+  } else {
+    const v = Number(usd.value);
+    cop.value = v ? Math.round(v*trm) : '';
+  }
+}
+function reabastInjectModalEtapaAdjunto(){
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="ov" id="modal-etapa-adjunto">
+    <div class="mo">
+      <div class="mh"><div class="mt" id="ea-titulo">Etapa</div><div class="mx" onclick="cerrarModalEtapaAdjunto()">✕</div></div>
+      <div class="mb">
+        <div id="ea-contenido"></div>
+        <div id="ea-file-wrap" class="fg"><label class="fl">Foto o comprobante (obligatorio)</label><input class="inp" type="file" id="ea-file" accept="image/*,.pdf"></div>
+        <div id="ea-pago-wrap" style="display:none;">
+          <div id="ea-total-oc" style="font-size:11px;color:var(--mu);margin-bottom:8px;"></div>
+          <div class="fg2">
+            <div class="fg"><label class="fl">Monto pagado (COP)</label><input class="inp" type="number" id="ea-monto-cop" oninput="eaSincronizarMonto('cop')"></div>
+            <div class="fg"><label class="fl">Monto pagado (USD)</label><input class="inp" type="number" step="0.01" id="ea-monto-usd" oninput="eaSincronizarMonto('usd')"></div>
+          </div>
+        </div>
+        <div class="fg"><label class="fl">Comentario (opcional)</label><textarea class="inp" id="ea-comentario"></textarea></div>
+        <div id="ea-estado" style="font-size:11px;"></div>
+        <div style="margin-top:10px;"><span id="ea-vertodo" style="font-size:11px;color:var(--mu);text-decoration:underline;cursor:pointer;">Ver todas las etapas de esta OC</span></div>
+      </div>
+      <div class="mf">
+        <button class="btn btn-g" onclick="cerrarModalEtapaAdjunto()">Cancelar</button>
+        <button class="btn btn-p" id="ea-confirmar" onclick="confirmarEtapaAdjunto()">✔ Confirmar y marcar OK</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap.firstElementChild);
+}
+async function confirmarEtapaAdjunto(){
+  const {plantilla, ocId, etapaId, totalCop} = ETAPA_ADJUNTO_CTX;
+  const estado = document.getElementById('ea-estado');
+  const extra = { comentario_extra: document.getElementById('ea-comentario').value.trim()||null };
+  if(plantilla.requiereAdjunto){
+    const file = document.getElementById('ea-file').files[0];
+    if(!file){ if(typeof toast==='function') toast('Adjunta la foto o el comprobante','wa'); return; }
+    estado.textContent = '⏳ Subiendo archivo…';
+    try{ extra.adjunto_url = await ocSubirAdjunto(file); }
+    catch(e){ estado.innerHTML = '<span style="color:var(--rd);">Error subiendo: '+e.message+'</span>'; return; }
+  }
+  if(plantilla.tienePago){
+    const cop = Number(document.getElementById('ea-monto-cop').value)||0;
+    const usd = Number(document.getElementById('ea-monto-usd').value)||0;
+    extra.monto_pagado_cop = cop||null;
+    extra.monto_pagado_usd = usd||null;
+    extra.saldo_pendiente_cop = totalCop ? Math.max(0, totalCop-cop) : null;
+  }
+  cerrarModalEtapaAdjunto();
+  await ocMarcarEtapaCompleta(ocId, etapaId, extra);
+}
+
+
+// Devuelve una etapa ya completada a "en curso" (por si te equivocaste marcando antes de tiempo).
+// No te deja deshacer si ya hay una etapa siguiente completada que dependía de esta — primero
+// hay que deshacer esa, en orden, para no dejar el proceso en un estado imposible.
+async function ocDeshacerEtapa(ocId, etapaId){
+  const etapas = (REABAST.ocEtapas[ocId]||[]).slice();
+  const e = etapas.find(x=>x.id===etapaId);
+  if(!e || e.estado!=='completada') return;
+  if(!confirm('¿Deshacer "'+e.nombre+'"? Vuelve a quedar en curso y se borra su fecha/comprobante.')) return;
+  const dependientes = etapas.filter(x=>{
+    const t = OC_ETAPAS_POR_ID[x.etapa_id];
+    return t && ((t.dependeDe===e.etapa_id) || (t.requiere && t.requiere.includes(e.etapa_id)));
+  });
+  if(dependientes.some(d=>d.estado==='completada')){
+    if(typeof toast==='function') toast('Primero deshaz la etapa siguiente que ya se completó a partir de esta','er');
+    return;
+  }
+  try{
+    await sbReabast.patch('oc_etapas', 'id=eq.'+etapaId, {
+      estado:'en_curso', fecha_inicio: new Date().toISOString(), fecha_fin:null, dias_reales:null,
+      completado_por:null, adjunto_url:null, monto_pagado_cop:null, monto_pagado_usd:null, saldo_pendiente_cop:null, comentario_extra:null
+    });
+    for(const d of dependientes){
+      if(d.estado==='en_curso') await sbReabast.patch('oc_etapas', 'id=eq.'+d.id, {estado:'pendiente', fecha_inicio:null});
+    }
+    const oc = (REABAST.ordenesCompra||[]).find(o=>o.id===ocId);
+    if(oc && oc.estado_general==='completada') await sbReabast.patch('ordenes_compra', 'id=eq.'+ocId, {estado_general:'activa'});
+    if(typeof toast==='function') toast('Etapa devuelta a en curso','ok');
+    await cargarOC();
+    const modalAbierto = document.getElementById('modal-oc-detalle')?.classList.contains('on');
+    if(modalAbierto) reabastAbrirDetalleOC(ocId);
+    reabastPintar();
+  }catch(err){ if(typeof toast==='function') toast('Error: '+err.message,'er'); }
+}
+
+async function ocMarcarEtapaCompleta(ocId, etapaId, extra){
+  const etapas = (REABAST.ocEtapas[ocId]||[]).slice();
+  const e = etapas.find(x=>x.id===etapaId);
+  if(!e) return;
+  // Si la OC se creó con una plantilla de etapas anterior (ej. la vieja "diseno_arte" antes de
+  // dividirse en Recibido/Terminado), su etapa_id puede ya no existir en la plantilla actual.
+  // En ese caso la tratamos como una etapa simple (sin adjunto ni dependientes) para no romper
+  // OC viejas — solo se completa y avanza si tiene dependientes registrados por dependeDe/requiere.
+  const plantilla = OC_ETAPAS_POR_ID[e.etapa_id] || {id:e.etapa_id, area:'—', requiereAdjunto:false};
+  if(plantilla.requiereAdjunto && !extra){
+    ocAbrirTarjetaEtapa(ocId, etapaId);
+    return;
+  }
+  const ahora = new Date();
+  const diasReales = Math.round(((ahora - new Date(e.fecha_inicio))/86400000)*100)/100;
+  try{
+    await sbReabast.patch('oc_etapas', 'id=eq.'+etapaId, {
+      estado:'completada', fecha_fin: ahora.toISOString(), dias_reales: diasReales, completado_por: CU.nombre,
+      ...(extra||{})
+    });
+    e.estado = 'completada';
+    await ocActivarDependientes(ocId, etapas);
+    const todasCompletas = etapas.every(x=>x.estado==='completada');
+    if(todasCompletas) await sbReabast.patch('ordenes_compra', 'id=eq.'+ocId, {estado_general:'completada'});
+    if(typeof toast==='function') toast('Etapa marcada como completa','ok');
+    await cargarOC();
+    const modalAbierto = document.getElementById('modal-oc-detalle')?.classList.contains('on');
+    if(modalAbierto) reabastAbrirDetalleOC(ocId);
+    reabastPintar(); // refresca la pestaña que sea que esté abierta (tablero, lista de OC, etc.)
+  }catch(err){ if(typeof toast==='function') toast('Error: '+err.message,'er'); }
+}
+
+// ── Modal: nueva OC ──
+function ocProximoNumero(){
+  const anio = new Date().getFullYear();
+  const prefijo = 'OC-'+anio+'-';
+  let max = 0;
+  (REABAST.ordenesCompra||[]).forEach(o=>{
+    if(o.numero_oc && o.numero_oc.indexOf(prefijo)===0){
+      const n = parseInt(o.numero_oc.slice(prefijo.length),10);
+      if(!isNaN(n) && n>max) max = n;
+    }
+  });
+  return prefijo + String(max+1).padStart(3,'0');
+}
+
+function ocProveedoresDistintos(){
+  const set = new Set();
+  (REABAST.proveedores||[]).forEach(p=>{ if(p.nombre) set.add(p.nombre); });
+  (REABAST.politica||[]).forEach(p=>{ if(p.proveedor) set.add(p.proveedor); });
+  return [...set].sort();
+}
+
+// Cantidad/descr./rotación sugeridas para una referencia, igual criterio que la pestaña Urgentes
+// Cuánto de una referencia ya está pedido en OC activas (aún no llega a bodega)
+function reabastCantidadEnCamino(referencia){
+  let total = 0;
+  (REABAST.ordenesCompra||[]).forEach(o=>{
+    if(o.estado_general!=='activa') return;
+    (REABAST.ocItems[o.id]||[]).forEach(it=>{
+      if(it.referencia===referencia) total += Number(it.cantidad)||0;
+    });
+  });
+  return total;
+}
+
+function ocCalcularSugerido(referencia){
+  const inv = reabastInventarioPorReferencia().find(g=>g.referencia===referencia);
+  if(!inv) return null;
+  const pol = (REABAST.politica||[]).find(p=>p.referencia===referencia) || null;
+  const punto = reabastCalcularPunto(referencia, pol);
+  let sugerido = 1;
+  if(punto.maximo!=null) sugerido = Math.max(1, Math.round(punto.maximo - inv.existencia));
+  if(pol && pol.moq) sugerido = Math.max(sugerido, Number(pol.moq));
+  const cobertura = reabastCobertura(inv.existencia, punto.promedio);
+  const urgenciaPct = punto.minimo ? Math.max(0, Math.round(100*inv.existencia/punto.minimo)) : null;
+  const trmActual = Number(document.getElementById('oc-trm')?.value) || OC_TRM_APROX;
+  const factorActual = Number(document.getElementById('oc-factor')?.value) || OC_FACTOR_LANDEO_DEFECTO;
+  const fobSimulado = ocSimularFOB(referencia);
+  const costoUnitCop = fobSimulado * factorActual * trmActual;
+  return {
+    descripcion: inv.descripcion, existencia: inv.existencia, sugerido, rot: reabastRotacion(punto.promedio),
+    tiempoEntrega: punto.diasEntregaUsados, cobertura, urgenciaPct, enCamino: reabastCantidadEnCamino(referencia),
+    fuentePromedio: punto.fuentePromedio, fobSimulado, costoUnitCop
+  };
+}
+
+function ocPanelSugerencias(){
+  const urgentes = (REABAST._urgentes && REABAST._urgentes.length) ? REABAST._urgentes : reabastCalcularUrgentes();
+  if(!urgentes.length) return '<div style="font-size:11px;color:var(--mu);margin-bottom:12px;">No hay referencias urgentes en este momento — busca directamente por referencia abajo.</div>';
+  REABAST._ocSugerenciasFull = urgentes;
+  return `<div style="margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <div style="font-size:11px;font-weight:700;">🚨 Sugeridos para pedir ahora (${urgentes.length} en total)</div>
+      <input class="inp" id="oc-sug-q" placeholder="Filtrar…" style="width:120px;padding:5px 8px;font-size:11px;" oninput="ocRepintarSugerencias(this.value)">
+    </div>
+    <div id="oc-sug-lista" class="hist-inline" style="max-height:320px;overflow-y:auto;"></div>
+  </div>`;
+}
+
+function ocVerPresupuestoSugerencia(referencia, el){
+  const cont = el.closest('div[style*="padding:6px 0"]').querySelector('.oc-sug-presupuesto');
+  if(!cont) return;
+  if(cont.style.display==='block'){ cont.style.display='none'; return; }
+  cont.innerHTML = reabastPresupuestoMensualHtml(referencia);
+  cont.style.display = 'block';
+}
+
+function ocRepintarSugerencias(q){
+  const cont = document.getElementById('oc-sug-lista'); if(!cont) return;
+  const qq = (q||'').trim().toLowerCase();
+  let urgentes = REABAST._ocSugerenciasFull || [];
+  if(qq) urgentes = urgentes.filter(u => u.referencia.toLowerCase().includes(qq) || (u.descripcion||'').toLowerCase().includes(qq));
+  urgentes = urgentes.slice(0,60);
+  if(!urgentes.length){ cont.innerHTML = '<div style="font-size:11px;color:var(--mu);">Sin coincidencias</div>'; return; }
+  cont.innerHTML = urgentes.map(u=>{
+    const sug = ocCalcularSugerido(u.referencia);
+    if(!sug) return '';
+    const refKey = reabastEsc(u.referencia);
+    return `<div style="padding:6px 0;border-bottom:1px solid var(--b1);">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;"><span style="font-family:monospace;font-weight:700;">${refKey}</span> — ${reabastEsc((u.descripcion||'').slice(0,32))}</span>
+        <button class="btn btn-g btn-sm" style="flex-shrink:0;" onclick='ocAgregarSugerido(${JSON.stringify(u.referencia)})'>+ ${sug.sugerido}</button>
+      </div>
+      <div style="font-size:10px;color:var(--mu);margin-top:2px;">
+        <span class="bdg ${sug.rot.cls}" style="font-size:9px;">${sug.rot.lbl}</span>
+        · Existencia: <strong>${reabastFmtN(sug.existencia)}</strong>
+        · Nivel: <span style="color:${sug.urgenciaPct<50?'var(--rd)':'#ca8a04'};font-weight:700;">${sug.urgenciaPct!=null?sug.urgenciaPct+'% del mínimo':'—'}</span>
+        · Cobertura: ${sug.cobertura.lbl}
+        · Entrega: ${sug.tiempoEntrega} d
+        ${sug.fuentePromedio==='presupuesto'?` · <span style="color:var(--bl);cursor:pointer;text-decoration:underline;" onclick='ocVerPresupuestoSugerencia(${JSON.stringify(u.referencia)}, this)'>📊 según presupuesto — ver mes a mes</span>`:sug.fuentePromedio==='historico'?' · según histórico':''}
+        ${sug.enCamino>0?' · <span style="color:var(--pu);">En camino (OC activas): '+reabastFmtN(sug.enCamino)+'</span>':''}
+        <br>· FOB simulado: US$${sug.fobSimulado} → <strong>$${reabastFmtN(sug.costoUnitCop)}</strong> COP landeado
+      </div>
+      <div class="oc-sug-presupuesto" style="display:none;margin-top:6px;"></div>
+    </div>`;
+  }).join('');
+}
+
+// TRM de referencia — se intenta obtener en vivo al abrir el formulario (ver ocObtenerTRM);
+// este valor solo se usa si la consulta en vivo falla.
+const OC_TRM_APROX = 3100;
+const OC_FACTOR_LANDEO_DEFECTO = 1.015;
+const OC_LISTA_PRECIO_MARGEN = '1'; // P1 — Ferroeléctrico, la lista más usada
+
+// FOB simulado (mientras no tengas los precios reales de fábrica): determinístico por
+// referencia, para que cada vez que abras el formulario te salga el mismo número simulado
+// y puedas comparar. En cuanto tengas el precio real, edítalo en el campo y deja de ser "simulado".
+function ocSimularFOB(referencia){
+  let hash = 0;
+  for(let i=0;i<referencia.length;i++){ hash = (hash*31 + referencia.charCodeAt(i)) % 1000000; }
+  return Math.round((0.4 + (hash % 450)/100) * 100) / 100; // ~US$0.40 a US$4.90
+}
+
+// Consulta la TRM (USD→COP) en vivo desde una API pública y gratuita, sin necesidad de llave.
+async function ocObtenerTRM(){
+  const estado = document.getElementById('oc-trm-estado');
+  if(estado) estado.innerHTML = '⏳ Consultando TRM en vivo…';
+  try{
+    const r = await fetch('https://open.er-api.com/v6/latest/USD');
+    const j = await r.json();
+    const cop = j && j.rates && j.rates.COP;
+    if(!cop) throw new Error('sin dato');
+    document.getElementById('oc-trm').value = Math.round(cop*100)/100;
+    if(estado) estado.innerHTML = '🟢 TRM en vivo · actualizada '+new Date().toLocaleTimeString('es-CO');
+    ocRecalcularTodasFilas();
+    const q = document.getElementById('oc-sug-q');
+    ocRepintarSugerencias(q?q.value:'');
+  }catch(e){
+    if(estado) estado.innerHTML = '🟡 No se pudo obtener la TRM en vivo — quedó el valor aproximado, ajústalo si sabes el real.';
+  }
+}
+
+function abrirModalOC(){
+  if(!document.getElementById('modal-oc')) reabastInjectModalOC();
+  document.getElementById('oc-numero').value = ocProximoNumero();
+  document.getElementById('oc-proveedor').value = '';
+  document.getElementById('oc-trm').value = OC_TRM_APROX;
+  document.getElementById('oc-trm-estado').textContent = '';
+  document.getElementById('oc-factor').value = OC_FACTOR_LANDEO_DEFECTO;
+  document.getElementById('oc-sugerencias').innerHTML = ocPanelSugerencias();
+  ocRepintarSugerencias('');
+  document.getElementById('oc-items-wrap').innerHTML = '';
+  document.getElementById('oc-totales').innerHTML = '';
+  ocAgregarItemRow();
+  document.getElementById('modal-oc').classList.add('on');
+  ocObtenerTRM();
+}
+function reabastInjectModalOC(){
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="ov" id="modal-oc">
+    <div class="mo" style="max-width:600px;">
+      <div class="mh"><div class="mt">Nueva orden de compra</div><div class="mx" onclick="document.getElementById('modal-oc').classList.remove('on')">✕</div></div>
+      <div class="mb">
+        <div class="fg2">
+          <div class="fg"><label class="fl"># OC (consecutivo automático)</label><input class="inp" id="oc-numero" readonly style="background:var(--s1);color:var(--mu);"></div>
+          <div class="fg dd-wrap">
+            <label class="fl">Proveedor</label>
+            <input class="inp" id="oc-proveedor" placeholder="Buscar o escribir uno nuevo…" oninput="ocBuscarProveedor(this)" onfocus="ocBuscarProveedor(this)" onblur="setTimeout(()=>{const d=this.closest('.dd-wrap').querySelector('.dd-list'); if(d) d.classList.remove('on');},150)">
+            <div class="dd-list"></div>
+          </div>
+        </div>
+        <div class="fg2">
+          <div class="fg">
+            <label class="fl">TRM (USD→COP) <span onclick="ocObtenerTRM()" style="cursor:pointer;color:var(--bl);font-weight:600;">🔄 actualizar en vivo</span></label>
+            <input class="inp" type="number" id="oc-trm" oninput="ocRecalcularTodasFilas()">
+            <div id="oc-trm-estado" style="font-size:9.5px;color:var(--mu);margin-top:2px;"></div>
+          </div>
+          <div class="fg"><label class="fl">Factor de landeo (FOB × esto = costo en Colombia)</label><input class="inp" type="number" step="0.001" id="oc-factor" oninput="ocRecalcularTodasFilas()"></div>
+        </div>
+        <div style="font-size:10px;color:var(--mu);margin:-4px 0 10px;">El margen se calcula contra la lista de precios P1. Mientras no tengas los precios FOB reales, cada referencia trae un <strong style="color:var(--or);">FOB simulado</strong> — reemplázalo cuando tengas el dato real.</div>
+        <div id="oc-sugerencias"></div>
+        <label class="fl">Ítems (deberían ser de rotación Alta)</label>
+        <div id="oc-items-wrap"></div>
+        <button class="btn btn-g btn-sm" onclick="ocAgregarItemRow()" style="margin-top:6px;">+ Agregar ítem</button>
+        <div id="oc-totales" style="font-size:11.5px;margin-top:10px;padding:8px 10px;background:var(--s1);border-radius:8px;"></div>
+        <div style="font-size:10.5px;color:var(--mu);margin-top:10px;">Al crear, se genera automáticamente el paso a paso completo del proceso de importación (${OC_ETAPAS_TEMPLATE.length} etapas, ~${OC_ETAPAS_TEMPLATE.reduce((a,e)=>a+e.dias,0)} días esperados en total) y arranca el cronómetro de la primera etapa.</div>
+      </div>
+      <div class="mf">
+        <button class="btn btn-g" onclick="document.getElementById('modal-oc').classList.remove('on')">Cancelar</button>
+        <button class="btn btn-p" onclick="crearOC()">Crear OC</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap.firstElementChild);
+}
+
+function ocBuscarProveedor(input){
+  const q = input.value.trim().toLowerCase();
+  const dd = input.closest('.dd-wrap').querySelector('.dd-list');
+  const todos = ocProveedoresDistintos();
+  const matches = q ? todos.filter(p=>p.toLowerCase().includes(q)) : todos;
+  if(!matches.length){ dd.classList.remove('on'); dd.innerHTML=''; return; }
+  dd.innerHTML = matches.slice(0,10).map(p=>`<div class="dd-item" onmousedown="event.preventDefault();document.getElementById('oc-proveedor').value=${JSON.stringify(p)};this.closest('.dd-list').classList.remove('on')">${reabastEsc(p)}</div>`).join('');
+  dd.classList.add('on');
+}
+
+function ocAgregarItemRow(){
+  const wrap = document.getElementById('oc-items-wrap');
+  const row = document.createElement('div');
+  row.className = 'oc-item-row';
+  row.style.cssText = 'margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--b1);';
+  row.innerHTML = `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+      <div class="dd-wrap" style="flex:1;min-width:140px;position:relative;">
+        <input class="inp oc-item-ref" placeholder="Buscar referencia o descripción…" oninput="ocBuscarReferencia(this)" onfocus="ocBuscarReferencia(this)" onblur="setTimeout(()=>{const d=this.closest('.dd-wrap').querySelector('.dd-list'); if(d) d.classList.remove('on');},150)">
+        <div class="dd-list"></div>
+      </div>
+      <input class="inp oc-item-cant" type="number" placeholder="Cant." style="width:70px;">
+      <input class="inp oc-item-fob" type="number" step="0.01" placeholder="FOB US$" style="width:80px;" oninput="this.closest('.oc-item-row').dataset.fobSimulado='';ocRecalcularFila(this.closest('.oc-item-row'))">
+      <span class="oc-item-rot" style="font-size:10px;min-width:60px;"></span>
+      <span onclick="this.closest('.oc-item-row').remove();ocRecalcularTotales()" style="cursor:pointer;color:var(--rd);padding:0 4px;">✕</span>
+    </div>
+    <div class="oc-item-desc" style="font-size:10.5px;color:var(--mu);margin:2px 0 0 2px;"></div>
+    <div class="oc-item-costeo" style="font-size:10.5px;color:var(--tx);margin:2px 0 0 2px;"></div>
+    <div style="display:flex;gap:6px;margin-top:5px;">
+      <input class="inp oc-item-lote" placeholder="Lote (opcional)" style="flex:1;padding:5px 8px;font-size:11px;">
+      <input class="inp oc-item-ficha" type="file" accept="image/*,.pdf" style="flex:1;font-size:10.5px;" title="Ficha técnica (opcional)">
+    </div>`;
+  wrap.appendChild(row);
+}
+
+function ocBuscarReferencia(input){
+  const q = input.value.trim().toLowerCase();
+  const dd = input.closest('.dd-wrap').querySelector('.dd-list');
+  if(!q){ dd.classList.remove('on'); dd.innerHTML=''; return; }
+  const inv = reabastInventarioPorReferencia();
+  const matches = inv.filter(g=> g.referencia.toLowerCase().includes(q) || (g.descripcion||'').toLowerCase().includes(q)).slice(0,8);
+  if(!matches.length){ dd.classList.remove('on'); dd.innerHTML = '<div class="dd-empty">Sin coincidencias</div>'; dd.classList.add('on'); return; }
+  dd.innerHTML = matches.map(g=>{
+    const sug = ocCalcularSugerido(g.referencia);
+    return `<div class="dd-item" onmousedown='event.preventDefault();ocSeleccionarReferencia(this, ${JSON.stringify(g.referencia)})'>
+      <strong style="font-family:monospace;">${reabastEsc(g.referencia)}</strong> — ${reabastEsc((g.descripcion||'').slice(0,40))}
+      ${sug?` <span style="color:var(--bl);">· sugerido: ${sug.sugerido}</span>`:''}
+    </div>`;
+  }).join('');
+  dd.classList.add('on');
+}
+
+async function ocLlenarFilaDesdeReferencia(row, referencia){
+  row.querySelector('.oc-item-ref').value = referencia;
+  const dd = row.querySelector('.dd-list'); if(dd){ dd.classList.remove('on'); dd.innerHTML=''; }
+  const sug = ocCalcularSugerido(referencia);
+  row.querySelector('.oc-item-desc').textContent = sug ? sug.descripcion + ' · existencia actual: '+reabastFmtN(sug.existencia) : 'Sin datos de inventario para esta referencia';
+  row.querySelector('.oc-item-cant').value = sug ? sug.sugerido : 1;
+  row.querySelector('.oc-item-rot').innerHTML = sug ? `<span class="bdg ${sug.rot.cls}">${sug.rot.lbl}</span>`+(sug.rot.lbl!=='Alta'?' ⚠️':'') : '';
+  const fobInput = row.querySelector('.oc-item-fob');
+  if(!fobInput.value){ fobInput.value = ocSimularFOB(referencia); row.dataset.fobSimulado = '1'; }
+  row.dataset.precioVenta = '';
+  try{
+    const precios = await sb.get('precios_lista', `lista=eq.${OC_LISTA_PRECIO_MARGEN}&referencia=eq.${encodeURIComponent(referencia)}&select=precio&limit=1`);
+    if(precios && precios[0]) row.dataset.precioVenta = precios[0].precio;
+  }catch(e){ console.warn('Error consultando precio de lista:', e.message); }
+  ocRecalcularFila(row);
+}
+function ocSeleccionarReferencia(el, referencia){ ocLlenarFilaDesdeReferencia(el.closest('.oc-item-row'), referencia); }
+function ocAgregarSugerido(referencia){
+  const wrap = document.getElementById('oc-items-wrap');
+  let row = [...wrap.querySelectorAll('.oc-item-row')].find(r=>!r.querySelector('.oc-item-ref').value.trim());
+  if(!row){ ocAgregarItemRow(); row = wrap.lastElementChild; }
+  ocLlenarFilaDesdeReferencia(row, referencia);
+}
+
+// Costo unitario en COP = FOB (US$) × factor de landeo × TRM. Margen = 1 − costo/precio de venta (lista P1).
+function ocRecalcularFila(row){
+  const fob = Number(row.querySelector('.oc-item-fob').value)||0;
+  const trm = Number(document.getElementById('oc-trm').value)||0;
+  const factor = Number(document.getElementById('oc-factor').value)||0;
+  const cont = row.querySelector('.oc-item-costeo');
+  if(!fob || !trm || !factor){ cont.innerHTML = ''; ocRecalcularTotales(); return; }
+  const simulado = row.dataset.fobSimulado === '1';
+  const costoUnitCop = fob*factor*trm;
+  const precioVenta = row.dataset.precioVenta ? Number(row.dataset.precioVenta) : null;
+  const margen = precioVenta ? Math.round((1 - costoUnitCop/precioVenta)*1000)/10 : null;
+  cont.innerHTML = `Costo unitario: <strong>$${reabastFmtN(costoUnitCop)}</strong> COP (US$${fob}${simulado?' <span style="color:var(--or);font-weight:700;">simulado</span>':''} × ${factor} × TRM ${reabastFmtN(trm)})`
+    + (precioVenta!=null ? ` · Precio venta P1: $${reabastFmtN(precioVenta)} · Margen: <strong style="color:${margen<20?'var(--rd)':'var(--gr)'}">${margen}%</strong>` : ' · <span style="color:var(--mu);">sin precio en lista P1 para calcular margen</span>');
+  ocRecalcularTotales();
+}
+function ocRecalcularTodasFilas(){
+  [...document.querySelectorAll('#oc-items-wrap .oc-item-row')].forEach(ocRecalcularFila);
+}
+function ocRecalcularTotales(){
+  const el = document.getElementById('oc-totales'); if(!el) return;
+  const trm = Number(document.getElementById('oc-trm').value)||0;
+  const factor = Number(document.getElementById('oc-factor').value)||0;
+  const filas = [...document.querySelectorAll('#oc-items-wrap .oc-item-row')];
+  let totalFob=0, totalCop=0, totalVenta=0, n=0;
+  filas.forEach(f=>{
+    const fob = Number(f.querySelector('.oc-item-fob').value)||0;
+    const cant = Number(f.querySelector('.oc-item-cant').value)||0;
+    if(fob && trm && factor && cant){
+      totalFob += fob*cant;
+      totalCop += fob*factor*trm*cant;
+      if(f.dataset.precioVenta) totalVenta += Number(f.dataset.precioVenta)*cant;
+      n++;
+    }
+  });
+  if(!n){ el.innerHTML = '<span style="color:var(--mu);">Agrega FOB, TRM y factor de landeo para ver el costo total y el margen.</span>'; return; }
+  const margenTotal = totalVenta ? Math.round((1-totalCop/totalVenta)*1000)/10 : null;
+  el.innerHTML = `<strong>Total OC:</strong> US$${totalFob.toFixed(2)} FOB · $${reabastFmtN(totalCop)} COP landeado` + (margenTotal!=null ? ` · Margen promedio ponderado: <strong>${margenTotal}%</strong>` : '');
+}
+
+async function crearOC(){
+  const numero = document.getElementById('oc-numero').value.trim() || ocProximoNumero();
+  const proveedor = document.getElementById('oc-proveedor').value.trim();
+  const trm = Number(document.getElementById('oc-trm').value)||null;
+  const factor = Number(document.getElementById('oc-factor').value)||null;
+  if(!proveedor){ if(typeof toast==='function') toast('Selecciona o escribe un proveedor','wa'); return; }
+  const filas = [...document.querySelectorAll('#oc-items-wrap .oc-item-row')];
+  const items = filas.map(f=>{
+    const fob = Number(f.querySelector('.oc-item-fob').value)||null;
+    const precioVenta = f.dataset.precioVenta ? Number(f.dataset.precioVenta) : null;
+    const costoUnitCop = (fob && trm && factor) ? fob*factor*trm : null;
+    const margen = (costoUnitCop && precioVenta) ? Math.round((1-costoUnitCop/precioVenta)*1000)/10 : null;
+    return {
+      referencia: f.querySelector('.oc-item-ref').value.trim(),
+      cantidad: Number(f.querySelector('.oc-item-cant').value)||0,
+      precio_fob_usd: fob, costo_unitario_cop: costoUnitCop, precio_venta_cop: precioVenta, margen_pct: margen,
+      lote: f.querySelector('.oc-item-lote').value.trim() || null,
+      _fichaFile: f.querySelector('.oc-item-ficha').files[0] || null
+    };
+  }).filter(it=>it.referencia && it.cantidad>0);
+  if(!items.length){ if(typeof toast==='function') toast('Agrega al menos un ítem con cantidad','wa'); return; }
+  try{
+    for(const it of items){
+      if(it._fichaFile){
+        try{ it.ficha_tecnica_url = await ocSubirAdjunto(it._fichaFile); }catch(e){ console.warn('Error subiendo ficha técnica:', e.message); }
+      }
+      delete it._fichaFile;
+    }
+    const ahora = new Date().toISOString();
+    const ocCreada = await sbReabast.post('ordenes_compra', {numero_oc:numero, proveedor: proveedor||null, creado_por: CU.nombre, trm, factor_landeo: factor});
+    const oc = ocCreada[0];
+    await sbReabast.post('oc_items', items.map(it=>({oc_id:oc.id, ...it})));
+    const etapasFilas = OC_ETAPAS_TEMPLATE.map((et,i)=>{
+      const arrancaSola = !et.dependeDe && !et.requiere;
+      return { oc_id: oc.id, etapa_id: et.id, nombre: et.nombre, orden: i+1, dias_esperado: et.dias,
+        estado: arrancaSola?'en_curso':'pendiente', fecha_inicio: arrancaSola?ahora:null };
+    });
+    await sbReabast.post('oc_etapas', etapasFilas);
+    document.getElementById('modal-oc').classList.remove('on');
+    if(typeof toast==='function') toast('OC '+numero+' creada — arrancó "Creación de OC"','ok');
+    await cargarOC();
+    reabastRepintarOC();
+  }catch(e){ if(typeof toast==='function') toast('Error creando OC: '+e.message,'er'); }
+}
+
+// ── Tab: Proveedores y MOQ (solo admin) — grilla editable por REFERENCIA ──
+function reabastCombinarInventarioPolitica(){
+  const polMap = {}; REABAST.politica.forEach(p => { polMap[p.referencia] = p; });
+  const inv = reabastInventarioPorReferencia();
+  return inv.map(g=>{
+    const pol = polMap[g.referencia] || null;
+    const punto = reabastCalcularPunto(g.referencia, pol);
+    return { ...g, pol, ...punto };
+  }).sort((a,b)=> a.referencia.localeCompare(b.referencia));
+}
+
+function reabastHtmlPolitica(){
+  if(!reabastEsAdmin()) return '<div class="empty"><div class="empty-t">Solo el admin puede ver esto</div></div>';
+  if(!REABAST._combinados) REABAST._combinados = reabastCombinarInventarioPolitica();
+  if(!REABAST.politicaFiltro) REABAST.politicaFiltro = { q:'', soloSinConfig:true };
+  return `
+    <div style="font-size:11px;color:var(--mu);margin-bottom:10px;">
+      El mínimo y máximo se calculan <strong>automáticamente</strong> con el promedio de venta mensual, el tiempo de entrega y el margen de seguridad.
+      Solo necesitas configurar proveedor, tiempo de entrega, MOQ y margen; si quieres forzar un mínimo/máximo distinto, edítalo directamente y queda como manual.
+    </div>
+    <div class="toolbar" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+      <input class="inp" style="flex:1;min-width:180px;" id="pol-q" placeholder="Buscar referencia o descripción…" value="${reabastEsc(REABAST.politicaFiltro.q)}" oninput="REABAST.politicaFiltro.q=this.value;reabastRepintarPolitica()">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mu);white-space:nowrap;">
+        <input type="checkbox" id="pol-sinconf" ${REABAST.politicaFiltro.soloSinConfig?'checked':''} onchange="REABAST.politicaFiltro.soloSinConfig=this.checked;reabastRepintarPolitica()"> Solo sin proveedor/tiempo de entrega
+      </label>
+    </div>
+    <div id="pol-tabla-wrap"></div>`;
+}
+
+function reabastFilasPolitica(){
+  const {q, soloSinConfig} = REABAST.politicaFiltro;
+  const qq = (q||'').toLowerCase();
+  let filas = REABAST._combinados || [];
+  if(qq) filas = filas.filter(f => f.referencia.toLowerCase().includes(qq) || (f.descripcion||'').toLowerCase().includes(qq));
+  if(soloSinConfig) filas = filas.filter(f => !f.pol || !f.pol.proveedor || !f.pol.tiempo_entrega_dias);
+  return filas.slice(0, 300);
+}
+
+function reabastRepintarPolitica(){
+  const wrap = document.getElementById('pol-tabla-wrap');
+  if(!wrap) return;
+  const filas = reabastFilasPolitica();
+  const total = (REABAST._combinados||[]).length;
+  if(!filas.length){ wrap.innerHTML = '<div class="empty"><div class="empty-t">🎉 Todo configurado</div>No hay referencias sin proveedor/tiempo de entrega con este filtro.</div>'; return; }
+  wrap.innerHTML = `<div style="font-size:11px;color:var(--mu);margin-bottom:6px;">${filas.length.toLocaleString('es-CO')} de ${total.toLocaleString('es-CO')} referencias ${filas.length>=300?'(mostrando primeras 300, refina la búsqueda)':''}</div>
+  <div class="tw"><table>
+    <thead><tr><th>Referencia</th><th>Prom./mes</th><th>Existencia</th><th>Proveedor</th><th>Entrega (d)</th><th>MOQ</th><th>Margen seg. %</th><th>Mínimo</th><th>Máximo</th></tr></thead>
+    <tbody>${filas.map(f=>{
+      const sinConf = !f.pol || !f.pol.proveedor || !f.pol.tiempo_entrega_dias;
+      const ref = reabastEsc(f.referencia);
+      return `<tr style="${sinConf?'background:#fef9c3;':''}">
+        <td style="font-family:monospace;">${ref}${sinConf?' <span class="bdg bp" style="font-size:9px;">sin config.</span>':''}</td>
+        <td style="text-align:right;">${reabastFmtN(f.promedio)}</td>
+        <td style="text-align:right;">${reabastFmtN(f.existencia)}</td>
+        <td><input class="inp" type="text" style="width:110px;padding:5px 6px;" value="${reabastEsc(f.pol?.proveedor||'')}" onchange="reabastGuardarCelda('${ref}','proveedor',this.value,this)"></td>
+        <td><input class="inp" type="number" style="width:60px;padding:5px 6px;" value="${f.pol?.tiempo_entrega_dias ?? ''}" onchange="reabastGuardarCelda('${ref}','tiempo_entrega_dias',this.value,this)"></td>
+        <td><input class="inp" type="number" style="width:65px;padding:5px 6px;" value="${f.pol?.moq ?? ''}" onchange="reabastGuardarCelda('${ref}','moq',this.value,this)"></td>
+        <td><input class="inp" type="number" style="width:65px;padding:5px 6px;" value="${f.pol?.margen_seguridad_pct ?? 20}" onchange="reabastGuardarCelda('${ref}','margen_seguridad_pct',this.value,this)"></td>
+        <td><input class="inp" type="number" style="width:70px;padding:5px 6px;" placeholder="${f.minimoAuto ?? 'auto'}" value="${f.pol?.stock_minimo_manual ?? ''}" onchange="reabastGuardarCelda('${ref}','stock_minimo_manual',this.value,this)"></td>
+        <td><input class="inp" type="number" style="width:70px;padding:5px 6px;" placeholder="${f.maximoAuto ?? 'auto'}" value="${f.pol?.stock_maximo_manual ?? ''}" onchange="reabastGuardarCelda('${ref}','stock_maximo_manual',this.value,this)"></td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+async function reabastGuardarCelda(referencia, campo, valorRaw, inputEl){
+  const esTexto = campo==='proveedor';
+  const valor = valorRaw==='' ? null : (esTexto ? valorRaw.trim() : Number(valorRaw));
+  const payload = { referencia, [campo]: valor, actualizado_en: new Date().toISOString() };
+  const original = inputEl.style.borderColor;
+  try{
+    const r = await fetch(SB_REABAST_URL+'/rest/v1/politica_inventario?on_conflict=referencia', {
+      method:'POST',
+      headers:{...sbReabast.headers, 'Prefer':'resolution=merge-duplicates,return=representation'},
+      body: JSON.stringify(payload)
+    });
+    if(!r.ok) throw new Error(await r.text());
+    const saved = (await r.json())[0];
+    let combo = (REABAST._combinados||[]).find(f=>f.referencia===referencia);
+    let pol = REABAST.politica.find(p=>p.referencia===referencia);
+    if(pol) Object.assign(pol, saved); else REABAST.politica.push(saved);
+    if(combo) Object.assign(combo, { pol: saved, ...reabastCalcularPunto(referencia, saved) });
+    inputEl.style.borderColor = 'var(--gr)';
+    setTimeout(()=>{ inputEl.style.borderColor = original; }, 900);
+  }catch(e){
+    inputEl.style.borderColor = 'var(--rd)';
+    if(typeof toast==='function') toast('Error guardando: '+e.message,'er');
+  }
+}
+
+// ── Modal: nueva solicitud ──
+let REABAST_PREFILL = null;
+function abrirModalReabast(item){
+  REABAST_PREFILL = item || null;
+  if(!document.getElementById('modal-reabast')) reabastInjectModal();
+  document.getElementById('rb-ref').value = item ? item.referencia : '';
+  document.getElementById('rb-bodega').value = item && item.bodega ? String(item.bodega).split(',')[0].trim() : '';
+  let desc = item ? (item.descripcion||'') + (item.existencia!=null?(' · disponible: '+reabastFmtN(item.existencia)):'') : '';
+  if(item && item.proveedor) desc += ' · Proveedor: '+item.proveedor;
+  if(item && item.moq) desc += ' · MOQ: '+reabastFmtN(item.moq);
+  document.getElementById('rb-desc').textContent = desc;
+  document.getElementById('rb-cant').value = item && item.sugerido ? item.sugerido : 1;
+  document.getElementById('rb-coment').value = '';
+  document.getElementById('modal-reabast').classList.add('on');
+}
+function cerrarModalReabast(){ const m=document.getElementById('modal-reabast'); if(m) m.classList.remove('on'); }
+
+function reabastInjectModal(){
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="ov" id="modal-reabast">
+    <div class="mo">
+      <div class="mh"><div class="mt">Solicitar abastecimiento</div><div class="mx" onclick="cerrarModalReabast()">✕</div></div>
+      <div class="mb">
+        <div class="fg"><label class="fl">Referencia</label><input class="inp" id="rb-ref" placeholder="Ej: 1222"></div>
+        <div id="rb-desc" style="font-size:11px;color:var(--mu);margin:-6px 0 10px;"></div>
+        <div class="fg2">
+          <div class="fg"><label class="fl">Bodega</label><input class="inp" id="rb-bodega" placeholder="BA, BS, RE…"></div>
+          <div class="fg"><label class="fl">Cantidad</label><input type="number" class="inp" id="rb-cant" min="1"></div>
+        </div>
+        <div class="fg"><label class="fl">Comentario (opcional)</label><textarea class="inp" id="rb-coment"></textarea></div>
+      </div>
+      <div class="mf">
+        <button class="btn btn-g" onclick="cerrarModalReabast()">Cancelar</button>
+        <button class="btn btn-p" onclick="enviarReabast()">Enviar solicitud</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap.firstElementChild);
+}
+
+async function enviarReabast(){
+  const referencia = document.getElementById('rb-ref').value.trim();
+  const bodega = document.getElementById('rb-bodega').value.trim().toUpperCase();
+  const cantidad = Number(document.getElementById('rb-cant').value);
+  const comentario = document.getElementById('rb-coment').value.trim();
+  if(!referencia || !cantidad || cantidad<=0){ if(typeof toast==='function') toast('Completa referencia y cantidad','wa'); return; }
+  const item = REABAST_PREFILL;
+  const pol = REABAST.politica.find(p=>p.referencia===referencia);
+  try{
+    await sbReabast.post('solicitudes_reabastecimiento', {
+      referencia, bodega: bodega||null,
+      descripcion: item ? item.descripcion : null,
+      cantidad_solicitada: cantidad,
+      cantidad_disponible: item ? item.existencia : null,
+      solicitante_email: CU.email, solicitante_nombre: CU.nombre,
+      comentario_solicitante: comentario || null,
+      proveedor: (item && item.proveedor) || (pol && pol.proveedor) || null,
+      tiempo_entrega_dias: (item && item.tiempo_entrega_dias) || (pol && pol.tiempo_entrega_dias) || null
+    });
+    cerrarModalReabast();
+    if(typeof toast==='function') toast('Solicitud enviada','ok');
+    if(document.getElementById('pg-reabast')?.classList.contains('on')) renderReabastMod();
+  }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
+}
+
+async function decidirReabast(id, estado){
+  try{
+    await sbReabast.patch('solicitudes_reabastecimiento', 'id=eq.'+id, {
+      estado, aprobador_email: CU.email, fecha_decision: new Date().toISOString()
+    });
+    if(typeof toast==='function') toast(estado==='aprobada'?'Solicitud aprobada':'Solicitud rechazada', estado==='aprobada'?'ok':'wa');
+    renderReabastMod();
+  }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
+}
+
+async function marcarEnTransito(id, diasEntrega){
+  try{
+    const fecha = new Date();
+    if(diasEntrega) fecha.setDate(fecha.getDate()+Number(diasEntrega));
+    await sbReabast.patch('solicitudes_reabastecimiento', 'id=eq.'+id, {
+      estado: 'en_transito', fecha_estimada_llegada: fecha.toISOString().split('T')[0]
+    });
+    if(typeof toast==='function') toast('Marcado en tránsito','ok');
+    renderReabastMod();
+  }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
+}
+
+async function marcarRecibido(id, cantidadSugerida){
+  const cant = prompt('¿Cuántas unidades llegaron?', cantidadSugerida||'');
+  if(cant===null) return;
+  try{
+    await sbReabast.patch('solicitudes_reabastecimiento', 'id=eq.'+id, {
+      estado: 'recibida', fecha_llegada_real: new Date().toISOString(), cantidad_recibida: Number(cant)||0
+    });
+    if(typeof toast==='function') toast('Marcado como recibido','ok');
+    renderReabastMod();
+  }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -9746,8 +11696,9 @@ async function invduvSincronizar(inputEl) {
       const r = aI[i]; const ref = str(r[cI['Referencia Item']]); if(!ref) continue;
       const bod = str(r[cI['Bodega']]); const k = ref+'|'+bod;
       const ex = num(r[cI['Cant_existencia_actual']]);
-      if(inv[k]) { inv[k].existencia += ex; continue; }
-      inv[k] = {referencia:ref, bodega:bod, descripcion:str(r[cI['Nombre Item']]).slice(0,200), existencia:ex, costo_prom:r2(num(r[cI['Costo_prom_uni']])), um:str(r[cI['Unidad de Medida']])};
+      const fc = fechaISOdeCelda(r[cI['FECHA CREACION']]);
+      if(inv[k]) { inv[k].existencia += ex; if(fc && (!inv[k].fecha_creacion || fc < inv[k].fecha_creacion)) inv[k].fecha_creacion = fc; continue; }
+      inv[k] = {referencia:ref, bodega:bod, descripcion:str(r[cI['Nombre Item']]).slice(0,200), existencia:ex, costo_prom:r2(num(r[cI['Costo_prom_uni']])), um:str(r[cI['Unidad de Medida']]), fecha_creacion: fc};
     }
     const invL = Object.values(inv); invL.forEach(x => x.existencia = r2(x.existencia));
     log('📦 INVENTARIO: ' + invL.length + ' referencia+bodega');
@@ -9756,12 +11707,24 @@ async function invduvSincronizar(inputEl) {
     const hV = aV.findIndex(r => r && r.includes('Periodo') && r.includes('Valor_subtotal_local'));
     if(hV<0) throw new Error('No encontré el encabezado de VENTAS');
     const cV = {}; aV[hV].forEach((h,i) => { if(h && !(h in cV)) cV[h]=i; });
-    const hist = {}, cm = {}, mcMap = {}, rvDocs = {};
+    const hist = {}, cm = {}, mcMap = {}, rvDocs = {}, rcMap = {};
     let lineas = 0;
     const serialDe = f => {
       if(typeof f === 'number') return Math.round(f);
       const t = str(f); if(t.length < 8) return 0;
       return Math.round((Date.UTC(+t.slice(0,4), +t.slice(4,6)-1, +t.slice(6,8)) - Date.UTC(1899,11,30)) / 86400000);
+    };
+    const fechaISOdeCelda = v => {
+      if(v==null || v==='') return null;
+      if(typeof v === 'number') {
+        const d = new Date(Date.UTC(1899,11,30) + Math.round(v)*86400000);
+        return isNaN(d) ? null : d.toISOString().slice(0,10);
+      }
+      const t = str(v);
+      if(/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0,10);
+      const m = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+      if(m) { let [_,d,mo,y] = m; if(y.length===2) y = '20'+y; return y+'-'+String(mo).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
+      return null;
     };
     for(let i=hV+1;i<aV.length;i++){
       const r = aV[i]; const per = str(r[cV['Periodo']]); if(per.length<6) continue;
@@ -9784,6 +11747,12 @@ async function invduvSincronizar(inputEl) {
         const g = mcMap[km];
         g['Cantidad inv.'] += u; g['Valor subtotal'] += val; g['Costo promedio total'] += num(r[cV['Costo_prom_tot']]);
       }
+      // Qué clientes compran más cada referencia
+      if(nit && ref) {
+        const kr = ref + '|' + nit;
+        if(!rcMap[kr]) rcMap[kr] = {referencia:ref, cliente_nit:nit, cliente_nombre:str(r[cV['Nombre Cliente_factura']]) || nit, unidades:0, valor_cop:0};
+        rcMap[kr].unidades += u; rcMap[kr].valor_cop += val;
+      }
       // Reporte Diario — una fila por factura (documento), agrupada por periodo
       const tipoDoc = str(r[cV['Tipo de Documento']]), nroDoc = num(r[cV['Numero_documento']]);
       if(tipoDoc && nroDoc) {
@@ -9796,6 +11765,7 @@ async function invduvSincronizar(inputEl) {
       }
     }
     const mcL = Object.values(mcMap).map(g => ({...g, 'Cantidad inv.':r2(g['Cantidad inv.']), 'Valor subtotal':r2(g['Valor subtotal']), 'Costo promedio total':r2(g['Costo promedio total'])}));
+    const rcL = Object.values(rcMap).map(g => ({...g, unidades:r2(g.unidades), valor_cop:r2(g.valor_cop), actualizado:new Date().toISOString()}));
     const perMax = Math.max(...Object.keys(rvDocs).map(Number));
     const rvDatos = Object.values(rvDocs[perMax] || {}).map(d => ({...d, 'Valor subtotal local':r2(d['Valor subtotal local'])}));
     const rvFechas = [...new Set(rvDatos.map(d => d.Fecha).filter(Boolean))].sort((a,b) => a-b);
@@ -9815,7 +11785,7 @@ async function invduvSincronizar(inputEl) {
     const ahora = hoy.toISOString(); const quien = (CU && CU.nombre) || 'Portal';
     const upd = [], ins = [];
     invL.forEach(x => {
-      const f = {descripcion:x.descripcion, existencia:x.existencia, costo_prom:x.costo_prom, um:x.um, periodo, subido_por:quien, actualizado:ahora};
+      const f = {descripcion:x.descripcion, existencia:x.existencia, costo_prom:x.costo_prom, um:x.um, periodo, subido_por:quien, actualizado:ahora, fecha_creacion:x.fecha_creacion||null};
       const ids = idx[x.referencia+'|'+x.bodega];
       if(ids) ids.forEach(id => upd.push({id, referencia:x.referencia, bodega:x.bodega, ...f}));
       else ins.push({referencia:x.referencia, bodega:x.bodega, ubicacion:'', lote:'', ...f});
@@ -9834,6 +11804,8 @@ async function invduvSincronizar(inputEl) {
     }
     log('⬆️ Margen por Cliente: ' + mcL.length + ' filas cliente/mes');
     await req('POST','rpc/invduv_actualizar_margen', {p_datos:mcL, p_subido:email, p_origen:'🔄 INV - DUV (Biable)'});
+    log('⬆️ Clientes por producto: ' + rcL.length + ' filas referencia+cliente');
+    for(let i=0;i<rcL.length;i+=500) await req('POST','ventas_cliente_producto?on_conflict=referencia,cliente_nit', rcL.slice(i,i+500), 'resolution=merge-duplicates,return=minimal');
     await req('POST','configuracion?on_conflict=clave', [
       {clave:'inv_ultima_actualizacion', valor:ahora, tipo:'texto'},
       {clave:'invduv_ultima_sync', valor:JSON.stringify({fecha:ahora, origen:'portal', por:quien, archivo:file.name, inv:invL.length, hist:histL.length, cm:cmL.length}), tipo:'json'}
