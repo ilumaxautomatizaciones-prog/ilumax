@@ -2605,8 +2605,16 @@ async function startApp(){
     updBadges();
   }
 
-  // Renderizar dashboard con datos listos
-  renderInicio();
+  // Restaurar la última vista donde estaba el usuario (para que al refrescar la página no
+  // se pierda y toque volver a buscarla) — si no hay nada guardado, o no tiene acceso a ese
+  // módulo, se queda en Inicio como siempre.
+  const ultimaVista = leerUltimaVista();
+  if(ultimaVista && ultimaVista.page && ultimaVista.page!=='inicio'){
+    if(ultimaVista.page==='reabast' && ultimaVista.reabastTab && typeof REABAST!=='undefined') REABAST.tab = ultimaVista.reabastTab;
+    goPage(ultimaVista.page);
+  } else {
+    renderInicio();
+  }
   hideLoader();
   // Cargar config de correo del reporte en background
   rvCargarConfig().catch(()=>{});
@@ -2862,6 +2870,18 @@ function renderNavFav() {
 }
 
 const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'inv-ti':renderInvTiMod,reabast:renderReabastMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas,centro:renderCentro,'reporte-ventas':renderReporteVentas,'margen-cliente':function(){renderMargenCliente();},'ppto-areas':renderPptoAreas,'admin-center':renderAdminCenter,'mi-equipo':renderMiEquipo};
+// ── Recordar la última vista (módulo + pestaña) para restaurarla al refrescar el navegador ──
+function ultimaVistaKey(){ return 'ilx_ultima_vista_' + (typeof CU!=='undefined' && CU ? CU.email : 'default'); }
+function guardarUltimaVista(pageId){
+  try{
+    const data = { page: pageId };
+    if(pageId==='reabast' && typeof REABAST!=='undefined' && REABAST.tab) data.reabastTab = REABAST.tab;
+    localStorage.setItem(ultimaVistaKey(), JSON.stringify(data));
+  }catch(e){}
+}
+function leerUltimaVista(){
+  try{ return JSON.parse(localStorage.getItem(ultimaVistaKey())||'null'); }catch(e){ return null; }
+}
 function goPage(id, el){
   // Candado real, no solo cosmético: si el módulo está en el catálogo de 🧩 Módulos por Rol
   // y el usuario no tiene acceso, no lo dejamos entrar aunque lo invoque directo (consola, etc.)
@@ -2875,6 +2895,7 @@ function goPage(id, el){
   cerrarGrupos();
   if(pgMap[id]) pgMap[id]();
   hookSearchRenderers();
+  guardarUltimaVista(id);
 }
 
 function updSyncSt(){
@@ -8553,7 +8574,7 @@ async function renderReabastMod(){
   reabastGoTab(REABAST.tab || 'urgentes');
 }
 
-function reabastGoTab(tab){ REABAST.tab = tab; reabastPintar(); }
+function reabastGoTab(tab){ REABAST.tab = tab; reabastPintar(); if(typeof guardarUltimaVista==='function') guardarUltimaVista('reabast'); }
 
 // ── Punto de reorden automático ──
 // mínimo = demanda durante el tiempo de entrega + STOCK DE SEGURIDAD
@@ -8696,6 +8717,7 @@ function reabastPintar(){
     {id:'vendidos', lbl:'🏆 Más vendidos'},
     {id:'abc', lbl:'🔤 Clasificación ABC'},
     {id:'proveedores', lbl:'🏭 Proveedores'},
+    {id:'panelcompras', lbl:'📥 Panel de compras'},
     {id:'solicitudes', lbl:'📋 Solicitudes'},
     {id:'dashboard', lbl:'📊 Dashboard'},
   ];
@@ -8713,7 +8735,7 @@ function reabastPintar(){
         <button class="btn btn-bl" onclick="abrirModalReabast()">+ Nueva solicitud</button>
       </div>
     </div>
-    <div style="display:flex;gap:4px;border-bottom:1px solid var(--b1);margin-bottom:14px;overflow-x:auto;">
+    <div style="display:flex;gap:4px 2px;flex-wrap:wrap;border-bottom:1px solid var(--b1);margin-bottom:14px;">
       ${tabs.map(t=>`<div onclick="reabastGoTab('${t.id}')" style="padding:9px 13px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;border-bottom:2px solid ${REABAST.tab===t.id?'var(--bl)':'transparent'};color:${REABAST.tab===t.id?'var(--bl)':'var(--mu)'};">${t.lbl}</div>`).join('')}
     </div>
     <div id="reabast-tab-body"></div>
@@ -8730,6 +8752,7 @@ function reabastPintar(){
   else if(REABAST.tab==='vendidos'){ body.innerHTML = reabastHtmlVendidosShell(); reabastRepintarVendidos(); }
   else if(REABAST.tab==='abc'){ body.innerHTML = reabastHtmlAbcShell(); reabastRepintarAbc(); }
   else if(REABAST.tab==='proveedores'){ body.innerHTML = reabastHtmlProveedores(); }
+  else if(REABAST.tab==='panelcompras'){ body.innerHTML = reabastHtmlPanelCompras(); reabastCargarPanelCompras(); }
   else if(REABAST.tab==='referencias'){ body.innerHTML = reabastHtmlReferenciasShell(); reabastRepintarReferencias(); }
   else if(REABAST.tab==='dashboard') body.innerHTML = reabastHtmlDashboard();
   else if(REABAST.tab==='politica'){ REABAST._combinados = null; body.innerHTML = reabastHtmlPolitica(); reabastRepintarPolitica(); }
@@ -9178,7 +9201,10 @@ function reabastOcCardHtml(o){
   return `<div class="sc2" style="cursor:pointer;" onclick="reabastAbrirDetalleOC('${o.id}')">
     <div class="sc2-head">
       <div><strong>OC ${reabastEsc(o.numero_oc)}</strong> <span style="color:var(--mu)">· ${reabastEsc(o.proveedor||'sin proveedor')}</span></div>
-      <span class="bdg ${sem.cls}">${actual?actual.nombre:'—'} · ${sem.lbl}</span>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button class="btn btn-g btn-sm" style="padding:3px 9px;font-size:10.5px;" onclick="event.stopPropagation();reabastVerDocumentoOC('${o.id}')">📄 Descargar</button>
+        <span class="bdg ${sem.cls}">${actual?actual.nombre:'—'} · ${sem.lbl}</span>
+      </div>
     </div>
     <div class="sc2-body">
       ${items.length} ítem(s) · creada ${new Date(o.creado_en).toLocaleDateString('es-CO')} por ${reabastEsc(o.creado_por||'')}
@@ -9284,14 +9310,16 @@ function reabastHtmlProveedores(){
   return `
     ${esAdmin?`<div style="margin-bottom:12px;"><button class="btn btn-bl btn-sm" onclick="abrirModalProveedor()">+ Nuevo proveedor</button></div>`:''}
     <div class="tw" style="margin-bottom:20px;"><table>
-      <thead><tr><th>Siglas</th><th>Nombre</th><th>NIT</th><th>Correo</th>${esAdmin?'<th></th>':''}</tr></thead>
+      <thead><tr><th>Siglas</th><th>Nombre</th><th>Nombre comercial</th><th>Ciudad</th><th>NIT</th><th>Correo</th>${esAdmin?'<th></th>':''}</tr></thead>
       <tbody>${provs.map(p=>`<tr>
         <td style="font-family:monospace;font-weight:700;">${reabastEsc(p.siglas||'—')}</td>
         <td>${reabastEsc(p.nombre)}</td>
+        <td>${reabastEsc(p.nombre_comercial||'—')}</td>
+        <td>${reabastEsc(p.ciudad||'—')}</td>
         <td>${reabastEsc(p.nit||'—')}</td>
         <td>${reabastEsc(p.correo||'—')}</td>
         ${esAdmin?`<td><button class="btn btn-g btn-sm" data-p='${JSON.stringify(p).replace(/'/g,"&#39;")}' onclick="abrirModalProveedor(JSON.parse(this.dataset.p))">✎</button></td>`:''}
-      </tr>`).join('') || `<tr><td colspan="${esAdmin?5:4}" style="text-align:center;padding:16px;color:var(--mu);">Aún no has registrado proveedores</td></tr>`}</tbody>
+      </tr>`).join('') || `<tr><td colspan="${esAdmin?7:6}" style="text-align:center;padding:16px;color:var(--mu);">Aún no has registrado proveedores</td></tr>`}</tbody>
     </table></div>
     <div class="admin-sec-t" style="margin-bottom:8px;">📊 Desempeño por proveedor (tiempos reales vs. esperados en sus OC)</div>
     ${reabastHtmlDesempenoProveedores()}`;
@@ -9330,29 +9358,93 @@ function reabastHtmlDesempenoProveedores(){
   </table></div>`;
 }
 
+// Mismas columnas que la hoja "proveedores" del Excel, organizadas por sesiones/módulos
+// (igual que en el formulario de Referencias/SKU) para no tener un formulario eterno.
+const PROVEEDOR_CAMPOS = [
+  {id:'pv-siglas',            campo:'siglas',                label:'Siglas',                          placeholder:'Ej: HZ-LED'},
+  {id:'pv-nit',               campo:'nit',                   label:'NIT'},
+  {id:'pv-nombre',            campo:'nombre',                label:'Nombre (Razón social)',           req:true},
+  {id:'pv-nombre-comercial',  campo:'nombre_comercial',      label:'Nombre comercial'},
+  {id:'pv-ciudad',            campo:'ciudad',                label:'Ciudad'},
+  {id:'pv-direccion',         campo:'direccion',             label:'Dirección',                       tipo:'textarea'},
+  {id:'pv-correo',            campo:'correo',                label:'Correo (uno o varios, uno por línea)', tipo:'textarea'},
+  {id:'pv-contacto',          campo:'nombre_contacto',       label:'Nombre contacto'},
+  {id:'pv-telefono',          campo:'telefono',              label:'Teléfono',                        tipo:'tel'},
+  {id:'pv-whatsapp',          campo:'whatsapp',              label:'# WhatsApp',                      tipo:'tel'},
+  {id:'pv-wechat',            campo:'wechat',                label:'# WeChat'},
+  {id:'pv-termino-pago',      campo:'termino_pago',          label:'Término de pago',                 tipo:'textarea'},
+  {id:'pv-pct-anticipo',      campo:'porcentaje_anticipo',   label:'% de anticipo',                   tipo:'number'},
+  {id:'pv-incoterm',          campo:'incoterm',              label:'Término Incoterm'},
+  {id:'pv-pct-saldo',         campo:'porcentaje_saldo',      label:'% Porcentaje de saldo',           tipo:'number'},
+  {id:'pv-dias-pago-bl',      campo:'dias_pago_despues_bl',  label:'Días para pago después de BL',    tipo:'number'},
+  {id:'pv-valor-compras',     campo:'valor_compras',         label:'Valor Compras',                   tipo:'number'},
+];
+const PROVEEDOR_SECCIONES = [
+  {titulo:'1. Identificación', filas:[
+    ['pv-siglas','pv-nit'],
+    ['pv-nombre'],
+    ['pv-nombre-comercial','pv-ciudad'],
+    ['pv-direccion'],
+  ]},
+  {titulo:'2. Contacto', filas:[
+    ['pv-correo'],
+    ['pv-contacto','pv-telefono'],
+    ['pv-whatsapp','pv-wechat'],
+  ]},
+  {titulo:'3. Condiciones comerciales', filas:[
+    ['pv-termino-pago'],
+    ['pv-pct-anticipo','pv-pct-saldo'],
+    ['pv-incoterm','pv-dias-pago-bl'],
+    ['pv-valor-compras'],
+  ]},
+];
 let PROVEEDOR_EDIT_ID = null;
 function abrirModalProveedor(p){
   PROVEEDOR_EDIT_ID = p ? p.id : null;
   if(!document.getElementById('modal-proveedor')) reabastInjectModalProveedor();
-  document.getElementById('pv-siglas').value = p ? (p.siglas||'') : '';
-  document.getElementById('pv-nombre').value = p ? p.nombre : '';
-  document.getElementById('pv-nit').value = p ? (p.nit||'') : '';
-  document.getElementById('pv-correo').value = p ? (p.correo||'') : '';
+  reabastCambiarSeccionProveedor(0); // siempre abre en el primer módulo
+  PROVEEDOR_CAMPOS.forEach(c=>{
+    const el = document.getElementById(c.id); if(!el) return;
+    el.value = p && p[c.campo]!=null ? p[c.campo] : '';
+  });
+  document.getElementById('pv-titulo').textContent = p ? ('Editar proveedor · '+p.nombre) : 'Nuevo proveedor';
   document.getElementById('modal-proveedor').classList.add('on');
 }
 function cerrarModalProveedor(){ document.getElementById('modal-proveedor').classList.remove('on'); }
+// Cambia entre los módulos del formulario (igual que en Referencias/SKU).
+function reabastCambiarSeccionProveedor(idx){
+  PROVEEDOR_SECCIONES.forEach((_,i)=>{
+    const panel = document.getElementById('pv-sec-'+i); if(panel) panel.style.display = (i===idx?'':'none');
+    const tab = document.getElementById('pv-tab-'+i); if(tab) tab.classList.toggle('on', i===idx);
+  });
+}
 function reabastInjectModalProveedor(){
   const wrap = document.createElement('div');
+  const porId = {}; PROVEEDOR_CAMPOS.forEach(c=>{ porId[c.id]=c; });
+  const campo = c => `<div class="fg"><label class="fl">${c.label}${c.req?' *':''}</label>
+    ${c.tipo==='textarea'
+      ? `<textarea class="inp" id="${c.id}" style="min-height:${c.id==='pv-correo'||c.id==='pv-termino-pago'?'70px':'50px'};"></textarea>`
+      : `<input class="inp" id="${c.id}" type="${c.tipo||'text'}" ${c.tipo==='number'?'step="0.01"':''} ${c.placeholder?`placeholder="${reabastEsc(c.placeholder)}"`:''}>`}
+  </div>`;
+  const filaHtml = fila => {
+    const camposFila = fila.map(id=>porId[id]).filter(Boolean);
+    if(!camposFila.length) return '';
+    return camposFila.length>1 ? `<div class="fg2">${camposFila.map(campo).join('')}</div>` : campo(camposFila[0]);
+  };
+  const tabs = `<div class="ref-tabs">${PROVEEDOR_SECCIONES.map((sec,i)=>
+    `<button type="button" class="ref-tab${i===0?' on':''}" id="pv-tab-${i}" onclick="reabastCambiarSeccionProveedor(${i})">${sec.titulo}</button>`
+  ).join('')}</div>`;
+  const secciones = PROVEEDOR_SECCIONES.map((sec,i) => `
+    <div class="ref-sec-panel" id="pv-sec-${i}" style="${i===0?'':'display:none;'}">
+      ${sec.filas.map(filaHtml).join('')}
+    </div>
+  `).join('');
   wrap.innerHTML = `<div class="ov" id="modal-proveedor">
-    <div class="mo">
-      <div class="mh"><div class="mt">Proveedor</div><div class="mx" onclick="cerrarModalProveedor()">✕</div></div>
+    <div class="mo" style="max-width:640px;width:94vw;max-height:90vh;overflow-y:auto;">
+      <div class="mh"><div class="mt" id="pv-titulo">Proveedor</div><div class="mx" onclick="cerrarModalProveedor()">✕</div></div>
       <div class="mb">
-        <div class="fg2">
-          <div class="fg"><label class="fl">Siglas</label><input class="inp" id="pv-siglas" placeholder="Ej: HZ-LED"></div>
-          <div class="fg"><label class="fl">NIT</label><input class="inp" id="pv-nit"></div>
-        </div>
-        <div class="fg"><label class="fl">Nombre</label><input class="inp" id="pv-nombre"></div>
-        <div class="fg"><label class="fl">Correo</label><input class="inp" type="email" id="pv-correo"></div>
+        ${tabs}
+        ${secciones}
       </div>
       <div class="mf">
         <button class="btn btn-g" onclick="cerrarModalProveedor()">Cancelar</button>
@@ -9363,13 +9455,15 @@ function reabastInjectModalProveedor(){
   document.body.appendChild(wrap.firstElementChild);
 }
 async function guardarProveedor(){
-  const nombre = document.getElementById('pv-nombre').value.trim();
+  const nombre = (document.getElementById('pv-nombre').value||'').trim();
   if(!nombre){ if(typeof toast==='function') toast('El nombre es obligatorio','wa'); return; }
-  const payload = {
-    siglas: document.getElementById('pv-siglas').value.trim() || null,
-    nombre, nit: document.getElementById('pv-nit').value.trim() || null,
-    correo: document.getElementById('pv-correo').value.trim() || null
-  };
+  const payload = {};
+  PROVEEDOR_CAMPOS.forEach(c=>{
+    const el = document.getElementById(c.id); if(!el) return;
+    let v = (el.value||'').trim();
+    if(c.tipo==='number') payload[c.campo] = v===''? null : Number(v);
+    else payload[c.campo] = v || null;
+  });
   try{
     if(PROVEEDOR_EDIT_ID){
       await sbReabast.patch('proveedores', 'id=eq.'+PROVEEDOR_EDIT_ID, payload);
@@ -9381,6 +9475,251 @@ async function guardarProveedor(){
     await cargarOC();
     reabastPintar();
   }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
+}
+
+// ═══ Tab: Panel de compras — respaldo/actualización del Excel "Base compras" de seguimiento ═══
+// Esta hoja (Nro de pedido, fechas de cada etapa, proveedor, costos, CBM, etc. — más de 60
+// columnas) la lleva Diana a mano en Excel. En vez de recrear cada columna una por una en la base
+// de datos (y romperse cada vez que agregue/quite una columna), cada fila se guarda completa como
+// JSON en la columna "fila" — así subir el Excel actualizado SIEMPRE funciona, tenga las columnas
+// que tenga, y "Descargar backup" reconstruye un .xlsx idéntico en la misma hoja/orden de columnas.
+const PANEL_COMPRAS_HOJA = 'base compras'; // nombre de la hoja a buscar (sin distinguir mayúsculas)
+// Columnas clave que sí mostramos en la vista compacta de la app (el resto solo viaja en el backup).
+const PANEL_COMPRAS_COLS_VISTA = ['Nro de Pedido (2)','Fecha','ESTADO DIANA','Código del producto2','Producto','Cantidad solicitada','PROVEEDOR','FECHA ESTIMADA DE ENTREGA (PROVEEDOR)','Fecha de entrega real','Estado'];
+function reabastHtmlPanelCompras(){
+  const esAdmin = reabastEsAdmin();
+  return `
+    <div style="font-size:11px;color:var(--mu);margin-bottom:10px;">Panel de seguimiento de compras — sube tu Excel "${reabastEsc(PANEL_COMPRAS_HOJA)}" para actualizar lo que está en camino y demás, o descarga un respaldo en cualquier momento. Se guardan TODAS las columnas del archivo, aunque aquí solo se muestren las principales.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+      <label class="btn btn-bl btn-sm" style="cursor:pointer;margin:0;">📤 Subir Excel (actualizar)<input type="file" accept=".xlsx,.xls" style="display:none;" onchange="reabastImportarPanelCompras(this)"></label>
+      <button class="btn btn-g btn-sm" onclick="reabastDescargarPanelCompras()">⬇️ Descargar backup (.xlsx)</button>
+    </div>
+    <div id="pc-import-estado" style="font-size:11px;margin-bottom:8px;"></div>
+    <div id="pc-meta" style="font-size:10.5px;color:var(--mu);margin-bottom:10px;"></div>
+    <div id="pc-dashboard"></div>
+    <input class="inp" id="pc-q" placeholder="Buscar por Nro de pedido, código o producto…" style="max-width:340px;margin-bottom:10px;" oninput="reabastRepintarPanelCompras()">
+    <div id="pc-wrap"></div>`;
+}
+// ── Dashboard de llegada de productos: cuánto de camino lleva cada pedido en tránsito, con una
+// barra de llenado por pedido (tiempo transcurrido desde que se hizo el pedido vs. la fecha
+// estimada de entrega del proveedor), y alertas de atrasados / próximos a llegar. ──
+const PC_COL_FECHA_PEDIDO = 'Fecha';
+const PC_COL_ESTADO_DIANA = 'ESTADO DIANA';
+const PC_COL_ESTADO = 'Estado';
+const PC_COL_PROVEEDOR = 'PROVEEDOR';
+const PC_COL_PRODUCTO = 'Producto';
+const PC_COL_CODIGO = 'Código del producto2';
+const PC_COL_CANTIDAD = 'Cantidad solicitada';
+const PC_COL_COSTO_UNIT = 'Costo unitario';
+const PC_COL_COMPRAS = 'Compras $';
+const PC_COL_NRO_PEDIDO2 = 'Nro de Pedido (2)';
+const PC_COL_FECHA_ESTIMADA = 'FECHA ESTIMADA DE ENTREGA (PROVEEDOR)';
+const PC_COL_FECHA_REAL = 'Fecha de entrega real';
+function pcFecha(v){ if(!v) return null; const d = new Date(v); return isNaN(d) ? null : d; }
+function reabastCalcularPanelCompras(){
+  const hoy = new Date();
+  return (REABAST.panelCompras||[]).map(f=>{
+    const d = f.fila||{};
+    const fechaPedido = pcFecha(d[PC_COL_FECHA_PEDIDO]);
+    const fechaEstim = pcFecha(d[PC_COL_FECHA_ESTIMADA]);
+    const fechaReal = pcFecha(d[PC_COL_FECHA_REAL]);
+    const llegado = !!fechaReal;
+    let pct = 0, atrasado = false, diasAtraso = 0, diasFaltan = null;
+    if(llegado) pct = 100;
+    else if(fechaPedido && fechaEstim){
+      const total = fechaEstim - fechaPedido;
+      const transcurrido = hoy - fechaPedido;
+      pct = total>0 ? Math.max(0, Math.min(100, Math.round(transcurrido/total*100))) : 0;
+      if(hoy > fechaEstim){ atrasado = true; diasAtraso = Math.round((hoy-fechaEstim)/86400000); }
+      else diasFaltan = Math.round((fechaEstim-hoy)/86400000);
+    }
+    return {f, d, fechaPedido, fechaEstim, fechaReal, llegado, pct, atrasado, diasAtraso, diasFaltan};
+  });
+}
+function reabastRepintarPanelComprasDashboard(){
+  const el = document.getElementById('pc-dashboard'); if(!el) return;
+  if(!(REABAST.panelCompras||[]).length){ el.innerHTML=''; return; }
+  const calc = reabastCalcularPanelCompras();
+  const enTransito = calc.filter(c=>!c.llegado);
+  const atrasados = enTransito.filter(c=>c.atrasado).sort((a,b)=>b.diasAtraso-a.diasAtraso);
+  const estaSemana = enTransito.filter(c=>!c.atrasado && c.diasFaltan!=null && c.diasFaltan<=7);
+  const inicioMes = new Date(); inicioMes.setDate(1); inicioMes.setHours(0,0,0,0);
+  const llegadosMes = calc.filter(c=>c.llegado && c.fechaReal>=inicioMes);
+  const card = (n, lbl, color) => `<div style="flex:1;min-width:130px;background:var(--w);border:1px solid var(--b1);border-radius:10px;padding:12px 14px;">
+    <div style="font-size:22px;font-weight:800;color:${color};">${n}</div>
+    <div style="font-size:10.5px;color:var(--mu);margin-top:2px;">${lbl}</div>
+  </div>`;
+  // Lista: primero los atrasados, luego los que llegan pronto, ordenados por lo más urgente.
+  const listaOrdenada = enTransito.slice().sort((a,b)=>{
+    if(a.atrasado !== b.atrasado) return a.atrasado ? -1 : 1;
+    const da = a.atrasado ? -a.diasAtraso : (a.diasFaltan==null?999:a.diasFaltan);
+    const db = b.atrasado ? -b.diasAtraso : (b.diasFaltan==null?999:b.diasFaltan);
+    return da - db;
+  }).slice(0, 60);
+  const filaHtml = c => {
+    const barColor = c.atrasado ? 'var(--rd)' : (c.pct>=80 ? '#ca8a04' : 'var(--gr)');
+    const estadoTxt = c.d[PC_COL_ESTADO_DIANA] || c.d[PC_COL_ESTADO] || '—';
+    const etiquetaTiempo = c.atrasado ? `<span style="color:var(--rd);font-weight:700;">⚠️ Atrasado ${c.diasAtraso} d</span>`
+      : (c.diasFaltan!=null ? `Llega en ${c.diasFaltan} d` : '<span style="color:var(--mu);">sin fecha estimada</span>');
+    return `<div style="padding:9px 0;border-bottom:1px solid var(--b1);">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap;">
+        <div style="min-width:0;">
+          <strong style="font-family:monospace;">${reabastEsc(c.f.oi||'—')}</strong> · ${reabastEsc((c.d[PC_COL_PRODUCTO]||'').slice(0,50))}
+          <span style="color:var(--mu);font-size:10.5px;"> · ${reabastEsc(c.d[PC_COL_PROVEEDOR]||'—')} · ${reabastEsc(estadoTxt)}</span>
+        </div>
+        <div style="font-size:11px;white-space:nowrap;">${etiquetaTiempo}</div>
+      </div>
+      <div style="background:var(--s1);border-radius:6px;height:8px;margin-top:6px;overflow:hidden;">
+        <div style="width:${c.pct}%;height:100%;background:${barColor};"></div>
+      </div>
+    </div>`;
+  };
+  el.innerHTML = `
+    <div class="admin-sec-t" style="margin-bottom:8px;">📦 Dashboard de llegada de productos</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+      ${card(enTransito.length, '🚢 En tránsito', 'var(--bl)')}
+      ${card(atrasados.length, '⚠️ Atrasados', 'var(--rd)')}
+      ${card(estaSemana.length, '⏰ Llegan esta semana', '#ca8a04')}
+      ${card(llegadosMes.length, '✅ Llegados este mes', 'var(--gr)')}
+    </div>
+    ${listaOrdenada.length ? `<div style="background:var(--w);border:1px solid var(--b1);border-radius:10px;padding:10px 14px;margin-bottom:16px;max-height:360px;overflow-y:auto;">
+      ${listaOrdenada.map(filaHtml).join('')}
+    </div>` : '<div class="empty" style="margin-bottom:16px;"><div class="empty-t">Nada en tránsito 🎉</div></div>'}`;
+}
+async function reabastCargarPanelCompras(){
+  const wrap = document.getElementById('pc-wrap'); if(!wrap) return;
+  wrap.innerHTML = '<div class="empty"><div class="empty-t">Cargando…</div></div>';
+  try{
+    const [filas, meta] = await Promise.all([
+      sbReabast.get('panel_compras', 'select=*&order=fila_num.asc.nullslast&limit=5000'),
+      sbReabast.get('panel_compras_meta', 'select=*'),
+    ]);
+    REABAST.panelCompras = filas||[];
+    REABAST.panelComprasMeta = {}; (meta||[]).forEach(m=>{ REABAST.panelComprasMeta[m.clave]=m.valor; });
+  }catch(e){
+    wrap.innerHTML = `<div class="empty"><div class="empty-t">Error cargando: ${reabastEsc(e.message)}</div></div>`;
+    return;
+  }
+  const cargaInfo = REABAST.panelComprasMeta.ultima_carga;
+  const metaEl = document.getElementById('pc-meta');
+  if(metaEl) metaEl.textContent = cargaInfo ? `Última actualización: ${new Date(cargaInfo.fecha).toLocaleString('es-CO')} por ${cargaInfo.usuario||'—'} · ${cargaInfo.filas||REABAST.panelCompras.length} filas` : (REABAST.panelCompras.length ? REABAST.panelCompras.length+' filas cargadas' : 'Aún no has subido el Excel de seguimiento.');
+  reabastRepintarPanelComprasDashboard();
+  reabastRepintarPanelCompras();
+}
+function reabastRepintarPanelCompras(){
+  const wrap = document.getElementById('pc-wrap'); if(!wrap) return;
+  const filas = REABAST.panelCompras||[];
+  if(!filas.length){ wrap.innerHTML = '<div class="empty"><div class="empty-t">Aún no has subido el Excel "Base compras" — usa "📤 Subir Excel" arriba.</div></div>'; return; }
+  const q = (document.getElementById('pc-q')?.value||'').trim().toLowerCase();
+  let vista = filas;
+  if(q) vista = filas.filter(f => (f.oi||'').toLowerCase().includes(q) || (f.codigo_producto||'').toLowerCase().includes(q) || (f.producto||'').toLowerCase().includes(q));
+  const cols = (REABAST.panelComprasMeta && REABAST.panelComprasMeta.encabezados ? REABAST.panelComprasMeta.encabezados : PANEL_COMPRAS_COLS_VISTA)
+    .filter(c => PANEL_COMPRAS_COLS_VISTA.includes(c));
+  const colsFinal = cols.length ? cols : PANEL_COMPRAS_COLS_VISTA;
+  wrap.innerHTML = `<div style="font-size:10.5px;color:var(--mu);margin-bottom:6px;">Mostrando ${vista.length} de ${filas.length} filas · vista compacta con las columnas principales (el backup trae todas).</div>
+    <div class="tw"><table>
+      <thead><tr>${colsFinal.map(c=>`<th>${reabastEsc(c.replace(' (2)','').trim())}</th>`).join('')}</tr></thead>
+      <tbody>${vista.slice(0,300).map(f=>{
+        const d = f.fila||{};
+        return `<tr>${colsFinal.map(c=>{
+          let v = d[c];
+          if(v && typeof v==='string' && /^\d{4}-\d{2}-\d{2}/.test(v)) v = new Date(v).toLocaleDateString('es-CO');
+          return `<td style="white-space:nowrap;font-size:11px;">${v!=null && v!=='' ? reabastEsc(v) : '<span style="color:var(--mu);">—</span>'}</td>`;
+        }).join('')}</tr>`;
+      }).join('')}</tbody>
+    </table></div>
+    ${vista.length>300?`<div style="font-size:10px;color:var(--mu);margin-top:6px;">Mostrando las primeras 300 — afina la búsqueda para ver otras.</div>`:''}`;
+}
+// Lee el Excel, encuentra la hoja "Base compras" (sin importar mayúsculas), guarda TODAS sus
+// columnas fila por fila en Supabase (reemplazando el contenido anterior — "actualizar" = subir
+// la foto más reciente de tu seguimiento completo), y refresca la vista.
+async function reabastImportarPanelCompras(input){
+  const file = input.files[0]; if(!file) return;
+  const estado = document.getElementById('pc-import-estado');
+  estado.innerHTML = '⏳ Leyendo archivo…';
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array', cellDates:true});
+    const nombreHoja = wb.SheetNames.find(n=>n.trim().toLowerCase()===PANEL_COMPRAS_HOJA);
+    if(!nombreHoja){ estado.innerHTML = `<span style="color:var(--rd);">No encontré una hoja llamada "${reabastEsc(PANEL_COMPRAS_HOJA)}" en este archivo — hojas disponibles: ${wb.SheetNames.map(reabastEsc).join(', ')}</span>`; input.value=''; return; }
+    // Algunas hojas de Excel traen un rango "usado" gigantesco (miles de filas vacías, por formato
+    // condicional aplicado a toda la columna) que puede tardar más de un minuto en procesarse y
+    // congelar el navegador. Limitamos la lectura a un margen amplio (8.000 filas) más que suficiente
+    // para cualquier seguimiento real, así siempre carga rápido.
+    const hojaLeer = wb.Sheets[nombreHoja];
+    const rangoLeer = XLSX.utils.decode_range(hojaLeer['!ref']);
+    rangoLeer.e.r = Math.min(rangoLeer.e.r, rangoLeer.s.r + 8000);
+    const filasCrudas = XLSX.utils.sheet_to_json(hojaLeer, {header:1, defval:null, raw:true, range:rangoLeer});
+    // Encabezados: la primera fila con al menos 2 celdas de texto no vacías.
+    let headerIdx = filasCrudas.findIndex(f => (f||[]).filter(c=>c!=null && String(c).trim()!=='').length>=2);
+    if(headerIdx<0){ estado.innerHTML = '<span style="color:var(--rd);">No pude encontrar la fila de encabezados.</span>'; input.value=''; return; }
+    const headerRaw = filasCrudas[headerIdx];
+    // Encabezados repetidos (ej: "Nro de Pedido" sale 2 veces) — se numeran para no perder ninguna columna.
+    const usados = {};
+    const encabezados = headerRaw.map(h=>{
+      let base = (h==null?'':String(h)).trim() || '(sin nombre)';
+      usados[base] = (usados[base]||0)+1;
+      return usados[base]>1 ? `${base} (${usados[base]})` : base;
+    });
+    const idxOiSegunda = encabezados.findIndex(h=>h.toLowerCase().startsWith('nro de pedido') && h.includes('(2)'));
+    const idxOi = idxOiSegunda>=0 ? idxOiSegunda : encabezados.findIndex(h=>h.toLowerCase().startsWith('nro de pedido'));
+    const idxCodigo = encabezados.findIndex(h=>h.toLowerCase().startsWith('código del producto') || h.toLowerCase().startsWith('codigo del producto'));
+    const idxProducto = encabezados.findIndex(h=>h.toLowerCase()==='producto');
+    const filas = [];
+    for(let i=headerIdx+1;i<filasCrudas.length;i++){
+      const f = filasCrudas[i]||[];
+      if(!f.some(c=>c!=null && String(c).trim()!=='')) continue; // fila totalmente vacía
+      const obj = {};
+      encabezados.forEach((h,ci)=>{
+        let v = f[ci];
+        if(v instanceof Date && !isNaN(v)) v = v.toISOString().slice(0,10);
+        obj[h] = (v===undefined || v==='') ? null : v;
+      });
+      filas.push({
+        fila_num: i - headerIdx,
+        oi: idxOi>=0 ? (f[idxOi]!=null ? String(f[idxOi]).trim() : null) : null,
+        codigo_producto: idxCodigo>=0 ? (f[idxCodigo]!=null ? String(f[idxCodigo]).trim() : null) : null,
+        producto: idxProducto>=0 ? (f[idxProducto]!=null ? String(f[idxProducto]).trim() : null) : null,
+        fila: obj,
+      });
+    }
+    if(!filas.length){ estado.innerHTML = '<span style="color:var(--rd);">No encontré filas con datos después del encabezado.</span>'; input.value=''; return; }
+    if(!confirm(`Vas a REEMPLAZAR el panel de compras actual con ${filas.length} filas de este Excel. ¿Continuar?`)){ input.value=''; return; }
+    estado.innerHTML = '⏳ Subiendo '+filas.length+' filas…';
+    await sbReabast.delete('panel_compras', 'id=not.is.null');
+    const BATCH = 200;
+    for(let i=0;i<filas.length;i+=BATCH){
+      await sbReabast.post('panel_compras', filas.slice(i,i+BATCH));
+      estado.innerHTML = `⏳ Subiendo… ${Math.min(i+BATCH,filas.length)}/${filas.length}`;
+    }
+    const cargaInfo = {fecha:new Date().toISOString(), usuario:(CU&&CU.nombre)||'', filas:filas.length};
+    await sbReabast.post('panel_compras_meta', [
+      {clave:'encabezados', valor:encabezados},
+      {clave:'ultima_carga', valor:cargaInfo},
+    ]).catch(async ()=>{
+      // Si ya existían las filas de metadatos, upsert manual (patch por clave).
+      await sbReabast.patch('panel_compras_meta', 'clave=eq.encabezados', {valor:encabezados, actualizado_en:new Date().toISOString()});
+      await sbReabast.patch('panel_compras_meta', 'clave=eq.ultima_carga', {valor:cargaInfo, actualizado_en:new Date().toISOString()});
+    });
+    estado.innerHTML = `<span style="color:var(--gr);font-weight:700;">✅ ${filas.length} filas actualizadas.</span>`;
+    input.value = '';
+    await reabastCargarPanelCompras();
+  }catch(e){
+    estado.innerHTML = `<span style="color:var(--rd);">Error: ${reabastEsc(e.message)}</span>`;
+    input.value = '';
+  }
+}
+// Reconstruye un .xlsx con la misma hoja/columnas del Excel original, a partir de lo que hay
+// guardado ahora mismo en la base de datos — sirve como respaldo o para devolver el archivo tal cual.
+function reabastDescargarPanelCompras(){
+  const filas = REABAST.panelCompras||[];
+  if(!filas.length){ if(typeof toast==='function') toast('Aún no hay panel de compras cargado','wa'); return; }
+  const encabezados = (REABAST.panelComprasMeta && REABAST.panelComprasMeta.encabezados) || Object.keys(filas[0].fila||{});
+  const aoa = [encabezados, ...filas.map(f => encabezados.map(h => (f.fila||{})[h] ?? ''))];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wbOut = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wbOut, ws, 'Base compras');
+  XLSX.writeFile(wbOut, 'Backup_Panel_de_Compras_ILUMAX_'+new Date().toISOString().slice(0,10)+'.xlsx');
 }
 
 // ═══ Tab: Referencias (SKU) — catálogo maestro de productos (solo admin) ═══
@@ -9450,40 +9789,22 @@ function reabastLimpiarFiltrosReferencias(){
   reabastRepintarReferencias();
 }
 function reabastToggleVistaReferencias(){
-  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false});
+  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false, vista:'tabla'});
   f.vistaCompleta = !f.vistaCompleta;
   reabastRepintarReferencias();
 }
-function reabastRepintarReferencias(){
-  const wrap = document.getElementById('ref-wrap'); if(!wrap) return;
-  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false});
-  if(!f.col) f.col = {};
-  const vistaCompleta = !!f.vistaCompleta;
-  const cols = vistaCompleta ? TABLA_REF_COLUMNAS : TABLA_REF_COLUMNAS_COMPACTA;
-  const hayFiltrosCol = Object.values(f.col).some(v=>v);
-  wrap.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:4px 0 6px;flex-wrap:wrap;">
-      <div style="font-size:10.5px;color:var(--mu);">${vistaCompleta?'Todas las columnas del Excel — puede requerir desplazar hacia los lados.':'Vista compacta con las columnas más usadas — sin necesidad de desplazar la pantalla.'} · escribe en la fila de filtros para buscar dentro de cada columna.</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        ${hayFiltrosCol?'<button class="btn btn-g btn-sm" onclick="reabastLimpiarFiltrosReferencias()">✕ Limpiar filtros de columna</button>':''}
-        <button class="btn btn-bl btn-sm" onclick="reabastToggleVistaReferencias()">${vistaCompleta?'↙ Vista compacta':'↗ Ver todas las columnas'}</button>
-      </div>
-    </div>
-    <div class="ref-tw"><table>
-      <thead>
-        <tr><th>Estado</th>${cols.map(c=>`<th>${reabastEsc(c.th)}</th>`).join('')}<th>&nbsp;</th></tr>
-        <tr><th>&nbsp;</th>${cols.map(c=>`<th><input class="inp" style="width:100%;min-width:90px;font-size:10.5px;padding:4px 6px;border-radius:6px;" placeholder="Filtrar…" value="${reabastEsc(f.col[c.campo]||'')}" oninput="REABAST.filtros.referencias.col['${c.campo}']=this.value;reabastActualizarTbodyReferencias()"></th>`).join('')}<th>&nbsp;</th></tr>
-      </thead>
-      <tbody id="ref-tbody"></tbody>
-    </table></div>`;
-  reabastActualizarTbodyReferencias();
+// Cambia entre la vista de tabla (tipo Excel) y la vista de tarjetas (tipo galería/proyectos).
+function reabastCambiarVistaModoReferencias(modo){
+  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false, vista:'tabla'});
+  f.vista = modo;
+  reabastRepintarReferencias();
 }
-function reabastActualizarTbodyReferencias(){
-  const tbody = document.getElementById('ref-tbody'); if(!tbody) return;
-  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false});
+// Filtra y ordena las referencias según el buscador y los filtros de columna activos. Se usa tanto
+// para la vista de tabla como para la vista de tarjetas, así los dos modos muestran lo mismo.
+function reabastReferenciasFiltradas(cols){
+  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false, vista:'tabla'});
   const qq = (f.q||'').toLowerCase();
   const col = f.col||{};
-  const cols = f.vistaCompleta ? TABLA_REF_COLUMNAS : TABLA_REF_COLUMNAS_COMPACTA;
   let filas = Object.values(REABAST.referenciasMaestro||{}).sort((a,b)=>String(a.referencia).localeCompare(String(b.referencia)));
   if(qq){
     filas = filas.filter(r => String(r.referencia||'').toLowerCase().includes(qq)
@@ -9500,9 +9821,59 @@ function reabastActualizarTbodyReferencias(){
       return String(val==null?'':val).toLowerCase().includes(v);
     });
   });
-  if(!filas.length){ tbody.innerHTML = `<tr><td colspan="${cols.length+2}" style="padding:16px;text-align:center;color:var(--mu);">Sin referencias que coincidan con los filtros.</td></tr>`; return; }
+  return filas;
+}
+function reabastRepintarReferencias(){
+  const wrap = document.getElementById('ref-wrap'); if(!wrap) return;
+  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false, vista:'tabla'});
+  if(!f.col) f.col = {};
+  if(!f.vista) f.vista = 'tabla';
+  const vistaCompleta = !!f.vistaCompleta;
+  const esTarjetas = f.vista === 'tarjetas';
+  const cols = vistaCompleta ? TABLA_REF_COLUMNAS : TABLA_REF_COLUMNAS_COMPACTA;
+  const hayFiltrosCol = Object.values(f.col).some(v=>v);
+  const botonesVista = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:4px 0 6px;flex-wrap:wrap;">
+      <div style="font-size:10.5px;color:var(--mu);">${esTarjetas ? 'Vista de tarjetas — clic en una tarjeta para ver el detalle completo.' : (vistaCompleta?'Todas las columnas del Excel — puede requerir desplazar hacia los lados.':'Vista compacta con las columnas más usadas — sin necesidad de desplazar la pantalla.')} ${esTarjetas?'':'· escribe en la fila de filtros para buscar dentro de cada columna.'}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${(hayFiltrosCol && !esTarjetas)?'<button class="btn btn-g btn-sm" onclick="reabastLimpiarFiltrosReferencias()">✕ Limpiar filtros de columna</button>':''}
+        <div style="display:flex;border:1px solid var(--b1);border-radius:8px;overflow:hidden;">
+          <button class="btn btn-sm" style="border:0;border-radius:0;${!esTarjetas?'background:var(--bl);color:#fff;':''}" onclick="reabastCambiarVistaModoReferencias('tabla')">📋 Tabla</button>
+          <button class="btn btn-sm" style="border:0;border-radius:0;${esTarjetas?'background:var(--bl);color:#fff;':''}" onclick="reabastCambiarVistaModoReferencias('tarjetas')">🗂 Tarjetas</button>
+        </div>
+        ${esTarjetas?'':`<button class="btn btn-bl btn-sm" onclick="reabastToggleVistaReferencias()">${vistaCompleta?'↙ Vista compacta':'↗ Ver todas las columnas'}</button>`}
+      </div>
+    </div>`;
+  if(esTarjetas){
+    wrap.innerHTML = botonesVista + `<div id="ref-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;"></div>`;
+    reabastActualizarCardsReferencias();
+    return;
+  }
+  wrap.innerHTML = botonesVista + `
+    <div class="ref-tw"><table>
+      <thead>
+        <tr><th>Foto</th><th>Estado</th>${cols.map(c=>`<th>${reabastEsc(c.th)}</th>`).join('')}<th>&nbsp;</th></tr>
+        <tr><th>&nbsp;</th><th>&nbsp;</th>${cols.map(c=>`<th><input class="inp" style="width:100%;min-width:90px;font-size:10.5px;padding:4px 6px;border-radius:6px;" placeholder="Filtrar…" value="${reabastEsc(f.col[c.campo]||'')}" oninput="REABAST.filtros.referencias.col['${c.campo}']=this.value;reabastActualizarTbodyReferencias()"></th>`).join('')}<th>&nbsp;</th></tr>
+      </thead>
+      <tbody id="ref-tbody"></tbody>
+    </table></div>`;
+  reabastActualizarTbodyReferencias();
+}
+// Miniatura de foto reutilizable (tabla y tarjetas): clic para ampliar, o un ícono si no tiene foto.
+function reabastFotoMiniHtml(url, tam){
+  tam = tam || 36;
+  if(!url) return `<span style="display:inline-flex;align-items:center;justify-content:center;width:${tam}px;height:${tam}px;border-radius:6px;background:var(--b0,#f1f3f5);color:var(--mu);font-size:${Math.round(tam*0.5)}px;">🖼️</span>`;
+  return `<img src="${url}" style="width:${tam}px;height:${tam}px;object-fit:cover;border-radius:6px;cursor:zoom-in;border:1px solid var(--b1);" onclick="event.stopPropagation();reabastVerFotoGrande(this.src)" title="Ver foto">`;
+}
+function reabastActualizarTbodyReferencias(){
+  const tbody = document.getElementById('ref-tbody'); if(!tbody) return;
+  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false, vista:'tabla'});
+  const cols = f.vistaCompleta ? TABLA_REF_COLUMNAS : TABLA_REF_COLUMNAS_COMPACTA;
+  const filas = reabastReferenciasFiltradas(cols);
+  if(!filas.length){ tbody.innerHTML = `<tr><td colspan="${cols.length+3}" style="padding:16px;text-align:center;color:var(--mu);">Sin referencias que coincidan con los filtros.</td></tr>`; return; }
   tbody.innerHTML = filas.map(r=>{
     const activo = r.activo!==false; // por defecto activo (dato viejo sin la columna aún)
+    const fotoTd = `<td style="white-space:nowrap;">${reabastFotoMiniHtml(r.foto_url, 36)}</td>`;
     const estadoTd = `<td style="white-space:nowrap;">
       <label class="sw" title="${activo?'Activo — clic para desactivar':'Inactivo — clic para activar'}">
         <input type="checkbox" ${activo?'checked':''} onchange="reabastToggleActivoReferencia('${r.id}',this.checked)"><span class="sw-sl"></span>
@@ -9519,15 +9890,105 @@ function reabastActualizarTbodyReferencias(){
       <button class="btn btn-g btn-sm" data-r='${JSON.stringify(r).replace(/'/g,"&#39;")}' onclick="abrirModalReferencia(JSON.parse(this.dataset.r))" title="Editar">✎</button>
       <button class="btn btn-g btn-sm" style="color:var(--rd);" onclick="reabastEliminarReferencia('${r.id}','${String(r.referencia).replace(/'/g,"\\'")}')" title="Eliminar">🗑</button>
     </td>`;
-    return `<tr>${estadoTd}${filaTds}${accionesTd}</tr>`;
+    return `<tr>${fotoTd}${estadoTd}${filaTds}${accionesTd}</tr>`;
   }).join('');
+}
+// Vista de tarjetas (tipo galería/proyectos): una tarjeta por referencia con foto grande, datos
+// clave y estado; clic en la tarjeta abre el detalle completo (el mismo formulario de edición).
+function reabastActualizarCardsReferencias(){
+  const cont = document.getElementById('ref-cards'); if(!cont) return;
+  const filas = reabastReferenciasFiltradas(TABLA_REF_COLUMNAS_COMPACTA);
+  if(!filas.length){ cont.innerHTML = `<div style="grid-column:1/-1;padding:16px;text-align:center;color:var(--mu);">Sin referencias que coincidan con los filtros.</div>`; return; }
+  cont.innerHTML = filas.map(r=>{
+    const activo = r.activo!==false;
+    return `<div class="card" data-r='${JSON.stringify(r).replace(/'/g,"&#39;")}' onclick="reabastVerDetalleReferencia(JSON.parse(this.dataset.r))" style="cursor:pointer;padding:10px;display:flex;flex-direction:column;gap:6px;${activo?'':'opacity:.55;'}">
+      <div style="display:flex;justify-content:center;">${reabastFotoMiniHtml(r.foto_url, 96)}</div>
+      <div style="font-family:monospace;font-weight:700;font-size:12.5px;text-align:center;">${reabastEsc(r.referencia)}</div>
+      <div style="font-size:11.5px;text-align:center;color:var(--tx);min-height:15px;">${reabastEsc(r.nombre_comercial||'—')}</div>
+      <div style="font-size:10px;color:var(--mu);text-align:center;">${reabastEsc(r.categoria||'—')}${r.canal?' · '+reabastEsc(r.canal):''}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
+        <label class="sw" title="${activo?'Activo — clic para desactivar':'Inactivo — clic para activar'}" onclick="event.stopPropagation()">
+          <input type="checkbox" ${activo?'checked':''} onchange="reabastToggleActivoReferencia('${r.id}',this.checked)"><span class="sw-sl"></span>
+        </label>
+        <button class="btn btn-g btn-sm" style="color:var(--rd);" onclick="event.stopPropagation();reabastEliminarReferencia('${r.id}','${String(r.referencia).replace(/'/g,"\\'")}')" title="Eliminar">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+// Vista de solo lectura de una referencia (al hacer clic en una tarjeta): muestra el detalle
+// completo sin permitir edición directa; desde ahí el botón "Editar" abre el formulario real.
+let REFERENCIA_DETALLE_ACTUAL = null;
+function reabastVerDetalleReferencia(r){
+  REFERENCIA_DETALLE_ACTUAL = r;
+  if(!document.getElementById('modal-referencia-detalle')) reabastInjectModalDetalleReferencia();
+  reabastPintarDetalleReferencia(r);
+  document.getElementById('modal-referencia-detalle').classList.add('on');
+}
+function reabastCerrarDetalleReferencia(){
+  const mo = document.getElementById('modal-referencia-detalle'); if(mo) mo.classList.remove('on');
+}
+function reabastEditarDesdeDetalle(){
+  const r = REFERENCIA_DETALLE_ACTUAL;
+  reabastCerrarDetalleReferencia();
+  abrirModalReferencia(r);
+}
+function reabastInjectModalDetalleReferencia(){
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="ov" id="modal-referencia-detalle">
+    <div class="mo" style="max-width:640px;">
+      <div style="padding:16px 18px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div style="font-weight:700;font-size:15px;" id="rd-titulo">Referencia</div>
+        <button class="btn btn-g btn-sm" onclick="reabastCerrarDetalleReferencia()">✕</button>
+      </div>
+      <div style="padding:18px;" id="rd-body"></div>
+      <div style="padding:14px 18px;border-top:1px solid var(--b1);display:flex;justify-content:flex-end;gap:8px;">
+        <button class="btn btn-g btn-sm" onclick="reabastCerrarDetalleReferencia()">Cerrar</button>
+        <button class="btn btn-bl btn-sm" onclick="reabastEditarDesdeDetalle()">✎ Editar</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap.firstElementChild);
+}
+function reabastPintarDetalleReferencia(r){
+  const activo = r.activo!==false;
+  document.getElementById('rd-titulo').textContent = (r.referencia||'') + (r.nombre_comercial ? ' · '+r.nombre_comercial : '');
+  const campo = (label, val) => `<div><div style="font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.03em;">${reabastEsc(label)}</div><div style="font-size:13px;">${(val!=null && val!=='') ? reabastEsc(val) : '—'}</div></div>`;
+  document.getElementById('rd-body').innerHTML = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;">
+      <div>${reabastFotoMiniHtml(r.foto_url, 120)}</div>
+      <div style="flex:1;min-width:220px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        ${campo('Estado', activo?'Activo':'Inactivo')}
+        ${campo('Canal', r.canal)}
+        ${campo('Clasificación ABC', r.clasificacion_abc_manual)}
+        ${campo('Categoría', r.categoria)}
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;">
+      ${campo('Línea', r.linea)}
+      ${campo('Subcategoría', r.subcategoria)}
+      ${campo('Potencia', r.potencia)}
+      ${campo('Marca de producto', r.marca_producto)}
+      ${campo('Proveedor', r.proveedor_predeterminado)}
+      ${campo('FOB USD', r.fob_usd)}
+      ${campo('MOQ', r.moq)}
+      ${campo('EAN 13', r.ean13)}
+      ${campo('Referencia ILUMAX', r.referencia_ilumax)}
+    </div>
+    ${r.descripcion_en ? `<div style="margin-top:14px;"><div style="font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.03em;">Descripción (EN)</div><div style="font-size:12.5px;white-space:pre-wrap;">${reabastEsc(r.descripcion_en)}</div></div>` : ''}
+  `;
+}
+// Vuelve a pintar la lista de referencias en el modo actual (tabla o tarjetas).
+function reabastRefrescarVistaActual(){
+  const f = reabastFiltro('referencias', {q:'', col:{}, vistaCompleta:false, vista:'tabla'});
+  if(f.vista === 'tarjetas') reabastActualizarCardsReferencias();
+  else reabastActualizarTbodyReferencias();
 }
 // Activa/desactiva una referencia sin tener que abrir el formulario.
 async function reabastToggleActivoReferencia(id, activo){
   try{
     await sbReabast.patch('referencias_maestro', 'id=eq.'+id, {activo, actualizado:new Date().toISOString()});
     Object.values(REABAST.referenciasMaestro||{}).forEach(r=>{ if(String(r.id)===String(id)) r.activo = activo; });
-    reabastActualizarTbodyReferencias();
+    reabastRefrescarVistaActual();
     if(typeof toast==='function') toast(activo?'Referencia activada':'Referencia desactivada','ok');
   }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
 }
@@ -9537,7 +9998,7 @@ async function reabastEliminarReferencia(id, referencia){
   try{
     await sbReabast.delete('referencias_maestro', 'id=eq.'+id);
     Object.keys(REABAST.referenciasMaestro||{}).forEach(k=>{ if(REABAST.referenciasMaestro[k] && String(REABAST.referenciasMaestro[k].id)===String(id)) delete REABAST.referenciasMaestro[k]; });
-    reabastActualizarTbodyReferencias();
+    reabastRefrescarVistaActual();
     if(typeof toast==='function') toast('Referencia '+referencia+' eliminada','ok');
   }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
 }
@@ -9796,7 +10257,7 @@ function reabastInjectModalReferencia(){
   </div>`;
   const fotoHtml = `<div class="fg"><label class="fl">Foto del producto</label>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-      <img id="rf-foto-preview" style="width:60px;height:60px;object-fit:cover;border-radius:8px;border:1px solid var(--b1);display:none;">
+      <img id="rf-foto-preview" style="width:60px;height:60px;object-fit:cover;border-radius:8px;border:1px solid var(--b1);display:none;cursor:zoom-in;" onclick="this.src&&reabastVerFotoGrande(this.src)" title="Clic para ampliar">
       <input type="file" accept="image/*" id="rf-foto-file" style="max-width:190px;" onchange="reabastCargarFotoArchivo(this)">
       <button type="button" class="btn btn-g btn-sm" id="rf-foto-quitar" style="display:none;" onclick="reabastQuitarFoto()">Quitar foto</button>
     </div>
@@ -9936,6 +10397,18 @@ function reabastQuitarFoto(){
   const prev = document.getElementById('rf-foto-preview'); if(prev){ prev.src=''; prev.style.display='none'; prev.dataset.valor=''; }
   const inp = document.getElementById('rf-foto-file'); if(inp) inp.value='';
   const btn = document.getElementById('rf-foto-quitar'); if(btn) btn.style.display='none';
+}
+// Amplía cualquier foto de producto (miniatura de tabla, tarjeta o del formulario) en un visor de pantalla completa.
+function reabastVerFotoGrande(url){
+  if(!url) return;
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:24px;';
+  const img = document.createElement('img');
+  img.src = url;
+  img.style.cssText = 'max-width:92vw;max-height:92vh;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5);';
+  ov.appendChild(img);
+  ov.onclick = ()=>ov.remove();
+  document.body.appendChild(ov);
 }
 async function guardarReferencia(){
   const referencia = document.getElementById('rf-referencia').value.trim();
@@ -10146,9 +10619,27 @@ function reabastAbrirDetalleOC(ocId){
   const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*it.cantidad,0);
   const totalVenta = items.reduce((a,it)=>a+(it.precio_venta_cop||0)*it.cantidad,0);
   const margenTotal = totalVenta ? Math.round((1-totalCop/totalVenta)*1000)/10 : null;
+  const prov = (REABAST.proveedores||[]).find(p=>(p.nombre||'').toLowerCase()===(o.proveedor||'').toLowerCase());
   document.getElementById('ocd-body').innerHTML = `
     <div style="margin-bottom:10px;font-size:12.5px;"><strong>Proveedor:</strong> ${reabastEsc(o.proveedor||'—')} · <strong>Creada:</strong> ${new Date(o.creado_en).toLocaleDateString('es-CO')} por ${reabastEsc(o.creado_por||'')}</div>
     ${o.trm?`<div style="margin-bottom:10px;font-size:11px;color:var(--mu);">TRM usada: $${reabastFmtN(o.trm)} · Factor de landeo: ${o.factor_landeo}×</div>`:''}
+    <div class="admin-sec" style="margin-bottom:14px;padding:10px;background:var(--s1);border-radius:8px;">
+      <div class="admin-sec-t" style="margin-bottom:8px;">📄 Datos para el documento de la orden de compra</div>
+      <div class="fg2">
+        <div class="fg"><label class="fl">Batch / Lote</label><input class="inp" id="ocd-lote" value="${reabastEsc(o.lote||'')}"></div>
+        <div class="fg"><label class="fl">Incoterm</label><input class="inp" id="ocd-incoterm" value="${reabastEsc(o.incoterm||prov?.incoterm||'')}"></div>
+      </div>
+      <div class="fg"><label class="fl">Delivery date must be</label><input class="inp" id="ocd-entrega" value="${reabastEsc(o.terminos_entrega||'')}" placeholder="Ej: 30 Days order date"></div>
+      <div class="fg"><label class="fl">Payment Terms</label><input class="inp" id="ocd-pago" value="${reabastEsc(o.terminos_pago||prov?.termino_pago||'')}"></div>
+      <div class="fg2">
+        <div class="fg"><label class="fl">Destino (To:)</label><input class="inp" id="ocd-destino" value="${reabastEsc(o.destino||'To: Buenaventura (COL) final destination: Cali (COL).')}"></div>
+        <div class="fg"><label class="fl">% Depósito</label><input class="inp" type="number" step="0.01" id="ocd-deposito" value="${o.deposito_pct!=null?o.deposito_pct:(prov?.porcentaje_anticipo!=null?prov.porcentaje_anticipo:'')}"></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-g btn-sm" onclick="reabastGuardarDatosDocOC('${ocId}')">💾 Guardar datos</button>
+        <button class="btn btn-bl btn-sm" onclick="reabastVerDocumentoOC('${ocId}')">🖨️ Ver / imprimir orden de compra</button>
+      </div>
+    </div>
     <div class="tw" style="margin-bottom:14px;"><table>
       <thead><tr><th>Referencia</th><th>Lote</th><th>Cant.</th><th>FOB US$</th><th>Costo unit. COP</th><th>Venta P1</th><th>Margen</th><th></th></tr></thead>
       <tbody>${items.map(it=>`<tr>
@@ -10211,6 +10702,154 @@ function reabastInjectModalOCDetalle(){
     </div>
   </div>`;
   document.body.appendChild(wrap.firstElementChild);
+}
+// Guarda los datos propios del documento (batch, incoterm, términos, destino, % depósito) en la OC.
+async function reabastGuardarDatosDocOC(ocId){
+  const payload = {
+    lote:              (document.getElementById('ocd-lote').value||'').trim() || null,
+    incoterm:          (document.getElementById('ocd-incoterm').value||'').trim() || null,
+    terminos_entrega:  (document.getElementById('ocd-entrega').value||'').trim() || null,
+    terminos_pago:     (document.getElementById('ocd-pago').value||'').trim() || null,
+    destino:           (document.getElementById('ocd-destino').value||'').trim() || null,
+    deposito_pct:      document.getElementById('ocd-deposito').value!=='' ? Number(document.getElementById('ocd-deposito').value) : null,
+  };
+  try{
+    await sbReabast.patch('ordenes_compra', 'id=eq.'+ocId, payload);
+    const o = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId);
+    if(o) Object.assign(o, payload);
+    if(typeof toast==='function') toast('Datos del documento guardados','ok');
+  }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
+}
+// Abre en una pestaña nueva el documento de orden de compra, con el mismo formato exacto de la
+// plantilla en Excel de ILUMAX TRADING CORP (recuadros naranja, tabla de ítems con las mismas
+// columnas del catálogo de Referencias, totales y las notas adicionales estándar).
+function reabastVerDocumentoOC(ocId){
+  const o = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId); if(!o) return;
+  const items = REABAST.ocItems[ocId]||[];
+  const prov = (REABAST.proveedores||[]).find(p=>(p.nombre||'').toLowerCase()===(o.proveedor||'').toLowerCase()) || {};
+  const refPorCodigo = REABAST.referenciasMaestro||{};
+  const fecha = o.creado_en ? new Date(o.creado_en) : new Date();
+  const fechaTxt = fecha.toLocaleDateString('es-CO', {day:'2-digit', month:'2-digit', year:'numeric'});
+  const fmtMoney = n => n==null ? '' : Number(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const filas = items.map(it=>{
+    const r = refPorCodigo[it.referencia] || {};
+    const cant = Number(it.cantidad)||0;
+    const usd = it.precio_fob_usd!=null ? Number(it.precio_fob_usd) : 0;
+    const amount = cant*usd;
+    return {it, r, cant, usd, amount};
+  });
+  const totalQty = filas.reduce((a,f)=>a+f.cant,0);
+  const totalAmount = filas.reduce((a,f)=>a+f.amount,0);
+  const depositoPct = o.deposito_pct!=null ? o.deposito_pct : 0;
+  const deposito = totalAmount * depositoPct;
+  const balance = totalAmount - deposito;
+  const celda = 'padding:4px 6px;border:1px solid #999;font-size:10.5px;vertical-align:middle;';
+  const celdaC = celda+'text-align:center;';
+  const celdaN = celda+'text-align:right;';
+  const etiqueta = 'background:#ffc000;font-weight:700;padding:3px 6px;border:1px solid #999;font-size:10.5px;';
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>OC ${reabastEsc(o.numero_oc)}</title>
+  <style>
+    body{font-family:Calibri,Arial,sans-serif;font-size:11px;color:#111;margin:16px;}
+    table{border-collapse:collapse;width:100%;}
+    .box{border:1px solid #999;}
+    .tit{font-size:20px;font-weight:800;letter-spacing:1px;color:#444;}
+    .tit small{display:block;font-size:9px;font-weight:600;letter-spacing:3px;color:#888;}
+    @media print{ body{margin:6mm;} .noprint{display:none;} }
+  </style></head><body>
+  <div class="noprint" style="margin-bottom:10px;"><button onclick="window.print()" style="padding:8px 14px;font-weight:700;cursor:pointer;">🖨️ Imprimir / Guardar como PDF</button></div>
+  <table style="margin-bottom:10px;"><tr>
+    <td style="width:40%;vertical-align:top;">
+      <div class="tit">ILUMAX<small>TRADING CORP.</small></div>
+      <div style="margin-top:8px;font-size:10.5px;line-height:1.5;">
+        ILUMAX TRADING CORP<br>
+        1860 N Pine Island Rd Suite 106 Plantation Fl 33322<br>
+        Phone number: +57-3104348478<br>
+        Contact person: Luisa Jaramillo<br>
+        email: comercioexterior@ilumax.com.co
+      </div>
+    </td>
+    <td style="width:30%;text-align:center;vertical-align:top;">
+      <table style="margin:0 auto;"><tr><td style="${etiqueta}">Purchase Order:</td><td style="${celdaC}">${reabastEsc(o.numero_oc)}</td></tr></table>
+    </td>
+    <td style="width:30%;vertical-align:top;">
+      <table>
+        <tr><td style="${etiqueta}">Acronym</td><td style="${celda}">${reabastEsc(prov.siglas||'')}</td></tr>
+        <tr><td style="${etiqueta}">Supplier:</td><td style="${celda}">${reabastEsc(prov.nombre||o.proveedor||'')}</td></tr>
+        <tr><td colspan="2" style="${celda}">${reabastEsc(prov.direccion||'')}${prov.correo?'<br>'+reabastEsc(prov.correo).replace(/\n/g,'<br>'):''}${prov.whatsapp?'<br>'+reabastEsc(prov.whatsapp):''}</td></tr>
+      </table>
+    </td>
+  </tr></table>
+  <table style="margin-bottom:10px;"><tr>
+    <td style="width:34%;"></td>
+    <td style="width:33%;vertical-align:top;">
+      <table>
+        <tr><td style="${etiqueta}">Date:</td><td style="${celda}">${fechaTxt}</td></tr>
+        <tr><td style="${etiqueta}">Batch:</td><td style="${celda}">${reabastEsc(o.lote||'')}</td></tr>
+      </table>
+    </td>
+    <td style="width:33%;vertical-align:top;">
+      <table><tr><td style="${etiqueta}">INCOTERM:</td><td style="${celda}">${reabastEsc(o.incoterm||prov.incoterm||'')}</td></tr></table>
+    </td>
+  </tr></table>
+  <table style="margin-bottom:10px;width:60%;">
+    <tr><td style="${etiqueta}">Delivery date must be:</td><td style="${celda}color:#c00;font-weight:700;">${reabastEsc(o.terminos_entrega||'')}</td></tr>
+    <tr><td style="${etiqueta}">Payment Terms:</td><td style="${celda}">${reabastEsc(o.terminos_pago||prov.termino_pago||'')}</td></tr>
+  </table>
+  <div style="margin-bottom:8px;font-weight:700;">${reabastEsc(o.destino||'To: Buenaventura (COL) final destination: Cali (COL).')}</div>
+  <table class="box" style="margin-bottom:6px;">
+    <thead><tr style="background:#f2f2f2;font-weight:700;">
+      <th style="${celda}">Observation</th><th style="${celda}">Reference</th><th style="${celda}">Picture</th><th style="${celda}">Description</th>
+      <th style="${celda}">Temperature Color</th><th style="${celda}">Quantity</th><th style="${celda}">USD</th><th style="${celda}">Amount</th>
+      <th style="${celda}">Type Of Packaging</th><th style="${celda}"># Hours</th><th style="${celda}">Cap Type</th><th style="${celda}">Color Card / Box Brand</th>
+      <th style="${celda}">EAN 13</th><th style="${celda}">Master Packaging</th><th style="${celda}">EAN 14 Master Packaging</th>
+      <th style="${celda}">Internal Packaging</th><th style="${celda}">EAN 14 Internal Packaging</th>
+    </tr></thead>
+    <tbody>
+      ${filas.map(({it,r,cant,usd,amount})=>`<tr>
+        <td style="${celdaC}">${reabastEsc(it.lote||'')}</td>
+        <td style="${celdaC}">${reabastEsc(it.referencia)}</td>
+        <td style="${celdaC};width:46px;">${r.foto_url?`<img src="${r.foto_url}" style="width:40px;height:40px;object-fit:cover;">`:''}</td>
+        <td style="${celda}">${reabastEsc(r.descripcion_en||it.descripcion||'')}</td>
+        <td style="${celdaC}">${reabastEsc(r.temperatura_color||'')}</td>
+        <td style="${celdaN}">${reabastFmtN(cant)}</td>
+        <td style="${celdaN}">$ ${fmtMoney(usd)}</td>
+        <td style="${celdaN}">$ ${fmtMoney(amount)}</td>
+        <td style="${celdaC}">${reabastEsc(r.tipo_empaque||'')}</td>
+        <td style="${celdaC}">${reabastEsc(r.horas||'')}</td>
+        <td style="${celdaC}">${reabastEsc(r.tipo_tapa||'')}</td>
+        <td style="${celdaC}">${reabastEsc(r.marca_caja||'')}</td>
+        <td style="${celdaC}">${reabastEsc(r.ean13||'')}</td>
+        <td style="${celdaC}">${reabastEsc(r.master_packaging||'')}</td>
+        <td style="${celdaC}">${reabastEsc(r.ean14_master||'')}</td>
+        <td style="${celdaC}">${reabastEsc(r.internal_packaging||'')}</td>
+        <td style="${celdaC}">${reabastEsc(r.ean14_internal||'')}</td>
+      </tr>`).join('') || `<tr><td colspan="17" style="${celdaC}">Sin ítems</td></tr>`}
+    </tbody>
+  </table>
+  <table style="width:40%;margin-left:auto;margin-bottom:14px;">
+    <tr><td style="${etiqueta}">TOTAL QTY</td><td style="${celdaN}">${reabastFmtN(totalQty)}</td><td style="${celdaN}">$ ${fmtMoney(totalAmount)}</td></tr>
+    <tr><td style="${etiqueta}">TOTAL</td><td></td><td style="${celdaN}">$ ${fmtMoney(totalAmount)}</td></tr>
+    <tr><td style="${etiqueta}">DEPOSIT</td><td style="${celdaC}">${depositoPct?Math.round(depositoPct*100)+'%':'0%'}</td><td style="${celdaN}">$ ${fmtMoney(deposito)}</td></tr>
+    <tr><td style="${etiqueta}">BALANCE</td><td></td><td style="${celdaN}">$ ${fmtMoney(balance)}</td></tr>
+  </table>
+  <table class="box"><tr><td style="${etiqueta}">ADDITIONAL INFORMATION:</td></tr></table>
+  <div style="margin-top:6px;line-height:1.6;font-size:10.5px;">
+    1. Please send PI, PL signed and stamped and Technical Sheet<br>
+    2. Please send check list before shipment.<br>
+    3. If the supplier delays the order more than 5 days, there's a penalty of 0.5% from the whole order, per day.<br>
+    4. The delivery date is marked when the provider sends the checklist.<br>
+    5. Real Power must be 93% of the nominal Power.<br>
+    6. Address for master box:<br>
+    &nbsp;&nbsp;ILUMAX S.A.<br>
+    &nbsp;&nbsp;Carrera 35 # 10-532, Parcelación Nueva Era- Bodega No 3, Yumbo Colombia<br>
+    &nbsp;&nbsp;Tel: (572) 6954690<br>
+    &nbsp;&nbsp;e-mails: compras@ilumax.com.co / comercioexterior@ilumax.com.co<br>
+    7. Please send .IES File Before production
+  </div>
+  </body></html>`;
+  const w = window.open('', '_blank');
+  if(!w){ if(typeof toast==='function') toast('El navegador bloqueó la ventana emergente — habilítala e inténtalo de nuevo','wa'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
 }
 
 // Revisa todas las etapas 'pendiente' de la OC y activa (en_curso) las que ya cumplen
@@ -10439,17 +11078,24 @@ async function ocMarcarEtapaCompleta(ocId, etapaId, extra){
 }
 
 // ── Modal: nueva OC ──
-function ocProximoNumero(){
-  const anio = new Date().getFullYear();
-  const prefijo = 'OC-'+anio+'-';
+// El consecutivo de la OC debe ser el mismo "OI####" que usa el Panel de compras (Nro de Pedido),
+// así que buscamos el máximo tanto en las OC ya creadas en la app como en el panel de compras
+// (que puede tener números más altos si vinieron de una carga de Excel más reciente) y seguimos
+// desde ahí. No se pisan: siempre es el máximo de ambas fuentes + 1.
+async function ocProximoNumero(){
   let max = 0;
   (REABAST.ordenesCompra||[]).forEach(o=>{
-    if(o.numero_oc && o.numero_oc.indexOf(prefijo)===0){
-      const n = parseInt(o.numero_oc.slice(prefijo.length),10);
-      if(!isNaN(n) && n>max) max = n;
-    }
+    const n = parseInt(String(o.numero_oc||'').replace(/\D/g,''),10);
+    if(!isNaN(n) && n>max) max = n;
   });
-  return prefijo + String(max+1).padStart(3,'0');
+  try{
+    const filas = await sbReabast.get('panel_compras', 'select=oi');
+    (filas||[]).forEach(f=>{
+      const n = parseInt(String(f.oi||'').replace(/\D/g,''),10);
+      if(!isNaN(n) && n>max) max = n;
+    });
+  }catch(e){ console.warn('No pude leer el consecutivo del panel de compras, sigo solo con las OC de la app:', e.message); }
+  return 'OI' + (max+1);
 }
 
 function ocProveedoresDistintos(){
@@ -10613,33 +11259,65 @@ async function ocObtenerTRM(){
   }
 }
 
-function abrirModalOC(){
+async function abrirModalOC(){
   if(!document.getElementById('modal-oc')) reabastInjectModalOC();
-  document.getElementById('oc-numero').value = ocProximoNumero();
+  document.getElementById('oc-numero').value = 'calculando…';
   document.getElementById('oc-proveedor').value = '';
   document.getElementById('oc-trm').value = OC_TRM_APROX;
   document.getElementById('oc-trm-estado').textContent = '';
   document.getElementById('oc-factor').value = OC_FACTOR_LANDEO_DEFECTO;
+  document.getElementById('oc-lote').value = '';
+  document.getElementById('oc-incoterm').value = 'FOB MAIN PORT (SHANGHAI, NINGBO, SHEZHEN)';
+  document.getElementById('oc-entrega').value = '';
+  document.getElementById('oc-pago').value = '';
+  document.getElementById('oc-destino').value = 'To: Buenaventura (COL) final destination: Cali (COL).';
+  document.getElementById('oc-deposito').value = '';
   document.getElementById('oc-sugerencias').innerHTML = ocPanelSugerencias();
   ocRepintarSugerencias('');
-  document.getElementById('oc-items-wrap').innerHTML = '';
+  document.getElementById('oc-items-tbody').innerHTML = '';
   document.getElementById('oc-totales').innerHTML = '';
   ocAgregarItemRow();
   document.getElementById('modal-oc').classList.add('on');
   ocObtenerTRM();
+  document.getElementById('oc-numero').value = await ocProximoNumero();
+}
+// Cuando se elige/escribe el proveedor, precarga Incoterm/Payment Terms/% depósito desde su ficha
+// (si ya están en blanco) — igual que hace el documento de la OC — para no repetir el dato dos veces.
+function ocProveedorSeleccionado(){
+  const nombre = (document.getElementById('oc-proveedor').value||'').trim().toLowerCase();
+  const prov = (REABAST.proveedores||[]).find(p=>(p.nombre||'').toLowerCase()===nombre);
+  if(!prov) return;
+  const incoEl = document.getElementById('oc-incoterm'); if(incoEl && prov.incoterm) incoEl.value = prov.incoterm;
+  const pagoEl = document.getElementById('oc-pago'); if(pagoEl && !pagoEl.value && prov.termino_pago) pagoEl.value = prov.termino_pago;
+  const depEl = document.getElementById('oc-deposito'); if(depEl && !depEl.value && prov.porcentaje_anticipo!=null) depEl.value = prov.porcentaje_anticipo;
 }
 function reabastInjectModalOC(){
   const wrap = document.createElement('div');
   wrap.innerHTML = `<div class="ov" id="modal-oc">
-    <div class="mo" style="max-width:600px;">
+    <div class="mo" style="max-width:1400px;width:97vw;max-height:93vh;overflow-y:auto;">
       <div class="mh"><div class="mt">Nueva orden de compra</div><div class="mx" onclick="document.getElementById('modal-oc').classList.remove('on')">✕</div></div>
       <div class="mb">
         <div class="fg2">
           <div class="fg"><label class="fl"># OC (consecutivo automático)</label><input class="inp" id="oc-numero" readonly style="background:var(--s1);color:var(--mu);"></div>
           <div class="fg dd-wrap">
             <label class="fl">Proveedor</label>
-            <input class="inp" id="oc-proveedor" placeholder="Buscar o escribir uno nuevo…" oninput="ocBuscarProveedor(this)" onfocus="ocBuscarProveedor(this)" onblur="setTimeout(()=>{const d=this.closest('.dd-wrap').querySelector('.dd-list'); if(d) d.classList.remove('on');},150)">
+            <input class="inp" id="oc-proveedor" placeholder="Buscar o escribir uno nuevo…" oninput="ocBuscarProveedor(this)" onfocus="ocBuscarProveedor(this)" onchange="ocProveedorSeleccionado()" onblur="setTimeout(()=>{const d=this.closest('.dd-wrap').querySelector('.dd-list'); if(d) d.classList.remove('on');},150)">
             <div class="dd-list"></div>
+          </div>
+        </div>
+        <div class="admin-sec" style="margin:4px 0 12px;padding:10px;background:var(--s1);border-radius:8px;">
+          <div class="admin-sec-t" style="margin-bottom:8px;">📄 Datos del documento (igual que la plantilla de la orden de compra)</div>
+          <div class="fg2">
+            <div class="fg"><label class="fl">Batch / Lote</label><input class="inp" id="oc-lote"></div>
+            <div class="fg"><label class="fl">Incoterm</label><input class="inp" id="oc-incoterm"></div>
+          </div>
+          <div class="fg2">
+            <div class="fg"><label class="fl">Delivery date must be</label><input class="inp" id="oc-entrega" placeholder="Ej: 30 Days order date"></div>
+            <div class="fg"><label class="fl">Payment Terms</label><input class="inp" id="oc-pago"></div>
+          </div>
+          <div class="fg2">
+            <div class="fg"><label class="fl">Destino (To:)</label><input class="inp" id="oc-destino"></div>
+            <div class="fg"><label class="fl">% Depósito</label><input class="inp" type="number" step="0.01" id="oc-deposito"></div>
           </div>
         </div>
         <div class="fg2">
@@ -10652,9 +11330,18 @@ function reabastInjectModalOC(){
         </div>
         <div style="font-size:10px;color:var(--mu);margin:-4px 0 10px;">El margen se calcula contra la lista de precios P1. Mientras no tengas los precios FOB reales, cada referencia trae un <strong style="color:var(--or);">FOB simulado</strong> — reemplázalo cuando tengas el dato real.</div>
         <div id="oc-sugerencias"></div>
-        <label class="fl">Ítems (deberían ser de rotación Alta)</label>
-        <div id="oc-items-wrap"></div>
-        <button class="btn btn-g btn-sm" onclick="ocAgregarItemRow()" style="margin-top:6px;">+ Agregar ítem</button>
+        <label class="fl">Ítems — al elegir la referencia se rellenan solas sus características (igual que en la plantilla)</label>
+        <div class="ref-tw" style="max-height:52vh;">
+          <table>
+            <thead><tr>
+              <th>Referencia</th><th>Foto</th><th>Descripción / Obs.</th><th>Temp. color</th><th>Cant.</th><th>USD FOB</th><th>Amount</th>
+              <th>Empaque</th><th># Horas</th><th>Tapa</th><th>Marca caja</th><th>EAN 13</th><th>Master pack.</th><th>EAN14 master</th>
+              <th>Internal pack.</th><th>EAN14 internal</th><th>Lote</th><th>Ficha</th><th>Nuevo</th><th></th>
+            </tr></thead>
+            <tbody id="oc-items-tbody"></tbody>
+          </table>
+        </div>
+        <button class="btn btn-g btn-sm" onclick="ocAgregarItemRow()" style="margin-top:8px;">+ Agregar ítem</button>
         <div id="oc-totales" style="font-size:11.5px;margin-top:10px;padding:8px 10px;background:var(--s1);border-radius:8px;"></div>
         <div style="font-size:10.5px;color:var(--mu);margin-top:10px;">Al crear, se genera automáticamente el paso a paso del proceso de importación y arranca el cronómetro de la primera etapa. Si marcas algún ítem como "SKU nuevo", la solicitud de arte pasa por Calidad y Diseño; si no, se le pide la reimpresión directo al proveedor.</div>
       </div>
@@ -10678,47 +11365,80 @@ function ocBuscarProveedor(input){
 }
 
 function ocAgregarItemRow(){
-  const wrap = document.getElementById('oc-items-wrap');
-  const row = document.createElement('div');
+  const tbody = document.getElementById('oc-items-tbody');
+  const row = document.createElement('tr');
   row.className = 'oc-item-row';
-  row.style.cssText = 'margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--b1);';
-  row.innerHTML = `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-      <div class="dd-wrap" style="flex:1;min-width:140px;position:relative;">
-        <input class="inp oc-item-ref" placeholder="Buscar referencia o descripción…" oninput="ocBuscarReferencia(this)" onfocus="ocBuscarReferencia(this)" onblur="setTimeout(()=>{const d=this.closest('.dd-wrap').querySelector('.dd-list'); if(d) d.classList.remove('on');},150)">
-        <div class="dd-list"></div>
-      </div>
-      <input class="inp oc-item-cant" type="number" placeholder="Cant." style="width:70px;">
-      <input class="inp oc-item-fob" type="number" step="0.01" placeholder="FOB US$" style="width:80px;" oninput="this.closest('.oc-item-row').dataset.fobSimulado='';ocRecalcularFila(this.closest('.oc-item-row'))">
-      <span class="oc-item-rot" style="font-size:10px;min-width:60px;"></span>
-      <span onclick="this.closest('.oc-item-row').remove();ocRecalcularTotales()" style="cursor:pointer;color:var(--rd);padding:0 4px;">✕</span>
-    </div>
-    <div class="oc-item-desc" style="font-size:10.5px;color:var(--mu);margin:2px 0 0 2px;"></div>
-    <div class="oc-item-costeo" style="font-size:10.5px;color:var(--tx);margin:2px 0 0 2px;"></div>
-    <div style="display:flex;gap:6px;margin-top:5px;align-items:center;">
-      <input class="inp oc-item-lote" placeholder="Lote (opcional)" style="flex:1;padding:5px 8px;font-size:11px;">
-      <input class="inp oc-item-ficha" type="file" accept="image/*,.pdf" style="flex:1;font-size:10.5px;" title="Ficha técnica (opcional)">
-      <label style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--mu);white-space:nowrap;cursor:pointer;" title="Si el SKU es nuevo, la solicitud de arte pasa por Calidad y Diseño antes del proveedor. Si no, se le pide la reimpresión directo al proveedor.">
-        <input type="checkbox" class="oc-item-nuevo"> SKU nuevo
-      </label>
-    </div>`;
-  wrap.appendChild(row);
+  row.innerHTML = `
+    <td style="min-width:170px;">
+        <input class="inp oc-item-ref" placeholder="Buscar referencia o descripción…" style="font-size:11px;" oninput="ocBuscarReferencia(this)" onfocus="ocBuscarReferencia(this)" onblur="setTimeout(ocCerrarDdReferencia,150)">
+      </td>
+    <td class="oc-item-foto" style="text-align:center;"></td>
+    <td class="oc-item-desc" style="min-width:200px;max-width:260px;white-space:normal;font-size:10.5px;"></td>
+    <td class="oc-item-temp" style="white-space:nowrap;font-size:10.5px;"></td>
+    <td><input class="inp oc-item-cant" type="number" style="width:64px;font-size:11px;" oninput="ocRecalcularFila(this.closest('.oc-item-row'))"></td>
+    <td><input class="inp oc-item-fob" type="number" step="0.01" style="width:72px;font-size:11px;" oninput="this.closest('.oc-item-row').dataset.fobSimulado='';ocRecalcularFila(this.closest('.oc-item-row'))"></td>
+    <td class="oc-item-amount" style="white-space:nowrap;font-size:10.5px;text-align:right;"></td>
+    <td class="oc-item-empaque" style="white-space:nowrap;font-size:10.5px;"></td>
+    <td class="oc-item-horas" style="white-space:nowrap;font-size:10.5px;"></td>
+    <td class="oc-item-tapa" style="white-space:nowrap;font-size:10.5px;"></td>
+    <td class="oc-item-marcacaja" style="white-space:nowrap;font-size:10.5px;"></td>
+    <td class="oc-item-ean13" style="white-space:nowrap;font-family:monospace;font-size:10px;"></td>
+    <td class="oc-item-masterpack" style="white-space:nowrap;font-size:10.5px;"></td>
+    <td class="oc-item-ean14m" style="white-space:nowrap;font-family:monospace;font-size:10px;"></td>
+    <td class="oc-item-internalpack" style="white-space:nowrap;font-size:10.5px;"></td>
+    <td class="oc-item-ean14i" style="white-space:nowrap;font-family:monospace;font-size:10px;"></td>
+    <td><input class="inp oc-item-lote" placeholder="Lote" style="width:80px;font-size:10.5px;"></td>
+    <td><input class="inp oc-item-ficha" type="file" accept="image/*,.pdf" style="width:90px;font-size:9.5px;" title="Ficha técnica (opcional)"></td>
+    <td style="text-align:center;"><input type="checkbox" class="oc-item-nuevo" title="SKU nuevo — pasa por Calidad y Diseño antes del proveedor"></td>
+    <td><span onclick="this.closest('.oc-item-row').nextElementSibling?.remove();this.closest('.oc-item-row').remove();ocRecalcularTotales()" style="cursor:pointer;color:var(--rd);padding:0 4px;">✕</span></td>`;
+  tbody.appendChild(row);
+  const filaCosteo = document.createElement('tr');
+  filaCosteo.className = 'oc-item-costeo-row';
+  filaCosteo.innerHTML = `<td colspan="19" class="oc-item-costeo" style="font-size:10.5px;color:var(--mu);padding:2px 10px 8px;border-bottom:2px solid var(--b1);"></td>`;
+  tbody.appendChild(filaCosteo);
 }
 
+// La tabla de ítems de la OC tiene scroll propio (para caber todas las columnas de la plantilla),
+// así que un desplegable normal (absolute, dentro de la celda) queda recortado por ese scroll y
+// se ve vacío/cortado. Por eso este buscador usa un único desplegable "portal": vive suelto en
+// document.body, con position:fixed calculada según la posición real del input en pantalla, para
+// que siempre se vea completo por encima de todo, sin que el scroll de la tabla lo recorte.
+let OC_REF_DD_ROW = null;
+function ocRefDdGlobal(){
+  let dd = document.getElementById('oc-ref-dd-global');
+  if(!dd){
+    dd = document.createElement('div');
+    dd.id = 'oc-ref-dd-global';
+    dd.className = 'dd-list';
+    dd.style.cssText = 'position:fixed;display:none;z-index:99999;min-width:260px;max-width:420px;';
+    document.body.appendChild(dd);
+    document.addEventListener('scroll', ()=>{ dd.style.display='none'; }, true);
+  }
+  return dd;
+}
 function ocBuscarReferencia(input){
+  const dd = ocRefDdGlobal();
+  OC_REF_DD_ROW = input.closest('.oc-item-row');
+  const r = input.getBoundingClientRect();
+  dd.style.left = r.left+'px';
+  dd.style.top = (r.bottom+2)+'px';
+  dd.style.width = Math.max(r.width, 260)+'px';
   const q = input.value.trim().toLowerCase();
-  const dd = input.closest('.dd-wrap').querySelector('.dd-list');
-  if(!q){ dd.classList.remove('on'); dd.innerHTML=''; return; }
+  if(!q){ dd.style.display = 'none'; dd.innerHTML=''; return; }
   const inv = reabastInventarioPorReferencia();
   const matches = inv.filter(g=> g.referencia.toLowerCase().includes(q) || (g.descripcion||'').toLowerCase().includes(q)).slice(0,8);
-  if(!matches.length){ dd.classList.remove('on'); dd.innerHTML = '<div class="dd-empty">Sin coincidencias</div>'; dd.classList.add('on'); return; }
+  if(!matches.length){ dd.innerHTML = '<div class="dd-empty">Sin coincidencias</div>'; dd.style.display='block'; return; }
   dd.innerHTML = matches.map(g=>{
     const sug = ocCalcularSugerido(g.referencia);
-    return `<div class="dd-item" onmousedown='event.preventDefault();ocSeleccionarReferencia(this, ${JSON.stringify(g.referencia)})'>
+    return `<div class="dd-item" onmousedown='event.preventDefault();ocSeleccionarReferencia(${JSON.stringify(g.referencia)})'>
       <strong style="font-family:monospace;">${reabastEsc(g.referencia)}</strong> — ${reabastEsc((g.descripcion||'').slice(0,40))}
       ${sug?` <span style="color:var(--bl);">· sugerido: ${sug.sugerido}</span>`:''}
     </div>`;
   }).join('');
-  dd.classList.add('on');
+  dd.style.display = 'block';
+}
+function ocCerrarDdReferencia(){
+  const dd = document.getElementById('oc-ref-dd-global'); if(dd) dd.style.display='none';
 }
 
 async function ocLlenarFilaDesdeReferencia(row, referencia){
@@ -10726,19 +11446,33 @@ async function ocLlenarFilaDesdeReferencia(row, referencia){
   const dd = row.querySelector('.dd-list'); if(dd){ dd.classList.remove('on'); dd.innerHTML=''; }
   const sug = ocCalcularSugerido(referencia);
   const tieneFicha = REABAST.fichasTecnicas && REABAST.fichasTecnicas[referencia];
-  const refMaestro = REABAST.referenciasMaestro && REABAST.referenciasMaestro[referencia];
-  row.querySelector('.oc-item-desc').innerHTML = (sug ? reabastEsc(sug.descripcion) + ' · existencia actual: '+reabastFmtN(sug.existencia) : 'Sin datos de inventario para esta referencia')
-    + (refMaestro && refMaestro.ean13 ? ' · EAN13: '+reabastEsc(refMaestro.ean13) : '')
-    + (tieneFicha ? ` · <span onclick="ftAbrirFicha('${reabastEsc(referencia)}')" style="color:var(--bl);cursor:pointer;text-decoration:underline;">📄 Ver ficha técnica (catálogo)</span>` : '');
+  const r = (REABAST.referenciasMaestro && REABAST.referenciasMaestro[referencia]) || {};
+  // Descripción + info de inventario/rotación/ficha técnica (equivalente a la columna "Observation"
+  // de la plantilla, más datos útiles que no están en el Excel pero sí ayudan a decidir cantidad).
+  row.querySelector('.oc-item-desc').innerHTML = `<div>${reabastEsc(r.descripcion_en || sug?.descripcion || 'Sin descripción en el catálogo')}</div>
+    <div style="color:var(--mu);font-size:9.5px;margin-top:2px;">
+      ${sug ? 'Existencia: '+reabastFmtN(sug.existencia)+' · <span class="bdg '+sug.rot.cls+'" style="font-size:9px;">'+sug.rot.lbl+'</span>'+(sug.rot.lbl!=='Alta'?' ⚠️':'') : 'Sin datos de inventario'}
+      ${tieneFicha ? ` · <span onclick="ftAbrirFicha('${reabastEsc(referencia)}')" style="color:var(--bl);cursor:pointer;text-decoration:underline;">📄 ficha</span>` : ''}
+    </div>`;
+  row.querySelector('.oc-item-temp').textContent = r.temperatura_color || '—';
+  row.querySelector('.oc-item-empaque').textContent = r.tipo_empaque || '—';
+  row.querySelector('.oc-item-horas').textContent = r.horas || '—';
+  row.querySelector('.oc-item-tapa').textContent = r.tipo_tapa || '—';
+  row.querySelector('.oc-item-marcacaja').textContent = r.marca_caja || '—';
+  row.querySelector('.oc-item-ean13').textContent = r.ean13 || '—';
+  row.querySelector('.oc-item-masterpack').textContent = r.master_packaging || '—';
+  row.querySelector('.oc-item-ean14m').textContent = r.ean14_master || '—';
+  row.querySelector('.oc-item-internalpack').textContent = r.internal_packaging || '—';
+  row.querySelector('.oc-item-ean14i').textContent = r.ean14_internal || '—';
+  row.querySelector('.oc-item-foto').innerHTML = reabastFotoMiniHtml(r.foto_url, 34);
   row.querySelector('.oc-item-cant').value = sug ? sug.sugerido : 1;
-  row.querySelector('.oc-item-rot').innerHTML = sug ? `<span class="bdg ${sug.rot.cls}">${sug.rot.lbl}</span>`+(sug.rot.lbl!=='Alta'?' ⚠️':'') : '';
   // Si ya hay ficha técnica en el catálogo (subida por Excel), no hace falta volver a adjuntar archivo
   const fichaWrap = row.querySelector('.oc-item-ficha');
   if(fichaWrap) fichaWrap.style.display = tieneFicha ? 'none' : '';
   row.dataset.tieneFichaCatalogo = tieneFicha ? '1' : '';
   const fobInput = row.querySelector('.oc-item-fob');
-  if(refMaestro && refMaestro.fob_usd!=null){
-    fobInput.value = refMaestro.fob_usd;
+  if(r.fob_usd!=null){
+    fobInput.value = r.fob_usd;
     row.dataset.fobSimulado = '';
   } else if(!fobInput.value){
     fobInput.value = ocSimularFOB(referencia); row.dataset.fobSimulado = '1';
@@ -10776,20 +11510,28 @@ function ftAbrirFicha(referencia){
   document.getElementById('modal-ficha-ver').classList.add('on');
 }
 
-function ocSeleccionarReferencia(el, referencia){ ocLlenarFilaDesdeReferencia(el.closest('.oc-item-row'), referencia); }
+function ocSeleccionarReferencia(referencia){
+  ocCerrarDdReferencia();
+  if(OC_REF_DD_ROW) ocLlenarFilaDesdeReferencia(OC_REF_DD_ROW, referencia);
+}
 function ocAgregarSugerido(referencia){
-  const wrap = document.getElementById('oc-items-wrap');
-  let row = [...wrap.querySelectorAll('.oc-item-row')].find(r=>!r.querySelector('.oc-item-ref').value.trim());
-  if(!row){ ocAgregarItemRow(); row = wrap.lastElementChild; }
+  const tbody = document.getElementById('oc-items-tbody');
+  let row = [...tbody.querySelectorAll('.oc-item-row')].find(r=>!r.querySelector('.oc-item-ref').value.trim());
+  if(!row){ ocAgregarItemRow(); row = [...tbody.querySelectorAll('.oc-item-row')].pop(); }
   ocLlenarFilaDesdeReferencia(row, referencia);
 }
 
 // Costo unitario en COP = FOB (US$) × factor de landeo × TRM. Margen = 1 − costo/precio de venta (lista P1).
 function ocRecalcularFila(row){
   const fob = Number(row.querySelector('.oc-item-fob').value)||0;
+  const cant = Number(row.querySelector('.oc-item-cant').value)||0;
+  const amountEl = row.querySelector('.oc-item-amount');
+  if(amountEl) amountEl.textContent = (fob&&cant) ? '$ '+(fob*cant).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '';
   const trm = Number(document.getElementById('oc-trm').value)||0;
   const factor = Number(document.getElementById('oc-factor').value)||0;
-  const cont = row.querySelector('.oc-item-costeo');
+  const filaCosteo = row.nextElementSibling;
+  const cont = filaCosteo ? filaCosteo.querySelector('.oc-item-costeo') : null;
+  if(!cont){ ocRecalcularTotales(); return; }
   if(!fob || !trm || !factor){ cont.innerHTML = ''; ocRecalcularTotales(); return; }
   const simulado = row.dataset.fobSimulado === '1';
   const costoUnitCop = fob*factor*trm;
@@ -10800,13 +11542,13 @@ function ocRecalcularFila(row){
   ocRecalcularTotales();
 }
 function ocRecalcularTodasFilas(){
-  [...document.querySelectorAll('#oc-items-wrap .oc-item-row')].forEach(ocRecalcularFila);
+  [...document.querySelectorAll('#oc-items-tbody .oc-item-row')].forEach(ocRecalcularFila);
 }
 function ocRecalcularTotales(){
   const el = document.getElementById('oc-totales'); if(!el) return;
   const trm = Number(document.getElementById('oc-trm').value)||0;
   const factor = Number(document.getElementById('oc-factor').value)||0;
-  const filas = [...document.querySelectorAll('#oc-items-wrap .oc-item-row')];
+  const filas = [...document.querySelectorAll('#oc-items-tbody .oc-item-row')];
   let totalFob=0, totalCop=0, totalVenta=0, n=0;
   filas.forEach(f=>{
     const fob = Number(f.querySelector('.oc-item-fob').value)||0;
@@ -10824,12 +11566,21 @@ function ocRecalcularTotales(){
 }
 
 async function crearOC(){
-  const numero = document.getElementById('oc-numero').value.trim() || ocProximoNumero();
+  let numero = document.getElementById('oc-numero').value.trim();
+  if(!numero || numero==='calculando…') numero = await ocProximoNumero();
   const proveedor = document.getElementById('oc-proveedor').value.trim();
   const trm = Number(document.getElementById('oc-trm').value)||null;
   const factor = Number(document.getElementById('oc-factor').value)||null;
   if(!proveedor){ if(typeof toast==='function') toast('Selecciona o escribe un proveedor','wa'); return; }
-  const filas = [...document.querySelectorAll('#oc-items-wrap .oc-item-row')];
+  const datosDoc = {
+    lote:             (document.getElementById('oc-lote').value||'').trim() || null,
+    incoterm:         (document.getElementById('oc-incoterm').value||'').trim() || null,
+    terminos_entrega: (document.getElementById('oc-entrega').value||'').trim() || null,
+    terminos_pago:    (document.getElementById('oc-pago').value||'').trim() || null,
+    destino:          (document.getElementById('oc-destino').value||'').trim() || null,
+    deposito_pct:     document.getElementById('oc-deposito').value!=='' ? Number(document.getElementById('oc-deposito').value) : null,
+  };
+  const filas = [...document.querySelectorAll('#oc-items-tbody .oc-item-row')];
   const items = filas.map(f=>{
     const fob = Number(f.querySelector('.oc-item-fob').value)||null;
     const precioVenta = f.dataset.precioVenta ? Number(f.dataset.precioVenta) : null;
@@ -10853,7 +11604,7 @@ async function crearOC(){
       delete it._fichaFile;
     }
     const ahora = new Date().toISOString();
-    const ocCreada = await sbReabast.post('ordenes_compra', {numero_oc:numero, proveedor: proveedor||null, creado_por: CU.nombre, trm, factor_landeo: factor});
+    const ocCreada = await sbReabast.post('ordenes_compra', {numero_oc:numero, proveedor: proveedor||null, creado_por: CU.nombre, trm, factor_landeo: factor, ...datosDoc});
     const oc = ocCreada[0];
     await sbReabast.post('oc_items', items.map(it=>({oc_id:oc.id, ...it})));
     // Si al menos un ítem es SKU nuevo, la OC toma el camino largo de arte (Calidad → Diseño →
@@ -10870,11 +11621,64 @@ async function crearOC(){
         estado: arrancaSola?'en_curso':'pendiente', fecha_inicio: arrancaSola?ahora:null };
     });
     await sbReabast.post('oc_etapas', etapasFilas);
+    try{ await ocSincronizarPanelCompras(oc, items, proveedor); }
+    catch(e){ console.warn('No pude sincronizar la OC con el panel de compras:', e.message); }
     document.getElementById('modal-oc').classList.remove('on');
     if(typeof toast==='function') toast('OC '+numero+' creada — arrancó "Creación de OC"','ok');
     await cargarOC();
     reabastRepintarOC();
   }catch(e){ if(typeof toast==='function') toast('Error creando OC: '+e.message,'er'); }
+}
+// Cada vez que se crea una OC en la app, se agrega automáticamente (una fila por ítem) al Panel de
+// compras — la misma base que ella sube/descarga en Excel — para que quede reflejada ahí sin tener
+// que digitarla dos veces. Usa las mismas columnas que trae el Excel de seguimiento.
+async function ocSincronizarPanelCompras(oc, items, proveedor){
+  let maxFilaNum = 0;
+  (REABAST.panelCompras||[]).forEach(f=>{ if(f.fila_num>maxFilaNum) maxFilaNum = f.fila_num; });
+  if(!REABAST.panelCompras || !REABAST.panelCompras.length){
+    try{
+      const ultima = await sbReabast.get('panel_compras', 'select=fila_num&order=fila_num.desc.nullslast&limit=1');
+      if(ultima && ultima[0] && ultima[0].fila_num>maxFilaNum) maxFilaNum = ultima[0].fila_num;
+    }catch(e){ /* seguimos desde 0 si falla */ }
+  }
+  const hoy = new Date().toISOString().slice(0,10);
+  const filasNuevas = items.map((it,i)=>{
+    const r = (REABAST.referenciasMaestro && REABAST.referenciasMaestro[it.referencia]) || {};
+    const descripcion = r.descripcion_en || it.referencia;
+    const fila = {};
+    fila[PC_COL_NRO_PEDIDO2] = oc.numero_oc;
+    fila[PC_COL_FECHA_PEDIDO] = hoy;
+    fila[PC_COL_ESTADO_DIANA] = 'Pedido creado';
+    fila[PC_COL_CODIGO] = it.referencia;
+    fila[PC_COL_PRODUCTO] = descripcion;
+    fila[PC_COL_CANTIDAD] = it.cantidad;
+    fila[PC_COL_COSTO_UNIT] = it.precio_fob_usd;
+    fila[PC_COL_COMPRAS] = (it.precio_fob_usd!=null) ? Math.round(it.precio_fob_usd*it.cantidad*100)/100 : null;
+    fila[PC_COL_PROVEEDOR] = proveedor;
+    fila[PC_COL_ESTADO] = 'En proceso';
+    return { fila_num: maxFilaNum+1+i, oi: oc.numero_oc, codigo_producto: it.referencia, producto: descripcion, fila };
+  });
+  if(!filasNuevas.length) return;
+  const insertadas = await sbReabast.post('panel_compras', filasNuevas);
+  // Si el usuario ya tenía cargado el panel de compras en memoria, lo actualizamos ahí mismo para
+  // que se vea al instante si entra a esa pestaña, sin esperar a un refresco.
+  if(REABAST.panelCompras && REABAST.panelCompras.length){
+    REABAST.panelCompras = REABAST.panelCompras.concat(insertadas||filasNuevas);
+    if(document.getElementById('pc-dashboard')){ reabastRepintarPanelComprasDashboard(); reabastRepintarPanelCompras(); }
+  }
+  // Nos aseguramos de que las columnas nuevas (si alguna no existía en los encabezados guardados)
+  // queden registradas, para que el backup en Excel las incluya.
+  if(REABAST.panelComprasMeta && REABAST.panelComprasMeta.encabezados){
+    const encabezados = REABAST.panelComprasMeta.encabezados.slice();
+    let cambio = false;
+    [PC_COL_NRO_PEDIDO2, PC_COL_FECHA_PEDIDO, PC_COL_ESTADO_DIANA, PC_COL_CODIGO, PC_COL_PRODUCTO, PC_COL_CANTIDAD, PC_COL_COSTO_UNIT, PC_COL_COMPRAS, PC_COL_PROVEEDOR, PC_COL_ESTADO].forEach(c=>{
+      if(!encabezados.includes(c)){ encabezados.push(c); cambio = true; }
+    });
+    if(cambio){
+      REABAST.panelComprasMeta.encabezados = encabezados;
+      await sbReabast.patch('panel_compras_meta', 'clave=eq.encabezados', {valor:encabezados, actualizado_en:new Date().toISOString()}).catch(()=>{});
+    }
+  }
 }
 
 // ── Tab: Proveedores y MOQ (solo admin) — grilla editable por REFERENCIA ──
