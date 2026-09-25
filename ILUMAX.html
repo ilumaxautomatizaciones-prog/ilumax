@@ -8388,7 +8388,10 @@ function _renderFilasInv(mostrar, preciosMap) {
 let REABAST = { lista: [], politica: [], ventas: {}, abc: {}, clientesPorRef: {}, filtros: {}, tab: 'urgentes' };
 
 function reabastPuedeAprobar(){ return !!(CU && (CU.rol==='aprobador'||CU.rol==='admin')); }
-function reabastEsAdmin(){ return !!(CU && CU.rol==='admin'); }
+// Admin real, o el/la jefe de Abastecimiento (área Abastecimiento + rol líder) — dentro de este
+// módulo debe poder ver y hacer todo lo mismo que el admin (Referencias/SKU, Política por
+// referencia, alta de proveedores, etc.), sin necesidad de volverla admin de todo el sistema.
+function reabastEsAdmin(){ return !!(CU && (CU.rol==='admin' || (CU.area==='Abastecimiento' && CU.rolPres==='lider'))); }
 function reabastEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function reabastFmtN(n){ return n==null?'—':Math.round(n).toLocaleString('es-CO'); }
 
@@ -11078,24 +11081,30 @@ async function ocMarcarEtapaCompleta(ocId, etapaId, extra){
 }
 
 // ── Modal: nueva OC ──
-// El consecutivo de la OC debe ser el mismo "OI####" que usa el Panel de compras (Nro de Pedido),
-// así que buscamos el máximo tanto en las OC ya creadas en la app como en el panel de compras
-// (que puede tener números más altos si vinieron de una carga de Excel más reciente) y seguimos
-// desde ahí. No se pisan: siempre es el máximo de ambas fuentes + 1.
+// El consecutivo real de las órdenes de compra es "OCI###" (lo que confirmó Diana — el "OI####"
+// que también aparece en el panel de compras es un esquema viejo/distinto, no son las OC).
+// Buscamos el máximo tanto en las OC ya creadas en la app como en el panel de compras y seguimos
+// desde ahí, para nunca repetir un número. Ojo: en el panel hay filas tipo "OCI106 -1" (envíos
+// parciales de una misma OC) — se debe tomar SOLO el número que sigue a "OCI", ignorando
+// cualquier sufijo después (" -1", "-2"...), para no leer "1061" en vez de "106".
+function ocExtraerNumeroOCI(s){
+  const m = String(s||'').match(/OCI\s*(\d+)/i);
+  return m ? parseInt(m[1],10) : NaN;
+}
 async function ocProximoNumero(){
   let max = 0;
   (REABAST.ordenesCompra||[]).forEach(o=>{
-    const n = parseInt(String(o.numero_oc||'').replace(/\D/g,''),10);
+    const n = ocExtraerNumeroOCI(o.numero_oc);
     if(!isNaN(n) && n>max) max = n;
   });
   try{
     const filas = await sbReabast.get('panel_compras', 'select=oi');
     (filas||[]).forEach(f=>{
-      const n = parseInt(String(f.oi||'').replace(/\D/g,''),10);
+      const n = ocExtraerNumeroOCI(f.oi);
       if(!isNaN(n) && n>max) max = n;
     });
   }catch(e){ console.warn('No pude leer el consecutivo del panel de compras, sigo solo con las OC de la app:', e.message); }
-  return 'OI' + (max+1);
+  return 'OCI' + (max+1);
 }
 
 function ocProveedoresDistintos(){
