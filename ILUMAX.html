@@ -14599,6 +14599,19 @@ async function invduvSincronizar(inputEl) {
       }
     }, (hoja, bytes) => log('   … ' + hoja + ': ' + Math.round(bytes/1048576) + ' MB procesados'));
 
+    const fechaISOdeCelda = v => {
+      if(v==null || v==='') return null;
+      if(typeof v === 'number') {
+        const d = new Date(Date.UTC(1899,11,30) + Math.round(v)*86400000);
+        return isNaN(d) ? null : d.toISOString().slice(0,10);
+      }
+      const t = str(v);
+      if(/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0,10);
+      const m = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+      if(m) { let [_,d,mo,y] = m; if(y.length===2) y = '20'+y; return y+'-'+String(mo).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
+      return null;
+    };
+
     // ── INVENTARIO ──
     const hI = aI.findIndex(r => r && r.includes('Referencia Item'));
     if(hI<0) throw new Error('No encontré el encabezado "Referencia Item" en INVENTARIO');
@@ -14625,18 +14638,6 @@ async function invduvSincronizar(inputEl) {
       if(typeof f === 'number') return Math.round(f);
       const t = str(f); if(t.length < 8) return 0;
       return Math.round((Date.UTC(+t.slice(0,4), +t.slice(4,6)-1, +t.slice(6,8)) - Date.UTC(1899,11,30)) / 86400000);
-    };
-    const fechaISOdeCelda = v => {
-      if(v==null || v==='') return null;
-      if(typeof v === 'number') {
-        const d = new Date(Date.UTC(1899,11,30) + Math.round(v)*86400000);
-        return isNaN(d) ? null : d.toISOString().slice(0,10);
-      }
-      const t = str(v);
-      if(/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0,10);
-      const m = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-      if(m) { let [_,d,mo,y] = m; if(y.length===2) y = '20'+y; return y+'-'+String(mo).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
-      return null;
     };
     for(let i=hV+1;i<aV.length;i++){
       const r = aV[i]; const per = str(r[cV['Periodo']]); if(per.length<6) continue;
@@ -18821,7 +18822,7 @@ function rvPptoCanalMes() {
 async function rvCargarConfig() {
   if(RV.configCargada) return;
   try {
-    const rows = await sb.get('configuracion','clave=like.rv_%');
+    const rows = await sb.get('configuracion','clave=like.rv_*');
     (rows||[]).forEach(r => {
       if(r.clave==='rv_destinatarios' && r.valor) RV.destinatarios = r.valor;
       if(r.clave==='rv_asunto'        && r.valor) RV.asunto        = r.valor;
@@ -20971,6 +20972,7 @@ function acRenderModulos(el) {
 async function acCargarPermisosModulos() {
   try {
     const rows = await sb.get('permisos_modulos','order=tipo.asc,clave.asc');
+    if(!AC._mod) AC._mod = { nivel:'rol', rolSel:'admin', areaSel:'', empSel:'', permisosPorClave:{} };
     AC._mod.permisosPorClave = {};
     (rows||[]).forEach(r => {
       AC._mod.permisosPorClave[`${r.tipo}:${r.clave}`] = Array.isArray(r.modulos) ? r.modulos : (r.modulos||'').split(',').filter(Boolean);
