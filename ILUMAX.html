@@ -13095,17 +13095,17 @@ ARTE_GUIAS.oc_creada = {
     'Revisa el <b>resumen</b>: si sale el aviso naranja, entra al detalle de la OC y completa lo que falta (correo del proveedor, INCOTERM, términos de pago, fecha de entrega, lote, FOB).',
     'Pulsa <b>📄 Generar PDF de la OCI</b>. Se descarga en tu computador y queda guardado en el expediente. Si el generador falla, usa <i>Ver / imprimir → Guardar como PDF</i> y súbelo con <i>Subir un PDF propio</i>.',
     'Abre el PDF descargado y dale una última mirada: referencias, cantidades, precios y totales.',
-    'Revisa el <b>correo</b>: destinatario, asunto y mensaje (se arma solo con el total, INCOTERM, pago y fecha). Puedes editarlo.',
-    'Pulsa <b>✉️ Abrir en mi correo</b>, <b>adjunta el PDF descargado</b> y envía.',
-    'Marca <b>"Ya envié el correo…"</b> y confirma con <b>📤 OCI enviada al proveedor</b>. Con eso se habilita el paso de la PI.'
+    'Revisa el <b>correo</b>: destinatario, las <b>dos copias (CC)</b>, asunto y mensaje. Las copias se guardan una vez con <i>💾 Guardar como copias predeterminadas</i> y quedan para todas las OC.',
+    'Pulsa <b>📨 Enviar correo con el PDF adjunto</b>. El ERP lo envía con el PDF ya adjunto (si aún no existía, lo genera solo).',
+    'Confirma con <b>📤 OCI enviada al proveedor</b>. Con eso se habilita el paso de la PI.'
   ],
   listo: 'PDF generado (o subido), correo del proveedor definido y el envío marcado.',
   errores: [
     'Enviar la OC sin fecha de entrega o sin términos de pago: el proveedor los devuelve en la PI a su favor.',
-    'Olvidar adjuntar el PDF al correo (el navegador no lo adjunta solo).',
+    'Cambiar las copias solo para una OC y creer que quedaron guardadas (usa el botón 💾 para dejarlas fijas).',
     'Regenerar el PDF después de cambiar precios y no reenviarlo.'
   ],
-  ejemplo: 'OCI137 · Para: sales@edisun.com · Asunto: "Purchase Order OCI137 – ILUMAX TRADING CORP" · PDF OC_OCI137_ILUMAX_TRADING.pdf adjunto · ✓ enviado.'
+  ejemplo: 'OCI137 · Para: sales@edisun.com · CC: las dos copias predeterminadas · Asunto: "Purchase Order OCI137 – ILUMAX TRADING CORP" · PDF OC_OCI137_ILUMAX_TRADING.pdf adjunto · ✅ enviado desde el ERP.'
 };
 ARTE_GUIAS.pi_confirmada = {
   objetivo: 'Verificar que la Proforma Invoice del proveedor corresponde a lo que pedimos y devolverla firmada con el sello de ILUMAX TRADING CORP.',
@@ -13116,7 +13116,7 @@ ARTE_GUIAS.pi_confirmada = {
     'Mira también los <b>términos de pago</b> que puso el proveedor y la diferencia en el total.',
     'Si hay diferencias: acuérdalas con el proveedor. Si se aceptan (ej. cantidad ajustada a caja completa), marca <b>"Revisé las diferencias…"</b> y escribe la nota. Si no se aceptan, pide una PI corregida y cárgala de nuevo.',
     'Pulsa <b>🖊 Poner sello y descargar</b>. El sello se pone encima de "THE BUYER"; si quieres otra posición, escribe la celda (ej. G43) y vuelve a sellar.',
-    'Abre el archivo sellado para verificarlo y envíalo al proveedor con <b>✉️ Enviar PI sellada</b> (adjunta el archivo descargado).',
+    'Abre el archivo sellado para verificarlo y envíalo al proveedor con <b>📨 Enviar PI sellada</b> (sale con el archivo adjunto y las mismas copias).',
     'Confirma con <b>✅ PI confirmada y sellada</b>.'
   ],
   listo: 'PI cargada, diferencias revisadas (si hay) y el archivo sellado generado.',
@@ -13251,14 +13251,12 @@ function ocpFaltanDatosOC(){
   return f;
 }
 function ocpMensajeOCI(){
-  const o = OCP.oc, t = ocpTotalesOC();
-  const link = OCP.d.envio.pdf_url;
+  const o = OCP.oc;
   return `Dear ${OCP.prov.nombre_contacto || 'supplier'},\n\nPlease find attached our Purchase Order ${o.numero_oc} from ILUMAX TRADING CORP.\n\n`+
-    `- Items: ${OCP.items.length} references · ${ocpNum(t.qty,0)} pcs\n- Total amount: US$ ${ocpNum(t.tot)}\n`+
     `${(o.incoterm||OCP.prov.incoterm)?'- INCOTERM: '+(o.incoterm||OCP.prov.incoterm)+'\n':''}`+
     `${(o.terminos_pago||OCP.prov.termino_pago)?'- Payment terms: '+(o.terminos_pago||OCP.prov.termino_pago)+'\n':''}`+
     `${o.terminos_entrega?'- Delivery date: '+o.terminos_entrega+'\n':''}`+
-    `${link?'\nPDF: '+link+'\n':''}\nPlease send us the Proforma Invoice (PI) and Packing List, signed and stamped, confirming quantities, prices and delivery date.\n\nBest regards,\n${arteQuien()}\nILUMAX TRADING CORP`;
+    `\nPlease send us the Proforma Invoice (PI) and Packing List, signed and stamped, confirming quantities, prices and delivery date.\n\nBest regards,\n${arteQuien()}\nILUMAX TRADING CORP`;
 }
 function ocpHtmlEnvio(){
   const o = OCP.oc, e = OCP.d.envio, t = ocpTotalesOC(), ed = OCP.editable ? '' : 'disabled';
@@ -13289,15 +13287,127 @@ function ocpHtmlEnvio(){
       <div class="fg"><label class="fl">Para</label><input class="inp" ${ed} id="ocp-para" value="${ocpEsc(para)}" placeholder="correo@proveedor.com" oninput="ocpSet('envio.para',this.value)"></div>
       <div class="fg"><label class="fl">Asunto</label><input class="inp" ${ed} id="ocp-asunto" value="${ocpEsc(asunto)}" oninput="ocpSet('envio.asunto',this.value)"></div>
     </div>
-    <textarea class="inp arte-msg" id="ocp-cuerpo" rows="11" ${ed} oninput="ocpSet('envio.cuerpo',this.value)">${ocpEsc(e.cuerpo || ocpMensajeOCI())}</textarea>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
-      <button class="btn btn-bl btn-sm" onclick="ocpAbrirCorreo()">✉️ Abrir en mi correo</button>
-      <button class="btn btn-g btn-sm" onclick="arteCopiarTexto(document.getElementById('ocp-cuerpo').value)">📋 Copiar mensaje</button>
-      ${OCP.editable?`<button class="btn btn-g btn-sm" onclick="OCP.d.envio.cuerpo='';document.getElementById('ocp-cuerpo').value=ocpMensajeOCI();ocpCambio()">↻ Regenerar</button>`:''}
-    </div>
-    <div class="arte-mu" style="margin-top:6px;">El correo se abre listo; <strong>adjunta el PDF que se descargó</strong> (los navegadores no permiten adjuntarlo solos). El link del PDF también va en el mensaje.</div>
-    <label class="arte-chk ${e.enviado?'ok':''}" style="margin-top:10px;"><input type="checkbox" ${ed} ${e.enviado?'checked':''} onchange="ocpSet('envio.enviado',this.checked);this.closest('.arte-chk').classList.toggle('ok',this.checked)"> Ya envié el correo al proveedor con el PDF adjunto</label>
+    ${ocpHtmlCC('envio')}
+    <textarea class="inp arte-msg" id="ocp-cuerpo" rows="10" ${ed} oninput="ocpSet('envio.cuerpo',this.value)">${ocpEsc(e.cuerpo || ocpMensajeOCI())}</textarea>
+    <div class="arte-adj" style="margin-top:6px;"><span class="arte-adj-t">📎 Adjunto</span>${e.pdf_url?`<a href="${ocpEsc(e.pdf_url)}" target="_blank" rel="noopener">${ocpEsc(e.pdf_nombre)}</a>`:'<span class="arte-mu">el PDF de la OCI (se genera solo al enviar si aún no existe)</span>'}</div>
+    ${OCP.editable?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center;">
+      <button class="btn btn-p btn-sm" style="padding:9px 16px;" id="ocp-btn-enviar" onclick="ocpEnviarOCI()">📨 ${e.enviado_por_erp?'Reenviar':'Enviar'} correo con el PDF adjunto</button>
+      <button class="btn btn-g btn-sm" onclick="OCP.d.envio.cuerpo='';document.getElementById('ocp-cuerpo').value=ocpMensajeOCI();ocpCambio()">↻ Regenerar mensaje</button>
+    </div>`:''}
+    ${e.enviado_por_erp?`<div class="arte-mu" style="margin-top:8px;color:var(--gr);">✅ Enviado desde el ERP ${arteFmtFecha(e.enviado_erp_en)} a ${ocpEsc(e.enviado_a||'')}${e.enviado_cc?' · CC '+ocpEsc(e.enviado_cc):''}</div>`:''}
+    ${ocpHtmlConfigCorreo()}
+    ${!e.enviado_por_erp?`<label class="arte-chk ${e.enviado?'ok':''}" style="margin-top:10px;"><input type="checkbox" ${ed} ${e.enviado?'checked':''} onchange="ocpSet('envio.enviado',this.checked);this.closest('.arte-chk').classList.toggle('ok',this.checked)"> Lo envié por fuera del ERP (desde mi correo)</label>`:''}
   </div>`;
+}
+// ── CC predeterminados (se guardan una vez y quedan para todas las OC) ──
+let OCP_CC_DEFAULT = null;
+async function ocpCargarCC(){
+  if(OCP_CC_DEFAULT) return OCP_CC_DEFAULT;
+  try{ const rows = await sb.get('configuracion','clave=in.(oci_cc_default,oc_correo_apps_script_url)');
+    const m = {}; (rows||[]).forEach(r=>m[r.clave]=r.valor);
+    OCP_CC_DEFAULT = (()=>{ try{ return JSON.parse(m.oci_cc_default||'[]'); }catch(e){ return String(m.oci_cc_default||'').split(','); } })();
+    OCP.appsUrl = m.oc_correo_apps_script_url || '';
+  }catch(e){ OCP_CC_DEFAULT = []; }
+  return OCP_CC_DEFAULT;
+}
+function ocpCCActual(base){
+  const d = OCP.d[base] || {};
+  return Array.isArray(d.cc) ? d.cc : [OCP_CC_DEFAULT[0]||'', OCP_CC_DEFAULT[1]||''];
+}
+function ocpHtmlCC(base){
+  const cc = ocpCCActual(base), ed = OCP.editable ? '' : 'disabled';
+  const esDefault = (OCP_CC_DEFAULT||[]).join(',')===cc.join(',') && cc.some(Boolean);
+  return `<div class="arte-grid2">
+      <div class="fg"><label class="fl">CC 1 (copia)</label><input class="inp" ${ed} type="email" id="ocp-cc1-${base}" value="${ocpEsc(cc[0]||'')}" placeholder="copia1@ilumax.com.co" oninput="ocpSetCC('${base}')"></div>
+      <div class="fg"><label class="fl">CC 2 (copia)</label><input class="inp" ${ed} type="email" id="ocp-cc2-${base}" value="${ocpEsc(cc[1]||'')}" placeholder="copia2@ilumax.com.co" oninput="ocpSetCC('${base}')"></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin:-2px 0 8px;flex-wrap:wrap;">
+      ${OCP.editable?`<button class="btn btn-g btn-sm" onclick="ocpGuardarCCDefault('${base}')">💾 Guardar como copias predeterminadas</button>`:''}
+      <span class="arte-mu" id="ocp-cc-st-${base}">${esDefault?'✓ Son las copias predeterminadas':(OCP_CC_DEFAULT||[]).some(Boolean)?'Predeterminadas: '+ocpEsc(OCP_CC_DEFAULT.filter(Boolean).join(', ')):'Aún no hay copias predeterminadas guardadas'}</span>
+    </div>`;
+}
+function ocpSetCC(base){
+  const cc = [document.getElementById('ocp-cc1-'+base).value.trim(), document.getElementById('ocp-cc2-'+base).value.trim()];
+  OCP.d[base] = OCP.d[base] || {}; OCP.d[base].cc = cc; ocpCambio();
+}
+async function ocpGuardarCCDefault(base){
+  const cc = [document.getElementById('ocp-cc1-'+base).value.trim(), document.getElementById('ocp-cc2-'+base).value.trim()];
+  const malos = cc.filter(x=>x && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+  if(malos.length){ if(typeof toast==='function') toast('Correo no válido: '+malos.join(', '),'wa'); return; }
+  try{
+    await sb.upsert('configuracion',{clave:'oci_cc_default', valor:JSON.stringify(cc), tipo:'json'},'clave');
+    OCP_CC_DEFAULT = cc;
+    const st = document.getElementById('ocp-cc-st-'+base); if(st) st.textContent = '✓ Son las copias predeterminadas';
+    if(typeof toast==='function') toast('Copias guardadas — quedan para todas las OC','ok');
+  }catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); }
+}
+
+// ── Envío directo con adjunto (Apps Script de Google, igual que el Reporte Diario) ──
+const OCP_APPS_SCRIPT_CODIGO = `function doPost(e) {
+  try {
+    var d = JSON.parse(e.postData.contents);
+    var adjuntos = (d.adjuntos || []).map(function (a) {
+      return UrlFetchApp.fetch(a.url).getBlob().setName(a.nombre);
+    });
+    var opciones = { attachments: adjuntos, name: d.remitente || 'ILUMAX TRADING CORP' };
+    if (d.cc) opciones.cc = d.cc;
+    if (d.responderA) opciones.replyTo = d.responderA;
+    GmailApp.sendEmail(d.para, d.asunto, d.cuerpo, opciones);
+    return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) })).setMimeType(ContentService.MimeType.JSON);
+  }
+}`;
+function ocpHtmlConfigCorreo(){
+  const ok = !!OCP.appsUrl;
+  return `<details class="arte-hist" ${ok?'':'open'} style="margin-top:8px;">
+    <summary>${ok?'⚙️ Envío automático configurado':'⚡ Configura una sola vez el envío automático con adjunto'}</summary>
+    <div style="background:var(--s1);border-radius:8px;padding:10px 12px;font-size:11.5px;line-height:1.7;">
+      ${ok?`<div style="color:var(--gr);margin-bottom:6px;">✓ Los correos salen desde la cuenta de Google que publicó el script, con el PDF adjunto.</div>`:
+      `<div style="margin-bottom:6px;">Los navegadores no pueden adjuntar archivos a un correo por sí solos. Con este paso único, el ERP envía el correo <strong>con el PDF ya adjunto</strong> desde la cuenta de Google de compras.</div>`}
+      1. Entra a <strong>script.google.com</strong> con la cuenta que enviará los correos → <strong>Nuevo proyecto</strong>.<br>
+      2. Borra lo que hay y pega este código <span class="arte-link" onclick="arteCopiarTexto(OCP_APPS_SCRIPT_CODIGO)">📋 copiar código</span><br>
+      3. <strong>Implementar → Nueva implementación → Aplicación web</strong> · Ejecutar como: <strong>Yo</strong> · Quién tiene acceso: <strong>Cualquier usuario</strong> → autoriza los permisos.<br>
+      4. Copia la URL que termina en <code>/exec</code> y pégala aquí:
+      <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+        <input class="inp" id="ocp-apps-url" style="flex:1;min-width:220px;" value="${ocpEsc(OCP.appsUrl||'')}" placeholder="https://script.google.com/macros/s/…/exec">
+        <button class="btn btn-gr btn-sm" onclick="ocpGuardarAppsUrl()">💾 Guardar</button>
+      </div>
+    </div>
+  </details>`;
+}
+async function ocpGuardarAppsUrl(){
+  const url = (document.getElementById('ocp-apps-url').value||'').trim();
+  if(!/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)){ if(typeof toast==='function') toast('Pega la URL de la aplicación web (termina en /exec)','wa'); return; }
+  try{ await sb.upsert('configuracion',{clave:'oc_correo_apps_script_url', valor:url, tipo:'texto'},'clave'); OCP.appsUrl = url; if(typeof toast==='function') toast('Envío automático activado','ok'); ocpPintar(); }
+  catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); }
+}
+// Envía un correo por el Apps Script; los adjuntos van como links que el script descarga y adjunta.
+async function ocpEnviarCorreoServidor({para, cc, asunto, cuerpo, adjuntos}){
+  if(!OCP.appsUrl) throw new Error('Falta configurar el envío automático (paso único, abajo)');
+  const r = await fetch(OCP.appsUrl, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify({para, cc, asunto, cuerpo, adjuntos, remitente:'ILUMAX TRADING CORP', responderA:(typeof CU!=='undefined'&&CU&&CU.email)||''}) });
+  let data = null; try{ data = await r.json(); }catch(e){}
+  if(!r.ok || !data || !data.ok) throw new Error((data && data.error) || ('respuesta '+r.status+' del servidor de correo'));
+}
+function ocpListaCorreos(txt){ return String(txt||'').split(/[\s,;]+/).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)); }
+async function ocpEnviarOCI(){
+  const para = ocpListaCorreos(document.getElementById('ocp-para').value);
+  const cc = ocpListaCorreos(ocpCCActual('envio').join(','));
+  if(!para.length){ if(typeof toast==='function') toast('Escribe el correo del proveedor','wa'); return; }
+  if(!OCP.appsUrl){ if(typeof toast==='function') toast('Primero configura el envío automático (una sola vez, abajo)','wa'); const d = document.querySelector('#ea-contenido details.arte-hist'); if(d){ d.open = true; d.scrollIntoView({behavior:'smooth'}); } return; }
+  const btn = document.getElementById('ocp-btn-enviar'); const txt0 = btn.textContent; btn.disabled = true;
+  try{
+    if(!OCP.d.envio.pdf_url){ btn.textContent = '⏳ Generando PDF…'; await ocpGenerarPdf(); if(!OCP.d.envio.pdf_url) throw new Error('No se pudo generar el PDF'); }
+    btn.textContent = '⏳ Enviando…';
+    const asunto = document.getElementById('ocp-asunto').value, cuerpo = document.getElementById('ocp-cuerpo').value;
+    await ocpEnviarCorreoServidor({para:para.join(','), cc:cc.join(','), asunto, cuerpo, adjuntos:[{url:OCP.d.envio.pdf_url, nombre:OCP.d.envio.pdf_nombre||('OC_'+OCP.oc.numero_oc+'.pdf')}]});
+    Object.assign(OCP.d.envio, {enviado:true, enviado_por_erp:true, enviado_erp_en:new Date().toISOString(), enviado_a:para.join(', '), enviado_cc:cc.join(', ')});
+    ocpLog('correo', 'OCI enviada a '+para.join(', ')+(cc.length?' · CC '+cc.join(', '):''));
+    await ocpGuardar(true).catch(()=>{});
+    if(typeof toast==='function') toast('✅ Correo enviado con el PDF adjunto','ok');
+    ocpPintar();
+  }catch(err){ if(typeof toast==='function') toast('No se envió: '+err.message,'er'); btn.disabled = false; btn.textContent = txt0; }
 }
 function ocpHtmlPdfZona(){
   const e = OCP.d.envio;
@@ -13364,7 +13474,7 @@ function ocpFaltanEnvio(){
   const f = [];
   if(!OCP.d.envio.pdf_url) f.push('Generar o subir el PDF');
   if(!ocpCorreosProveedor({correo: (document.getElementById('ocp-para')||{}).value || OCP.d.envio.para || OCP.prov.correo}).length) f.push('Correo del proveedor');
-  if(!OCP.d.envio.enviado) f.push('Marcar que ya enviaste el correo');
+  if(!OCP.d.envio.enviado) f.push('Enviar el correo');
   return f;
 }
 
@@ -13508,7 +13618,8 @@ function ocpHtmlPI(){
     ${p.sellado_url ? `<div class="arte-adj" style="margin-top:8px;"><span class="arte-adj-t">✅ PI sellada</span><a href="${ocpEsc(p.sellado_url)}" target="_blank" rel="noopener">${ocpEsc(ocpNombreSellado())}</a><span class="arte-mu">${arteFmtFecha(p.sellado_en)}</span></div>`:''}
     ${ed ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
       <button class="btn btn-p btn-sm" style="padding:9px 14px;" onclick="ocpSellarPI()">🖊 ${p.sellado_url?'Volver a sellar':'Poner sello y descargar'}</button>
-      ${p.sellado_url?`<button class="btn btn-g btn-sm" onclick="ocpCorreoPI()">✉️ Enviar PI sellada al proveedor</button>`:''}
+      ${p.sellado_url?`<button class="btn btn-bl btn-sm" onclick="ocpCorreoPI()">📨 ${p.enviada_en?'Reenviar':'Enviar'} PI sellada al proveedor (adjunta)</button>`:''}
+      ${p.enviada_en?`<span class="arte-mu" style="color:var(--gr);align-self:center;">✅ Enviada ${arteFmtFecha(p.enviada_en)}</span>`:''}
     </div>` : ''}
   </div>`;
 }
@@ -13601,10 +13712,19 @@ async function ocpSellarPI(){
   }catch(err){ console.error(err); if(typeof toast==='function') toast('No pude sellar la PI: '+err.message,'er'); }
   ocpRefrescarPI();
 }
-function ocpCorreoPI(){
-  const p = OCP.d.pi; const para = ocpCorreosProveedor(OCP.prov).join(',');
-  const cuerpo = `Dear ${OCP.prov.nombre_contacto||'supplier'},\n\nPlease find attached the Proforma Invoice ${p.pi_no||''} for our PO ${OCP.oc.numero_oc}, signed and stamped by ILUMAX TRADING CORP.\n${p.nota?'\nNotes: '+p.nota+'\n':''}\nFile: ${p.sellado_url}\n\nPlease proceed accordingly and keep us updated on artwork and production timing.\n\nBest regards,\n${arteQuien()}\nILUMAX TRADING CORP`;
-  window.open('mailto:'+para+'?subject='+encodeURIComponent('PI '+(p.pi_no||'')+' / PO '+OCP.oc.numero_oc+' – signed and stamped')+'&body='+encodeURIComponent(cuerpo));
+async function ocpCorreoPI(){
+  const p = OCP.d.pi; const para = ocpCorreosProveedor(OCP.prov);
+  const cc = ocpListaCorreos((OCP_CC_DEFAULT||[]).join(','));
+  const asunto = 'PI '+(p.pi_no||'')+' / PO '+OCP.oc.numero_oc+' – signed and stamped';
+  const cuerpo = `Dear ${OCP.prov.nombre_contacto||'supplier'},\n\nPlease find attached the Proforma Invoice ${p.pi_no||''} for our PO ${OCP.oc.numero_oc}, signed and stamped by ILUMAX TRADING CORP.\n${p.nota?'\nNotes: '+p.nota+'\n':''}\nPlease proceed accordingly and keep us updated on artwork and production timing.\n\nBest regards,\n${arteQuien()}\nILUMAX TRADING CORP`;
+  if(!para.length){ if(typeof toast==='function') toast('El proveedor no tiene correo en su ficha','wa'); return; }
+  if(!OCP.appsUrl){ if(typeof toast==='function') toast('Configura el envío automático en el paso "Enviar OCI" (una sola vez)','wa'); return; }
+  if(!confirm('¿Enviar la PI sellada a '+para.join(', ')+(cc.length?'\nCC: '+cc.join(', '):'')+'?')) return;
+  try{
+    await ocpEnviarCorreoServidor({para:para.join(','), cc:cc.join(','), asunto, cuerpo, adjuntos:[{url:p.sellado_url, nombre:ocpNombreSellado()}]});
+    Object.assign(p, {enviada_en:new Date().toISOString()}); ocpLog('correo','PI sellada enviada a '+para.join(', ')); await ocpGuardar(true).catch(()=>{});
+    if(typeof toast==='function') toast('✅ PI sellada enviada con el archivo adjunto','ok'); ocpRefrescarPI();
+  }catch(err){ if(typeof toast==='function') toast('No se envió: '+err.message,'er'); }
 }
 function ocpFaltanPI(){
   const p = OCP.d.pi, f = [];
@@ -13660,7 +13780,7 @@ async function ocpAbrir(oc, e, tpl, items){
   document.getElementById('ea-devolver').style.display = 'none';
   const btn = document.getElementById('ea-confirmar'); btn.textContent = tpl.id==='oc_creada' ? '📤 OCI enviada al proveedor' : '✅ PI confirmada y sellada'; btn.style.display = OCP.editable ? 'inline-flex' : 'none';
   document.getElementById('ea-contenido').innerHTML = '<div class="arte-mu" style="padding:30px;text-align:center;">⏳ Cargando…</div>';
-  const d = await ocpCargar(oc.id); if(OCP.ocId!==oc.id) return;
+  const [d] = await Promise.all([ocpCargar(oc.id), ocpCargarCC()]); if(OCP.ocId!==oc.id) return;
   OCP.d = d; ocpPintar();
 }
 function ocpCerrarLimpio(){ if(OCP.tpl && OCP.d) ocpGuardar(true).catch(()=>{}); OCP.tpl = null; }
@@ -13671,7 +13791,7 @@ async function ocpConfirmar(){
   if(OCP.tpl.id==='oc_creada'){
     OCP.d.envio.enviado_en = new Date().toISOString();
     extra.adjunto_url = OCP.d.envio.pdf_url;
-    extra.comentario_extra = `OCI enviada por correo a ${(document.getElementById('ocp-para')||{}).value || OCP.d.envio.para || OCP.prov.correo || 'proveedor'} con PDF.`;
+    extra.comentario_extra = OCP.d.envio.enviado_por_erp ? `OCI enviada desde el ERP a ${OCP.d.envio.enviado_a}${OCP.d.envio.enviado_cc?' (CC '+OCP.d.envio.enviado_cc+')':''} con el PDF adjunto.` : `OCI enviada por fuera del ERP a ${(document.getElementById('ocp-para')||{}).value || OCP.prov.correo || 'proveedor'}.`;
   } else {
     const p = OCP.d.pi; const dif = (p.filas||[]).filter(x=>x.estado!=='ok').length;
     extra.adjunto_url = p.sellado_url;
