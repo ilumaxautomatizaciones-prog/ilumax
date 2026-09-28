@@ -13110,12 +13110,12 @@ ARTE_GUIAS.oc_creada = {
 ARTE_GUIAS.pi_confirmada = {
   objetivo: 'Verificar que la Proforma Invoice del proveedor corresponde a lo que pedimos y devolverla firmada con el sello de ILUMAX TRADING CORP.',
   pasos: [
-    'Arrastra o selecciona el <b>Excel de la PI</b> que envió el proveedor.',
+    'Arrastra o selecciona la <b>PI</b> que envió el proveedor: sirve en <b>Excel, PDF o Word</b>. (Si el PDF es escaneado —una foto— no se puede leer la tabla; se sella igual y la comparación se hace a ojo.)',
     'Revisa que el <b>PO No.</b> de la PI sea el de esta OC (sale ✓ o ✗).',
     'Revisa la <b>comparación</b>: ✓ coincide, <span style="color:var(--or)">≠</span> cantidad o precio diferente, <span style="color:var(--rd)">✗</span> referencia que pedimos y no está en la PI, <span style="color:var(--pu)">+</span> referencia que la PI trae de más.',
     'Mira también los <b>términos de pago</b> que puso el proveedor y la diferencia en el total.',
     'Si hay diferencias: acuérdalas con el proveedor. Si se aceptan (ej. cantidad ajustada a caja completa), marca <b>"Revisé las diferencias…"</b> y escribe la nota. Si no se aceptan, pide una PI corregida y cárgala de nuevo.',
-    'Pulsa <b>🖊 Poner sello y descargar</b>. El sello se pone encima de "THE BUYER"; si quieres otra posición, escribe la celda (ej. G43) y vuelve a sellar.',
+    'Ubica el sello: en <b>PDF</b> lo ves sobre la página y lo <b>arrastras</b> (y ajustas el tamaño); en <b>Excel</b> va encima de "THE BUYER" o en la celda que escribas; en <b>Word</b> va encima de "THE BUYER" o al final. Luego pulsa <b>🖊 Poner sello y descargar</b>.',
     'Abre el archivo sellado para verificarlo y envíalo al proveedor con <b>📨 Enviar PI sellada</b> (sale con el archivo adjunto y las mismas copias).',
     'Confirma con <b>✅ PI confirmada y sellada</b>.'
   ],
@@ -13542,12 +13542,13 @@ async function ocpCargarPI(inp){
   const zona = document.getElementById('ocp-pi-zona'); if(zona) zona.innerHTML = '<div class="arte-adj subiendo">⏳ Leyendo la PI…</div>';
   try{
     const buf = await f.arrayBuffer();
-    const pi = ocpLeerPI(buf);
+    const pi = await ocpLeerPIgenerico(buf, f.name);
     OCP.pi = {buf, nombre:f.name, info:pi};
     const filas = ocpCompararPI(pi);
     Object.assign(OCP.d.pi, {original_nombre:f.name, pi_no:pi.pi_no, po_no:pi.po_no, fecha:pi.fecha, terminos:pi.terminos,
       total: pi.items.reduce((a,x)=>a+(x.amount||0),0), filas, sellado_url:'', sellado_en:null, acepto_diferencias:false,
-      buyer: pi.buyer ? {celda: ocpColLetra(pi.buyer.c)+(pi.buyer.r+1), txt: pi.buyer.txt} : null, hoja: pi.hoja});
+      buyer: pi.tipo==='xlsx' && pi.buyer ? {celda: ocpColLetra(pi.buyer.c)+(pi.buyer.r+1), txt: pi.buyer.txt} : null, hoja: pi.hoja||'',
+      tipo: pi.tipo, ancla: pi.ancla||'', pos: pi.posDefecto ? {...pi.posDefecto} : null, enviada_en:null});
     ocpLog('pi_cargada', `PI ${pi.pi_no||f.name} cargada · ${pi.items.length} ítems`);
     ocSubirAdjunto(f).then(url=>{ OCP.d.pi.original_url = url; ocpCambio(); }).catch(e=>console.warn('No pude guardar la PI original:', e.message));
     ocpCambio();
@@ -13560,8 +13561,8 @@ function ocpHtmlPI(){
   if(!p.original_nombre){
     return `<div class="arte-sec"><div class="arte-sec-h">① Carga la PI que envió el proveedor</div>
       ${ed?`<label class="ocp-drop" ondragover="event.preventDefault();this.classList.add('on')" ondragleave="this.classList.remove('on')" ondrop="event.preventDefault();this.classList.remove('on');const i=this.querySelector('input');i.files=event.dataTransfer.files;ocpCargarPI(i)">
-        <div style="font-size:26px;">📊</div><strong>Arrastra aquí el Excel de la PI</strong><div class="arte-mu">o toca para buscarlo (.xlsx)</div>
-        <input type="file" accept=".xlsx,.xlsm" style="display:none;" onchange="ocpCargarPI(this)"></label>`:'<div class="arte-mu">Aún no se ha cargado la PI.</div>'}
+        <div style="font-size:26px;">📊</div><strong>Arrastra aquí la PI del proveedor</strong><div class="arte-mu">Excel, PDF o Word · o toca para buscarla</div>
+        <input type="file" accept=".xlsx,.xlsm,.pdf,.docx" style="display:none;" onchange="ocpCargarPI(this)"></label>`:'<div class="arte-mu">Aún no se ha cargado la PI.</div>'}
     </div>`;
   }
   const t = ocpTotalesOC();
@@ -13571,11 +13572,11 @@ function ocpHtmlPI(){
   const difTot = (p.total||0) - t.tot;
   const est = {ok:['✓','var(--gr)','Coincide'], dif:['≠','var(--or)','Diferente'], falta:['✗','var(--rd)','No está en la PI'], extra:['+','var(--pu)','No está en la OC']};
   return `<div class="arte-sec">
-    <div class="arte-sec-h">① PI cargada ${ed?`<label class="arte-link" style="cursor:pointer;">cambiar archivo<input type="file" accept=".xlsx,.xlsm" style="display:none;" onchange="ocpCargarPI(this)"></label>`:''}</div>
+    <div class="arte-sec-h">① PI cargada ${ed?`<label class="arte-link" style="cursor:pointer;">cambiar archivo<input type="file" accept=".xlsx,.xlsm,.pdf,.docx" style="display:none;" onchange="ocpCargarPI(this)"></label>`:''}</div>
     <div class="arte-kvs">
       <span class="arte-kv"><em>Archivo</em>${p.original_url?`<a href="${ocpEsc(p.original_url)}" target="_blank" rel="noopener">${ocpEsc(p.original_nombre)}</a>`:ocpEsc(p.original_nombre)}</span>
       <span class="arte-kv"><em>P/I No.</em>${ocpEsc(p.pi_no||'—')}</span>
-      <span class="arte-kv" style="${poOk?'':'border-color:var(--rd);color:var(--rd);'}"><em>PO No.</em>${ocpEsc(p.po_no||'—')} ${poOk?'✓':'✗ no es '+ocpEsc(OCP.oc.numero_oc)}</span>
+      <span class="arte-kv" style="${poOk?'':'border-color:var(--rd);color:var(--rd);'}"><em>PO No.</em>${p.po_no ? ocpEsc(p.po_no)+' '+(poOk?'✓':'✗ no es '+ocpEsc(OCP.oc.numero_oc)) : '<span class="arte-mu">no aparece en la PI</span>'}</span>
       <span class="arte-kv"><em>Fecha</em>${ocpEsc(p.fecha||'—')}</span>
     </div>
     ${p.terminos?`<div class="arte-mu" style="margin-top:6px;">💳 ${ocpEsc(p.terminos)}</div>`:''}
@@ -13607,14 +13608,7 @@ function ocpHtmlPI(){
   </div>
   <div class="arte-sec">
     <div class="arte-sec-h">③ Sello ILUMAX TRADING CORP.</div>
-    <div class="ocp-sello-fila">
-      <img src="${OCP_SELLO_DATAURI}" alt="Sello" class="ocp-sello-img">
-      <div style="flex:1;min-width:200px;">
-        <div style="font-size:12px;">Se pone ${p.buyer?`encima de <strong>"${ocpEsc(p.buyer.txt)}"</strong> (celda ${ocpEsc(p.buyer.celda)})`:'<strong>debajo de la tabla</strong> (no encontré "THE BUYER")'}, en la hoja ${ocpEsc(p.hoja||'')}. Todo lo demás del archivo del proveedor queda igual.</div>
-        <div class="fg" style="margin:6px 0 0;max-width:260px;"><label class="fl">¿Prefieres otra ubicación? Celda (opcional)</label>
-          <input class="inp" ${ed?'':'disabled'} value="${ocpEsc(p.celda_manual||'')}" placeholder="Ej: G43" oninput="this.value=this.value.toUpperCase();ocpSet('pi.celda_manual',this.value)"></div>
-      </div>
-    </div>
+    ${ocpHtmlSelloSeccion()}
     ${p.sellado_url ? `<div class="arte-adj" style="margin-top:8px;"><span class="arte-adj-t">✅ PI sellada</span><a href="${ocpEsc(p.sellado_url)}" target="_blank" rel="noopener">${ocpEsc(ocpNombreSellado())}</a><span class="arte-mu">${arteFmtFecha(p.sellado_en)}</span></div>`:''}
     ${ed ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
       <button class="btn btn-p btn-sm" style="padding:9px 14px;" onclick="ocpSellarPI()">🖊 ${p.sellado_url?'Volver a sellar':'Poner sello y descargar'}</button>
@@ -13623,8 +13617,8 @@ function ocpHtmlPI(){
     </div>` : ''}
   </div>`;
 }
-function ocpNombreSellado(){ const n = OCP.d.pi.original_nombre||'PI.xlsx'; return n.replace(/\.(xlsx|xlsm)$/i,'')+'_SELLADA.'+(/\.xlsm$/i.test(n)?'xlsm':'xlsx'); }
-function ocpRefrescarPI(){ const z = document.getElementById('ocp-pi-zona'); if(z) z.innerHTML = ocpHtmlPI(); ocpProgreso(); }
+function ocpNombreSellado(){ const n = OCP.d.pi.original_nombre||'PI.xlsx'; const ext = (n.match(/\.(xlsx|xlsm|pdf|docx)$/i)||[,'xlsx'])[1].toLowerCase(); return n.replace(/\.(xlsx|xlsm|pdf|docx)$/i,'')+'_SELLADA.'+ext; }
+function ocpRefrescarPI(){ const z = document.getElementById('ocp-pi-zona'); if(z) z.innerHTML = ocpHtmlPI(); ocpProgreso(); if(OCP.d.pi.tipo==='pdf') ocpPdfPreview(); }
 
 // Inserta el sello como imagen en el .xlsx original, tocando solo el dibujo de la hoja (así no se
 // pierden las fotos, fórmulas, formatos ni figuras que trae el archivo del proveedor).
@@ -13691,10 +13685,25 @@ async function ocpSellarPI(){
   if(!OCP.pi || !OCP.pi.buf){
     // se recargó la página: volvemos a traer la PI original guardada
     if(!p.original_url){ if(typeof toast==='function') toast('Vuelve a cargar el Excel de la PI','wa'); return; }
-    try{ const r = await fetch(p.original_url); OCP.pi = {buf: await r.arrayBuffer(), nombre:p.original_nombre, info: null}; OCP.pi.info = ocpLeerPI(OCP.pi.buf); }
+    try{ const r = await fetch(p.original_url); OCP.pi = {buf: await r.arrayBuffer(), nombre:p.original_nombre, info: null}; OCP.pi.info = await ocpLeerPIgenerico(OCP.pi.buf, p.original_nombre); }
     catch(e){ if(typeof toast==='function') toast('No pude traer la PI guardada, cárgala de nuevo','er'); return; }
   }
   const info = OCP.pi.info;
+  if(info.tipo==='pdf' || info.tipo==='docx'){
+    try{
+      if(typeof toast==='function') toast('⏳ Poniendo el sello…','inf');
+      const pos = p.pos || {...info.posDefecto};
+      const blob = info.tipo==='pdf' ? await ocpSellarPdf(OCP.pi.buf, pos) : await ocpSellarDocx(OCP.pi.buf);
+      const nombre = ocpNombreSellado();
+      ocpDescargar(blob, nombre);
+      const url = await ocSubirAdjunto(new File([blob], nombre, {type:blob.type}));
+      Object.assign(p, {sellado_url:url, sellado_en:new Date().toISOString(), celda_sello: info.tipo==='pdf' ? 'página '+pos.page : (info.ancla||'')});
+      ocpLog('pi_sellada', 'PI sellada ('+info.tipo.toUpperCase()+') '+p.celda_sello);
+      await ocpGuardar(true).catch(()=>{});
+      if(typeof toast==='function') toast('PI sellada y descargada','ok');
+    }catch(err){ console.error(err); if(typeof toast==='function') toast('No pude sellar la PI: '+err.message,'er'); }
+    ocpRefrescarPI(); return;
+  }
   let celda;
   if(p.celda_manual){ const ix = ocpCeldaAIndice(p.celda_manual); if(!ix){ if(typeof toast==='function') toast('Celda no válida (ej: G43)','wa'); return; } celda = {c:ix.c, r:ix.r, colOff:0, rowOff:0}; }
   else if(info.buyer) celda = {c:info.buyer.c, r:Math.max(0, info.buyer.r-7), colOff:400000, rowOff:180000};
@@ -13736,6 +13745,252 @@ function ocpFaltanPI(){
   return f;
 }
 
+
+// ═══ PI en PDF o Word (además de Excel): lectura para comparar contra la OC y sello ═══
+function ocpTipoArchivo(nombre){ const n = String(nombre||'').toLowerCase(); return /\.pdf$/.test(n) ? 'pdf' : /\.docx$/.test(n) ? 'docx' : 'xlsx'; }
+function ocpNumTxt(s){ const t = String(s==null?'':s).replace(/[^\d.,\-]/g,''); if(!t) return NaN; const n = Number(t.replace(/,(?=\d{3}(\D|$))/g,'').replace(/,/g,'.')); return n; }
+async function ocpPdfjs(){
+  if(window.__ocpPdfjs) return window.__ocpPdfjs;
+  // Compatibilidad: versiones nuevas de pdf.js usan Map.getOrInsertComputed (aún no está en todos los navegadores)
+  if(!Math.sumPrecise) Math.sumPrecise = it => { let t = 0; for(const v of it) t += v; return t; };
+  [Map, WeakMap].forEach(C=>{ if(!C.prototype.getOrInsertComputed) C.prototype.getOrInsertComputed = function(k, fn){ if(!this.has(k)) this.set(k, fn(k)); return this.get(k); }; if(!C.prototype.getOrInsert) C.prototype.getOrInsert = function(k, v){ if(!this.has(k)) this.set(k, v); return this.get(k); }; });
+  const urls = [
+    ['https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs','https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs'],
+    ['https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs','https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs']
+  ];
+  for(const [lib, worker] of urls){
+    try{ const m = await import(lib); m.GlobalWorkerOptions.workerSrc = worker; return (window.__ocpPdfjs = m); }catch(e){ console.warn('pdf.js ESM:', e.message); }
+  }
+  await ocpCargarScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js','pdfjsLib');
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  return (window.__ocpPdfjs = window.pdfjsLib);
+}
+async function ocpPdfLib(){ await ocpCargarScript('https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js','PDFLib'); return window.PDFLib; }
+
+// Reglas para reconocer las columnas de la tabla de ítems, en el orden de preferencia.
+const OCP_COLS = {
+  ref:   [/ilumax.*ref/i, /customer.*(item|ref|code)/i, /cusomer.*item/i, /^ref(erence)?\.?$/i, /^code$/i, /reference/i, /item\s*code/i, /^item\s*no/i, /model/i],
+  qty:   [/^(qty|q'?ty|quantity|cantidad)\.?$/i, /^quantity/i, /^qty(?!\s*\/)/i, /\bqty\b(?!\s*\/)/i],
+  price: [/unit\s*price/i, /^fob/i, /^price/i, /precio/i],
+  amount:[/^amount/i, /total\s*(usd|amount)/i, /^total$/i, /importe|valor/i]
+};
+function ocpElegirCol(headers, reglas, usadas){
+  for(const rx of reglas){ const h = headers.find(x=>!usadas.has(x) && rx.test(x.s)); if(h){ usadas.add(h); return h; } }
+  return null;
+}
+// Lee una PI en PDF (texto, no escaneado): agrupa el texto por líneas y ubica la tabla por sus encabezados.
+async function ocpLeerPIpdf(buf){
+  const lib = await ocpPdfjs();
+  const pdf = await lib.getDocument({data: new Uint8Array(buf.slice(0))}).promise;
+  const frases = []; const paginas = [];
+  for(let p=1; p<=pdf.numPages; p++){
+    const page = await pdf.getPage(p); const vp = page.getViewport({scale:1});
+    paginas.push({w:vp.width, h:vp.height, view: page.view});
+    const tc = await page.getTextContent();
+    const its = tc.items.filter(i=>i.str && i.str.trim()).map(i=>({s:i.str, x:i.transform[4], y:i.transform[5], w:i.width||0, h:Math.abs(i.transform[3])||8}));
+    // líneas (misma altura) → frases (textos pegados)
+    its.sort((a,b)=> b.y-a.y || a.x-b.x);
+    const lineas = [];
+    its.forEach(it=>{ let l = lineas.find(L=>Math.abs(L.y-it.y)<2.5); if(!l){ l = {y:it.y, items:[]}; lineas.push(l); } l.items.push(it); });
+    lineas.forEach(L=>{
+      L.items.sort((a,b)=>a.x-b.x); let cur = null;
+      L.items.forEach(it=>{
+        if(cur && it.x - (cur.x+cur.w) < Math.max(4, it.h*0.6)){ cur.s += (it.x-(cur.x+cur.w) > 1 ? ' ' : '') + it.s; cur.w = it.x+it.w-cur.x; }
+        else{ cur = {s:it.s, x:it.x, y:L.y, w:it.w, h:it.h, p}; frases.push(cur); }
+      });
+    });
+  }
+  frases.forEach(f=>{ f.s = f.s.replace(/\s+/g,' ').trim(); f.cx = f.x + f.w/2; });
+  // encabezado de la tabla: una línea que tenga columna de cantidad y de precio o valor
+  let hdr = null;
+  const porLinea = {}; frases.forEach(f=>{ const k = f.p+'|'+Math.round(f.y); (porLinea[k]=porLinea[k]||[]).push(f); });
+  for(const k of Object.keys(porLinea)){
+    const L = porLinea[k]; const us = new Set();
+    const q = ocpElegirCol(L, OCP_COLS.qty, us), pr = ocpElegirCol(L, OCP_COLS.price, us), am = ocpElegirCol(L, OCP_COLS.amount, us), rf = ocpElegirCol(L, OCP_COLS.ref, us);
+    if(q && rf && (pr||am)){ hdr = {L, q, pr, am, rf, p:L[0].p, y:L[0].y}; break; }
+  }
+  if(!hdr) throw new Error('No encontré la tabla de ítems en el PDF (encabezados de referencia y cantidad). Si es un PDF escaneado, no se puede leer: sube la PI en Excel o Word, o compárala a ojo.');
+  const cols = hdr.L.map(h=>({h, cx:h.cx}));
+  const colDe = f => cols.reduce((best,c)=> Math.abs(c.cx-f.cx) < Math.abs(best.cx-f.cx) ? c : best, cols[0]).h;
+  const debajo = f => f.p > hdr.p || (f.p===hdr.p && f.y < hdr.y - 2);
+  const totalF = frases.find(f=>debajo(f) && /^total\b/i.test(f.s));
+  const antesTotal = f => !totalF || f.p < totalF.p || (f.p===totalF.p && f.y > totalF.y + 2);
+  const cuerpo = frases.filter(f=>debajo(f) && antesTotal(f));
+  const items = [];
+  cuerpo.filter(f=>colDe(f)===hdr.rf && /^[A-Za-z0-9][A-Za-z0-9\-\/.]{1,24}$/.test(f.s) && !/^total/i.test(f.s)).forEach(rf=>{
+    const enFila = col => cuerpo.find(f=>f.p===rf.p && colDe(f)===col && Math.abs(f.y-rf.y) < 7 && isFinite(ocpNumTxt(f.s)));
+    const q = enFila(hdr.q); if(!q) return;
+    const pr = hdr.pr ? enFila(hdr.pr) : null, am = hdr.am ? enFila(hdr.am) : null;
+    const qty = ocpNumTxt(q.s), fob = pr ? ocpNumTxt(pr.s) : NaN, amount = am ? ocpNumTxt(am.s) : (isFinite(fob) ? fob*qty : NaN);
+    items.push({code: ocpNormRef(rf.s), qty, fob: isFinite(fob)?fob:null, amount: isFinite(amount)?amount:null, desc:''});
+  });
+  // descripción: primer texto de la columna de descripción en la misma fila (si existe)
+  const hDesc = hdr.L.find(h=>/descrip/i.test(h.s));
+  if(hDesc) items.forEach(it=>{ const rf = cuerpo.find(f=>ocpNormRef(f.s)===it.code && colDe(f)===hdr.rf); const d = rf && cuerpo.filter(f=>f.p===rf.p && colDe(f)===hDesc && Math.abs(f.y-rf.y)<40).sort((a,b)=>b.y-a.y)[0]; if(d) it.desc = d.s.slice(0,80); });
+  // encabezado de la PI
+  const valorDe = rx => { for(const f of frases){ const m = f.s.match(rx); if(m){ const v = (m[m.length-1]||'').replace(/^[:#\s]+/,'').trim(); if(v) return v; const sig = frases.filter(g=>g.p===f.p && Math.abs(g.y-f.y)<2.5 && g.x>f.x).sort((a,b)=>a.x-b.x)[0]; if(sig) return sig.s; } } return ''; };
+  const pi_no = valorDe(/^(?:p\s*\/?\s*i|proforma(?:\s*invoice)?|invoice)\s*(?:no\.?|number|#)\s*:?\s*(.*)$/i);
+  const po_no = valorDe(/^(?:p\.?\s*o\.?|purchase\s*order|order)\s*(?:no\.?|number|#)?\s*:?\s*((?:OCI|OC)\s*\d+.*)$/i) || ((frases.map(f=>f.s).join(' ').match(/\bOCI\s*\d{2,}/i)||[])[0]||'');
+  const fecha = valorDe(/^date\s*:?\s*(.*)$/i);
+  const terminos = (frases.filter(f=>/deposit|T\/T|payment|balance/i.test(f.s)).sort((a,b)=>b.s.length-a.s.length)[0]||{}).s || '';
+  // dónde poner el sello (coordenadas PDF: origen abajo a la izquierda)
+  const W = 150, H = Math.round(150*OCP_SELLO_EMU.cy/OCP_SELLO_EMU.cx);
+  const mitadInf = f => f.y < paginas[f.p-1].h*0.55 || f.p>hdr.p;
+  const buyer = [...frases].reverse().find(f=>mitadInf(f) && /(the\s*buyer|buyer'?s?\s*(signature|sign|stamp|confirm))/i.test(f.s));
+  const firma = [...frases].reverse().find(f=>mitadInf(f) && /accepted|confirmed\s*by|authori[sz]ed|the\s*seller|signature/i.test(f.s));
+  let pos;
+  if(buyer) pos = {page:buyer.p, x:Math.max(20, buyer.x-10), y:buyer.y+buyer.h+6};
+  else if(firma){ const pg = paginas[firma.p-1]; pos = {page:firma.p, x:pg.view[0]+pg.w-W-40, y:Math.max(pg.view[1]+30, firma.y-18)}; }
+  else { const pg = paginas[paginas.length-1]; pos = {page:paginas.length, x:pg.view[0]+pg.w-W-40, y:pg.view[1]+60}; }
+  pos.w = W; pos.h = H;
+  return {tipo:'pdf', pi_no, po_no, fecha, terminos, items, paginas, posDefecto:pos, ancla: buyer ? 'encima de "'+buyer.s+'"' : firma ? 'al lado de la firma del proveedor' : 'abajo a la derecha'};
+}
+
+// Lee una PI en Word (.docx): busca la tabla con referencia y cantidad.
+async function ocpLeerPIdocx(buf){
+  await ocpCargarScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js','JSZip');
+  const zip = await JSZip.loadAsync(buf);
+  const xml = await zip.file('word/document.xml').async('string');
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const txt = el => [...el.getElementsByTagNameNS(W,'t')].map(t=>t.textContent).join('').replace(/\s+/g,' ').trim();
+  let items = [];
+  for(const tbl of [...doc.getElementsByTagNameNS(W,'tbl')]){
+    const filas = [...tbl.getElementsByTagNameNS(W,'tr')].filter(tr=>tr.parentNode===tbl).map(tr=>[...tr.childNodes].filter(n=>n.localName==='tc').map(txt));
+    const hi = filas.findIndex(f=>{ const hs = f.map((s,i)=>({s,i})); const us = new Set(); return ocpElegirCol(hs, OCP_COLS.ref, us) && ocpElegirCol(hs, OCP_COLS.qty, us); });
+    if(hi<0) continue;
+    const hs = filas[hi].map((s,i)=>({s,i})); const us = new Set();
+    const rf = ocpElegirCol(hs, OCP_COLS.ref, us), q = ocpElegirCol(hs, OCP_COLS.qty, us), pr = ocpElegirCol(hs, OCP_COLS.price, us), am = ocpElegirCol(hs, OCP_COLS.amount, us);
+    const hDesc = hs.find(h=>/descrip/i.test(h.s));
+    for(const f of filas.slice(hi+1)){
+      const code = f[rf.i]; const qty = ocpNumTxt(f[q.i]);
+      if(!code || /^total/i.test(code) || !isFinite(qty) || qty<=0) continue;
+      const fob = pr ? ocpNumTxt(f[pr.i]) : NaN, amount = am ? ocpNumTxt(f[am.i]) : NaN;
+      items.push({code: ocpNormRef(code), qty, fob: isFinite(fob)?fob:null, amount: isFinite(amount)?amount:(isFinite(fob)?fob*qty:null), desc: hDesc ? (f[hDesc.i]||'').slice(0,80) : ''});
+    }
+    if(items.length) break;
+  }
+  if(!items.length) throw new Error('No encontré en el Word una tabla con referencia y cantidad');
+  const parrafos = [...doc.getElementsByTagNameNS(W,'p')].map(txt).filter(Boolean);
+  const valorDe = rx => { for(const s of parrafos){ const m = s.match(rx); if(m && m[1] && m[1].trim()) return m[1].trim(); } return ''; };
+  const buyerP = [...parrafos].reverse().find(s=>/the\s*buyer|buyer'?s?\s*(signature|sign|stamp)/i.test(s));
+  return {tipo:'docx', pi_no: valorDe(/(?:p\s*\/?\s*i|invoice)\s*(?:no\.?|number|#)\s*:?\s*(\S.*)$/i), po_no: valorDe(/(?:p\.?\s*o\.?|purchase\s*order)\s*(?:no\.?|#)?\s*:?\s*(\S.*)$/i),
+    fecha: valorDe(/^date\s*:?\s*(.*)$/i), terminos: parrafos.filter(s=>/deposit|T\/T|payment/i.test(s)).sort((a,b)=>b.length-a.length)[0]||'', items,
+    ancla: buyerP ? 'encima de "'+buyerP.slice(0,40)+'"' : 'al final del documento'};
+}
+async function ocpLeerPIgenerico(buf, nombre){
+  const tipo = ocpTipoArchivo(nombre);
+  if(tipo==='pdf') return await ocpLeerPIpdf(buf);
+  if(tipo==='docx') return await ocpLeerPIdocx(buf);
+  const info = ocpLeerPI(buf); info.tipo = 'xlsx'; return info;
+}
+
+// ── Sellar PDF: el sello se dibuja como imagen sobre la página, en la posición elegida ──
+async function ocpSellarPdf(buf, pos){
+  const PDFLib = await ocpPdfLib();
+  const doc = await PDFLib.PDFDocument.load(buf.slice(0));
+  const png = await doc.embedPng(Uint8Array.from(atob(OCP_SELLO_DATAURI.split(',')[1]), c=>c.charCodeAt(0)));
+  const page = doc.getPage(Math.max(0, Math.min(doc.getPageCount()-1, (pos.page||1)-1)));
+  page.drawImage(png, {x:pos.x, y:pos.y, width:pos.w, height:pos.h});
+  const bytes = await doc.save();
+  return new Blob([bytes], {type:'application/pdf'});
+}
+// ── Sellar Word: se agrega el sello como imagen en un párrafo propio, encima de "THE BUYER" o al final ──
+async function ocpSellarDocx(buf){
+  await ocpCargarScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js','JSZip');
+  const zip = await JSZip.loadAsync(buf);
+  let xml = await zip.file('word/document.xml').async('string');
+  let rels = await zip.file('word/_rels/document.xml.rels').async('string');
+  let ct = await zip.file('[Content_Types].xml').async('string');
+  let n=1; while(zip.file('word/media/sello_ilumax'+n+'.png')) n++;
+  zip.file('word/media/sello_ilumax'+n+'.png', OCP_SELLO_DATAURI.split(',')[1], {base64:true, createFolders:false});
+  let k=1; while(new RegExp('Id="rId'+k+'"').test(rels)) k++;
+  const rid = 'rId'+k;
+  rels = rels.replace('</Relationships>', `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/sello_ilumax${n}.png"/></Relationships>`);
+  if(!/Extension="png"/i.test(ct)) ct = ct.replace(/(<Types[^>]*>)/, '$1<Default Extension="png" ContentType="image/png"/>');
+  const ids = [...xml.matchAll(/<wp:docPr[^>]*\sid="(\d+)"/g)].map(m=>Number(m[1])); const did = (ids.length?Math.max(...ids):0)+1;
+  const cx = OCP_SELLO_EMU.cx, cy = OCP_SELLO_EMU.cy;
+  const par = `<w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`+
+    `<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${did}" name="Sello ILUMAX TRADING"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>`+
+    `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${did}" name="sello.png"/><pic:cNvPicPr/></pic:nvPicPr>`+
+    `<pic:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+  // párrafo que contiene "BUYER" (el último); si no hay, antes del cierre del cuerpo
+  const parrafos = [...xml.matchAll(/<w:p[ >][\s\S]*?<\/w:p>/g)];
+  const conBuyer = parrafos.filter(m=>/buyer/i.test(m[0].replace(/<[^>]+>/g,''))).pop();
+  if(conBuyer) xml = xml.slice(0, conBuyer.index) + par + xml.slice(conBuyer.index);
+  else { const i = xml.lastIndexOf('<w:sectPr'); const j = i>=0 ? i : xml.lastIndexOf('</w:body>'); xml = xml.slice(0,j) + par + xml.slice(j); }
+  zip.file('word/document.xml', xml, {createFolders:false});
+  zip.file('word/_rels/document.xml.rels', rels, {createFolders:false});
+  zip.file('[Content_Types].xml', ct, {createFolders:false});
+  return await zip.generateAsync({type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', compression:'DEFLATE'});
+}
+
+// ── Vista previa del PDF con el sello arrastrable ──
+async function ocpPdfPreview(){
+  const cont = document.getElementById('ocp-pdf-prev'); if(!cont || !OCP.pi || !OCP.pi.buf) return;
+  const p = OCP.d.pi; const pos = p.pos || (p.pos = {...OCP.pi.info.posDefecto});
+  try{
+    const lib = await ocpPdfjs();
+    const pdf = await lib.getDocument({data: new Uint8Array(OCP.pi.buf.slice(0))}).promise;
+    const page = await pdf.getPage(pos.page);
+    const base = page.getViewport({scale:1});
+    const ancho = Math.min(cont.clientWidth || 620, 720);
+    const vp = page.getViewport({scale: ancho/base.width});
+    const canvas = document.createElement('canvas'); canvas.width = Math.floor(vp.width*2); canvas.height = Math.floor(vp.height*2);
+    canvas.style.width = vp.width+'px'; canvas.style.height = vp.height+'px';
+    await page.render({canvasContext: canvas.getContext('2d'), viewport: page.getViewport({scale: 2*ancho/base.width})}).promise;
+    cont.innerHTML = ''; cont.style.width = vp.width+'px'; cont.style.height = vp.height+'px';
+    cont.appendChild(canvas);
+    const img = document.createElement('img'); img.src = OCP_SELLO_DATAURI; img.className = 'ocp-sello-drag'; img.draggable = false;
+    cont.appendChild(img);
+    const colocar = ()=>{ const [l,t] = vp.convertToViewportPoint(pos.x, pos.y+pos.h); img.style.left = l+'px'; img.style.top = t+'px'; img.style.width = (pos.w*vp.scale)+'px'; };
+    colocar();
+    if(!OCP.editable) return;
+    let arr = null;
+    img.onpointerdown = ev=>{ ev.preventDefault(); img.setPointerCapture(ev.pointerId); arr = {x:ev.clientX, y:ev.clientY, l:parseFloat(img.style.left), t:parseFloat(img.style.top)}; img.classList.add('mov'); };
+    img.onpointermove = ev=>{ if(!arr) return; const l = Math.max(0, Math.min(vp.width - img.offsetWidth, arr.l + ev.clientX - arr.x)); const t = Math.max(0, Math.min(vp.height - img.offsetHeight, arr.t + ev.clientY - arr.y)); img.style.left = l+'px'; img.style.top = t+'px'; };
+    img.onpointerup = ()=>{ if(!arr) return; arr = null; img.classList.remove('mov');
+      const [x, yTop] = vp.convertToPdfPoint(parseFloat(img.style.left), parseFloat(img.style.top));
+      pos.x = Math.round(x*10)/10; pos.y = Math.round((yTop - pos.h)*10)/10; ocpCambio(); };
+    OCP.__colocarSello = colocar;
+  }catch(err){ cont.innerHTML = `<div class="arte-mu" style="padding:12px;">No se pudo mostrar la vista previa (${ocpEsc(err.message)}). El sello se pondrá ${ocpEsc(OCP.pi.info.ancla||'abajo a la derecha')}.</div>`; }
+}
+function ocpTamSello(pct){
+  const p = OCP.d.pi; if(!p.pos) return; const W0 = 150, H0 = Math.round(150*OCP_SELLO_EMU.cy/OCP_SELLO_EMU.cx);
+  const cx = p.pos.x + p.pos.w/2, cy = p.pos.y + p.pos.h/2;
+  p.pos.w = Math.round(W0*pct/100); p.pos.h = Math.round(H0*pct/100); p.pos.x = cx - p.pos.w/2; p.pos.y = cy - p.pos.h/2;
+  if(OCP.__colocarSello) OCP.__colocarSello(); ocpCambio();
+}
+function ocpPaginaSello(n){ const p = OCP.d.pi; p.pos.page = Number(n); ocpCambio(); ocpPdfPreview(); }
+function ocpRestablecerSello(){ OCP.d.pi.pos = {...OCP.pi.info.posDefecto}; ocpCambio(); ocpRefrescarPI(); }
+function ocpHtmlSelloSeccion(){
+  const p = OCP.d.pi, ed = OCP.editable, tipo = p.tipo || 'xlsx';
+  if(tipo==='pdf'){
+    const nPag = (OCP.pi && OCP.pi.info && OCP.pi.info.paginas || []).length || 1;
+    const pct = p.pos ? Math.round(p.pos.w/150*100) : 100;
+    return `<div class="arte-mu" style="margin-bottom:6px;">${ed?'<strong>Arrastra el sello</strong> hasta donde quieras que quede. ':''}Por defecto va ${ocpEsc((OCP.pi&&OCP.pi.info&&OCP.pi.info.ancla)||p.ancla||'abajo a la derecha')}.</div>
+      ${ed?`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+        <label class="arte-mu">Tamaño <input type="range" min="60" max="160" step="5" value="${pct}" oninput="ocpTamSello(this.value);this.nextElementSibling.textContent=this.value+'%'"> <span>${pct}%</span></label>
+        ${nPag>1?`<label class="arte-mu">Página <select class="inp" style="width:auto;display:inline-block;padding:4px 8px;" onchange="ocpPaginaSello(this.value)">${Array.from({length:nPag},(_,i)=>`<option ${p.pos&&p.pos.page===i+1?'selected':''}>${i+1}</option>`).join('')}</select></label>`:''}
+        <span class="arte-link" onclick="ocpRestablecerSello()">↺ posición sugerida</span>
+      </div>`:''}
+      ${OCP.pi && OCP.pi.buf ? `<div class="ocp-pdf-wrap"><div id="ocp-pdf-prev" class="ocp-pdf-prev"><div class="arte-mu" style="padding:20px;">⏳ Cargando vista previa…</div></div></div>`
+        : `<div class="arte-mu">Vuelve a cargar el PDF para ver y mover el sello.</div>`}`;
+  }
+  if(tipo==='docx'){
+    return `<div class="ocp-sello-fila"><img src="${OCP_SELLO_DATAURI}" alt="Sello" class="ocp-sello-img">
+      <div style="flex:1;min-width:200px;font-size:12px;">Se agrega ${ocpEsc(p.ancla||'al final del documento')}, alineado a la derecha. El resto del Word queda igual.</div></div>`;
+  }
+  return `<div class="ocp-sello-fila">
+      <img src="${OCP_SELLO_DATAURI}" alt="Sello" class="ocp-sello-img">
+      <div style="flex:1;min-width:200px;">
+        <div style="font-size:12px;">Se pone ${p.buyer?`encima de <strong>"${ocpEsc(p.buyer.txt)}"</strong> (celda ${ocpEsc(p.buyer.celda)})`:'<strong>debajo de la tabla</strong> (no encontré "THE BUYER")'}, en la hoja ${ocpEsc(p.hoja||'')}. Todo lo demás del archivo del proveedor queda igual.</div>
+        <div class="fg" style="margin:6px 0 0;max-width:260px;"><label class="fl">¿Prefieres otra ubicación? Celda (opcional)</label>
+          <input class="inp" ${ed?'':'disabled'} value="${ocpEsc(p.celda_manual||'')}" placeholder="Ej: G43" oninput="this.value=this.value.toUpperCase();ocpSet('pi.celda_manual',this.value)"></div>
+      </div>
+    </div>`;
+}
+
 // ── pintar / abrir / confirmar ──
 function ocpProgreso(){
   if(!OCP.tpl) return;
@@ -13768,6 +14023,7 @@ function ocpPintar(){
     ${tpl.id==='oc_creada' ? ocpHtmlEnvio() : `<div id="ocp-pi-zona">${ocpHtmlPI()}</div>`}
   </div>`;
   ocpProgreso();
+  if(tpl.id==='pi_confirmada' && OCP.d.pi.tipo==='pdf') ocpPdfPreview();
 }
 async function ocpAbrir(oc, e, tpl, items){
   Object.assign(OCP, {ocId:oc.id, oc, etapa:e, tpl, items, pi:null, d:null,
@@ -13813,6 +14069,11 @@ function ocpInjectCss(){
   .ocp-tabla.solo-dif tr.ocp-ok{display:none;}
   .ocp-sello-fila{display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
   .ocp-sello-img{width:180px;height:auto;border:1px dashed var(--b2);border-radius:8px;padding:6px;background:#fff;}
+  .ocp-pdf-wrap{overflow:auto;max-height:560px;border:1px solid var(--b1);border-radius:8px;background:#e5e7eb;padding:8px;}
+  .ocp-pdf-prev{position:relative;margin:0 auto;box-shadow:0 2px 10px rgba(0,0,0,.15);background:#fff;}
+  .ocp-pdf-prev canvas{display:block;}
+  .ocp-sello-drag{position:absolute;cursor:grab;outline:2px dashed rgba(37,99,235,.7);outline-offset:2px;touch-action:none;user-select:none;}
+  .ocp-sello-drag.mov{cursor:grabbing;outline-color:var(--acc);}
   `;
   document.head.appendChild(s);
 }
