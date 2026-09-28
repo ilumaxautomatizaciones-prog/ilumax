@@ -11901,9 +11901,11 @@ function ocAbrirTarjetaEtapa(ocId, etapaId){
   }
   document.getElementById('ea-confirmar').style.display = e.estado==='en_curso' ? 'inline-flex' : 'none';
   document.getElementById('ea-vertodo').setAttribute('onclick', `cerrarModalEtapaAdjunto();reabastAbrirDetalleOC('${ocId}')`);
+  if(typeof ARTE_IDS!=='undefined') arteCerrarLimpio();
+  if(typeof ARTE_IDS!=='undefined' && ARTE_IDS.has(tpl.id)) arteAbrir(oc, e, tpl, items);
   document.getElementById('modal-etapa-adjunto').classList.add('on');
 }
-function cerrarModalEtapaAdjunto(){ document.getElementById('modal-etapa-adjunto').classList.remove('on'); }
+function cerrarModalEtapaAdjunto(){ document.getElementById('modal-etapa-adjunto').classList.remove('on'); if(typeof arteCerrarLimpio==='function' && ARTE.tpl) arteCerrarLimpio(); }
 
 // Si escribes en un campo, calcula el otro al instante usando la TRM de la OC.
 function eaSincronizarMonto(origen){
@@ -11925,7 +11927,7 @@ function reabastInjectModalEtapaAdjunto(){
       <div class="mh"><div class="mt" id="ea-titulo">Etapa</div><div class="mx" onclick="cerrarModalEtapaAdjunto()">✕</div></div>
       <div class="mb">
         <div id="ea-contenido"></div>
-        <div id="ea-file-wrap" class="fg"><label class="fl">Foto o comprobante (obligatorio)</label><input class="inp" type="file" id="ea-file" accept="image/*,.pdf"></div>
+        <div id="ea-file-wrap" class="fg"><label class="fl" id="ea-file-lbl">Foto o comprobante (obligatorio)</label><input class="inp" type="file" id="ea-file" accept="image/*,.pdf"></div>
         <div id="ea-pago-wrap" style="display:none;">
           <div id="ea-total-oc" style="font-size:11px;color:var(--mu);margin-bottom:8px;"></div>
           <div class="fg2">
@@ -11933,12 +11935,14 @@ function reabastInjectModalEtapaAdjunto(){
             <div class="fg"><label class="fl">Monto pagado (USD)</label><input class="inp" type="number" step="0.01" id="ea-monto-usd" oninput="eaSincronizarMonto('usd')"></div>
           </div>
         </div>
-        <div class="fg"><label class="fl">Comentario (opcional)</label><textarea class="inp" id="ea-comentario"></textarea></div>
+        <div class="fg" id="ea-com-wrap"><label class="fl">Comentario (opcional)</label><textarea class="inp" id="ea-comentario"></textarea></div>
         <div id="ea-estado" style="font-size:11px;"></div>
         <div style="margin-top:10px;"><span id="ea-vertodo" style="font-size:11px;color:var(--mu);text-decoration:underline;cursor:pointer;">Ver todas las etapas de esta OC</span></div>
       </div>
       <div class="mf">
-        <button class="btn btn-g" onclick="cerrarModalEtapaAdjunto()">Cancelar</button>
+        <span id="ea-save"></span>
+        <button class="btn btn-or" id="ea-devolver" style="display:none;" onclick="arteDevolverDesdeBoton()">↩ Devolver</button>
+        <button class="btn btn-g" onclick="cerrarModalEtapaAdjunto()">Cerrar</button>
         <button class="btn btn-p" id="ea-confirmar" onclick="confirmarEtapaAdjunto()">✔ Confirmar y marcar OK</button>
       </div>
     </div>
@@ -11947,6 +11951,7 @@ function reabastInjectModalEtapaAdjunto(){
 }
 async function confirmarEtapaAdjunto(){
   const {plantilla, ocId, etapaId, totalCop} = ETAPA_ADJUNTO_CTX;
+  if(ARTE_IDS.has(plantilla.id) && ARTE.tpl) return arteConfirmar();
   const estado = document.getElementById('ea-estado');
   const extra = { comentario_extra: document.getElementById('ea-comentario').value.trim()||null };
   if(plantilla.requiereAdjunto){
@@ -11965,6 +11970,1149 @@ async function confirmarEtapaAdjunto(){
   }
   cerrarModalEtapaAdjunto();
   await ocMarcarEtapaCompleta(ocId, etapaId, extra);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// ═══ FLUJO DE ARTE — expediente interactivo por OC ═══
+// Cada etapa de arte (camino largo: Compras → Calidad → Diseño → proveedor → preprensa; camino
+// corto: reimpresión → preprensa) abre un formulario propio en vez del comentario libre.
+// Todo lo que se diligencia queda en un "expediente de arte" por OC, guardado en la tabla
+// `configuracion` (clave arte_oc_<id>, tipo json) — así no hace falta tocar el esquema de la
+// base de Reabastecimiento. Se guarda solo (autoguardado) mientras escribes.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+const ARTE_LARGO = ['arte_solicitud_calidad','arte_revision_calidad','arte_diseno_elaborado','arte_enviado_proveedor','arte_aprobado_proveedor','arte_preprensa_larga'];
+const ARTE_CORTO = ['arte_reimpresion_solicitada','arte_preprensa_corta'];
+const ARTE_IDS = new Set([...ARTE_LARGO, ...ARTE_CORTO]);
+const ARTE_PASO_CORTO = {
+  arte_solicitud_calidad:'Solicitud', arte_revision_calidad:'Calidad', arte_diseno_elaborado:'Diseño',
+  arte_enviado_proveedor:'Envío', arte_aprobado_proveedor:'Aprobación', arte_preprensa_larga:'Preprensa',
+  arte_reimpresion_solicitada:'Reimpresión', arte_preprensa_corta:'Preprensa'
+};
+const ARTE_PIEZAS = ['Caja individual','Etiqueta','Caja máster','Inserto / manual','Rotulado en producto','Blíster / bolsa'];
+const ARTE_CERTS  = ['RETILAP','Etiqueta de eficiencia (si aplica)','Advertencias de seguridad','Símbolo reciclaje / RAEE','Importador y NIT','País de origen'];
+const ARTE_TEC = [
+  {k:'potencia', l:'Potencia',        ph:'15 W',      req:true,  rx:/(\d+(?:[.,]\d+)?)\s*W\b/i,              fmt:m=>m[1]+' W',  keys:/potenc|watt|vatio/},
+  {k:'voltaje',  l:'Voltaje',         ph:'100-240 V', req:true,  rx:/(\d{2,3}(?:\s*-\s*\d{2,3})?)\s*V(?:AC)?\b/i, fmt:m=>m[1]+' V', keys:/volt|tensi/},
+  {k:'base',     l:'Base / casquillo',ph:'E27',       req:true,  rx:/\b(E\d{2}|GU10|GU5\.3|MR16|G13|G9|T8|T5|B22)\b/i, fmt:m=>m[1].toUpperCase(), keys:/base|casquil|socket|rosca/},
+  {k:'cct',      l:'Temp. de color',  ph:'6500 K',    req:false, rx:/(\d{4})\s*K\b/i,                         fmt:m=>m[1]+' K',  keys:/temperat|cct|kelvin|color/},
+  {k:'lumenes',  l:'Flujo luminoso',  ph:'1500 lm',   req:false, rx:/(\d{3,5})\s*LM\b/i,                      fmt:m=>m[1]+' lm', keys:/lumen|flujo/},
+  {k:'vida',     l:'Vida útil',       ph:'15.000 h',  req:false, rx:/(\d{1,2})\s*KH\b/i,                      fmt:m=>(Number(m[1])*1000).toLocaleString('es-CO')+' h', keys:/vida|horas|lifetime/},
+  {k:'ip',       l:'Grado IP',        ph:'IP20',      req:false, rx:/\b(IP\s?\d{2})\b/i,                      fmt:m=>m[1].replace(/\s/,'').toUpperCase(), keys:/\bip\b|protecc/}
+];
+const ARTE_CHK_CALIDAD = [
+  {k:'tecnicos',    l:'Datos técnicos correctos'},
+  {k:'ean',         l:'Código de barras válido'},
+  {k:'certs',       l:'Sellos / certificaciones definidos'},
+  {k:'legales',     l:'Textos legales definidos'},
+  {k:'advertencias',l:'Advertencias de uso/seguridad'}
+];
+const ARTE_CHK_PREPRENSA = [
+  {k:'textos',  l:'Textos y datos técnicos coinciden con el arte aprobado', c:'textos'},
+  {k:'ean',     l:'El código de barras escanea y coincide', c:'código de barras'},
+  {k:'colores', l:'Colores / pantones correctos', c:'colores'},
+  {k:'medidas', l:'Medidas y troquel correctos', c:'medidas'},
+  {k:'sellos',  l:'Logos, sellos y advertencias presentes', c:'sellos'}
+];
+const ARTE_PIEZAS_EN = {'Caja individual':'unit box','Etiqueta':'label','Caja máster':'master carton','Inserto / manual':'insert / manual','Rotulado en producto':'product marking','Blíster / bolsa':'blister / bag'};
+const ARTE_TIPOS_ADJ = {ficha:'📄 Ficha técnica', troquel:'📐 Troquel / medidas', foto:'📷 Foto / muestra', evidencia:'🧾 Evidencia', otro:'📎 Otro'};
+
+let ARTE = { d:null, ocId:null, etapa:null, tpl:null, oc:null, items:[], refs:[], editable:false, dirty:false, timer:null, guardando:false, cache:{} };
+
+// ── util ──
+function arteEsc(s){ return reabastEsc(s); }
+function arteHoy(){ return new Date().toISOString().slice(0,10); }
+function arteFmtFecha(iso){ if(!iso) return '—'; const d=new Date(iso); return isNaN(d)?iso:d.toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); }
+function arteEanValido(c){
+  c = String(c||'').replace(/\s/g,'');
+  if(!/^\d{8}$|^\d{12,14}$/.test(c)) return false;
+  const d = c.split('').map(Number); const chk = d.pop();
+  const s = d.reverse().reduce((a,n,i)=>a + n*(i%2===0?3:1), 0);
+  return (10 - s%10)%10 === chk;
+}
+function arteUrlValida(u){ return /^https?:\/\/\S+\.\S+/i.test(String(u||'').trim()); }
+function arteDescRef(ref){
+  const m = (REABAST.referenciasMaestro||{})[ref] || {};
+  return m.descripcion || m.nombre || m.descripcion_item || '';
+}
+function arteFichaCatalogo(ref){ return (REABAST.fichasTecnicas||{})[ref] || null; }
+function arteQuien(){ return (typeof CU!=='undefined' && CU && CU.nombre) ? CU.nombre : 'Usuario'; }
+
+// Sugiere datos técnicos a partir de la ficha del catálogo y de la descripción (ej. "LED BULB 15W E27 15KH").
+function arteSugerirTecnicos(ref){
+  const out = {};
+  const ficha = arteFichaCatalogo(ref) || {};
+  Object.keys(ficha).forEach(k=>{
+    const kn = k.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+    ARTE_TEC.forEach(t=>{ if(!out[t.k] && t.keys.test(kn) && ficha[k]!=null && String(ficha[k]).trim() && !/^https?:/i.test(String(ficha[k]))) out[t.k] = String(ficha[k]).trim(); });
+  });
+  const txt = arteDescRef(ref);
+  ARTE_TEC.forEach(t=>{ if(!out[t.k]){ const m = txt.match(t.rx); if(m) out[t.k] = t.fmt(m); } });
+  return out;
+}
+
+// ── expediente ──
+function arteNuevoExpediente(oc, items){
+  return { v:1, oc_id:oc.id, numero_oc:oc.numero_oc, items:{}, general:{ fecha_limite:'', prioridad:'normal', adjuntos:[], link_carpeta:'' },
+    calidad:{ notas:'' }, diseno:{ version:1, link_general:'', notas:'' },
+    envio:{ medio:'', contacto:'', idioma:'en', enviado_en:null },
+    proveedor:{ decision:'', cambios:'', rondas:[] },
+    preprensa:{ rondas:[] }, reimpresion:{ medio:'', contacto:'', idioma:'en' }, log:[] };
+}
+function arteAsegurarItems(d, items){
+  const porRef = {};
+  items.forEach(it=>{ const r = String(it.referencia||'').trim(); if(!r) return; (porRef[r]=porRef[r]||{cant:0, nuevo:false, lotes:[]}); porRef[r].cant += Number(it.cantidad)||0; if(it.sku_nuevo) porRef[r].nuevo = true; if(it.lote) porRef[r].lotes.push(it.lote); });
+  Object.keys(porRef).forEach(ref=>{
+    if(!d.items[ref]){
+      d.items[ref] = { modo: porRef[ref].nuevo ? 'nuevo' : 'reimp', piezas: porRef[ref].nuevo ? ['Caja individual'] : [], tecnicos: arteSugerirTecnicos(ref),
+        ean:'', ean_pendiente:false, certs:['RETILAP'], medidas:'', arte_base:'', notas:'',
+        calidad:{ checks:{}, legales:'', obs:'' }, diseno:{ link:'', listo:false },
+        preprensa:{ checks:{}, leido:'', obs:'' }, reimp:{ cambios:null, detalle:'' } };
+    }
+    d.items[ref]._cant = porRef[ref].cant; d.items[ref]._lotes = porRef[ref].lotes; d.items[ref]._nuevo = porRef[ref].nuevo;
+  });
+  return Object.keys(porRef);
+}
+async function arteCargar(oc, items){
+  let d = null;
+  try{
+    const rows = await sb.get('configuracion', 'clave=eq.arte_oc_'+oc.id);
+    if(rows && rows[0] && rows[0].valor) d = JSON.parse(rows[0].valor);
+  }catch(e){ console.warn('Expediente de arte:', e.message); }
+  if(!d) d = arteNuevoExpediente(oc, items);
+  const refs = arteAsegurarItems(d, items);
+  ARTE.cache[oc.id] = d;
+  return {d, refs};
+}
+async function arteGuardar(silencioso){
+  if(!ARTE.d || !ARTE.ocId) return;
+  clearTimeout(ARTE.timer); ARTE.guardando = true; arteEstadoGuardado('guardando');
+  try{
+    await sb.upsert('configuracion', {clave:'arte_oc_'+ARTE.ocId, valor: JSON.stringify(ARTE.d), tipo:'json'}, 'clave');
+    ARTE.dirty = false; arteEstadoGuardado('ok');
+  }catch(e){ arteEstadoGuardado('error'); if(!silencioso && typeof toast==='function') toast('No se pudo guardar el expediente: '+e.message,'er'); throw e; }
+  finally{ ARTE.guardando = false; }
+}
+function arteMarcarCambio(){
+  ARTE.dirty = true; arteEstadoGuardado('pendiente');
+  clearTimeout(ARTE.timer);
+  ARTE.timer = setTimeout(()=>{ arteGuardar(true).catch(()=>{}); }, 1200);
+  arteActualizarProgreso();
+}
+function arteEstadoGuardado(st){
+  const el = document.getElementById('ea-save'); if(!el) return;
+  const m = {pendiente:['✏️ Cambios sin guardar','var(--mu)'], guardando:['⏳ Guardando…','var(--mu)'], ok:['✓ Borrador guardado','var(--gr)'], error:['⚠ Sin conexión, reintenta','var(--rd)']}[st] || ['',''];
+  el.textContent = m[0]; el.style.color = m[1];
+}
+function arteLog(accion, msg){
+  ARTE.d.log = ARTE.d.log || [];
+  ARTE.d.log.push({t:new Date().toISOString(), quien:arteQuien(), etapa: ARTE.tpl ? ARTE.tpl.id : '', accion, msg: msg||''});
+}
+
+// ── setters llamados desde los campos ──
+function arteRef(i){ return ARTE.refs[i]; }
+function arteIt(i){ return ARTE.d.items[ARTE.refs[i]]; }
+function arteSetPath(obj, path, val){ const p = path.split('.'); let o = obj; for(let i=0;i<p.length-1;i++){ o = (o[p[i]] = o[p[i]] || {}); } o[p[p.length-1]] = val; }
+function arteGetPath(obj, path){ return path.split('.').reduce((o,k)=> o==null?undefined:o[k], obj); }
+function arteSet(i, path, val){ arteSetPath(arteIt(i), path, val); arteMarcarCambio(); if(path==='ean' || path==='ean_pendiente') arteRefrescarEan(i); if(path.startsWith('preprensa.leido')) arteRefrescarLectura(i); }
+function arteSetG(path, val){ arteSetPath(ARTE.d, path, val); arteMarcarCambio(); if(path.startsWith('envio.') || path.startsWith('reimpresion.')) arteRefrescarMensaje(); }
+function arteToggle(i, path, valor, el){
+  const arr = arteGetPath(arteIt(i), path) || [];
+  const k = arr.indexOf(valor); if(k>=0) arr.splice(k,1); else arr.push(valor);
+  arteSetPath(arteIt(i), path, arr); if(el) el.classList.toggle('on', k<0);
+  arteMarcarCambio();
+}
+function arteCheck(i, path, el){ arteSetPath(arteIt(i), path, !!el.checked); const row = el.closest('.arte-chk'); if(row) row.classList.toggle('ok', !!el.checked); arteMarcarCambio(); }
+function arteModo(i, modo){ arteIt(i).modo = modo; arteMarcarCambio(); arteRepintarItem(i); }
+function arteCopiarATodos(i, campo){
+  const src = arteIt(i); let n = 0;
+  ARTE.refs.forEach((r,j)=>{ if(j===i) return; const it = ARTE.d.items[r]; if(campo!=='fecha' && it.modo==='reimp') return; it[campo] = JSON.parse(JSON.stringify(src[campo])); n++; });
+  arteMarcarCambio(); ARTE.refs.forEach((_,j)=>{ if(j!==i) arteRepintarItem(j); });
+  if(typeof toast==='function') toast(n ? 'Copiado a '+n+' referencia(s)' : 'No hay otras referencias con arte para copiar','ok');
+}
+function arteToggleCard(i){ const c = document.getElementById('arte-card-'+i); if(c) c.classList.toggle('abierta'); }
+function arteMarcarTodo(i, grupo, lista){
+  const it = arteIt(i); const obj = arteGetPath(it, grupo) || {};
+  const todos = lista.every(c=>obj[c.k]);
+  lista.forEach(c=> obj[c.k] = !todos);
+  arteSetPath(it, grupo, obj); arteMarcarCambio(); arteRepintarItem(i);
+}
+
+// ── adjuntos generales ──
+async function arteSubirAdjuntos(input){
+  const tipo = document.getElementById('arte-adj-tipo')?.value || 'otro';
+  const files = [...(input.files||[])]; if(!files.length) return;
+  const zona = document.getElementById('arte-adj-lista');
+  if(zona) zona.insertAdjacentHTML('beforeend', `<div class="arte-adj subiendo" id="arte-adj-up">⏳ Subiendo ${files.length} archivo(s)…</div>`);
+  for(const f of files){
+    try{
+      const url = await ocSubirAdjunto(f);
+      ARTE.d.general.adjuntos.push({nombre:f.name, url, tipo, etapa: ARTE.tpl.id, por: arteQuien(), t: new Date().toISOString()});
+    }catch(e){ if(typeof toast==='function') toast('Error subiendo '+f.name+': '+e.message,'er'); }
+  }
+  input.value = '';
+  arteLog('adjunto', files.length+' archivo(s) · '+(ARTE_TIPOS_ADJ[tipo]||tipo));
+  arteMarcarCambio(); arteRepintarAdjuntos();
+}
+function arteAgregarLink(){
+  const inp = document.getElementById('arte-adj-link'); const url = (inp?.value||'').trim();
+  if(!arteUrlValida(url)){ if(typeof toast==='function') toast('Pega un link válido (https://…)','wa'); return; }
+  const tipo = document.getElementById('arte-adj-tipo')?.value || 'otro';
+  ARTE.d.general.adjuntos.push({nombre:url.replace(/^https?:\/\//,'').slice(0,50), url, tipo, etapa: ARTE.tpl.id, por: arteQuien(), t:new Date().toISOString(), link:true});
+  inp.value = ''; arteMarcarCambio(); arteRepintarAdjuntos();
+}
+function arteQuitarAdjunto(k){
+  if(!confirm('¿Quitar este adjunto del expediente?')) return;
+  ARTE.d.general.adjuntos.splice(k,1); arteMarcarCambio(); arteRepintarAdjuntos();
+}
+function arteHtmlAdjuntos(editable, filtroTipos){
+  const lista = (ARTE.d.general.adjuntos||[]).map((a,k)=>({...a,k})).filter(a=>!filtroTipos || filtroTipos.includes(a.tipo));
+  return lista.length ? lista.map(a=>`<div class="arte-adj">
+      <span class="arte-adj-t">${ARTE_TIPOS_ADJ[a.tipo]||'📎'}</span>
+      <a href="${arteEsc(a.url)}" target="_blank" rel="noopener">${arteEsc(a.nombre)}</a>
+      <span class="arte-mu">${arteEsc(a.por||'')}</span>
+      ${editable?`<span class="arte-x" title="Quitar" onclick="arteQuitarAdjunto(${a.k})">✕</span>`:''}
+    </div>`).join('') : `<div class="arte-mu" style="padding:4px 0;">Sin adjuntos todavía.</div>`;
+}
+function arteRepintarAdjuntos(){ const z = document.getElementById('arte-adj-lista'); if(z) z.innerHTML = arteHtmlAdjuntos(ARTE.editable); arteActualizarProgreso(); }
+function arteHtmlZonaAdjuntos(titulo, ayuda, tipoDefecto){
+  return `<div class="arte-sec">
+    <div class="arte-sec-h">${titulo}</div>
+    ${ayuda?`<div class="arte-mu" style="margin-bottom:6px;">${ayuda}</div>`:''}
+    <div id="arte-adj-lista">${arteHtmlAdjuntos(ARTE.editable)}</div>
+    ${ARTE.editable?`<div class="arte-adj-add">
+      <select class="inp" id="arte-adj-tipo">${Object.keys(ARTE_TIPOS_ADJ).map(k=>`<option value="${k}" ${k===tipoDefecto?'selected':''}>${ARTE_TIPOS_ADJ[k]}</option>`).join('')}</select>
+      <label class="btn btn-bl btn-sm" style="cursor:pointer;">⬆ Subir archivos<input type="file" multiple accept="image/*,.pdf,.ai,.zip,.cdr,.psd" style="display:none;" onchange="arteSubirAdjuntos(this)"></label>
+      <input class="inp" id="arte-adj-link" placeholder="…o pega un link (Drive, WeTransfer)" onkeydown="if(event.key==='Enter'){event.preventDefault();arteAgregarLink();}">
+      <button class="btn btn-g btn-sm" onclick="arteAgregarLink()">+ Link</button>
+    </div>`:''}
+  </div>`;
+}
+
+// ── estructura visual ──
+function arteHtmlStepper(){
+  const etapas = REABAST.ocEtapas[ARTE.ocId]||[];
+  const camino = etapas.some(e=>e.etapa_id==='arte_solicitud_calidad') ? ARTE_LARGO : ARTE_CORTO;
+  return `<div class="arte-stepper">${camino.map((id,k)=>{
+    const e = etapas.find(x=>x.etapa_id===id); const st = e ? e.estado : 'pendiente';
+    const actual = ARTE.tpl && ARTE.tpl.id===id;
+    const ico = st==='completada' ? '✓' : (st==='en_curso' ? '●' : (k+1));
+    return `<div class="arte-step ${st} ${actual?'actual':''}" title="${arteEsc((OC_ETAPAS_POR_ID[id]||{}).nombre||id)}">
+      <div class="arte-step-c">${ico}</div><div class="arte-step-l">${ARTE_PASO_CORTO[id]}</div></div>`;
+  }).join('<div class="arte-step-line"></div>')}</div>`;
+}
+function arteHtmlCabecera(){
+  const e = ARTE.etapa; const dt = e.fecha_inicio ? (Date.now()-new Date(e.fecha_inicio))/86400000 : 0;
+  const sem = e.estado==='en_curso' ? ocSemaforo(dt, e.dias_esperado) : null;
+  const rondasProv = (ARTE.d.proveedor.rondas||[]).length;
+  const devoluciones = (ARTE.d.log||[]).filter(l=>l.accion==='devolucion').length;
+  return `${arteHtmlStepper()}
+    <div class="arte-meta">
+      <span class="arte-btn-guia" onclick="arteToggleGuia(true)">📘 Guía del paso</span>
+      <span class="bdg bdg-gris">🏢 ${arteEsc(ARTE.tpl.area)}</span>
+      ${sem?`<span class="bdg ${sem.cls}">⏱ ${reabastFmtDuracion(dt)} de ${reabastFmtDuracion(e.dias_esperado)}</span>`:''}
+      ${ARTE.d.general.fecha_limite?`<span class="bdg bdg-azul">📅 Límite ${arteEsc(ARTE.d.general.fecha_limite)}</span>`:''}
+      ${ARTE.d.general.prioridad==='urgente'?'<span class="bdg bdg-rojo">🔥 Urgente</span>':''}
+      ${ARTE.d.diseno.version>1?`<span class="bdg bdg-or2">Arte v${ARTE.d.diseno.version}</span>`:''}
+      ${devoluciones?`<span class="bdg bdg-amarillo">↩ ${devoluciones} devolución(es)</span>`:''}
+      ${rondasProv?`<span class="bdg bdg-amarillo">✏️ ${rondasProv} ronda(s) de cambios</span>`:''}
+      ${!ARTE.editable?'<span class="bdg bdg-gris">👁 Solo lectura</span>':''}
+    </div>
+    ${arteHtmlUltimaDevolucion()}
+    <div class="arte-progreso"><div class="arte-progreso-bar"><div id="arte-prog-fill"></div></div><div id="arte-prog-txt" class="arte-mu"></div></div>
+    <div id="arte-faltantes" class="arte-faltantes"></div>`;
+}
+function arteHtmlUltimaDevolucion(){
+  const log = ARTE.d.log||[];
+  const ult = [...log].reverse().find(l=>l.accion==='devolucion');
+  if(!ult) return '';
+  // solo mostrarla si la devolución apunta a esta etapa y no se ha completado otra vez después
+  const idxUlt = log.lastIndexOf(ult);
+  const completadaDespues = log.slice(idxUlt+1).some(l=>l.accion==='completada' && l.etapa===ARTE.tpl.id);
+  if(ult.destino!==ARTE.tpl.id || completadaDespues) return '';
+  return `<div class="arte-alerta">↩ <strong>Devuelta por ${arteEsc(ult.quien)}</strong> (${arteFmtFecha(ult.t)}): ${arteEsc(ult.msg)}</div>`;
+}
+function arteHtmlHistorial(){
+  const log = (ARTE.d.log||[]).slice().reverse();
+  if(!log.length) return '';
+  const ico = {completada:'✅', devolucion:'↩', adjunto:'📎', cambios:'✏️', preprensa_error:'⚠', guardado:'💾', envio:'📤'};
+  return `<details class="arte-hist"><summary>🕘 Historial del arte (${log.length})</summary>
+    ${log.map(l=>`<div class="arte-hist-r"><span>${ico[l.accion]||'•'}</span><div><strong>${arteEsc(ARTE_PASO_CORTO[l.etapa]||l.etapa||'')}</strong> · ${arteEsc(l.msg||l.accion)}<div class="arte-mu">${arteEsc(l.quien)} · ${arteFmtFecha(l.t)}</div></div></div>`).join('')}
+  </details>`;
+}
+function arteHtmlItemTitulo(i, badgeHtml){
+  const ref = arteRef(i), it = arteIt(i);
+  const desc = arteDescRef(ref);
+  const modoTxt = {nuevo:'Arte nuevo', reimp:'Reimpresión sin cambios', reimp_cambios:'Reimpresión con cambios'}[it.modo];
+  return `<div class="arte-card-h" onclick="arteToggleCard(${i})">
+      <div style="min-width:0;flex:1;">
+        <div><span class="arte-ref">${arteEsc(ref)}</span> <span class="bdg ${it.modo==='nuevo'?'bdg-azul':'bdg-gris'}" style="font-size:9px;">${modoTxt}</span>${it._nuevo?' <span class="bdg bdg-or2" style="font-size:9px;">SKU nuevo</span>':''}</div>
+        <div class="arte-mu arte-desc">${arteEsc(desc||'—')} · ${reabastFmtN(it._cant)} und${it._lotes&&it._lotes.length?' · lote '+arteEsc(it._lotes.join(', ')):''}</div>
+      </div>
+      <div class="arte-card-st" id="arte-st-${i}">${badgeHtml||''}</div>
+      <span class="arte-chev">▾</span>
+    </div>`;
+}
+function arteHtmlResumenBrief(it, ref){
+  const tec = ARTE_TEC.filter(t=>it.tecnicos && it.tecnicos[t.k]).map(t=>`<span class="arte-kv"><em>${t.l}</em>${arteEsc(it.tecnicos[t.k])}</span>`).join('');
+  const ficha = arteFichaCatalogo(ref);
+  return `<div class="arte-brief">
+    ${it.modo!=='nuevo'?`<div class="arte-mu">${it.modo==='reimp'?'Reimpresión del arte actual, sin cambios.':'Reimpresión con cambios: <strong>'+arteEsc(it.notas||'—')+'</strong>'}</div>`:''}
+    ${(it.piezas||[]).length?`<div><em class="arte-lbl">Piezas:</em> ${it.piezas.map(p=>`<span class="bdg bdg-gris">${arteEsc(p)}</span>`).join(' ')}</div>`:''}
+    ${tec?`<div class="arte-kvs">${tec}</div>`:''}
+    <div><em class="arte-lbl">EAN:</em> ${it.ean?`<code>${arteEsc(it.ean)}</code> ${arteEanValido(it.ean)?'<span style="color:var(--gr);">✓ válido</span>':'<span style="color:var(--rd);">✗ dígito de control no cuadra</span>'}`:(it.ean_pendiente?'<span style="color:var(--or);">pendiente de asignar</span>':'—')}</div>
+    ${(it.certs||[]).length?`<div><em class="arte-lbl">Sellos:</em> ${it.certs.map(c=>`<span class="bdg bdg-verde">${arteEsc(c)}</span>`).join(' ')}</div>`:''}
+    ${it.medidas?`<div><em class="arte-lbl">Medidas:</em> ${arteEsc(it.medidas)}</div>`:''}
+    ${it.arte_base?`<div><em class="arte-lbl">Arte base:</em> ${arteEsc(it.arte_base)}</div>`:''}
+    ${it.modo==='nuevo' && it.notas?`<div><em class="arte-lbl">Notas:</em> ${arteEsc(it.notas)}</div>`:''}
+    ${ficha?`<div><span class="arte-link" onclick="ftAbrirFicha('${arteEsc(ref)}')">📄 Ver ficha técnica del catálogo</span></div>`:''}
+  </div>`;
+}
+
+// ── etapa 1: Solicitud de arte a Calidad (Compras) ──
+function arteItemFaltantesSolicitud(it, ref){
+  const f = [];
+  if(it.modo==='reimp') return f;
+  if(!(it.piezas||[]).length) f.push('piezas');
+  if(it.modo==='reimp_cambios'){ if(!String(it.notas||'').trim()) f.push('qué cambia'); return f; }
+  ARTE_TEC.filter(t=>t.req).forEach(t=>{ if(!String((it.tecnicos||{})[t.k]||'').trim()) f.push(t.l.toLowerCase()); });
+  if(!it.ean_pendiente && !arteEanValido(it.ean)) f.push('EAN válido');
+  if(!String(it.medidas||'').trim() && !(ARTE.d.general.adjuntos||[]).some(a=>a.tipo==='troquel')) f.push('medidas o troquel');
+  return f;
+}
+function arteHtmlItemSolicitud(i){
+  const ref = arteRef(i), it = arteIt(i), ed = ARTE.editable ? '' : 'disabled';
+  const dis = !ARTE.editable;
+  const tec = ARTE_TEC.map(t=>`<div class="fg"><label class="fl">${t.l}${t.req?' *':''}</label>
+      <input class="inp" ${ed} value="${arteEsc((it.tecnicos||{})[t.k]||'')}" placeholder="${t.ph}" oninput="arteSet(${i},'tecnicos.${t.k}',this.value)"></div>`).join('');
+  return `${arteHtmlItemTitulo(i)}
+    <div class="arte-card-b">
+      <div class="arte-seg">
+        ${[['nuevo','🎨 Arte nuevo'],['reimp_cambios','✏️ Reimpresión con cambios'],['reimp','🔁 Reimpresión sin cambios']].map(([m,l])=>`<button class="${it.modo===m?'on':''}" ${ed} onclick="arteModo(${i},'${m}')">${l}</button>`).join('')}
+      </div>
+      ${it.modo==='reimp' ? `<div class="arte-mu" style="padding:6px 0;">Se reimprime el arte vigente de esta referencia. No requiere más datos.</div>` : `
+      <div class="arte-sub">Piezas a diseñar * ${!dis?`<span class="arte-link" onclick="arteCopiarATodos(${i},'piezas')">copiar a todas</span>`:''}</div>
+      <div class="arte-chips">${ARTE_PIEZAS.map(p=>`<span class="chip ${(it.piezas||[]).includes(p)?'on':''}" ${dis?'':`onclick="arteToggle(${i},'piezas','${p}',this)"`}>${p}</span>`).join('')}</div>
+      ${it.modo==='reimp_cambios' ? `
+        <div class="fg"><label class="fl">¿Qué cambia respecto al arte actual? *</label>
+          <textarea class="inp" ${ed} placeholder="Ej: nueva potencia 12W → 15W, actualizar código de barras, cambiar dirección del importador" oninput="arteSet(${i},'notas',this.value)">${arteEsc(it.notas||'')}</textarea></div>` : `
+      <div class="arte-sub">Datos técnicos que van impresos <span class="arte-mu">(se prellenan desde la ficha y la descripción)</span>
+        ${!dis?`<span class="arte-link" onclick="arteResugerir(${i})">↻ volver a sugerir</span>`:''}</div>
+      <div class="arte-grid">${tec}</div>
+      <div class="arte-grid2">
+        <div class="fg"><label class="fl">Código de barras EAN-13 *</label>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input class="inp" ${ed} inputmode="numeric" maxlength="14" value="${arteEsc(it.ean||'')}" placeholder="7701234567890" oninput="this.value=this.value.replace(/\\D/g,'');arteSet(${i},'ean',this.value)" ${it.ean_pendiente?'style="opacity:.5"':''}>
+            <span id="arte-ean-${i}" class="arte-ean-st"></span>
+          </div>
+          <label class="arte-inline"><input type="checkbox" ${ed} ${it.ean_pendiente?'checked':''} onchange="arteSet(${i},'ean_pendiente',this.checked)"> Aún no está asignado (Calidad lo gestiona)</label>
+        </div>
+        <div class="fg"><label class="fl">Medidas del empaque (mm) *</label>
+          <input class="inp" ${ed} value="${arteEsc(it.medidas||'')}" placeholder="Largo × ancho × alto, ej. 60×60×120" oninput="arteSet(${i},'medidas',this.value)">
+          <div class="arte-mu" style="margin-top:3px;">O sube el troquel del proveedor abajo.</div></div>
+      </div>
+      <div class="arte-sub">Sellos y certificaciones sugeridos ${!dis?`<span class="arte-link" onclick="arteCopiarATodos(${i},'certs')">copiar a todas</span>`:''} <span class="arte-mu">(Calidad confirma)</span></div>
+      <div class="arte-chips">${ARTE_CERTS.map(p=>`<span class="chip ${(it.certs||[]).includes(p)?'on':''}" ${dis?'':`onclick="arteToggle(${i},'certs','${p}',this)"`}>${p}</span>`).join('')}</div>
+      <div class="arte-grid2">
+        <div class="fg"><label class="fl">Arte base (SKU parecido para reutilizar)</label>
+          <input class="inp" ${ed} list="arte-dl-refs" value="${arteEsc(it.arte_base||'')}" placeholder="Referencia existente" oninput="arteSet(${i},'arte_base',this.value)"></div>
+        <div class="fg"><label class="fl">Notas para Calidad / Diseño</label>
+          <input class="inp" ${ed} value="${arteEsc(it.notas||'')}" placeholder="Ej: mismo estilo de la línea Essential" oninput="arteSet(${i},'notas',this.value)"></div>
+      </div>`}`}
+    </div>`;
+}
+function arteResugerir(i){
+  const it = arteIt(i); const sug = arteSugerirTecnicos(arteRef(i));
+  let n = 0; Object.keys(sug).forEach(k=>{ if(!String(it.tecnicos[k]||'').trim()){ it.tecnicos[k] = sug[k]; n++; } });
+  arteMarcarCambio(); arteRepintarItem(i);
+  if(typeof toast==='function') toast(n ? n+' dato(s) completado(s) automáticamente' : 'No encontré más datos en la ficha ni en la descripción','ok');
+}
+function arteHtmlGeneralSolicitud(){
+  const ed = ARTE.editable ? '' : 'disabled'; const g = ARTE.d.general;
+  return `<div class="arte-sec">
+    <div class="arte-sec-h">Datos generales</div>
+    <div class="arte-grid2">
+      <div class="fg"><label class="fl">Fecha límite para tener el arte *</label>
+        <input class="inp" type="date" ${ed} min="${arteHoy()}" value="${arteEsc(g.fecha_limite||'')}" onchange="arteSetG('general.fecha_limite',this.value);arteSugerirFecha()"></div>
+      <div class="fg"><label class="fl">Prioridad</label>
+        <div class="arte-seg">${[['normal','Normal'],['urgente','🔥 Urgente']].map(([v,l])=>`<button class="${g.prioridad===v?'on':''}" ${ed} onclick="arteSetG('general.prioridad','${v}');this.parentNode.querySelectorAll('button').forEach(b=>b.classList.remove('on'));this.classList.add('on')">${l}</button>`).join('')}</div></div>
+    </div>
+    <div id="arte-fecha-hint" class="arte-mu"></div>
+  </div>`;
+}
+function arteSugerirFecha(){
+  const el = document.getElementById('arte-fecha-hint'); if(!el) return;
+  const dias = ARTE_LARGO.slice(1,5).reduce((a,id)=>a+Number((OC_ETAPAS_POR_ID[id]||{}).dias||0),0);
+  const minimo = new Date(Date.now()+dias*86400000).toISOString().slice(0,10);
+  const f = ARTE.d.general.fecha_limite;
+  el.innerHTML = f && f < minimo ? `<span style="color:var(--or);">⚠ Con los tiempos estándar (Calidad → Diseño → proveedor ≈ ${dias} días) lo realista es a partir del <strong>${minimo}</strong>. Si es urgente, márcala como urgente.</span>`
+    : `Tiempo estándar de Calidad → Diseño → aprobación del proveedor: ≈ ${dias} días (fecha realista: ${minimo}).`;
+}
+
+// ── etapa 2: Revisión de Calidad ──
+function arteItemFaltantesCalidad(it){
+  if(it.modo==='reimp') return (it.calidad.checks||{}).sin_cambios ? [] : ['confirmar que no hay cambios'];
+  return ARTE_CHK_CALIDAD.filter(c=>!(it.calidad.checks||{})[c.k]).map(c=>c.l.toLowerCase());
+}
+function arteHtmlItemCalidad(i){
+  const ref = arteRef(i), it = arteIt(i), ed = ARTE.editable ? '' : 'disabled';
+  const chks = it.modo==='reimp' ? [{k:'sin_cambios', l:'Confirmo que el arte vigente sigue cumpliendo (sin cambios)'}] : ARTE_CHK_CALIDAD;
+  return `${arteHtmlItemTitulo(i)}
+    <div class="arte-card-b">
+      ${arteHtmlResumenBrief(it, ref)}
+      <div class="arte-sub">Lista de chequeo ${ARTE.editable && chks.length>1?`<span class="arte-link" onclick="arteMarcarTodo(${i},'calidad.checks',${arteEsc(JSON.stringify(chks))})">marcar / desmarcar todo</span>`:''}</div>
+      ${chks.map(c=>`<label class="arte-chk ${(it.calidad.checks||{})[c.k]?'ok':''}"><input type="checkbox" ${ed} ${(it.calidad.checks||{})[c.k]?'checked':''} onchange="arteCheck(${i},'calidad.checks.${c.k}',this)"> ${c.l}</label>`).join('')}
+      ${it.modo!=='reimp'?`
+      <div class="arte-sub">Sellos que deben ir (definitivo)</div>
+      <div class="arte-chips">${ARTE_CERTS.map(p=>`<span class="chip ${(it.certs||[]).includes(p)?'on':''}" ${ARTE.editable?`onclick="arteToggle(${i},'certs','${p}',this)"`:''}>${p}</span>`).join('')}</div>
+      <div class="arte-grid2">
+        <div class="fg"><label class="fl">EAN confirmado</label>
+          <div style="display:flex;gap:6px;align-items:center;"><input class="inp" ${ed} inputmode="numeric" maxlength="14" value="${arteEsc(it.ean||'')}" oninput="this.value=this.value.replace(/\\D/g,'');arteSet(${i},'ean',this.value)"><span id="arte-ean-${i}" class="arte-ean-st"></span></div></div>
+        <div class="fg"><label class="fl">Observaciones para Diseño</label>
+          <input class="inp" ${ed} value="${arteEsc(it.calidad.obs||'')}" placeholder="Ej: usar pictograma de no desechar con basura común" oninput="arteSet(${i},'calidad.obs',this.value)"></div>
+      </div>
+      <div class="fg"><label class="fl">Textos legales y advertencias que debe llevar el arte</label>
+        <textarea class="inp" ${ed} placeholder="Ej: Importado por ILUMAX S.A.S. NIT … · Hecho en China · No mirar directamente la fuente de luz · Apagar antes de instalar" oninput="arteSet(${i},'calidad.legales',this.value)">${arteEsc(it.calidad.legales||'')}</textarea>
+        ${ARTE.editable?`<span class="arte-link" onclick="arteTextosTipo(${i})">✨ Insertar textos típicos</span>`:''}</div>`:''}
+    </div>`;
+}
+function arteTextosTipo(i){
+  const it = arteIt(i); const t = it.tecnicos||{};
+  const base = [
+    'Importado y distribuido por ILUMAX S.A.S.',
+    'País de origen: China',
+    (t.potencia||t.voltaje) ? `Especificaciones: ${[t.potencia,t.voltaje,t.base,t.cct,t.lumenes].filter(Boolean).join(' · ')}` : '',
+    'Advertencia: desconecte la energía antes de instalar. No mirar directamente la fuente de luz.',
+    'No desechar con la basura común; llévelo a un punto de recolección de residuos eléctricos.'
+  ].filter(Boolean).join('\n');
+  it.calidad.legales = (it.calidad.legales ? it.calidad.legales+'\n' : '') + base;
+  arteMarcarCambio(); arteRepintarItem(i);
+}
+
+// ── etapa 3: Diseño elabora el arte ──
+function arteItemFaltantesDiseno(it){
+  if(it.modo==='reimp') return [];
+  const f = [];
+  if(!arteUrlValida(it.diseno.link) && !arteUrlValida(ARTE.d.diseno.link_general)) f.push('link del arte');
+  if(!it.diseno.listo) f.push('marcar como listo');
+  return f;
+}
+function arteHtmlItemDiseno(i){
+  const ref = arteRef(i), it = arteIt(i), ed = ARTE.editable ? '' : 'disabled';
+  if(it.modo==='reimp') return `${arteHtmlItemTitulo(i,'<span class="bdg bdg-gris">no aplica</span>')}<div class="arte-card-b"><div class="arte-mu">Reimpresión sin cambios — Diseño no interviene en esta referencia.</div></div>`;
+  const cambiosProv = [...(ARTE.d.proveedor.rondas||[])].reverse().find(r=>r.items && r.items[ref]);
+  return `${arteHtmlItemTitulo(i)}
+    <div class="arte-card-b">
+      ${cambiosProv?`<div class="arte-alerta">✏️ <strong>El proveedor pidió cambios:</strong> ${arteEsc(cambiosProv.items[ref])}</div>`:''}
+      ${arteHtmlResumenBrief(it, ref)}
+      ${(it.calidad.legales||it.calidad.obs)?`<div class="arte-brief" style="border-left-color:var(--gr);">
+        <div class="arte-lbl">Indicaciones de Calidad</div>
+        ${it.calidad.legales?`<div style="white-space:pre-line;">${arteEsc(it.calidad.legales)}</div>`:''}
+        ${it.calidad.obs?`<div class="arte-mu" style="margin-top:4px;">${arteEsc(it.calidad.obs)}</div>`:''}
+        ${ARTE.editable?`<span class="arte-link" onclick="arteCopiarTexto(${arteEsc(JSON.stringify(it.calidad.legales||''))})">📋 copiar textos</span>`:''}
+      </div>`:''}
+      <div class="arte-grid2">
+        <div class="fg"><label class="fl">Link del arte de esta referencia</label>
+          <input class="inp" ${ed} value="${arteEsc(it.diseno.link||'')}" placeholder="https://drive.google.com/…" oninput="arteSet(${i},'diseno.link',this.value)"></div>
+        <div class="fg" style="display:flex;align-items:flex-end;">
+          <label class="arte-chk ${it.diseno.listo?'ok':''}" style="width:100%;"><input type="checkbox" ${ed} ${it.diseno.listo?'checked':''} onchange="arteCheck(${i},'diseno.listo',this)"> Arte terminado (v${ARTE.d.diseno.version})</label></div>
+      </div>
+    </div>`;
+}
+function arteCopiarTexto(t){
+  const ok = ()=>{ if(typeof toast==='function') toast('Copiado al portapapeles','ok'); };
+  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(ok).catch(()=>arteCopiarFallback(t,ok));
+  else arteCopiarFallback(t,ok);
+}
+function arteCopiarFallback(t, ok){ const ta = document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); ok(); }catch(e){} ta.remove(); }
+
+// ── etapas 4 y reimpresión: mensaje para el proveedor ──
+function arteMensajeProveedor(tipo){
+  const idioma = (tipo==='reimp' ? ARTE.d.reimpresion.idioma : ARTE.d.envio.idioma) || 'en';
+  const en = idioma==='en';
+  const lineas = ARTE.refs.map(ref=>{
+    const it = ARTE.d.items[ref];
+    if(tipo==='reimp'){
+      const cambio = it.reimp.cambios===true;
+      return en ? `- ${ref}: ${cambio?'reprint WITH changes: '+(it.reimp.detalle||''):'reprint current artwork, no changes'}`
+                : `- ${ref}: ${cambio?'reimpresión CON cambios: '+(it.reimp.detalle||''):'reimpresión del arte actual, sin cambios'}`;
+    }
+    if(it.modo==='reimp') return en ? `- ${ref}: reprint current artwork, no changes` : `- ${ref}: reimpresión del arte actual, sin cambios`;
+    const link = arteUrlValida(it.diseno.link) ? it.diseno.link : (ARTE.d.diseno.link_general||'');
+    const piezas = (it.piezas||[]).map(p=> en ? (ARTE_PIEZAS_EN[p]||p) : p).join(', ');
+    return en ? `- ${ref}${piezas?' ('+piezas+')':''}: ${link||'[link]'}${it.ean?' · EAN '+it.ean:''}`
+              : `- ${ref}${piezas?' ('+piezas+')':''}: ${link||'[link]'}${it.ean?' · EAN '+it.ean:''}`;
+  }).join('\n');
+  const oc = ARTE.d.numero_oc;
+  if(tipo==='reimp'){
+    return en ? `Dear supplier,\n\nFor our purchase order ${oc}, please prepare the packaging/labels as follows:\n${lineas}\n\nPlease send us the pre-press (final proof) for approval before printing.\n\nBest regards,\n${arteQuien()} – ILUMAX`
+              : `Estimado proveedor,\n\nPara la orden de compra ${oc}, por favor preparar empaques/etiquetas así:\n${lineas}\n\nPor favor enviar la preprensa (prueba final) para aprobación antes de imprimir.\n\nSaludos,\n${arteQuien()} – ILUMAX`;
+  }
+  return en ? `Dear supplier,\n\nPlease find below the final artwork (v${ARTE.d.diseno.version}) for purchase order ${oc}:\n${lineas}\n\nPlease review and confirm approval or let us know any technical comment (dieline, colors, printing). After approval, send us the pre-press proof before mass printing.\n\nBest regards,\n${arteQuien()} – ILUMAX`
+            : `Estimado proveedor,\n\nAdjuntamos los artes finales (v${ARTE.d.diseno.version}) de la orden de compra ${oc}:\n${lineas}\n\nPor favor revisar y confirmar aprobación, o indicarnos cualquier comentario técnico (troquel, colores, impresión). Luego de aprobar, enviar la preprensa antes de imprimir.\n\nSaludos,\n${arteQuien()} – ILUMAX`;
+}
+function arteRefrescarMensaje(){
+  const ta = document.getElementById('arte-msg'); if(!ta || ta.dataset.editado==='1') return;
+  ta.value = arteMensajeProveedor(ta.dataset.tipo);
+}
+function arteHtmlEnvio(tipo){
+  const cfg = tipo==='reimp' ? ARTE.d.reimpresion : ARTE.d.envio; const base = tipo==='reimp' ? 'reimpresion' : 'envio';
+  const ed = ARTE.editable ? '' : 'disabled';
+  const prov = (REABAST.proveedores||[]).find(p=>p.nombre===ARTE.oc.proveedor) || {};
+  const correo = prov.email || prov.correo || '';
+  return `<div class="arte-sec">
+    <div class="arte-sec-h">Mensaje para el proveedor ${ARTE.oc.proveedor?'· '+arteEsc(ARTE.oc.proveedor):''}</div>
+    <div class="arte-grid2">
+      <div class="fg"><label class="fl">Medio de envío *</label>
+        <div class="arte-seg">${['Correo','WeChat','WhatsApp','Otro'].map(m=>`<button class="${cfg.medio===m?'on':''}" ${ed} onclick="arteSetG('${base}.medio','${m}');this.parentNode.querySelectorAll('button').forEach(b=>b.classList.remove('on'));this.classList.add('on')">${m}</button>`).join('')}</div></div>
+      <div class="fg"><label class="fl">Idioma</label>
+        <div class="arte-seg">${[['en','English'],['es','Español']].map(([v,l])=>`<button class="${(cfg.idioma||'en')===v?'on':''}" ${ed} onclick="arteSetG('${base}.idioma','${v}');this.parentNode.querySelectorAll('button').forEach(b=>b.classList.remove('on'));this.classList.add('on');document.getElementById('arte-msg').dataset.editado='';arteRefrescarMensaje()">${l}</button>`).join('')}</div></div>
+    </div>
+    <div class="fg"><label class="fl">Contacto / correo</label><input class="inp" ${ed} value="${arteEsc(cfg.contacto||correo)}" placeholder="correo o nombre del contacto" oninput="arteSetG('${base}.contacto',this.value)"></div>
+    <textarea class="inp arte-msg" id="arte-msg" data-tipo="${tipo}" rows="9" oninput="this.dataset.editado='1'">${arteEsc(arteMensajeProveedor(tipo))}</textarea>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
+      <button class="btn btn-bl btn-sm" onclick="arteCopiarTexto(document.getElementById('arte-msg').value)">📋 Copiar mensaje</button>
+      <button class="btn btn-g btn-sm" onclick="arteAbrirCorreo('${base}')">✉️ Abrir en correo</button>
+      <button class="btn btn-g btn-sm" onclick="document.getElementById('arte-msg').dataset.editado='';arteRefrescarMensaje()">↻ Regenerar</button>
+    </div>
+  </div>`;
+}
+function arteAbrirCorreo(base){
+  const cfg = ARTE.d[base]; const to = /@/.test(cfg.contacto||'') ? cfg.contacto : '';
+  const asunto = (cfg.idioma==='es' ? 'Artes OC ' : 'Artwork PO ') + ARTE.d.numero_oc;
+  window.open('mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(asunto)+'&body='+encodeURIComponent(document.getElementById('arte-msg').value));
+  if(!cfg.medio){ cfg.medio = 'Correo'; arteMarcarCambio(); }
+}
+
+// ── etapa 5: el proveedor aprueba o pide cambios ──
+function arteHtmlDecision(){
+  const p = ARTE.d.proveedor; const ed = ARTE.editable;
+  return `<div class="arte-sec">
+    <div class="arte-sec-h">¿Qué respondió el proveedor?</div>
+    <div class="arte-decision">
+      <div class="arte-dec ${p.decision==='aprobado'?'on ok':''}" ${ed?`onclick="arteDecidir('aprobado')"`:''}><div class="arte-dec-i">✅</div><strong>Aprobó el arte</strong><div class="arte-mu">Pasa a esperar la preprensa</div></div>
+      <div class="arte-dec ${p.decision==='cambios'?'on warn':''}" ${ed?`onclick="arteDecidir('cambios')"`:''}><div class="arte-dec-i">✏️</div><strong>Pidió cambios</strong><div class="arte-mu">Vuelve a Diseño como v${ARTE.d.diseno.version+1}</div></div>
+    </div>
+    <div id="arte-dec-body">${arteHtmlDecisionBody()}</div>
+  </div>`;
+}
+function arteHtmlDecisionBody(){
+  const p = ARTE.d.proveedor; const ed = ARTE.editable ? '' : 'disabled';
+  if(p.decision==='cambios'){
+    p._cambios = p._cambios || {};
+    return `<div class="arte-mu" style="margin:8px 0 4px;">Escribe el cambio solo en las referencias que lo necesitan:</div>
+      ${ARTE.refs.map((ref,i)=> ARTE.d.items[ref].modo==='reimp' ? '' : `<div class="fg"><label class="fl"><span class="arte-ref">${arteEsc(ref)}</span></label>
+        <input class="inp" ${ed} value="${arteEsc(p._cambios[ref]||'')}" placeholder="Ej: el troquel es 2 mm más alto; cambiar Pantone del logo" oninput="ARTE.d.proveedor._cambios['${arteEsc(ref)}']=this.value;arteMarcarCambio()"></div>`).join('')}
+      ${ARTE.editable?`<button class="btn btn-or" style="width:100%;margin-top:4px;" onclick="arteEnviarCambiosADiseno()">↩ Devolver a Diseño con estos cambios</button>`:''}`;
+  }
+  if(p.decision==='aprobado') return `<div class="arte-mu" style="margin-top:8px;">Adjunta abajo el pantallazo/correo de aprobación como evidencia (opcional) y confirma.</div>`;
+  return '';
+}
+function arteDecidir(v){ ARTE.d.proveedor.decision = v; arteMarcarCambio(); arteRepintarTodo(); }
+async function arteEnviarCambiosADiseno(){
+  const c = ARTE.d.proveedor._cambios || {};
+  const items = {}; Object.keys(c).forEach(r=>{ if(String(c[r]||'').trim()) items[r] = c[r].trim(); });
+  if(!Object.keys(items).length){ if(typeof toast==='function') toast('Escribe qué cambio pidió el proveedor en al menos una referencia','wa'); return; }
+  ARTE.d.proveedor.rondas.push({t:new Date().toISOString(), quien:arteQuien(), items, version: ARTE.d.diseno.version});
+  ARTE.d.diseno.version += 1;
+  Object.keys(items).forEach(r=>{ if(ARTE.d.items[r]) ARTE.d.items[r].diseno.listo = false; });
+  ARTE.d.proveedor.decision = ''; ARTE.d.proveedor._cambios = {};
+  const msg = 'Proveedor pidió cambios → '+Object.keys(items).map(r=>r+': '+items[r]).join(' | ');
+  arteLog('cambios', msg);
+  await arteDevolver('arte_diseno_elaborado', msg);
+}
+
+// ── preprensa (larga y corta) ──
+function arteItemFaltantesPreprensa(it){ return ARTE_CHK_PREPRENSA.filter(c=>!(it.preprensa.checks||{})[c.k]).map(c=>c.c); }
+function arteHtmlItemPreprensa(i){
+  const ref = arteRef(i), it = arteIt(i), ed = ARTE.editable ? '' : 'disabled';
+  return `${arteHtmlItemTitulo(i)}
+    <div class="arte-card-b">
+      ${it.modo!=='reimp' && arteUrlValida(it.diseno.link)?`<div style="margin-bottom:6px;"><a class="arte-link" href="${arteEsc(it.diseno.link)}" target="_blank" rel="noopener">🎨 Abrir arte aprobado (v${ARTE.d.diseno.version}) para comparar</a></div>`:''}
+      <div class="arte-grid2">
+        <div class="fg"><label class="fl">Escanea o digita el código de la preprensa</label>
+          <div style="display:flex;gap:6px;align-items:center;"><input class="inp" ${ed} inputmode="numeric" value="${arteEsc(it.preprensa.leido||'')}" placeholder="${it.ean?'debe ser '+arteEsc(it.ean):'código leído'}" oninput="this.value=this.value.replace(/\\D/g,'');arteSet(${i},'preprensa.leido',this.value)"><span id="arte-lect-${i}" class="arte-ean-st"></span></div></div>
+        <div class="fg"><label class="fl">Observaciones</label><input class="inp" ${ed} value="${arteEsc(it.preprensa.obs||'')}" placeholder="Ej: el azul salió más oscuro" oninput="arteSet(${i},'preprensa.obs',this.value)"></div>
+      </div>
+      <div class="arte-sub">Verificación ${ARTE.editable?`<span class="arte-link" onclick="arteMarcarTodo(${i},'preprensa.checks',${arteEsc(JSON.stringify(ARTE_CHK_PREPRENSA))})">marcar / desmarcar todo</span>`:''}</div>
+      ${ARTE_CHK_PREPRENSA.map(c=>`<label class="arte-chk ${(it.preprensa.checks||{})[c.k]?'ok':''}"><input type="checkbox" ${ed} ${(it.preprensa.checks||{})[c.k]?'checked':''} onchange="arteCheck(${i},'preprensa.checks.${c.k}',this)"> ${c.l}</label>`).join('')}
+    </div>`;
+}
+function arteRegistrarErroresPreprensa(){
+  const errores = ARTE.refs.map(ref=>{ const it = ARTE.d.items[ref]; const f = ARTE_CHK_PREPRENSA.filter(c=>!(it.preprensa.checks||{})[c.k]).map(c=>c.l);
+    return f.length || it.preprensa.obs ? `${ref}: ${[...f.map(x=>'✗ '+x), it.preprensa.obs].filter(Boolean).join('; ')}` : null; }).filter(Boolean);
+  if(!errores.length){ if(typeof toast==='function') toast('No hay errores marcados — todo está verificado','ok'); return; }
+  ARTE.d.preprensa.rondas.push({t:new Date().toISOString(), quien:arteQuien(), errores});
+  arteLog('preprensa_error', 'Preprensa con errores, se pide corrección: '+errores.join(' | '));
+  const msg = `Dear supplier,\n\nWe reviewed the pre-press proof for PO ${ARTE.d.numero_oc} and found the following issues:\n${errores.map(e=>'- '+e).join('\n')}\n\nPlease correct them and send us a new proof before printing.\n\nBest regards,\n${arteQuien()} – ILUMAX`;
+  arteCopiarTexto(msg);
+  arteMarcarCambio(); arteRepintarTodo();
+  if(typeof toast==='function') toast('Errores registrados · mensaje para el proveedor copiado','ok');
+}
+
+// ── reimpresión (camino corto) ──
+function arteItemFaltantesReimp(it){ if(it.reimp.cambios==null) return ['¿tiene cambios?']; if(it.reimp.cambios && !String(it.reimp.detalle||'').trim()) return ['detalle del cambio']; return []; }
+function arteHtmlItemReimp(i){
+  const it = arteIt(i), ed = ARTE.editable ? '' : 'disabled';
+  return `${arteHtmlItemTitulo(i)}
+    <div class="arte-card-b">
+      <div class="arte-seg">
+        <button class="${it.reimp.cambios===false?'on':''}" ${ed} onclick="arteSet(${i},'reimp.cambios',false);arteRepintarItem(${i});arteRefrescarMensaje()">🔁 Sin cambios</button>
+        <button class="${it.reimp.cambios===true?'on':''}" ${ed} onclick="arteSet(${i},'reimp.cambios',true);arteRepintarItem(${i});arteRefrescarMensaje()">✏️ Con cambios menores</button>
+      </div>
+      ${it.reimp.cambios===true?`<div class="fg"><label class="fl">¿Qué cambia? *</label>
+        <input class="inp" ${ed} value="${arteEsc(it.reimp.detalle||'')}" placeholder="Ej: actualizar lote y fecha de fabricación" oninput="arteSet(${i},'reimp.detalle',this.value);arteRefrescarMensaje()">
+        <div class="arte-mu" style="margin-top:3px;">Si el cambio es de datos técnicos, textos legales o código de barras, debería pasar por Calidad y Diseño (márcalo como SKU nuevo en la OC).</div></div>`:''}
+    </div>`;
+}
+
+// ── configuración por etapa ──
+const ARTE_ETAPAS_UI = {
+  arte_solicitud_calidad: {
+    intro:'Arma el brief para Calidad: qué piezas hay que diseñar y los datos que van impresos. Con esto Calidad valida sin tener que devolverse a preguntar.',
+    item: arteHtmlItemSolicitud, faltan: arteItemFaltantesSolicitud,
+    antes: arteHtmlGeneralSolicitud,
+    despues: ()=>arteHtmlZonaAdjuntos('Adjuntos para Calidad y Diseño','Ficha técnica del proveedor, troquel o medidas del empaque, fotos de la muestra.','ficha'),
+    faltanGeneral: ()=>{
+      const f = [];
+      if(!ARTE.d.general.fecha_limite) f.push('Fecha límite');
+      const nuevos = ARTE.refs.filter(r=>ARTE.d.items[r].modo==='nuevo');
+      const conFicha = r=> arteFichaCatalogo(r) || (ARTE.items.find(it=>it.referencia===r)||{}).ficha_tecnica_url;
+      if(nuevos.length && !(ARTE.d.general.adjuntos||[]).some(a=>a.tipo==='ficha') && nuevos.some(r=>!conFicha(r))) f.push('Ficha técnica (adjúntala o regístrala en el catálogo)');
+      return f;
+    },
+    boton:'📨 Enviar solicitud a Calidad'
+  },
+  arte_revision_calidad: {
+    intro:'Revisa el brief de Compras. Marca cada punto, define sellos y textos legales. Si falta información, devuélvelo a Compras diciendo qué falta.',
+    item: arteHtmlItemCalidad, faltan: arteItemFaltantesCalidad,
+    despues: ()=>`<div class="arte-sec"><div class="arte-sec-h">Adjuntos del expediente</div><div id="arte-adj-lista">${arteHtmlAdjuntos(false)}</div></div>`,
+    devolver:{destino:'arte_solicitud_calidad', label:'↩ Devolver a Compras', pide:'¿Qué información falta?', sugerir: ()=>ARTE.refs.map(r=>{ const f = arteItemFaltantesCalidad(ARTE.d.items[r]); return f.length?`${r}: revisar ${f.join(', ')}`:null; }).filter(Boolean).join(' · ')},
+    boton:'✅ Aprobar y pasar a Diseño'
+  },
+  arte_diseno_elaborado: {
+    intro:'Diseña cada referencia con el brief y las indicaciones de Calidad. Pega el link de cada arte (o uno general) y sube una vista previa.',
+    item: arteHtmlItemDiseno, faltan: arteItemFaltantesDiseno,
+    antes: ()=>`<div class="arte-sec"><div class="arte-sec-h">Carpeta general del arte (v${ARTE.d.diseno.version})</div>
+      <input class="inp" ${ARTE.editable?'':'disabled'} value="${arteEsc(ARTE.d.diseno.link_general||'')}" placeholder="https://drive.google.com/… (sirve para todas las referencias)" oninput="arteSetG('diseno.link_general',this.value)"></div>`,
+    despues: ()=>arteHtmlZonaAdjuntos('Adjuntos del expediente','','otro'),
+    devolver:{destino:'arte_revision_calidad', label:'↩ Devolver a Calidad', pide:'¿Qué hay que aclarar?'},
+    archivo:'Vista previa del arte (PDF o imagen) *',
+    boton:'🎨 Arte listo · pasar a Compras'
+  },
+  arte_enviado_proveedor: {
+    intro:'Envía los links del arte al proveedor. El mensaje se arma solo con los links de Diseño; cópialo o ábrelo en tu correo.',
+    item: (i)=>`${arteHtmlItemTitulo(i)}<div class="arte-card-b">${arteHtmlResumenBrief(arteIt(i), arteRef(i))}${arteUrlValida(arteIt(i).diseno.link)?`<a class="arte-link" href="${arteEsc(arteIt(i).diseno.link)}" target="_blank" rel="noopener">🎨 Abrir arte</a>`:''}</div>`,
+    faltan: ()=>[], colapsado:true,
+    antes: ()=>arteHtmlEnvio('nuevo'),
+    faltanGeneral: ()=> ARTE.d.envio.medio ? [] : ['Medio de envío'],
+    devolver:{destino:'arte_diseno_elaborado', label:'↩ Devolver a Diseño', pide:'¿Qué hay que corregir antes de enviarlo?'},
+    boton:'📤 Ya lo envié al proveedor'
+  },
+  arte_aprobado_proveedor: {
+    intro:'Registra la respuesta del proveedor. Si pidió cambios, el arte vuelve a Diseño como una nueva versión y se guarda la ronda.',
+    item: (i)=>`${arteHtmlItemTitulo(i)}<div class="arte-card-b">${arteHtmlResumenBrief(arteIt(i), arteRef(i))}</div>`,
+    faltan: ()=>[], colapsado:true,
+    antes: arteHtmlDecision,
+    despues: ()=>arteHtmlZonaAdjuntos('Evidencia de la respuesta','Pantallazo del correo/WeChat con la aprobación.','evidencia'),
+    faltanGeneral: ()=> ARTE.d.proveedor.decision==='aprobado' ? [] : [ARTE.d.proveedor.decision==='cambios' ? 'Devolver a Diseño con los cambios (botón naranja)' : 'Elegir: aprobó o pidió cambios'],
+    boton:'✅ Aprobado por el proveedor'
+  },
+  arte_preprensa_larga: {
+    intro:'Compara la preprensa del proveedor contra el arte aprobado. Si algo no cuadra, registra los errores y se copia el mensaje para pedir la corrección.',
+    item: arteHtmlItemPreprensa, faltan: arteItemFaltantesPreprensa,
+    despues: ()=>`<div class="arte-sec">${(ARTE.d.preprensa.rondas||[]).length?`<div class="arte-mu" style="margin-bottom:6px;">Correcciones pedidas: ${ARTE.d.preprensa.rondas.length}</div>`:''}${ARTE.editable?`<button class="btn btn-or btn-sm" onclick="arteRegistrarErroresPreprensa()">⚠ Registrar errores y pedir corrección</button>`:''}</div>`,
+    archivo:'Archivo de la preprensa recibida *',
+    boton:'🖨 Preprensa aprobada'
+  },
+  arte_reimpresion_solicitada: {
+    intro:'Estas referencias ya tienen arte. Confirma si se reimprime igual o con algún cambio menor, y envía la solicitud al proveedor.',
+    item: arteHtmlItemReimp, faltan: arteItemFaltantesReimp,
+    despues: ()=>arteHtmlEnvio('reimp'),
+    faltanGeneral: ()=> ARTE.d.reimpresion.medio ? [] : ['Medio de envío'],
+    boton:'📤 Reimpresión solicitada'
+  }
+};
+ARTE_ETAPAS_UI.arte_preprensa_corta = ARTE_ETAPAS_UI.arte_preprensa_larga;
+
+// ── pintar ──
+function arteUI(){ return ARTE_ETAPAS_UI[ARTE.tpl.id]; }
+function arteRepintarItem(i){
+  const c = document.getElementById('arte-card-'+i); if(!c) return;
+  const abierta = c.classList.contains('abierta');
+  c.innerHTML = arteUI().item(i); c.classList.toggle('abierta', abierta);
+  arteRefrescarEan(i); arteRefrescarLectura(i); arteActualizarProgreso();
+}
+function arteRepintarTodo(){
+  const cont = document.getElementById('ea-contenido'); if(!cont) return;
+  const abiertas = new Set([...cont.querySelectorAll('.arte-card.abierta')].map(c=>c.id));
+  const ui = arteUI();
+  const refsDl = Object.keys(REABAST.referenciasMaestro||{}).slice(0,3000);
+  cont.innerHTML = `<div class="arte-wrap">
+    ${arteHtmlCabecera()}
+    ${arteHtmlGuia()}
+    <div class="arte-intro">${ui.intro}</div>
+    ${ui.antes ? ui.antes() : ''}
+    <div class="arte-sec-h" style="margin-top:4px;">Referencias (${ARTE.refs.length})
+      <span class="arte-link" onclick="document.querySelectorAll('.arte-card').forEach(c=>c.classList.add('abierta'))">expandir todo</span>
+      <span class="arte-link" onclick="document.querySelectorAll('.arte-card').forEach(c=>c.classList.remove('abierta'))">contraer</span></div>
+    ${ARTE.refs.map((r,i)=>`<div class="arte-card" id="arte-card-${i}">${ui.item(i)}</div>`).join('')}
+    ${ui.despues ? ui.despues() : ''}
+    ${arteHtmlHistorial()}
+    <datalist id="arte-dl-refs">${refsDl.map(r=>`<option value="${arteEsc(r)}">`).join('')}</datalist>
+  </div>`;
+  ARTE.refs.forEach((r,i)=>{
+    const card = document.getElementById('arte-card-'+i);
+    const pend = ui.faltan(ARTE.d.items[r]).length>0;
+    if(abiertas.size ? abiertas.has(card.id) : (!ui.colapsado && (pend || ARTE.refs.length<=2))) card.classList.add('abierta');
+    arteRefrescarEan(i); arteRefrescarLectura(i);
+  });
+  if(ARTE.tpl.id==='arte_solicitud_calidad') arteSugerirFecha();
+  arteActualizarProgreso();
+}
+function arteRefrescarEan(i){
+  const el = document.getElementById('arte-ean-'+i); if(!el) return; const it = arteIt(i);
+  if(it.ean_pendiente && !it.ean){ el.innerHTML = '<span style="color:var(--or);">pendiente</span>'; return; }
+  if(!it.ean){ el.innerHTML = ''; return; }
+  const dup = ARTE.refs.some((r,j)=> j!==i && ARTE.d.items[r].ean && ARTE.d.items[r].ean===it.ean);
+  el.innerHTML = !arteEanValido(it.ean) ? `<span style="color:var(--rd);" title="Revisa el último dígito (dígito de control)">✗ inválido</span>`
+    : dup ? `<span style="color:var(--or);">⚠ repetido</span>` : `<span style="color:var(--gr);">✓ válido</span>`;
+}
+function arteRefrescarLectura(i){
+  const el = document.getElementById('arte-lect-'+i); if(!el) return; const it = arteIt(i);
+  const l = it.preprensa && it.preprensa.leido; if(!l){ el.innerHTML=''; return; }
+  if(it.ean){
+    const ok = l===it.ean;
+    el.innerHTML = ok ? '<span style="color:var(--gr);">✓ coincide</span>' : '<span style="color:var(--rd);">✗ no coincide</span>';
+    if(ok && !(it.preprensa.checks||{}).ean){ it.preprensa.checks = it.preprensa.checks||{}; it.preprensa.checks.ean = true; const c = document.querySelector(`#arte-card-${i} input[onchange*="preprensa.checks.ean"]`); if(c){ c.checked = true; c.closest('.arte-chk').classList.add('ok'); } arteMarcarCambio(); }
+  } else el.innerHTML = arteEanValido(l) ? '<span style="color:var(--gr);">✓ EAN válido</span>' : '<span style="color:var(--rd);">✗ inválido</span>';
+}
+function arteCalcularFaltantes(){
+  const ui = arteUI(); const lista = [];
+  (ui.faltanGeneral ? ui.faltanGeneral() : []).forEach(f=>lista.push(f));
+  let okItems = 0;
+  ARTE.refs.forEach((r,i)=>{
+    const f = ui.faltan(ARTE.d.items[r]);
+    if(f.length) lista.push(`${r}: ${f.join(', ')}`); else okItems++;
+    const st = document.getElementById('arte-st-'+i);
+    if(st) st.innerHTML = f.length ? `<span class="bdg bdg-amarillo" style="font-size:9px;">faltan ${f.length}</span>` : `<span class="bdg bdg-verde" style="font-size:9px;">✓ completo</span>`;
+  });
+  if(ui.archivo && ARTE.editable){
+    const file = document.getElementById('ea-file');
+    if(!(file && file.files && file.files[0])) lista.push(ui.archivo.replace(' *',''));
+  }
+  return {lista, okItems};
+}
+function arteActualizarProgreso(){
+  if(!ARTE.d || !ARTE.tpl) return;
+  const {lista, okItems} = arteCalcularFaltantes();
+  const ui = arteUI();
+  const totalGen = (ui.faltanGeneral ? 1 : 0) + (ui.archivo ? 1 : 0);
+  const okGen = totalGen - lista.filter(x=>!ARTE.refs.some(r=>x.startsWith(r+':'))).length;
+  const total = ARTE.refs.length + totalGen; const ok = okItems + Math.max(0,okGen);
+  const pct = total ? Math.round(ok/total*100) : 100;
+  const fill = document.getElementById('arte-prog-fill'); if(fill){ fill.style.width = pct+'%'; fill.style.background = pct===100 ? 'var(--gr)' : 'var(--acc)'; }
+  const txt = document.getElementById('arte-prog-txt'); if(txt) txt.textContent = pct===100 ? '✓ Todo listo para confirmar' : `${pct}% completo`;
+  const fz = document.getElementById('arte-faltantes');
+  if(fz) fz.innerHTML = lista.length && ARTE.editable ? `<strong>Para confirmar falta:</strong> ${lista.map(x=>`<span>${arteEsc(x)}</span>`).join('')}` : '';
+  const btn = document.getElementById('ea-confirmar');
+  if(btn){ btn.classList.toggle('arte-bloq', lista.length>0); btn.title = lista.length ? 'Falta: '+lista.join(' · ') : ''; }
+}
+
+// ── abrir desde la tarjeta de la etapa ──
+async function arteAbrir(oc, e, tpl, items){
+  ARTE.ocId = oc.id; ARTE.oc = oc; ARTE.etapa = e; ARTE.tpl = tpl; ARTE.items = items;
+  ARTE.editable = e.estado==='en_curso' && reabastPuedeMarcarEtapa(e);
+  arteInjectCss(); arteInjectCssGuia(); ARTE.guiaAbierta = undefined;
+  const mo = document.querySelector('#modal-etapa-adjunto .mo'); if(mo) mo.classList.add('arte-mo');
+  document.getElementById('ea-com-wrap').style.display = 'none';
+  document.getElementById('ea-contenido').innerHTML = '<div class="arte-mu" style="padding:30px;text-align:center;">⏳ Cargando expediente de arte…</div>';
+  const ui = ARTE_ETAPAS_UI[tpl.id];
+  document.getElementById('ea-file-wrap').style.display = (ui.archivo && ARTE.editable) ? 'block' : 'none';
+  const lbl = document.getElementById('ea-file-lbl'); if(lbl) lbl.textContent = ui.archivo || 'Foto o comprobante (obligatorio)';
+  const fileInp = document.getElementById('ea-file'); if(fileInp) fileInp.onchange = arteActualizarProgreso;
+  const btn = document.getElementById('ea-confirmar'); btn.textContent = ui.boton; btn.style.display = ARTE.editable ? 'inline-flex' : 'none';
+  const dev = document.getElementById('ea-devolver');
+  if(ui.devolver && ARTE.editable){ dev.textContent = ui.devolver.label; dev.style.display = 'inline-flex'; } else dev.style.display = 'none';
+  document.getElementById('ea-save').textContent = '';
+  const {d, refs} = await arteCargar(oc, items);
+  if(ARTE.ocId!==oc.id) return; // el usuario ya abrió otra
+  ARTE.d = d; ARTE.refs = refs;
+  arteRepintarTodo();
+}
+function arteCerrarLimpio(){
+  if(ARTE.dirty && ARTE.d) arteGuardar(true).catch(()=>{});
+  const mo = document.querySelector('#modal-etapa-adjunto .mo'); if(mo) mo.classList.remove('arte-mo');
+  const cw = document.getElementById('ea-com-wrap'); if(cw) cw.style.display = '';
+  const dev = document.getElementById('ea-devolver'); if(dev) dev.style.display = 'none';
+  const sv = document.getElementById('ea-save'); if(sv) sv.textContent = '';
+  const btn = document.getElementById('ea-confirmar'); if(btn){ btn.textContent = '✔ Confirmar y marcar OK'; btn.classList.remove('arte-bloq'); btn.title=''; }
+  const lbl = document.getElementById('ea-file-lbl'); if(lbl) lbl.textContent = 'Foto o comprobante (obligatorio)';
+  const fileInp = document.getElementById('ea-file'); if(fileInp) fileInp.onchange = null;
+  ARTE.tpl = null;
+}
+
+// Resumen legible que queda en el comentario de la etapa (se ve en el detalle de la OC).
+function arteResumenEtapa(){
+  const id = ARTE.tpl.id; const refs = ARTE.refs;
+  const n = refs.filter(r=>ARTE.d.items[r].modo!=='reimp').length;
+  if(id==='arte_solicitud_calidad') return `Brief enviado: ${n} arte(s) nuevo(s)/con cambios, ${refs.length-n} reimpresión(es). Límite ${ARTE.d.general.fecha_limite}${ARTE.d.general.prioridad==='urgente'?' · URGENTE':''}.`;
+  if(id==='arte_revision_calidad') return `Calidad aprobó el brief de ${refs.length} referencia(s).`;
+  if(id==='arte_diseno_elaborado') return `Arte v${ARTE.d.diseno.version} listo.${ARTE.d.diseno.link_general?' Carpeta: '+ARTE.d.diseno.link_general:''}`;
+  if(id==='arte_enviado_proveedor') return `Enviado por ${ARTE.d.envio.medio}${ARTE.d.envio.contacto?' a '+ARTE.d.envio.contacto:''} (arte v${ARTE.d.diseno.version}).`;
+  if(id==='arte_aprobado_proveedor') return `Proveedor aprobó el arte v${ARTE.d.diseno.version} tras ${(ARTE.d.proveedor.rondas||[]).length} ronda(s) de cambios.`;
+  if(id==='arte_reimpresion_solicitada'){ const c = refs.filter(r=>ARTE.d.items[r].reimp.cambios).length; return `Reimpresión pedida por ${ARTE.d.reimpresion.medio}: ${refs.length-c} sin cambios, ${c} con cambios.`; }
+  return `Preprensa verificada (${refs.length} ref.)${(ARTE.d.preprensa.rondas||[]).length?' tras '+ARTE.d.preprensa.rondas.length+' corrección(es)':''}.`;
+}
+
+async function arteConfirmar(){
+  const {lista} = arteCalcularFaltantes();
+  if(lista.length){
+    arteActualizarProgreso();
+    const fz = document.getElementById('arte-faltantes'); if(fz){ fz.classList.remove('shake'); void fz.offsetWidth; fz.classList.add('shake'); fz.scrollIntoView({behavior:'smooth', block:'center'}); }
+    // abrir las tarjetas con pendientes
+    ARTE.refs.forEach((r,i)=>{ if(arteUI().faltan(ARTE.d.items[r]).length) document.getElementById('arte-card-'+i)?.classList.add('abierta'); });
+    if(typeof toast==='function') toast('Completa lo que falta antes de confirmar','wa');
+    return;
+  }
+  const {ocId, etapaId, plantilla} = ETAPA_ADJUNTO_CTX;
+  const estado = document.getElementById('ea-estado');
+  const extra = {};
+  const ui = arteUI();
+  if(ui.archivo){
+    const file = document.getElementById('ea-file').files[0];
+    estado.textContent = '⏳ Subiendo archivo…';
+    try{ extra.adjunto_url = await ocSubirAdjunto(file); ARTE.d.general.adjuntos.push({nombre:file.name, url:extra.adjunto_url, tipo: plantilla.id==='arte_diseno_elaborado'?'otro':'evidencia', etapa: plantilla.id, por: arteQuien(), t:new Date().toISOString()}); }
+    catch(e){ estado.innerHTML = '<span style="color:var(--rd);">Error subiendo: '+arteEsc(e.message)+'</span>'; return; }
+  } else {
+    const ev = [...(ARTE.d.general.adjuntos||[])].reverse().find(a=>a.etapa===plantilla.id);
+    if(ev) extra.adjunto_url = ev.url;
+  }
+  if(plantilla.id==='arte_enviado_proveedor') ARTE.d.envio.enviado_en = new Date().toISOString();
+  extra.comentario_extra = arteResumenEtapa();
+  arteLog('completada', extra.comentario_extra);
+  estado.textContent = '⏳ Guardando…';
+  try{ await arteGuardar(); }catch(e){ estado.innerHTML = '<span style="color:var(--rd);">No se pudo guardar el expediente. Revisa la conexión e inténtalo de nuevo.</span>'; return; }
+  estado.textContent = '';
+  cerrarModalEtapaAdjunto();
+  await ocMarcarEtapaCompleta(ocId, etapaId, extra);
+}
+
+// Pide el motivo y devuelve el flujo a una etapa anterior del camino de arte.
+async function arteDevolverDesdeBoton(){
+  const cfg = arteUI().devolver; if(!cfg) return;
+  const sug = cfg.sugerir ? cfg.sugerir() : '';
+  const motivo = prompt(cfg.pide + '\n(Esto le llega a quien tiene la etapa anterior)', sug);
+  if(motivo==null) return;
+  if(!motivo.trim()){ if(typeof toast==='function') toast('Escribe el motivo para devolver','wa'); return; }
+  await arteDevolver(cfg.destino, motivo.trim());
+}
+async function arteDevolver(destinoId, motivo){
+  const ocId = ARTE.ocId; const etapas = REABAST.ocEtapas[ocId]||[];
+  const camino = ARTE_LARGO.includes(destinoId) ? ARTE_LARGO : ARTE_CORTO;
+  const iD = camino.indexOf(destinoId), iC = camino.indexOf(ARTE.tpl.id);
+  if(iD<0 || iC<=iD){ if(typeof toast==='function') toast('No se puede devolver a esa etapa','er'); return; }
+  const destino = etapas.find(x=>x.etapa_id===destinoId);
+  if(!destino){ if(typeof toast==='function') toast('Esta OC no tiene la etapa '+destinoId,'er'); return; }
+  ARTE.d.log.push({t:new Date().toISOString(), quien:arteQuien(), etapa:ARTE.tpl.id, accion:'devolucion', destino:destinoId, msg:motivo});
+  try{
+    await arteGuardar();
+    const ahora = new Date().toISOString();
+    for(const id of camino.slice(iD+1, iC+1)){
+      const x = etapas.find(y=>y.etapa_id===id); if(!x) continue;
+      await sbReabast.patch('oc_etapas','id=eq.'+x.id,{estado:'pendiente', fecha_inicio:null, fecha_fin:null, dias_reales:null, completado_por:null});
+    }
+    await sbReabast.patch('oc_etapas','id=eq.'+destino.id,{estado:'en_curso', fecha_inicio:ahora, fecha_fin:null, dias_reales:null, completado_por:null,
+      comentario_extra:'↩ Devuelta por '+arteQuien()+': '+motivo});
+    cerrarModalEtapaAdjunto();
+    if(typeof toast==='function') toast('Devuelta a "'+((OC_ETAPAS_POR_ID[destinoId]||{}).nombre||destinoId)+'"','ok');
+    await cargarOC();
+    if(document.getElementById('modal-oc-detalle')?.classList.contains('on')) reabastAbrirDetalleOC(ocId);
+    reabastPintar();
+  }catch(err){ if(typeof toast==='function') toast('Error devolviendo la etapa: '+err.message,'er'); }
+}
+
+function arteInjectCss(){
+  if(document.getElementById('arte-css')) return;
+  const s = document.createElement('style'); s.id = 'arte-css';
+  s.textContent = `
+  .mo.arte-mo{max-width:860px;}
+  .arte-wrap{font-size:12.5px;}
+  .arte-mu{font-size:11px;color:var(--mu);}
+  .arte-lbl{font-style:normal;font-size:10.5px;color:var(--mu);font-weight:600;margin-right:4px;}
+  .arte-link{font-size:11px;color:var(--bl);cursor:pointer;text-decoration:underline;margin-left:8px;font-weight:500;}
+  a.arte-link{margin-left:0;}
+  .arte-ref{font-family:monospace;font-weight:800;font-size:13px;}
+  .arte-stepper{display:flex;align-items:center;gap:0;margin:2px 0 12px;overflow-x:auto;padding-bottom:2px;}
+  .arte-step{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:62px;}
+  .arte-step-c{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;background:var(--s1);border:2px solid var(--b1);color:var(--mu);transition:all .2s;}
+  .arte-step-l{font-size:9.5px;color:var(--mu);font-weight:600;white-space:nowrap;}
+  .arte-step.completada .arte-step-c{background:var(--gr);border-color:var(--gr);color:#fff;}
+  .arte-step.en_curso .arte-step-c{background:var(--acc);border-color:var(--acc2);color:#000;}
+  .arte-step.actual .arte-step-c{box-shadow:0 0 0 4px rgba(245,197,24,.3);transform:scale(1.1);}
+  .arte-step.actual .arte-step-l{color:var(--tx);font-weight:800;}
+  .arte-step-line{flex:1;min-width:14px;height:2px;background:var(--b1);margin-bottom:14px;}
+  .arte-meta{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;}
+  .arte-intro{background:var(--bld);color:var(--tx);border-radius:8px;padding:8px 11px;font-size:11.5px;margin:8px 0 10px;line-height:1.5;}
+  .arte-alerta{background:rgba(234,88,12,.08);border:1px solid rgba(234,88,12,.25);color:var(--tx);border-radius:8px;padding:8px 11px;font-size:11.5px;margin:6px 0;}
+  .arte-progreso{display:flex;align-items:center;gap:10px;margin:4px 0;}
+  .arte-progreso-bar{flex:1;height:7px;background:var(--b1);border-radius:10px;overflow:hidden;}
+  #arte-prog-fill{height:100%;width:0;border-radius:10px;transition:width .35s ease, background .35s;}
+  .arte-faltantes{font-size:11px;color:var(--or);display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;}
+  .arte-faltantes span{background:var(--ord);border-radius:20px;padding:2px 8px;}
+  .arte-faltantes.shake{animation:arteShake .4s;}
+  @keyframes arteShake{0%,100%{transform:none}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+  .arte-sec{border:1px solid var(--b1);border-radius:10px;padding:10px 12px;margin:10px 0;background:var(--w);}
+  .arte-sec-h{font-size:12px;font-weight:800;margin-bottom:8px;display:flex;align-items:center;flex-wrap:wrap;gap:2px;}
+  .arte-card{border:1px solid var(--b1);border-radius:10px;margin-bottom:8px;background:var(--w);transition:box-shadow .15s;}
+  .arte-card:hover{box-shadow:var(--sh);}
+  .arte-card-h{display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;user-select:none;}
+  .arte-desc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .arte-chev{color:var(--mu);transition:transform .2s;font-size:12px;}
+  .arte-card.abierta .arte-chev{transform:rotate(180deg);}
+  .arte-card-b{display:none;padding:2px 12px 12px;border-top:1px dashed var(--b1);}
+  .arte-card.abierta .arte-card-b{display:block;animation:arteIn .18s ease;}
+  @keyframes arteIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+  .arte-sub{font-size:11px;font-weight:700;margin:10px 0 5px;color:var(--tx);}
+  .arte-chips{display:flex;flex-wrap:wrap;gap:5px;}
+  .arte-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:0 8px;}
+  .arte-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 10px;margin-top:6px;}
+  .arte-grid .fg,.arte-grid2 .fg{margin-bottom:6px;}
+  .arte-seg{display:inline-flex;flex-wrap:wrap;background:var(--s1);border:1px solid var(--b1);border-radius:9px;padding:3px;gap:3px;margin:8px 0 2px;}
+  .arte-seg button{border:none;background:transparent;padding:6px 10px;border-radius:7px;font-size:11.5px;font-weight:600;color:var(--mu);cursor:pointer;font-family:inherit;}
+  .arte-seg button.on{background:var(--w);color:var(--tx);box-shadow:var(--sh);}
+  .arte-seg button:disabled{cursor:default;}
+  .arte-inline{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--mu);margin-top:4px;cursor:pointer;}
+  .arte-ean-st{font-size:11px;font-weight:700;white-space:nowrap;min-width:64px;}
+  .arte-chk{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--b1);border-radius:8px;margin-bottom:5px;cursor:pointer;font-size:12px;transition:all .15s;}
+  .arte-chk:hover{border-color:var(--b2);}
+  .arte-chk.ok{background:var(--grd);border-color:rgba(22,163,74,.3);}
+  .arte-chk input{width:16px;height:16px;accent-color:var(--gr);}
+  .arte-brief{background:var(--s1);border-left:3px solid var(--bl);border-radius:6px;padding:8px 10px;margin:8px 0;display:flex;flex-direction:column;gap:5px;font-size:11.5px;}
+  .arte-kvs{display:flex;flex-wrap:wrap;gap:4px;}
+  .arte-kv{background:var(--w);border:1px solid var(--b1);border-radius:6px;padding:2px 7px;font-size:11px;}
+  .arte-kv em{font-style:normal;color:var(--mu);margin-right:4px;font-size:10px;}
+  .arte-adj{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--b1);border-radius:7px;margin-bottom:4px;font-size:11.5px;}
+  .arte-adj a{color:var(--bl);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .arte-adj.subiendo{color:var(--mu);border-style:dashed;}
+  .arte-adj-t{white-space:nowrap;font-size:10.5px;}
+  .arte-x{cursor:pointer;color:var(--mu);padding:0 4px;}
+  .arte-x:hover{color:var(--rd);}
+  .arte-adj-add{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center;}
+  .arte-adj-add select{width:auto;flex:0 0 auto;}
+  .arte-adj-add input.inp{flex:1;min-width:160px;}
+  .arte-msg{font-family:ui-monospace,monospace;font-size:11.5px;line-height:1.5;}
+  .arte-decision{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .arte-dec{border:2px solid var(--b1);border-radius:10px;padding:12px;text-align:center;cursor:pointer;transition:all .15s;}
+  .arte-dec:hover{border-color:var(--b2);transform:translateY(-1px);}
+  .arte-dec-i{font-size:22px;margin-bottom:4px;}
+  .arte-dec.on.ok{border-color:var(--gr);background:var(--grd);}
+  .arte-dec.on.warn{border-color:var(--or);background:var(--ord);}
+  .arte-hist{margin-top:10px;font-size:11.5px;}
+  .arte-hist summary{cursor:pointer;font-weight:700;padding:6px 0;}
+  .arte-hist-r{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--b1);}
+  #ea-confirmar.arte-bloq{opacity:.55;}
+  #ea-save{font-size:10.5px;margin-right:auto;align-self:center;}
+  @media(max-width:600px){ .arte-decision{grid-template-columns:1fr;} .arte-step{min-width:52px;} }
+  `;
+  document.head.appendChild(s);
+}
+
+
+// ═══ Guías "Cómo se hace este paso" — una por cada etapa de arte ═══
+// Se abren solas la primera vez que cada usuario entra a esa etapa (se recuerda en este
+// navegador) y luego quedan a un clic con el botón 📘 de la cabecera.
+const ARTE_GUIAS = {
+  arte_solicitud_calidad: {
+    objetivo: 'Entregarle a Calidad toda la información del producto en un solo envío, para que valide sin devolverse a preguntar. Un brief incompleto es la causa #1 de retrasos en el arte.',
+    pasos: [
+      'Revisa cada referencia y define su tipo: <b>Arte nuevo</b> (SKU nuevo o cambio de diseño), <b>Reimpresión con cambios</b> (mismo diseño, algún dato cambia) o <b>Reimpresión sin cambios</b>.',
+      'Marca las <b>piezas</b> que hay que diseñar (caja individual, etiqueta, caja máster…). Si todas llevan lo mismo, usa <i>copiar a todas</i>.',
+      'Verifica los <b>datos técnicos</b>. El sistema los prellena desde la descripción y la ficha, pero <b>confírmalos contra la ficha del proveedor</b>: lo que quede aquí es lo que se imprime.',
+      'Digita el <b>EAN-13</b>. Si sale "✗ inválido", el último dígito no cuadra: revisa que no falte o sobre un número. Si aún no está asignado, marca la casilla y Calidad lo gestiona.',
+      'Escribe las <b>medidas del empaque</b> (largo × ancho × alto en mm) o sube el <b>troquel</b> que envía el proveedor.',
+      'Sugiere los <b>sellos</b> que crees que aplican; Calidad los confirma.',
+      'Si hay un producto parecido ya diseñado, ponlo como <b>arte base</b>: Diseño reutiliza el estilo y ahorra días.',
+      'Define la <b>fecha límite</b> y sube la <b>ficha técnica</b> y fotos de la muestra en Adjuntos.',
+      'Cuando la barra esté en 100 %, pulsa <b>Enviar solicitud a Calidad</b>.'
+    ],
+    listo: 'Todas las referencias en "✓ completo", fecha límite puesta y ficha técnica disponible (adjunta o en el catálogo).',
+    errores: [
+      'Copiar la potencia o el voltaje de la descripción sin verificar con la ficha.',
+      'Confundir la medida del producto con la medida de la caja.',
+      'Poner el EAN de otra referencia (el sistema avisa "⚠ repetido").',
+      'Marcar "sin cambios" cuando el proveedor cambió el modelo o la potencia.'
+    ],
+    ejemplo: '<b>2660</b> · Arte nuevo · Caja individual + Caja máster · 15 W · 100-240 V · E27 · 6500 K · 15.000 h · EAN 7701234567897 · Caja 60×60×120 mm · Sellos: RETILAP, Advertencias · Arte base: línea Essential.'
+  },
+  arte_revision_calidad: {
+    objetivo: 'Garantizar que lo que se va a imprimir cumple la normativa y los datos son correctos antes de que Diseño invierta tiempo.',
+    pasos: [
+      'Abre cada referencia y lee el brief de Compras (datos técnicos, EAN, piezas, medidas).',
+      'Contrasta los datos técnicos con la ficha técnica (link "📄 Ver ficha" o en Adjuntos).',
+      'Confirma el <b>EAN</b>: que sea válido, que no esté usado por otra referencia y que corresponda al producto.',
+      'Define los <b>sellos definitivos</b> que debe llevar el empaque (toca los chips para activar/quitar).',
+      'Escribe los <b>textos legales y advertencias</b>. Usa <i>✨ Insertar textos típicos</i> como punto de partida y ajústalo al producto.',
+      'Deja en <b>Observaciones para Diseño</b> cualquier indicación especial (pictogramas, tamaños mínimos, ubicación).',
+      'Marca los 5 puntos de la lista de chequeo en cada referencia.',
+      'Si falta información, <b>no la inventes</b>: pulsa <b>↩ Devolver a Compras</b> y di exactamente qué falta.'
+    ],
+    listo: 'Las 5 casillas marcadas en cada referencia de arte nuevo, y "sin cambios" confirmado en las reimpresiones.',
+    errores: [
+      'Aprobar sin revisar la ficha técnica.',
+      'Dejar los textos legales vacíos "porque Diseño ya sabe".',
+      'Devolver a Compras sin decir qué falta (genera otra ronda).'
+    ],
+    ejemplo: '<b>Textos 2660:</b> Importado y distribuido por ILUMAX S.A.S. · País de origen: China · 15 W 100-240 V E27 6500 K · Desconecte la energía antes de instalar · No mirar directamente la fuente de luz · No desechar con la basura común.'
+  },
+  arte_diseno_elaborado: {
+    objetivo: 'Convertir el brief aprobado por Calidad en el arte final listo para enviar al proveedor.',
+    pasos: [
+      'Lee el brief y las <b>Indicaciones de Calidad</b> (recuadro verde). Usa <i>📋 copiar textos</i> para pegarlos tal cual y evitar errores de digitación.',
+      'Si aparece un recuadro naranja <b>"El proveedor pidió cambios"</b>, estás en una versión nueva: corrige solo lo que se pidió.',
+      'Trabaja sobre el troquel/medidas de Adjuntos. Si hay arte base, parte de él.',
+      'Genera el código de barras desde el EAN confirmado (no lo copies como imagen de otro arte).',
+      'Sube el arte a una carpeta compartida y pega el <b>link general</b> o un link por referencia.',
+      'Marca <b>Arte terminado</b> en cada referencia.',
+      'Sube una <b>vista previa</b> (PDF o imagen) en el campo inferior y confirma.',
+      'Si algo del brief no es claro, pulsa <b>↩ Devolver a Calidad</b> con la pregunta concreta.'
+    ],
+    listo: 'Cada referencia de arte nuevo con link y marcada como terminada, más la vista previa adjunta.',
+    errores: [
+      'Links sin permiso de acceso para el proveedor ("solicitar acceso").',
+      'Olvidar actualizar la versión en el nombre del archivo tras cambios.',
+      'Textos legales redigitados con errores en vez de copiados.'
+    ],
+    ejemplo: 'Carpeta: drive.google.com/…/OCI199_v1 · 2660_caja_v1.pdf · 2660_master_v1.pdf · marcado "Arte terminado (v1)".'
+  },
+  arte_enviado_proveedor: {
+    objetivo: 'Hacerle llegar al proveedor los artes finales de forma clara y dejar registro de cuándo y por dónde se enviaron.',
+    pasos: [
+      'Abre los links de cada referencia y verifica que abren sin pedir permiso.',
+      'Elige el <b>idioma</b> (English para proveedores del exterior).',
+      'Revisa el mensaje generado; puedes editarlo. Si cambias algo y quieres volver al original, usa <i>↻ Regenerar</i>.',
+      'Envíalo: <i>✉️ Abrir en correo</i> o <i>📋 Copiar mensaje</i> para WeChat/WhatsApp.',
+      'Marca el <b>medio de envío</b> y el contacto.',
+      'Pulsa <b>Ya lo envié al proveedor</b>. Desde ese momento corre el tiempo de respuesta del proveedor.',
+      'Si al revisar ves un error en el arte, <b>↩ Devolver a Diseño</b> antes de enviarlo.'
+    ],
+    listo: 'Mensaje enviado y medio de envío marcado.',
+    errores: [
+      'Confirmar en el sistema antes de enviar realmente el mensaje.',
+      'Enviar links de una versión anterior.'
+    ],
+    ejemplo: 'Medio: WeChat · Contacto: Lily (Shenzhen Light) · Mensaje en English con los 3 links y "2663: reprint current artwork, no changes".'
+  },
+  arte_aprobado_proveedor: {
+    objetivo: 'Registrar la respuesta del proveedor. Si pide cambios, el arte vuelve a Diseño como una nueva versión y queda la trazabilidad de cada ronda.',
+    pasos: [
+      'Lee la respuesta del proveedor completa (a veces aprueban unas referencias y otras no).',
+      'Si <b>aprobó todo</b>: toca la tarjeta ✅, sube el pantallazo de la aprobación en Evidencia y confirma.',
+      'Si <b>pidió cambios</b>: toca ✏️, escribe el cambio <b>solo</b> en las referencias afectadas y pulsa <b>↩ Devolver a Diseño con estos cambios</b>.',
+      'Si el proveedor no responde en el tiempo esperado (semáforo en rojo), haz seguimiento por el mismo medio.'
+    ],
+    listo: 'Proveedor aprobó todas las referencias (con evidencia recomendada).',
+    errores: [
+      'Tomar un "ok" informal como aprobación sin que confirme troquel y colores.',
+      'Escribir cambios genéricos ("ajustar caja") en vez de concretos ("troquel 2 mm más alto").'
+    ],
+    ejemplo: '<b>Cambios 2661:</b> "Dieline is 2 mm taller; move barcode to the side panel" → vuelve a Diseño como v2.'
+  },
+  arte_preprensa_larga: {
+    objetivo: 'Última barrera antes de imprimir miles de empaques: confirmar que la preprensa del proveedor es idéntica al arte aprobado.',
+    pasos: [
+      'Abre el <b>arte aprobado</b> (link en cada referencia) y la preprensa del proveedor lado a lado.',
+      '<b>Escanea el código de barras</b> de la preprensa con un lector o app y pégalo: debe salir "✓ coincide". Si no tienes lector, digítalo número por número.',
+      'Compara textos y datos técnicos palabra por palabra (potencia, voltaje, base, textos legales).',
+      'Revisa colores/pantones, medidas y troquel, logos, sellos y advertencias.',
+      'Marca cada casilla solo si lo verificaste. Anota diferencias en Observaciones.',
+      'Si algo no cuadra: pulsa <b>⚠ Registrar errores y pedir corrección</b>. Se guarda la ronda y se copia el mensaje para el proveedor. Espera la nueva preprensa y repite.',
+      'Cuando todo esté correcto, sube el archivo de la preprensa y confirma.'
+    ],
+    listo: 'Las 5 verificaciones marcadas en todas las referencias y el archivo de preprensa adjunto.',
+    errores: [
+      'Aprobar sin escanear el código de barras.',
+      'Revisar solo la caja individual y olvidar la caja máster o la etiqueta.',
+      'Aceptar "el color se ajusta en impresión" sin dejarlo por escrito.'
+    ],
+    ejemplo: '2660: escaneado 7701234567897 ✓ coincide · textos ✓ · colores ✓ · medidas ✓ · sellos ✓ → Preprensa aprobada.'
+  },
+  arte_reimpresion_solicitada: {
+    objetivo: 'Pedirle al proveedor que reimprima el arte que ya tiene de estas referencias, sin pasar por Calidad y Diseño.',
+    pasos: [
+      'Confirma en cada referencia si va <b>sin cambios</b> o con <b>cambios menores</b> (lote, fecha de fabricación).',
+      'Si el cambio es de datos técnicos, textos legales o código de barras, <b>no es una reimpresión</b>: la OC debe marcarse como SKU nuevo para que pase por Calidad y Diseño.',
+      'Revisa el mensaje generado, elige idioma y medio, y envíalo (copiar o abrir en correo).',
+      'Confirma con <b>Reimpresión solicitada</b>.'
+    ],
+    listo: 'Cada referencia con su decisión (con o sin cambios) y el medio de envío marcado.',
+    errores: [
+      'Pedir reimpresión de un arte que ya estaba desactualizado.',
+      'No pedir la preprensa al proveedor antes de imprimir.'
+    ],
+    ejemplo: '2663: sin cambios · 2670: cambio menor "actualizar fecha de fabricación" · enviado por correo en English.'
+  }
+};
+ARTE_GUIAS.arte_preprensa_corta = ARTE_GUIAS.arte_preprensa_larga;
+
+function arteGuiaVista(id){ try{ return localStorage.getItem('arte_guia_vista_'+id)==='1'; }catch(e){ return false; } }
+function arteGuiaMarcarVista(id){ try{ localStorage.setItem('arte_guia_vista_'+id,'1'); }catch(e){} }
+function arteHtmlGuia(){
+  const g = ARTE_GUIAS[ARTE.tpl.id]; if(!g) return '';
+  const tpl = ARTE.tpl; const abierta = ARTE.guiaAbierta!==undefined ? ARTE.guiaAbierta : !arteGuiaVista(tpl.id);
+  return `<div class="arte-guia ${abierta?'abierta':''}" id="arte-guia">
+    <div class="arte-guia-h" onclick="arteToggleGuia()">
+      <span>📘 <b>Cómo se hace este paso</b> <span class="arte-mu">· ${arteEsc(tpl.nombre)}</span></span>
+      <span class="arte-chev">▾</span>
+    </div>
+    <div class="arte-guia-b">
+      <div class="arte-guia-obj">🎯 ${g.objetivo}</div>
+      <div class="arte-guia-meta">
+        <span class="bdg bdg-gris">👤 Responsable: ${arteEsc(tpl.area)}</span>
+        <span class="bdg bdg-gris">⏱ Tiempo esperado: ${arteEsc(reabastFmtDuracion(tpl.dias))}</span>
+      </div>
+      <div class="arte-guia-t">Paso a paso</div>
+      <ol class="arte-guia-ol">${g.pasos.map(p=>`<li>${p}</li>`).join('')}</ol>
+      <div class="arte-guia-cols">
+        <div class="arte-guia-box ok"><div class="arte-guia-t">✅ Está listo cuando…</div>${g.listo}</div>
+        <div class="arte-guia-box warn"><div class="arte-guia-t">⚠ Errores comunes</div><ul>${g.errores.map(e=>`<li>${e}</li>`).join('')}</ul></div>
+      </div>
+      <div class="arte-guia-box ej"><div class="arte-guia-t">💡 Ejemplo bien diligenciado</div>${g.ejemplo}</div>
+      <div style="text-align:right;margin-top:8px;"><button class="btn btn-bl btn-sm" onclick="arteToggleGuia(false)">Entendido, ocultar guía</button></div>
+    </div>
+  </div>`;
+}
+function arteToggleGuia(forzar){
+  const el = document.getElementById('arte-guia'); if(!el) return;
+  const abrir = forzar===undefined ? !el.classList.contains('abierta') : forzar;
+  el.classList.toggle('abierta', abrir); ARTE.guiaAbierta = abrir;
+  if(!abrir && ARTE.tpl) arteGuiaMarcarVista(ARTE.tpl.id);
+  if(abrir) el.scrollIntoView({behavior:'smooth', block:'start'});
+}
+function arteInjectCssGuia(){
+  if(document.getElementById('arte-css-guia')) return;
+  const s = document.createElement('style'); s.id = 'arte-css-guia';
+  s.textContent = `
+  .arte-guia{border:1.5px solid rgba(37,99,235,.25);border-radius:10px;margin:8px 0 10px;background:var(--w);overflow:hidden;}
+  .arte-guia-h{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;background:var(--bld);font-size:12.5px;user-select:none;}
+  .arte-guia.abierta .arte-chev{transform:rotate(180deg);}
+  .arte-guia-b{display:none;padding:12px;font-size:12px;line-height:1.55;}
+  .arte-guia.abierta .arte-guia-b{display:block;animation:arteIn .2s ease;}
+  .arte-guia-obj{background:var(--s1);border-radius:8px;padding:8px 10px;margin-bottom:8px;}
+  .arte-guia-meta{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;}
+  .arte-guia-t{font-weight:800;font-size:11.5px;margin:6px 0 4px;}
+  .arte-guia-ol{padding-left:20px;margin:0 0 8px;}
+  .arte-guia-ol li{margin-bottom:4px;padding-left:2px;}
+  .arte-guia-ol li::marker{font-weight:800;color:var(--bl);}
+  .arte-guia-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;}
+  .arte-guia-box{border-radius:8px;padding:8px 10px;margin-top:6px;}
+  .arte-guia-box ul{padding-left:18px;margin:0;}
+  .arte-guia-box.ok{background:var(--grd);}
+  .arte-guia-box.warn{background:var(--ord);}
+  .arte-guia-box.ej{background:rgba(245,197,24,.12);}
+  .arte-btn-guia{font-size:10.5px;font-weight:700;color:var(--bl);background:var(--bld);border:1px solid rgba(37,99,235,.2);border-radius:20px;padding:3px 9px;cursor:pointer;}
+  `;
+  document.head.appendChild(s);
 }
 
 
@@ -12011,7 +13159,7 @@ async function ocMarcarEtapaCompleta(ocId, etapaId, extra){
   // En ese caso la tratamos como una etapa simple (sin adjunto ni dependientes) para no romper
   // OC viejas — solo se completa y avanza si tiene dependientes registrados por dependeDe/requiere.
   const plantilla = OC_ETAPAS_POR_ID[e.etapa_id] || {id:e.etapa_id, area:'—', requiereAdjunto:false};
-  if(plantilla.requiereAdjunto && !extra){
+  if((plantilla.requiereAdjunto || ARTE_IDS.has(plantilla.id)) && !extra){
     ocAbrirTarjetaEtapa(ocId, etapaId);
     return;
   }
