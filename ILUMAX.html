@@ -8791,6 +8791,7 @@ function reabastPintar(){
     {id:'urgentes', lbl:'🚨 Urgentes ('+REABAST._urgentes.length+')'},
     {id:'oc', lbl:'📑 Órdenes de compra ('+(REABAST.ordenesCompra||[]).filter(o=>o.estado_general==='activa').length+')'},
     {id:'calendario', lbl:'📅 Calendario de llegadas'},
+    {id:'novedades', lbl:'📋 Novedades'},
     {id:'agotados', lbl:'📦 Agotados ('+REABAST._agotados.length+')'},
     {id:'sobrestock', lbl:'📈 Sobrestock ('+REABAST._sobrestock.length+')'},
     {id:'vendidos', lbl:'🏆 Más vendidos'},
@@ -8826,6 +8827,7 @@ function reabastPintar(){
   else if(REABAST.tab==='urgentes'){ body.innerHTML = reabastHtmlUrgentesShell(); reabastRepintarUrgentes(); }
   else if(REABAST.tab==='oc'){ body.innerHTML = reabastHtmlOcShell(); reabastRepintarOC(); }
   else if(REABAST.tab==='calendario'){ body.innerHTML = reabastHtmlCalendario(); }
+  else if(REABAST.tab==='novedades'){ arteInjectCss(); ocnInjectCss(); body.innerHTML = reabastHtmlNovedadesShell(); ocnPintarGlobal(); }
   else if(REABAST.tab==='agotados'){ body.innerHTML = reabastHtmlAgotadosShell(); reabastRepintarAgotados(); }
   else if(REABAST.tab==='sobrestock'){ body.innerHTML = reabastHtmlSobrestockShell(); reabastRepintarSobrestock(); }
   else if(REABAST.tab==='vendidos'){ body.innerHTML = reabastHtmlVendidosShell(); reabastRepintarVendidos(); }
@@ -9581,6 +9583,7 @@ async function guardarProveedor(){
     if(c.tipo==='number') payload[c.campo] = v===''? null : (c.esPorcentaje ? Number(v)/100 : Number(v));
     else payload[c.campo] = v || null;
   });
+  const antes = PROVEEDOR_EDIT_ID ? {...((REABAST.proveedores||[]).find(p=>String(p.id)===String(PROVEEDOR_EDIT_ID))||{})} : null;
   try{
     if(PROVEEDOR_EDIT_ID){
       await sbReabast.patch('proveedores', 'id=eq.'+PROVEEDOR_EDIT_ID, payload);
@@ -9589,9 +9592,38 @@ async function guardarProveedor(){
     }
     cerrarModalProveedor();
     if(typeof toast==='function') toast('Proveedor guardado','ok');
+    if(antes) await reabastSincronizarProveedorEnOC(antes, payload);
     await cargarOC();
     reabastPintar();
   }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
+}
+
+// Cuando se actualiza la ficha del proveedor, pasa las condiciones nuevas (pago, % anticipo,
+// INCOTERM y nombre) a sus OC activas y deja la novedad en el histórico de cada una.
+async function reabastSincronizarProveedorEnOC(antes, nuevo){
+  const campos = [
+    {pv:'termino_pago', oc:'terminos_pago', l:'Términos de pago', fmt:v=>v||'—'},
+    {pv:'porcentaje_anticipo', oc:'deposito_pct', l:'% de anticipo', fmt:v=> v==null||v===''?'—':Math.round(Number(v)*1000)/10+'%'},
+    {pv:'incoterm', oc:'incoterm', l:'INCOTERM', fmt:v=>v||'—'},
+    {pv:'nombre', oc:'proveedor', l:'Proveedor', fmt:v=>v||'—'}
+  ];
+  const norm = v => v==null ? '' : String(v).trim();
+  const cambiados = campos.filter(c=> norm(antes[c.pv])!==norm(nuevo[c.pv]));
+  if(!cambiados.length) return;
+  const nomAntes = norm(antes.nombre).toLowerCase();
+  const ocs = (REABAST.ordenesCompra||[]).filter(o=>o.estado_general==='activa' && norm(o.proveedor).toLowerCase()===nomAntes);
+  if(!ocs.length) return;
+  const txt = cambiados.map(c=>`• ${c.l}: ${c.fmt(antes[c.pv])} → ${c.fmt(nuevo[c.pv])}`).join('\n');
+  if(!confirm(`Cambiaste en la ficha de ${antes.nombre}:\n${txt}\n\n¿Actualizar también ${ocs.length} OC activa(s)?\n${ocs.map(o=>o.numero_oc).join(', ')}`)) return;
+  let n = 0;
+  for(const o of ocs){
+    const patch = {}; const novs = [];
+    cambiados.forEach(c=>{ const v = nuevo[c.pv]; if(norm(o[c.oc])===norm(v)) return; novs.push({tipo:'condiciones', campo:c.l, antes:c.fmt(o[c.oc]!=null&&o[c.oc]!==''?o[c.oc]:antes[c.pv]), despues:c.fmt(v), motivo:'Actualización de la ficha del proveedor', origen:'ficha del proveedor'}); patch[c.oc] = v; });
+    if(!Object.keys(patch).length) continue;
+    try{ await sbReabast.patch('ordenes_compra','id=eq.'+o.id, patch); Object.assign(o, patch); n++; if(typeof ocnAgregar==='function') ocnAgregar(o.id, novs).catch(()=>{}); }
+    catch(e){ console.warn('No pude actualizar la OC '+o.numero_oc+':', e.message); }
+  }
+  if(typeof toast==='function') toast(`Condiciones actualizadas en ${n} OC`,'ok');
 }
 
 // ═══ Tab: Panel de compras — respaldo/actualización del Excel "Base compras" de seguimiento ═══
@@ -11316,8 +11348,10 @@ function reabastAbrirDetalleOC(ocId){
           ${e.comentario_extra?`<br>"${reabastEsc(e.comentario_extra)}"`:''}
         </div>`:''}
       </div>`;
-    }).join('')}</div>`;
+    }).join('')}</div>
+    <div id="ocd-novedades" class="admin-sec" style="margin-top:14px;padding:10px;border:1px solid var(--b1);border-radius:10px;"><div class="arte-mu">⏳ Cargando histórico de novedades…</div></div>`;
   document.getElementById('modal-oc-detalle').classList.add('on');
+  arteInjectCss(); ocnInjectCss(); ocnPintarDetalle(ocId);
 }
 
 function reabastInjectModalOCDetalle(){
@@ -11380,8 +11414,21 @@ async function ocdGuardarItem(ocId, itemId, trEl){
   const precioVenta = item ? item.precio_venta_cop : null;
   const margen = (costoUnitCop && precioVenta) ? Math.round((1-costoUnitCop/precioVenta)*1000)/10 : (item?item.margen_pct:null);
   const payload = {cantidad:cant, precio_fob_usd:fob, costo_unitario_cop:costoUnitCop, margen_pct:margen, observacion};
+  const novs = [];
+  if(item && (Number(item.cantidad)!==cant || Number(item.precio_fob_usd||0)!==Number(fob||0))){
+    const cambios = [];
+    if(Number(item.cantidad)!==cant) cambios.push(`Cantidad: ${reabastFmtN(item.cantidad)} → <strong>${reabastFmtN(cant)}</strong>`);
+    if(Number(item.precio_fob_usd||0)!==Number(fob||0)) cambios.push(`FOB: US$ ${item.precio_fob_usd??'—'} → <strong>US$ ${fob??'—'}</strong>`);
+    const r = await ocnPedirMotivo({titulo:'¿Por qué cambia '+item.referencia+'?', texto: cambios.join('<br>'), motivos: OCN_MOTIVOS_CAMBIO});
+    if(!r) return;
+    const valAntes = (Number(item.cantidad)||0)*(Number(item.precio_fob_usd)||0), valDesp = cant*(Number(fob)||0);
+    const imp = Math.round((valDesp-valAntes)*100)/100;
+    if(Number(item.cantidad)!==cant) novs.push({tipo:'cantidad', ref:item.referencia, campo:'Cantidad', antes:reabastFmtN(item.cantidad), despues:reabastFmtN(cant), motivo:r.motivo, nota:r.nota, impacto_usd:imp||null, origen:'edición en la OC'});
+    if(Number(item.precio_fob_usd||0)!==Number(fob||0)) novs.push({tipo:'precio', ref:item.referencia, campo:'Precio FOB (US$)', antes:String(item.precio_fob_usd??'—'), despues:String(fob??'—'), motivo:r.motivo, nota:r.nota, impacto_usd: Number(item.cantidad)!==cant ? null : (imp||null), origen:'edición en la OC'});
+  }
   try{
     await sbReabast.patch('oc_items', 'id=eq.'+itemId, payload);
+    if(novs.length) await ocnAgregar(ocId, novs).catch(err=>console.warn('Novedad:', err.message));
     if(item) Object.assign(item, payload);
     if(typeof toast==='function') toast('Ítem actualizado','ok');
     reabastAbrirDetalleOC(ocId);
@@ -11390,8 +11437,12 @@ async function ocdGuardarItem(ocId, itemId, trEl){
 // Quita un ítem de una OC ya creada (por ejemplo, si se digitó de más o ya no aplica).
 async function ocdEliminarItem(ocId, itemId, referencia){
   if(!confirm('¿Quitar '+referencia+' de esta OC? Esta acción no se puede deshacer.')) return;
+  const it0 = (REABAST.ocItems[ocId]||[]).find(x=>x.id===itemId);
+  const r = await ocnPedirMotivo({titulo:'¿Por qué se quita '+referencia+'?', texto:'Queda registrado en el histórico de novedades de la OC.', motivos: OCN_MOTIVOS_CAMBIO});
+  if(!r) return;
   try{
     await sbReabast.delete('oc_items', 'id=eq.'+itemId);
+    await ocnAgregar(ocId, [{tipo:'referencia', ref:referencia, campo:'Referencia quitada', antes: it0?reabastFmtN(it0.cantidad)+' und':'', despues:'—', motivo:r.motivo, nota:r.nota, impacto_usd: it0 ? -Math.round((Number(it0.cantidad)||0)*(Number(it0.precio_fob_usd)||0)*100)/100 : null, origen:'edición en la OC'}]).catch(()=>{});
     REABAST.ocItems[ocId] = (REABAST.ocItems[ocId]||[]).filter(x=>x.id!==itemId);
     if(typeof toast==='function') toast('Ítem eliminado de la OC','ok');
     reabastAbrirDetalleOC(ocId);
@@ -11423,6 +11474,7 @@ async function ocdAgregarItem(ocId){
   try{
     const nuevo = await sbReabast.post('oc_items', payload);
     REABAST.ocItems[ocId] = (REABAST.ocItems[ocId]||[]).concat(nuevo||[payload]);
+    ocnAgregar(ocId, [{tipo:'referencia', ref:referencia, campo:'Referencia agregada', antes:'—', despues:reabastFmtN(cantidad)+' und', motivo:'Agregada a la OC', impacto_usd: fob ? Math.round(cantidad*fob*100)/100 : null, origen:'edición en la OC'}]).catch(()=>{});
     if(typeof toast==='function') toast('Ítem agregado a la OC','ok');
     reabastAbrirDetalleOC(ocId);
   }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
@@ -11670,7 +11722,7 @@ async function reabastCargarExcelJS(){
 // Descarga la OC como Excel a color, con dos hojas: "Orden de compra" (igual estructura que el
 // documento impreso — encabezado, proveedor, comprador, ítems) y "Totales y condiciones"
 // (cantidades/valores totales en USD y COP, anticipo/saldo, términos e información adicional).
-async function reabastDescargarExcelOC(ocId, variante){
+async function reabastExcelOCBlob(ocId, variante){
   variante = variante || 'china';
   const o = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId); if(!o) return;
   if(typeof toast==='function') toast('⏳ Generando Excel…','inf');
@@ -11833,9 +11885,12 @@ async function reabastDescargarExcelOC(ocId, variante){
 
   const buf = await wb.xlsx.writeBuffer();
   const blob = new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = `OC_${(o.numero_oc||'orden').replace(/[^\w-]/g,'_')}${variante==='intercompania'?'_intercompania':''}.xlsx`;
+  return {blob, nombre:`OC_${(o.numero_oc||'orden').replace(/[^\w-]/g,'_')}${variante==='intercompania'?'_intercompania':''}.xlsx`};
+}
+async function reabastDescargarExcelOC(ocId, variante){
+  const x = await reabastExcelOCBlob(ocId, variante); if(!x) return;
+  const url = URL.createObjectURL(x.blob);
+  const a = document.createElement('a'); a.href = url; a.download = x.nombre;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
   if(typeof toast==='function') toast('✅ Excel descargado','ok');
@@ -11989,6 +12044,7 @@ async function confirmarEtapaAdjunto(){
   if(OCP_IDS.has(plantilla.id) && OCP.tpl) return ocpConfirmar();
   const estado = document.getElementById('ea-estado');
   const extra = { comentario_extra: document.getElementById('ea-comentario').value.trim()||null };
+  const dm = await ocnAsegurarMotivoDemora(ocId, etapaId); if(!dm.ok) return; extra._demora = dm.demora;
   if(plantilla.requiereAdjunto){
     const file = document.getElementById('ea-file').files[0];
     if(!file){ if(typeof toast==='function') toast('Adjunta la foto o el comprobante','wa'); return; }
@@ -12813,6 +12869,7 @@ async function arteConfirmar(){
   const {ocId, etapaId, plantilla} = ETAPA_ADJUNTO_CTX;
   const estado = document.getElementById('ea-estado');
   const extra = {};
+  const dm = await ocnAsegurarMotivoDemora(ocId, etapaId); if(!dm.ok) return; extra._demora = dm.demora;
   const ui = arteUI();
   if(ui.archivo){
     const file = document.getElementById('ea-file').files[0];
@@ -13112,9 +13169,9 @@ ARTE_GUIAS.pi_confirmada = {
   pasos: [
     'Arrastra o selecciona la <b>PI</b> que envió el proveedor: sirve en <b>Excel, PDF o Word</b>. (Si el PDF es escaneado —una foto— no se puede leer la tabla; se sella igual y la comparación se hace a ojo.)',
     'Revisa que el <b>PO No.</b> de la PI sea el de esta OC (sale ✓ o ✗).',
-    'Revisa la <b>comparación</b>: ✓ coincide, <span style="color:var(--or)">≠</span> cantidad o precio diferente, <span style="color:var(--rd)">✗</span> referencia que pedimos y no está en la PI, <span style="color:var(--pu)">+</span> referencia que la PI trae de más.',
+    'Revisa la <b>comparación completa</b>: cantidad, precio, valor, unidades por caja (master e interna), tipo de empaque, CBM, EAN, especificaciones (W, V, K, lm, horas, base, IP, PF, RA) y condiciones (anticipo, plazo del saldo, entrega, lote, INCOTERM). ✓ coincide · <span style="color:var(--or)">≠</span> diferente · <span style="color:#ca8a04">?</span> revisar · ⓘ solo informativo.',
     'Mira también los <b>términos de pago</b> que puso el proveedor y la diferencia en el total.',
-    'Si hay diferencias: acuérdalas con el proveedor. Si se aceptan (ej. cantidad ajustada a caja completa), marca <b>"Revisé las diferencias…"</b> y escribe la nota. Si no se aceptan, pide una PI corregida y cárgala de nuevo.',
+    'A <b>cada diferencia</b> ponle su <b>motivo</b> (ej. ajuste a caja completa, MOQ, alza de costos) y el detalle si hace falta; en las marcadas con ? puedes elegir "Revisado: está bien". Todo queda en el <b>histórico de novedades</b> de la OC. Si no se acepta, pide una PI corregida y cárgala de nuevo. Con <b>🔄 Actualizar la OC</b> pasas las cantidades y precios de la PI a la orden.',
     'Ubica el sello: en <b>PDF</b> lo ves sobre la página y lo <b>arrastras</b> (y ajustas el tamaño); en <b>Excel</b> va encima de "THE BUYER" o en la celda que escribas; en <b>Word</b> va encima de "THE BUYER" o al final. Luego pulsa <b>🖊 Poner sello y descargar</b>.',
     'Abre el archivo sellado para verificarlo y envíalo al proveedor con <b>📨 Enviar PI sellada</b> (sale con el archivo adjunto y las mismas copias).',
     'Confirma con <b>✅ PI confirmada y sellada</b>.'
@@ -13122,7 +13179,7 @@ ARTE_GUIAS.pi_confirmada = {
   listo: 'PI cargada, diferencias revisadas (si hay) y el archivo sellado generado.',
   errores: [
     'Sellar una PI con un PO No. de otra orden.',
-    'Aceptar cambios de MOQ o de precio sin dejar la nota (luego nadie sabe por qué cambió).',
+    'Poner "Otro" como motivo sin escribir el detalle (luego nadie sabe por qué cambió).',
     'No revisar los términos de pago: a veces el proveedor cambia el % de anticipo.'
   ],
   ejemplo: 'PI DS2026071302 · PO OCI137 ✓ · 2554: 1000 → 1008 und (caja completa) · Nota: "cantidades ajustadas a caja completa, aceptado" · sello en G42 · enviada por correo.'
@@ -13284,14 +13341,14 @@ function ocpHtmlEnvio(){
   <div class="arte-sec">
     <div class="arte-sec-h">② Correo al proveedor</div>
     <div class="arte-grid2">
-      <div class="fg"><label class="fl">Para</label><input class="inp" ${ed} id="ocp-para" value="${ocpEsc(para)}" placeholder="correo@proveedor.com" oninput="ocpSet('envio.para',this.value)"></div>
+      <div class="fg"><label class="fl">Para (uno o varios, separados por coma)</label><input class="inp" ${ed} id="ocp-para" value="${ocpEsc(para)}" placeholder="correo@proveedor.com, otro@proveedor.com" oninput="ocpSet('envio.para',this.value);ocpPintarChipsPara()"><div id="ocp-para-chips">${ocpHtmlChipsPara(para)}</div></div>
       <div class="fg"><label class="fl">Asunto</label><input class="inp" ${ed} id="ocp-asunto" value="${ocpEsc(asunto)}" oninput="ocpSet('envio.asunto',this.value)"></div>
     </div>
     ${ocpHtmlCC('envio')}
-    <textarea class="inp arte-msg" id="ocp-cuerpo" rows="10" ${ed} oninput="ocpSet('envio.cuerpo',this.value)">${ocpEsc(e.cuerpo || ocpMensajeOCI())}</textarea>
-    <div class="arte-adj" style="margin-top:6px;"><span class="arte-adj-t">📎 Adjunto</span>${e.pdf_url?`<a href="${ocpEsc(e.pdf_url)}" target="_blank" rel="noopener">${ocpEsc(e.pdf_nombre)}</a>`:'<span class="arte-mu">el PDF de la OCI (se genera solo al enviar si aún no existe)</span>'}</div>
+    <textarea class="inp arte-msg" id="ocp-cuerpo" rows="10" ${ed} oninput="ocpSet('envio.cuerpo',this.value)">${ocpEsc(ocpLimpiarCuerpo(e.cuerpo) || ocpMensajeOCI())}</textarea>
+    <div id="ocp-adj-zona">${ocpHtmlAdjuntosCorreo()}</div>
     ${OCP.editable?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center;">
-      <button class="btn btn-p btn-sm" style="padding:9px 16px;" id="ocp-btn-enviar" onclick="ocpEnviarOCI()">📨 ${e.enviado_por_erp?'Reenviar':'Enviar'} correo con el PDF adjunto</button>
+      <button class="btn btn-p btn-sm" style="padding:9px 16px;" id="ocp-btn-enviar" onclick="ocpEnviarOCI()">📨 ${e.enviado_por_erp?'Reenviar':'Enviar'} correo con los adjuntos</button>
       <button class="btn btn-g btn-sm" onclick="OCP.d.envio.cuerpo='';document.getElementById('ocp-cuerpo').value=ocpMensajeOCI();ocpCambio()">↻ Regenerar mensaje</button>
     </div>`:''}
     ${e.enviado_por_erp?`<div class="arte-mu" style="margin-top:8px;color:var(--gr);">✅ Enviado desde el ERP ${arteFmtFecha(e.enviado_erp_en)} a ${ocpEsc(e.enviado_a||'')}${e.enviado_cc?' · CC '+ocpEsc(e.enviado_cc):''}</div>`:''}
@@ -13398,17 +13455,74 @@ async function ocpEnviarOCI(){
   if(!OCP.appsUrl){ if(typeof toast==='function') toast('Primero configura el envío automático (una sola vez, abajo)','wa'); const d = document.querySelector('#ea-contenido details.arte-hist'); if(d){ d.open = true; d.scrollIntoView({behavior:'smooth'}); } return; }
   const btn = document.getElementById('ocp-btn-enviar'); const txt0 = btn.textContent; btn.disabled = true;
   try{
-    if(!OCP.d.envio.pdf_url){ btn.textContent = '⏳ Generando PDF…'; await ocpGenerarPdf(); if(!OCP.d.envio.pdf_url) throw new Error('No se pudo generar el PDF'); }
+    const env = OCP.d.envio; const adjuntos = [];
+    if(env.incluir_pdf!==false){
+      if(!env.pdf_url){ btn.textContent = '⏳ Generando PDF…'; await ocpGenerarPdf(); if(!env.pdf_url) throw new Error('No se pudo generar el PDF'); }
+      adjuntos.push({url:env.pdf_url, nombre:env.pdf_nombre||('OC_'+OCP.oc.numero_oc+'.pdf')});
+    }
+    if(env.incluir_excel){
+      btn.textContent = '⏳ Generando Excel…';
+      const x = await reabastExcelOCBlob(OCP.ocId, 'china'); if(!x) throw new Error('No se pudo generar el Excel de la OC');
+      const url = await ocSubirAdjunto(new File([x.blob], x.nombre, {type:x.blob.type}));
+      Object.assign(env, {excel_url:url, excel_nombre:x.nombre}); adjuntos.push({url, nombre:x.nombre});
+    }
+    (env.adjuntos_extra||[]).forEach(a=> adjuntos.push({url:a.url, nombre:a.nombre}));
+    if(!adjuntos.length) throw new Error('No hay ningún adjunto seleccionado');
     btn.textContent = '⏳ Enviando…';
-    const asunto = document.getElementById('ocp-asunto').value, cuerpo = document.getElementById('ocp-cuerpo').value;
-    await ocpEnviarCorreoServidor({para:para.join(','), cc:cc.join(','), asunto, cuerpo, adjuntos:[{url:OCP.d.envio.pdf_url, nombre:OCP.d.envio.pdf_nombre||('OC_'+OCP.oc.numero_oc+'.pdf')}]});
-    Object.assign(OCP.d.envio, {enviado:true, enviado_por_erp:true, enviado_erp_en:new Date().toISOString(), enviado_a:para.join(', '), enviado_cc:cc.join(', ')});
-    ocpLog('correo', 'OCI enviada a '+para.join(', ')+(cc.length?' · CC '+cc.join(', '):''));
+    const asunto = document.getElementById('ocp-asunto').value, cuerpo = ocpLimpiarCuerpo(document.getElementById('ocp-cuerpo').value);
+    await ocpEnviarCorreoServidor({para:para.join(','), cc:cc.join(','), asunto, cuerpo, adjuntos});
+    Object.assign(OCP.d.envio, {enviado:true, enviado_por_erp:true, enviado_erp_en:new Date().toISOString(), enviado_a:para.join(', '), enviado_cc:cc.join(', '), enviado_adjuntos: adjuntos.map(a=>a.nombre)});
+    ocpLog('correo', 'OCI enviada a '+para.join(', ')+(cc.length?' · CC '+cc.join(', '):'')+' · adjuntos: '+adjuntos.map(a=>a.nombre).join(', '));
     await ocpGuardar(true).catch(()=>{});
-    if(typeof toast==='function') toast('✅ Correo enviado con el PDF adjunto','ok');
+    if(typeof toast==='function') toast('✅ Correo enviado con '+adjuntos.length+' adjunto(s)','ok');
     ocpPintar();
   }catch(err){ if(typeof toast==='function') toast('No se envió: '+err.message,'er'); btn.disabled = false; btn.textContent = txt0; }
 }
+// Quita del cuerpo líneas de versiones anteriores que ya no deben ir (ítems/cantidades y total).
+function ocpLimpiarCuerpo(txt){ return String(txt||'').split('\n').filter(l=>!/^\s*-\s*(items|total\s*amount)\s*:/i.test(l)).join('\n'); }
+// Correos del proveedor como chips: tocar uno lo agrega o lo quita del "Para".
+function ocpHtmlChipsPara(para){
+  const lista = ocpListaCorreos(para); const prov = ocpCorreosProveedor(OCP.prov);
+  const nuevos = lista.filter(x=>!prov.map(y=>y.toLowerCase()).includes(x.toLowerCase()));
+  if(!prov.length && !nuevos.length) return '';
+  return `<div class="arte-chips" style="margin-top:5px;">${prov.map(c=>`<span class="chip ${lista.map(x=>x.toLowerCase()).includes(c.toLowerCase())?'on':''}" ${OCP.editable?`onclick="ocpToggleCorreo('${ocpEsc(c)}')"`:''} title="Correo de la ficha del proveedor">${ocpEsc(c)}</span>`).join('')}</div>
+    ${nuevos.length && OCP.editable ? `<div class="arte-mu" style="margin-top:4px;">Nuevo(s): ${nuevos.map(ocpEsc).join(', ')} · <span class="arte-link" style="margin-left:0;" onclick="ocpGuardarCorreosProveedor()">💾 guardar en la ficha del proveedor</span></div>` : ''}`;
+}
+function ocpPintarChipsPara(){ const z = document.getElementById('ocp-para-chips'); if(z) z.innerHTML = ocpHtmlChipsPara(document.getElementById('ocp-para').value); }
+function ocpToggleCorreo(c){
+  const inp = document.getElementById('ocp-para'); let l = ocpListaCorreos(inp.value);
+  const i = l.findIndex(x=>x.toLowerCase()===c.toLowerCase()); if(i>=0) l.splice(i,1); else l.push(c);
+  inp.value = l.join(', '); ocpSet('envio.para', inp.value); ocpPintarChipsPara();
+}
+async function ocpGuardarCorreosProveedor(){
+  const prov = OCP.prov; if(!prov || !prov.id){ if(typeof toast==='function') toast('Este proveedor no tiene ficha creada','wa'); return; }
+  const todos = [...ocpCorreosProveedor(prov)]; ocpListaCorreos(document.getElementById('ocp-para').value).forEach(c=>{ if(!todos.map(x=>x.toLowerCase()).includes(c.toLowerCase())) todos.push(c); });
+  try{ await sbReabast.patch('proveedores','id=eq.'+prov.id,{correo: todos.join('\n')}); prov.correo = todos.join('\n'); if(typeof toast==='function') toast('Correos guardados en la ficha del proveedor','ok'); ocpPintarChipsPara(); }
+  catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); }
+}
+// Adjuntos del correo: PDF de la OCI, Excel de la OC y cualquier otro archivo que quieras.
+function ocpHtmlAdjuntosCorreo(){
+  const e = OCP.d.envio, ed = OCP.editable ? '' : 'disabled';
+  const extra = e.adjuntos_extra||[];
+  return `<div class="arte-sec" style="margin:8px 0 0;padding:8px 10px;">
+    <div class="arte-sec-h" style="margin-bottom:6px;">📎 Adjuntos del correo</div>
+    <label class="arte-chk ${e.incluir_pdf!==false?'ok':''}" style="margin-bottom:4px;"><input type="checkbox" ${ed} ${e.incluir_pdf!==false?'checked':''} onchange="ocpSet('envio.incluir_pdf',this.checked);this.closest('.arte-chk').classList.toggle('ok',this.checked)">
+      📄 OC en PDF ${e.pdf_url?`· <a href="${ocpEsc(e.pdf_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${ocpEsc(e.pdf_nombre)}</a>`:'<span class="arte-mu">(se genera al enviar)</span>'}</label>
+    <label class="arte-chk ${e.incluir_excel?'ok':''}" style="margin-bottom:4px;"><input type="checkbox" ${ed} ${e.incluir_excel?'checked':''} onchange="ocpSet('envio.incluir_excel',this.checked);this.closest('.arte-chk').classList.toggle('ok',this.checked)">
+      📊 OC en Excel <span class="arte-mu">(se genera al enviar)</span></label>
+    ${extra.map((a,k)=>`<div class="arte-adj"><span class="arte-adj-t">📎</span><a href="${ocpEsc(a.url)}" target="_blank" rel="noopener">${ocpEsc(a.nombre)}</a>${OCP.editable?`<span class="arte-x" title="Quitar" onclick="ocpQuitarAdjuntoCorreo(${k})">✕</span>`:''}</div>`).join('')}
+    ${OCP.editable?`<label class="btn btn-g btn-sm" style="cursor:pointer;margin-top:4px;">📎 Adjuntar archivo (OC firmada, fichas, artes…)<input type="file" multiple style="display:none;" onchange="ocpAdjuntarCorreo(this)"></label>`:''}
+  </div>`;
+}
+async function ocpAdjuntarCorreo(inp){
+  const files = [...(inp.files||[])]; if(!files.length) return;
+  const z = document.getElementById('ocp-adj-zona'); if(z) z.insertAdjacentHTML('beforeend','<div class="arte-adj subiendo">⏳ Subiendo '+files.length+' archivo(s)…</div>');
+  OCP.d.envio.adjuntos_extra = OCP.d.envio.adjuntos_extra || [];
+  for(const f of files){ try{ const url = await ocSubirAdjunto(f); OCP.d.envio.adjuntos_extra.push({nombre:f.name, url}); }catch(e){ if(typeof toast==='function') toast('Error subiendo '+f.name+': '+e.message,'er'); } }
+  inp.value = ''; ocpCambio(); ocpRefrescarAdjCorreo();
+}
+function ocpQuitarAdjuntoCorreo(k){ OCP.d.envio.adjuntos_extra.splice(k,1); ocpCambio(); ocpRefrescarAdjCorreo(); }
+function ocpRefrescarAdjCorreo(){ const z = document.getElementById('ocp-adj-zona'); if(z) z.innerHTML = ocpHtmlAdjuntosCorreo(); ocpProgreso(); }
 function ocpHtmlPdfZona(){
   const e = OCP.d.envio;
   const btns = OCP.editable ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -13464,7 +13578,7 @@ async function ocpSubirPdfPropio(inp){
 function ocpRefrescarEnvio(){
   const zona = document.getElementById('ocp-pdf-zona'); if(zona) zona.innerHTML = ocpHtmlPdfZona();
   const cuerpo = document.getElementById('ocp-cuerpo'); if(cuerpo && !OCP.d.envio.cuerpo) cuerpo.value = ocpMensajeOCI();
-  ocpProgreso();
+  ocpRefrescarAdjCorreo();
 }
 function ocpAbrirCorreo(){
   const para = document.getElementById('ocp-para').value, asunto = document.getElementById('ocp-asunto').value, cuerpo = document.getElementById('ocp-cuerpo').value;
@@ -13472,7 +13586,7 @@ function ocpAbrirCorreo(){
 }
 function ocpFaltanEnvio(){
   const f = [];
-  if(!OCP.d.envio.pdf_url) f.push('Generar o subir el PDF');
+  if(!OCP.d.envio.pdf_url && !OCP.d.envio.enviado_por_erp && !(OCP.d.envio.adjuntos_extra||[]).length) f.push('Generar o adjuntar la OC');
   if(!ocpCorreosProveedor({correo: (document.getElementById('ocp-para')||{}).value || OCP.d.envio.para || OCP.prov.correo}).length) f.push('Correo del proveedor');
   if(!OCP.d.envio.enviado) f.push('Enviar el correo');
   return f;
@@ -13500,6 +13614,11 @@ function ocpLeerPI(buf){
   const cFob  = col(/^fob/i, /unit\s*price/i, /price/i);
   const cAmt  = col(/^amount/i, /total\s*(usd|amount)/i);
   const cDesc = col(/customer.*item|cusomer.*item/i, /descrip/i);
+  const cCtn  = col(/qty\s*\/\s*ctn|pcs\s*\/\s*ctn|qty\s*inner|inner\s*\/\s*outer|packing\s*qty|qty\s*per\s*(ctn|carton)|pcs\s*\/\s*carton/i);
+  const cPack = H.findIndex((h,i)=> i!==cCtn && /packag|^package|^packing$/i.test(h));
+  const cCbm  = col(/cbm\s*outer|cbm\s*\/\s*ctn|^cbm$/i, /^(?!.*total).*cbm/i);
+  const cEan  = col(/ean|barcode/i);
+  const cDescs = H.map((h,i)=>/descrip/i.test(h)?i:-1).filter(i=>i>=0);
   const items = []; let vacias = 0, ultimaFila = hdr;
   for(let r=hdr+1; r<filas.length; r++){
     const row = filas[r]||[]; const code = row[cCode];
@@ -13510,7 +13629,12 @@ function ocpLeerPI(buf){
     const qty = Number(row[cQty]); if(!isFinite(qty) || qty<=0) continue;
     ultimaFila = r;
     const fob = Number(row[cFob]);
-    items.push({code: ocpNormRef(code), qty, fob: isFinite(fob)?fob:null, amount: cAmt>=0 && isFinite(Number(row[cAmt])) ? Number(row[cAmt]) : (isFinite(fob)?fob*qty:null), desc: cDesc>=0 ? String(row[cDesc]||'').replace(/\s+/g,' ').trim().slice(0,80) : ''});
+    const ctnRaw = cCtn>=0 ? String(row[cCtn]==null?'':row[cCtn]) : ''; const mIO = ctnRaw.match(/(\d+)\s*\/\s*(\d+)/);
+    items.push({code: ocpNormRef(code), qty, fob: isFinite(fob)?fob:null, amount: cAmt>=0 && isFinite(Number(row[cAmt])) ? Number(row[cAmt]) : (isFinite(fob)?fob*qty:null), desc: cDesc>=0 ? String(row[cDesc]||'').replace(/\s+/g,' ').trim().slice(0,80) : '',
+      desc_full: cDescs.map(i=>row[i]).filter(v=>v!=null).join(' ').replace(/\s+/g,' '),
+      ctn: mIO ? Number(mIO[2]) : (isFinite(ocpPrimerNum(ctnRaw)) ? ocpPrimerNum(ctnRaw) : null), inner: mIO ? Number(mIO[1]) : null,
+      pack: cPack>=0 ? String(row[cPack]||'').replace(/\s+/g,' ').trim() : '', cbm: cCbm>=0 && isFinite(Number(row[cCbm])) && row[cCbm]!==null && row[cCbm]!=='' ? Number(row[cCbm]) : null,
+      ean: cEan>=0 && row[cEan] ? String(row[cEan]).replace(/\D/g,'') : ''});
   }
   // Encabezado: P/I No., PO No., fecha, términos de pago, celda del comprador
   const buscar = (rx)=>{ for(let r=0;r<filas.length;r++){ const row = filas[r]||[]; for(let c=0;c<row.length;c++){ if(row[c]!=null && rx.test(String(row[c]))){ for(let k=c+1;k<row.length;k++){ if(row[k]!=null && String(row[k]).trim()) return row[k]; } } } } return ''; };
@@ -13521,7 +13645,8 @@ function ocpLeerPI(buf){
     if(!terminos && /terms?\s*of\s*payment/i.test(s)) terminos = s.replace(/^\s*\d\)\s*/,'').trim();
     if(/buyer/i.test(s) && (!buyer || r+mejor.off.r>buyer.r)) buyer = {r:r+mejor.off.r, c:c+mejor.off.c, txt:s.trim()};
   }));
-  return { hoja: mejor.nombre, hojaIdx: mejor.idx, pi_no: String(buscar(/p\s*\/?\s*i\s*no/i)||''), po_no: String(buscar(/^\s*p\.?\s*o\.?\s*no/i)||''), fecha: String(fecha||''), terminos, items, buyer, ultimaFila: ultimaFila+mejor.off.r };
+  const texto = filas.map(r=>(r||[]).filter(c=>c!=null && c!=='').map(c=> c instanceof Date ? c.toISOString().slice(0,10) : String(c)).join(' ')).join('\n');
+  return { hoja: mejor.nombre, hojaIdx: mejor.idx, pi_no: String(buscar(/p\s*\/?\s*i\s*no/i)||''), po_no: String(buscar(/^\s*p\.?\s*o\.?\s*no/i)||''), fecha: String(fecha||''), terminos, items, buyer, ultimaFila: ultimaFila+mejor.off.r, texto };
 }
 function ocpColLetra(c){ let s=''; c++; while(c>0){ const m=(c-1)%26; s=String.fromCharCode(65+m)+s; c=Math.floor((c-1)/26); } return s; }
 function ocpCeldaAIndice(ref){ const m = String(ref||'').trim().toUpperCase().match(/^([A-Z]{1,3})(\d{1,6})$/); if(!m) return null; let c=0; for(const ch of m[1]) c = c*26 + (ch.charCodeAt(0)-64); return {c:c-1, r:Number(m[2])-1}; }
@@ -13529,12 +13654,13 @@ function ocpCeldaAIndice(ref){ const m = String(ref||'').trim().toUpperCase().ma
 // Compara la PI contra la OC (cantidades y FOB por referencia).
 function ocpCompararPI(pi){
   const oc = {}; OCP.items.forEach(it=>{ const k = ocpNormRef(it.referencia); (oc[k]=oc[k]||{qty:0, fob:Number(it.precio_fob_usd)||0}); oc[k].qty += Number(it.cantidad)||0; });
-  const piMap = {}; pi.items.forEach(x=>{ (piMap[x.code]=piMap[x.code]||{qty:0, fob:x.fob, amount:0, desc:x.desc}); piMap[x.code].qty += x.qty; piMap[x.code].amount += x.amount||0; });
+  const piMap = {}; pi.items.forEach(x=>{ if(!piMap[x.code]) piMap[x.code] = {...x, qty:0, amount:0}; piMap[x.code].qty += x.qty; piMap[x.code].amount += x.amount||0; });
   const refs = [...new Set([...Object.keys(oc), ...Object.keys(piMap)])];
   return refs.map(r=>{
     const a = oc[r], b = piMap[r];
-    const estado = !a ? 'extra' : !b ? 'falta' : (Math.abs(a.qty-b.qty)>1e-9 || (b.fob!=null && Math.abs(a.fob-b.fob)>1e-6)) ? 'dif' : 'ok';
-    return {ref:r, desc: b?b.desc:'', oc_qty:a?a.qty:null, pi_qty:b?b.qty:null, oc_fob:a?a.fob:null, pi_fob:b?b.fob:null, estado};
+    const attrs = a && b ? ocpAtributosRef(r, a, b) : [];
+    const estado = !a ? 'extra' : !b ? 'falta' : attrs.some(x=>x.estado==='dif') ? 'dif' : 'ok';
+    return {ref:r, desc: b?b.desc:'', oc_qty:a?a.qty:null, pi_qty:b?b.qty:null, oc_fob:a?a.fob:null, pi_fob:b?b.fob:null, estado, attrs};
   }).sort((x,y)=> ({falta:0,extra:1,dif:2,ok:3}[x.estado]-{falta:0,extra:1,dif:2,ok:3}[y.estado]) );
 }
 async function ocpCargarPI(inp){
@@ -13548,7 +13674,7 @@ async function ocpCargarPI(inp){
     Object.assign(OCP.d.pi, {original_nombre:f.name, pi_no:pi.pi_no, po_no:pi.po_no, fecha:pi.fecha, terminos:pi.terminos,
       total: pi.items.reduce((a,x)=>a+(x.amount||0),0), filas, sellado_url:'', sellado_en:null, acepto_diferencias:false,
       buyer: pi.tipo==='xlsx' && pi.buyer ? {celda: ocpColLetra(pi.buyer.c)+(pi.buyer.r+1), txt: pi.buyer.txt} : null, hoja: pi.hoja||'',
-      tipo: pi.tipo, ancla: pi.ancla||'', pos: pi.posDefecto ? {...pi.posDefecto} : null, enviada_en:null});
+      tipo: pi.tipo, ancla: pi.ancla||'', pos: pi.posDefecto ? {...pi.posDefecto} : null, enviada_en:null, condiciones: ocpCondiciones(pi), motivos:{}, oc_actualizada:false});
     ocpLog('pi_cargada', `PI ${pi.pi_no||f.name} cargada · ${pi.items.length} ítems`);
     ocSubirAdjunto(f).then(url=>{ OCP.d.pi.original_url = url; ocpCambio(); }).catch(e=>console.warn('No pude guardar la PI original:', e.message));
     ocpCambio();
@@ -13581,31 +13707,7 @@ function ocpHtmlPI(){
     </div>
     ${p.terminos?`<div class="arte-mu" style="margin-top:6px;">💳 ${ocpEsc(p.terminos)}</div>`:''}
   </div>
-  <div class="arte-sec">
-    <div class="arte-sec-h">② Comparación PI vs OC
-      <span class="bdg bdg-verde" style="margin-left:6px;">${n.ok} ✓</span>
-      ${n.dif?`<span class="bdg bdg-or2">${n.dif} diferentes</span>`:''}${n.falta?`<span class="bdg bdg-rojo">${n.falta} faltan</span>`:''}${n.extra?`<span class="bdg" style="background:var(--pud);color:var(--pu);">${n.extra} de más</span>`:''}
-      ${n.ok?`<span class="arte-link" onclick="document.getElementById('ocp-tabla').classList.toggle('solo-dif')">ver / ocultar las que coinciden</span>`:''}</div>
-    <div class="tw" style="max-height:320px;overflow:auto;"><table id="ocp-tabla" class="ocp-tabla ${hayDif?'solo-dif':''}">
-      <thead><tr><th></th><th>Ref.</th><th>Descripción PI</th><th style="text-align:right;">Cant. OC</th><th style="text-align:right;">Cant. PI</th><th style="text-align:right;">FOB OC</th><th style="text-align:right;">FOB PI</th></tr></thead>
-      <tbody>${(p.filas||[]).map(f=>{ const e = est[f.estado];
-        const dq = f.oc_qty!=null && f.pi_qty!=null && f.oc_qty!==f.pi_qty, df = f.oc_fob!=null && f.pi_fob!=null && Math.abs(f.oc_fob-f.pi_fob)>1e-6;
-        return `<tr class="ocp-${f.estado}" title="${e[2]}">
-        <td style="color:${e[1]};font-weight:800;">${e[0]}</td><td style="font-family:monospace;font-weight:700;">${ocpEsc(f.ref)}</td>
-        <td class="arte-mu" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${ocpEsc(f.desc||'')}</td>
-        <td style="text-align:right;">${f.oc_qty!=null?ocpNum(f.oc_qty,0):'—'}</td>
-        <td style="text-align:right;${dq?'color:var(--or);font-weight:800;':''}">${f.pi_qty!=null?ocpNum(f.pi_qty,0):'—'}${dq?` <small>(${f.pi_qty>f.oc_qty?'+':''}${ocpNum(f.pi_qty-f.oc_qty,0)})</small>`:''}</td>
-        <td style="text-align:right;">${f.oc_fob!=null?ocpNum(f.oc_fob,4):'—'}</td>
-        <td style="text-align:right;${df?'color:var(--or);font-weight:800;':''}">${f.pi_fob!=null?ocpNum(f.pi_fob,4):'—'}</td></tr>`; }).join('')}</tbody>
-    </table></div>
-    <div class="arte-kvs" style="margin-top:8px;">
-      <span class="arte-kv"><em>Total OC</em>US$ ${ocpNum(t.tot)}</span>
-      <span class="arte-kv"><em>Total PI</em>US$ ${ocpNum(p.total)}</span>
-      <span class="arte-kv" style="${Math.abs(difTot)>0.005?'color:var(--or);border-color:var(--or);':'color:var(--gr);'}"><em>Diferencia</em>${difTot>0?'+':''}US$ ${ocpNum(difTot)}</span>
-    </div>
-    ${hayDif || !poOk ? `<label class="arte-chk ${p.acepto_diferencias?'ok':''}" style="margin-top:10px;"><input type="checkbox" ${ed?'':'disabled'} ${p.acepto_diferencias?'checked':''} onchange="ocpSet('pi.acepto_diferencias',this.checked);this.closest('.arte-chk').classList.toggle('ok',this.checked)"> Revisé las diferencias y las acepto (o ya quedaron acordadas con el proveedor)</label>
-      <div class="fg"><label class="fl">Nota sobre las diferencias</label><input class="inp" ${ed?'':'disabled'} value="${ocpEsc(p.nota||'')}" placeholder="Ej: 2554 sube a 1008 und para completar caja; 2559 MOQ 3000 aceptado" oninput="ocpSet('pi.nota',this.value)"></div>` : `<div class="arte-mu" style="margin-top:8px;color:var(--gr);">✓ La PI coincide con la OC en referencias, cantidades y precios.</div>`}
-  </div>
+  ${ocpHtmlComparacion()}
   <div class="arte-sec">
     <div class="arte-sec-h">③ Sello ILUMAX TRADING CORP.</div>
     ${ocpHtmlSelloSeccion()}
@@ -13618,7 +13720,7 @@ function ocpHtmlPI(){
   </div>`;
 }
 function ocpNombreSellado(){ const n = OCP.d.pi.original_nombre||'PI.xlsx'; const ext = (n.match(/\.(xlsx|xlsm|pdf|docx)$/i)||[,'xlsx'])[1].toLowerCase(); return n.replace(/\.(xlsx|xlsm|pdf|docx)$/i,'')+'_SELLADA.'+ext; }
-function ocpRefrescarPI(){ const z = document.getElementById('ocp-pi-zona'); if(z) z.innerHTML = ocpHtmlPI(); ocpProgreso(); if(OCP.d.pi.tipo==='pdf') ocpPdfPreview(); }
+function ocpRefrescarPI(){ const z = document.getElementById('ocp-pi-zona'); if(z) z.innerHTML = ocpHtmlPI(); ocpProgreso(); ocpActualizarChipsDif(); if(OCP.d.pi.tipo==='pdf') ocpPdfPreview(); }
 
 // Inserta el sello como imagen en el .xlsx original, tocando solo el dibujo de la hoja (así no se
 // pierden las fotos, fórmulas, formatos ni figuras que trae el archivo del proveedor).
@@ -13738,9 +13840,7 @@ async function ocpCorreoPI(){
 function ocpFaltanPI(){
   const p = OCP.d.pi, f = [];
   if(!p.original_nombre) return ['Cargar el Excel de la PI'];
-  const hayDif = (p.filas||[]).some(x=>x.estado!=='ok');
-  const poOk = !p.po_no || ocpNormRef(p.po_no).replace(/\s/g,'').includes(ocpNormRef(OCP.oc.numero_oc).replace(/\s/g,''));
-  if((hayDif || !poOk) && !p.acepto_diferencias) f.push('Revisar y aceptar las diferencias');
+  if(ocpHayDiferencias() && !p.acepto_diferencias) f.push('Revisar y aceptar las diferencias');
   if(!p.sellado_url) f.push('Poner el sello');
   return f;
 }
@@ -13817,16 +13917,28 @@ async function ocpLeerPIpdf(buf){
   const antesTotal = f => !totalF || f.p < totalF.p || (f.p===totalF.p && f.y > totalF.y + 2);
   const cuerpo = frases.filter(f=>debajo(f) && antesTotal(f));
   const items = [];
-  cuerpo.filter(f=>colDe(f)===hdr.rf && /^[A-Za-z0-9][A-Za-z0-9\-\/.]{1,24}$/.test(f.s) && !/^total/i.test(f.s)).forEach(rf=>{
+  const hX = rx => hdr.L.find(h=> h!==hdr.q && h!==hdr.pr && h!==hdr.am && h!==hdr.rf && rx.test(h.s));
+  const hCtn = hX(/qty\s*\/\s*ctn|pcs\s*\/\s*ctn|inner\s*\/\s*outer|packing\s*qty|qty\s*per/i), hPack = hX(/packag|^package/i), hCbm = hX(/cbm/i), hEan = hX(/ean|barcode/i), hDescF = hX(/descrip/i);
+  const refsF = cuerpo.filter(f=>colDe(f)===hdr.rf && /^[A-Za-z0-9][A-Za-z0-9\-\/.]{1,24}$/.test(f.s) && !/^total/i.test(f.s)).sort((a,b)=> a.p-b.p || b.y-a.y);
+  const banda = rf => { const i = refsF.indexOf(rf); const prev = refsF[i-1], next = refsF[i+1];
+    const top = prev && prev.p===rf.p ? (prev.y+rf.y)/2 : (rf.p===hdr.p ? hdr.y-2 : 99999);
+    const bot = next && next.p===rf.p ? (rf.y+next.y)/2 : (totalF && totalF.p===rf.p ? totalF.y+2 : -99999);
+    return cuerpo.filter(f=>f.p===rf.p && f.y<top && f.y>bot); };
+  refsF.forEach(rf=>{
     const enFila = col => cuerpo.find(f=>f.p===rf.p && colDe(f)===col && Math.abs(f.y-rf.y) < 7 && isFinite(ocpNumTxt(f.s)));
     const q = enFila(hdr.q); if(!q) return;
     const pr = hdr.pr ? enFila(hdr.pr) : null, am = hdr.am ? enFila(hdr.am) : null;
     const qty = ocpNumTxt(q.s), fob = pr ? ocpNumTxt(pr.s) : NaN, amount = am ? ocpNumTxt(am.s) : (isFinite(fob) ? fob*qty : NaN);
-    items.push({code: ocpNormRef(rf.s), qty, fob: isFinite(fob)?fob:null, amount: isFinite(amount)?amount:null, desc:''});
+    const enBanda = banda(rf); const deCol = h => h ? enBanda.filter(f=>colDe(f)===h).sort((a,b)=>b.y-a.y).map(f=>f.s).join(' ') : '';
+    const ctnTxt = deCol(hCtn), mIO = ctnTxt.match(/(\d+)\s*\/\s*(\d+)/);
+    const descFull = deCol(hDescF);
+    items.push({code: ocpNormRef(rf.s), qty, fob: isFinite(fob)?fob:null, amount: isFinite(amount)?amount:null, desc: descFull.slice(0,80), desc_full: descFull,
+      ctn: mIO ? Number(mIO[2]) : (isFinite(ocpPrimerNum(ctnTxt)) ? ocpPrimerNum(ctnTxt) : null), inner: mIO ? Number(mIO[1]) : null,
+      pack: deCol(hPack), cbm: hCbm && isFinite(ocpPrimerNum(deCol(hCbm))) ? ocpPrimerNum(deCol(hCbm)) : null, ean: hEan ? deCol(hEan).replace(/\D/g,'') : ''});
   });
   // descripción: primer texto de la columna de descripción en la misma fila (si existe)
   const hDesc = hdr.L.find(h=>/descrip/i.test(h.s));
-  if(hDesc) items.forEach(it=>{ const rf = cuerpo.find(f=>ocpNormRef(f.s)===it.code && colDe(f)===hdr.rf); const d = rf && cuerpo.filter(f=>f.p===rf.p && colDe(f)===hDesc && Math.abs(f.y-rf.y)<40).sort((a,b)=>b.y-a.y)[0]; if(d) it.desc = d.s.slice(0,80); });
+  if(hDesc) items.forEach(it=>{ if(it.desc) return; const rf = cuerpo.find(f=>ocpNormRef(f.s)===it.code && colDe(f)===hdr.rf); const d = rf && cuerpo.filter(f=>f.p===rf.p && colDe(f)===hDesc && Math.abs(f.y-rf.y)<40).sort((a,b)=>b.y-a.y)[0]; if(d) it.desc = d.s.slice(0,80); });
   // encabezado de la PI
   const valorDe = rx => { for(const f of frases){ const m = f.s.match(rx); if(m){ const v = (m[m.length-1]||'').replace(/^[:#\s]+/,'').trim(); if(v) return v; const sig = frases.filter(g=>g.p===f.p && Math.abs(g.y-f.y)<2.5 && g.x>f.x).sort((a,b)=>a.x-b.x)[0]; if(sig) return sig.s; } } return ''; };
   const pi_no = valorDe(/^(?:p\s*\/?\s*i|proforma(?:\s*invoice)?|invoice)\s*(?:no\.?|number|#)\s*:?\s*(.*)$/i);
@@ -13843,7 +13955,8 @@ async function ocpLeerPIpdf(buf){
   else if(firma){ const pg = paginas[firma.p-1]; pos = {page:firma.p, x:pg.view[0]+pg.w-W-40, y:Math.max(pg.view[1]+30, firma.y-18)}; }
   else { const pg = paginas[paginas.length-1]; pos = {page:paginas.length, x:pg.view[0]+pg.w-W-40, y:pg.view[1]+60}; }
   pos.w = W; pos.h = H;
-  return {tipo:'pdf', pi_no, po_no, fecha, terminos, items, paginas, posDefecto:pos, ancla: buyer ? 'encima de "'+buyer.s+'"' : firma ? 'al lado de la firma del proveedor' : 'abajo a la derecha'};
+  const texto = [...frases].sort((a,b)=> a.p-b.p || b.y-a.y || a.x-b.x).map(f=>f.s).join('\n');
+  return {tipo:'pdf', texto, pi_no, po_no, fecha, terminos, items, paginas, posDefecto:pos, ancla: buyer ? 'encima de "'+buyer.s+'"' : firma ? 'al lado de la firma del proveedor' : 'abajo a la derecha'};
 }
 
 // Lee una PI en Word (.docx): busca la tabla con referencia y cantidad.
@@ -13862,11 +13975,16 @@ async function ocpLeerPIdocx(buf){
     const hs = filas[hi].map((s,i)=>({s,i})); const us = new Set();
     const rf = ocpElegirCol(hs, OCP_COLS.ref, us), q = ocpElegirCol(hs, OCP_COLS.qty, us), pr = ocpElegirCol(hs, OCP_COLS.price, us), am = ocpElegirCol(hs, OCP_COLS.amount, us);
     const hDesc = hs.find(h=>/descrip/i.test(h.s));
+    const hCtn = ocpElegirCol(hs, [/qty\s*\/\s*ctn|pcs\s*\/\s*ctn|inner\s*\/\s*outer|packing\s*qty|qty\s*per/i], us), hPack = ocpElegirCol(hs, [/packag|^package/i], us), hCbm = ocpElegirCol(hs, [/cbm/i], us), hEan = ocpElegirCol(hs, [/ean|barcode/i], us);
+    const hDescs = hs.filter(h=>/descrip/i.test(h.s));
     for(const f of filas.slice(hi+1)){
       const code = f[rf.i]; const qty = ocpNumTxt(f[q.i]);
       if(!code || /^total/i.test(code) || !isFinite(qty) || qty<=0) continue;
       const fob = pr ? ocpNumTxt(f[pr.i]) : NaN, amount = am ? ocpNumTxt(f[am.i]) : NaN;
-      items.push({code: ocpNormRef(code), qty, fob: isFinite(fob)?fob:null, amount: isFinite(amount)?amount:(isFinite(fob)?fob*qty:null), desc: hDesc ? (f[hDesc.i]||'').slice(0,80) : ''});
+      const ctnTxt = hCtn ? (f[hCtn.i]||'') : ''; const mIO = ctnTxt.match(/(\d+)\s*\/\s*(\d+)/);
+      items.push({code: ocpNormRef(code), qty, fob: isFinite(fob)?fob:null, amount: isFinite(amount)?amount:(isFinite(fob)?fob*qty:null), desc: hDesc ? (f[hDesc.i]||'').slice(0,80) : '',
+        desc_full: hDescs.map(h=>f[h.i]||'').join(' '), ctn: mIO ? Number(mIO[2]) : (isFinite(ocpPrimerNum(ctnTxt))?ocpPrimerNum(ctnTxt):null), inner: mIO?Number(mIO[1]):null,
+        pack: hPack ? (f[hPack.i]||'') : '', cbm: hCbm && isFinite(ocpPrimerNum(f[hCbm.i])) ? ocpPrimerNum(f[hCbm.i]) : null, ean: hEan ? String(f[hEan.i]||'').replace(/\D/g,'') : ''});
     }
     if(items.length) break;
   }
@@ -13874,7 +13992,8 @@ async function ocpLeerPIdocx(buf){
   const parrafos = [...doc.getElementsByTagNameNS(W,'p')].map(txt).filter(Boolean);
   const valorDe = rx => { for(const s of parrafos){ const m = s.match(rx); if(m && m[1] && m[1].trim()) return m[1].trim(); } return ''; };
   const buyerP = [...parrafos].reverse().find(s=>/the\s*buyer|buyer'?s?\s*(signature|sign|stamp)/i.test(s));
-  return {tipo:'docx', pi_no: valorDe(/(?:p\s*\/?\s*i|invoice)\s*(?:no\.?|number|#)\s*:?\s*(\S.*)$/i), po_no: valorDe(/(?:p\.?\s*o\.?|purchase\s*order)\s*(?:no\.?|#)?\s*:?\s*(\S.*)$/i),
+  const texto = parrafos.join('\n') + '\n' + [...doc.getElementsByTagNameNS(W,'tbl')].map(txt).join('\n');
+  return {tipo:'docx', texto, pi_no: valorDe(/(?:p\s*\/?\s*i|invoice)\s*(?:no\.?|number|#)\s*:?\s*(\S.*)$/i), po_no: valorDe(/(?:p\.?\s*o\.?|purchase\s*order)\s*(?:no\.?|#)?\s*:?\s*(\S.*)$/i),
     fecha: valorDe(/^date\s*:?\s*(.*)$/i), terminos: parrafos.filter(s=>/deposit|T\/T|payment/i.test(s)).sort((a,b)=>b.length-a.length)[0]||'', items,
     ancla: buyerP ? 'encima de "'+buyerP.slice(0,40)+'"' : 'al final del documento'};
 }
@@ -13991,6 +14110,463 @@ function ocpHtmlSelloSeccion(){
     </div>`;
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// ═══ HISTÓRICO DE NOVEDADES por OC: demoras (con su motivo) y cambios del proveedor ═══
+// Cada novedad guarda qué cambió, de cuánto a cuánto, por qué y quién lo registró. Se guarda en
+// `configuracion` (clave oc_novedades_<id>, tipo json), igual que los expedientes de arte y PI.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+const OCN_TIPOS = {
+  demora:        {i:'⏱', l:'Demora',                     c:'#dc2626'},
+  precio:        {i:'💲', l:'Cambio de precio',           c:'#ea580c'},
+  cantidad:      {i:'🔢', l:'Cambio de cantidad',         c:'#ea580c'},
+  empaque:       {i:'📦', l:'Cambio de empaque',          c:'#7c3aed'},
+  especificacion:{i:'⚙️', l:'Cambio de especificación',   c:'#7c3aed'},
+  condiciones:   {i:'📄', l:'Cambio de condiciones',      c:'#2563eb'},
+  referencia:    {i:'🏷', l:'Referencia agregada/quitada', c:'#2563eb'},
+  arte:          {i:'🎨', l:'Arte (devoluciones/cambios)', c:'#64748b'},
+  otro:          {i:'📝', l:'Otra novedad',               c:'#64748b'}
+};
+const OCN_MOTIVOS_CAMBIO = ['Ajuste a caja completa','MOQ del proveedor','Alza de costos / materia prima','Negociado con el proveedor','Error en nuestra OC','Error del proveedor en la PI','Cambio de especificación del producto','Disponibilidad del proveedor','Otro'];
+const OCN_MOTIVOS_DEMORA = ['Proveedor no respondió a tiempo','Proveedor pidió cambios','Esperando información interna','Aprobación interna pendiente','Pago / anticipo pendiente','Arte o diseño','Calidad / muestras','Festivos o fuerza mayor','Otro'];
+const OCN = { cache:{}, filtro:'todas', global:null, gFiltro:{tipo:'', prov:'', q:''} };
+
+async function ocnCargar(ocId, forzar){
+  if(!forzar && OCN.cache[ocId]) return OCN.cache[ocId];
+  let lista = [];
+  try{ const rows = await sb.get('configuracion','clave=eq.oc_novedades_'+ocId); if(rows && rows[0] && rows[0].valor) lista = JSON.parse(rows[0].valor)||[]; }
+  catch(e){ console.warn('Novedades OC:', e.message); }
+  return (OCN.cache[ocId] = lista);
+}
+async function ocnAgregar(ocId, entradas){
+  if(!entradas || !entradas.length) return;
+  const lista = await ocnCargar(ocId, true);
+  const quien = (typeof CU!=='undefined' && CU && CU.nombre) || 'Usuario';
+  entradas.forEach(e=> lista.push({id: Date.now().toString(36)+Math.random().toString(36).slice(2,6), t:new Date().toISOString(), quien, ...e}));
+  await sb.upsert('configuracion', {clave:'oc_novedades_'+ocId, valor:JSON.stringify(lista), tipo:'json'}, 'clave');
+  OCN.cache[ocId] = lista; OCN.global = null;
+  const el = document.getElementById('ocd-novedades'); if(el && el.dataset.oc===ocId) ocnPintarDetalle(ocId);
+}
+async function ocnBorrar(ocId, id){
+  if(!confirm('¿Borrar esta novedad del histórico?')) return;
+  const lista = (await ocnCargar(ocId, true)).filter(x=>x.id!==id);
+  await sb.upsert('configuracion', {clave:'oc_novedades_'+ocId, valor:JSON.stringify(lista), tipo:'json'}, 'clave');
+  OCN.cache[ocId] = lista; OCN.global = null; ocnPintarDetalle(ocId);
+}
+
+// ── Ventana para pedir el motivo (demora o cambio). Devuelve {motivo, nota} o null si cancela ──
+function ocnPedirMotivo({titulo, texto, motivos, obligatorio=true}){
+  return new Promise(res=>{
+    const ov = document.createElement('div'); ov.className = 'ov on'; ov.style.zIndex = 900;
+    ov.innerHTML = `<div class="mo" style="max-width:460px;">
+      <div class="mh"><div class="mt">${reabastEsc(titulo)}</div><div class="mx" data-x>✕</div></div>
+      <div class="mb">
+        ${texto?`<div style="font-size:12px;margin-bottom:10px;line-height:1.5;">${texto}</div>`:''}
+        <div class="fl" style="margin-bottom:6px;">¿Por qué?${obligatorio?' *':''}</div>
+        <div class="arte-chips" data-chips>${motivos.map(m=>`<span class="chip" data-m="${reabastEsc(m)}">${reabastEsc(m)}</span>`).join('')}</div>
+        <div class="fg" style="margin-top:10px;"><label class="fl">Detalle (opcional)</label><textarea class="inp" data-nota rows="2" placeholder="Qué pasó, con quién se habló, qué se acordó…"></textarea></div>
+        <div data-err style="font-size:11px;color:var(--rd);min-height:14px;"></div>
+      </div>
+      <div class="mf"><button class="btn btn-g" data-x>Cancelar</button><button class="btn btn-p" data-ok>Guardar motivo</button></div>
+    </div>`;
+    document.body.appendChild(ov);
+    let sel = '';
+    ov.querySelectorAll('[data-chips] .chip').forEach(c=> c.onclick = ()=>{ ov.querySelectorAll('[data-chips] .chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); sel = c.dataset.m; });
+    const cerrar = v=>{ ov.remove(); res(v); };
+    ov.querySelectorAll('[data-x]').forEach(b=> b.onclick = ()=>cerrar(null));
+    ov.querySelector('[data-ok]').onclick = ()=>{
+      const nota = ov.querySelector('[data-nota]').value.trim();
+      if(obligatorio && !sel){ ov.querySelector('[data-err]').textContent = 'Elige un motivo'; return; }
+      if(sel==='Otro' && !nota){ ov.querySelector('[data-err]').textContent = 'Cuéntanos cuál fue el motivo en el detalle'; return; }
+      cerrar({motivo: sel || 'Sin motivo', nota});
+    };
+  });
+}
+// Si la etapa se pasó del tiempo esperado, pide el motivo antes de cerrarla. {ok:false} = canceló.
+async function ocnAsegurarMotivoDemora(ocId, etapaId){
+  const e = (REABAST.ocEtapas[ocId]||[]).find(x=>x.id===etapaId);
+  if(!e || !e.fecha_inicio) return {ok:true, demora:null};
+  const dias = (Date.now()-new Date(e.fecha_inicio))/86400000, esp = Number(e.dias_esperado)||0;
+  if(!esp || dias <= esp) return {ok:true, demora:null};
+  const nombre = (OC_ETAPAS_POR_ID[e.etapa_id]||{}).nombre || e.nombre;
+  const r = await ocnPedirMotivo({titulo:'¿Por qué se demoró esta etapa?',
+    texto:`<strong>${reabastEsc(nombre)}</strong> tomó <strong>${reabastFmtDuracion(dias)}</strong>; lo esperado era ${reabastFmtDuracion(esp)} (<span style="color:var(--rd);font-weight:700;">${reabastFmtDuracion(dias-esp)} de más</span>).`,
+    motivos: OCN_MOTIVOS_DEMORA});
+  if(!r) return {ok:false};
+  return {ok:true, demora:{tipo:'demora', etapa:e.etapa_id, etapa_nombre:nombre, campo:'Duración', antes:reabastFmtDuracion(esp)+' (esperado)', despues:reabastFmtDuracion(dias), impacto_dias:Math.round((dias-esp)*10)/10, motivo:r.motivo, nota:r.nota}};
+}
+
+// ── Panel del histórico en el detalle de la OC ──
+async function ocnPintarDetalle(ocId){
+  const el = document.getElementById('ocd-novedades'); if(!el) return;
+  el.dataset.oc = ocId;
+  const [lista, arte] = await Promise.all([ocnCargar(ocId), sb.get('configuracion','clave=eq.arte_oc_'+ocId).then(r=>r&&r[0]&&r[0].valor?JSON.parse(r[0].valor):null).catch(()=>null)]);
+  // devoluciones y cambios del flujo de arte, como novedades de solo lectura
+  const deArte = ((arte&&arte.log)||[]).filter(l=>['devolucion','cambios','preprensa_error'].includes(l.accion)).map(l=>({id:'arte-'+l.t, t:l.t, quien:l.quien, tipo:'arte', etapa_nombre:(OC_ETAPAS_POR_ID[l.etapa]||{}).nombre||l.etapa, campo:{devolucion:'Devolución',cambios:'Proveedor pidió cambios',preprensa_error:'Preprensa con errores'}[l.accion], nota:l.msg, _soloLectura:true}));
+  const todas = [...lista, ...deArte].sort((a,b)=> new Date(b.t)-new Date(a.t));
+  const n = {}; todas.forEach(x=> n[x.tipo] = (n[x.tipo]||0)+1);
+  const diasDemora = lista.filter(x=>x.tipo==='demora').reduce((a,x)=>a+(Number(x.impacto_dias)||0),0);
+  const impacto = lista.reduce((a,x)=>a+(Number(x.impacto_usd)||0),0);
+  const filtradas = OCN.filtro==='todas' ? todas : todas.filter(x=>x.tipo===OCN.filtro);
+  el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+      <div class="admin-sec-t">📋 Histórico de novedades (${todas.length})</div>
+      <button class="btn btn-bl btn-sm" onclick="ocnFormManual('${ocId}')">+ Registrar novedad</button>
+    </div>
+    <div class="ocn-kpis">
+      <div class="ocn-kpi"><b style="color:${diasDemora?'var(--rd)':'var(--gr)'};">${diasDemora?'+'+reabastFmtDuracion(diasDemora):'0 d'}</b><span>demora acumulada</span></div>
+      <div class="ocn-kpi"><b style="color:${impacto>0.005?'var(--rd)':impacto<-0.005?'var(--gr)':'var(--tx)'};">${impacto>0?'+':''}US$ ${ocpNum(impacto)}</b><span>impacto en el valor</span></div>
+      <div class="ocn-kpi"><b>${(n.precio||0)+(n.cantidad||0)+(n.empaque||0)+(n.especificacion||0)+(n.condiciones||0)+(n.referencia||0)}</b><span>cambios del proveedor</span></div>
+    </div>
+    <div class="arte-chips" style="margin:8px 0;">
+      <span class="chip ${OCN.filtro==='todas'?'on':''}" onclick="OCN.filtro='todas';ocnPintarDetalle('${ocId}')">Todas</span>
+      ${Object.keys(OCN_TIPOS).filter(k=>n[k]).map(k=>`<span class="chip ${OCN.filtro===k?'on':''}" onclick="OCN.filtro='${k}';ocnPintarDetalle('${ocId}')">${OCN_TIPOS[k].i} ${OCN_TIPOS[k].l} (${n[k]})</span>`).join('')}
+    </div>
+    <div id="ocn-form-${ocId}"></div>
+    ${filtradas.length ? `<div class="ocn-tl">${filtradas.map(x=>ocnHtmlEntrada(x, ocId)).join('')}</div>`
+      : `<div class="arte-mu" style="padding:10px 0;">Sin novedades registradas. Las demoras y los cambios del proveedor (PI) se registran solos; también puedes agregar una a mano.</div>`}`;
+}
+function ocnHtmlEntrada(x, ocId){
+  const t = OCN_TIPOS[x.tipo] || OCN_TIPOS.otro;
+  const cambio = (x.antes!=null && x.antes!=='') || (x.despues!=null && x.despues!=='');
+  return `<div class="ocn-it" style="--c:${t.c};">
+    <div class="ocn-dot">${t.i}</div>
+    <div style="flex:1;min-width:0;">
+      <div class="ocn-h"><strong>${t.l}</strong>${x.ref?` · <span style="font-family:monospace;font-weight:700;">${reabastEsc(x.ref)}</span>`:''}${x.campo?` · ${reabastEsc(x.campo)}`:''}${x.etapa_nombre?` <span class="arte-mu">(${reabastEsc(x.etapa_nombre)})</span>`:''}</div>
+      ${cambio?`<div class="ocn-cambio"><span class="ocn-antes">${reabastEsc(x.antes==null||x.antes===''?'—':x.antes)}</span> → <span class="ocn-desp">${reabastEsc(x.despues==null||x.despues===''?'—':x.despues)}</span>
+        ${x.impacto_usd?` <span class="bdg ${x.impacto_usd>0?'bdg-rojo':'bdg-verde'}" style="font-size:9px;">${x.impacto_usd>0?'+':''}US$ ${ocpNum(x.impacto_usd)}</span>`:''}
+        ${x.impacto_dias?` <span class="bdg bdg-rojo" style="font-size:9px;">+${reabastFmtDuracion(x.impacto_dias)}</span>`:''}</div>`:''}
+      ${x.motivo?`<div style="margin-top:3px;"><span class="bdg bdg-amarillo" style="font-size:9.5px;">Motivo: ${reabastEsc(x.motivo)}</span></div>`:''}
+      ${x.nota?`<div class="arte-mu" style="margin-top:3px;white-space:pre-line;">${reabastEsc(x.nota)}</div>`:''}
+      <div class="arte-mu" style="margin-top:3px;font-size:10px;">${reabastEsc(x.quien||'')} · ${new Date(x.t).toLocaleString('es-CO',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}${x.origen?' · '+reabastEsc(x.origen):''}</div>
+    </div>
+    ${!x._soloLectura && reabastEsAdmin() ? `<span class="arte-x" title="Borrar" onclick="ocnBorrar('${ocId}','${x.id}')">✕</span>` : ''}
+  </div>`;
+}
+function ocnFormManual(ocId){
+  const z = document.getElementById('ocn-form-'+ocId); if(!z) return;
+  if(z.innerHTML){ z.innerHTML = ''; return; }
+  const refs = [...new Set((REABAST.ocItems[ocId]||[]).map(it=>it.referencia))];
+  z.innerHTML = `<div class="arte-sec" style="margin-top:0;">
+    <div class="fg2">
+      <div class="fg"><label class="fl">Tipo</label><select class="inp" id="ocn-f-tipo" onchange="document.getElementById('ocn-f-motivo').innerHTML=(this.value==='demora'?OCN_MOTIVOS_DEMORA:OCN_MOTIVOS_CAMBIO).map(m=>'<option>'+m+'</option>').join('')">${Object.keys(OCN_TIPOS).filter(k=>k!=='arte').map(k=>`<option value="${k}">${OCN_TIPOS[k].i} ${OCN_TIPOS[k].l}</option>`).join('')}</select></div>
+      <div class="fg"><label class="fl">Referencia (opcional)</label><select class="inp" id="ocn-f-ref"><option value="">Toda la OC</option>${refs.map(r=>`<option>${reabastEsc(r)}</option>`).join('')}</select></div>
+    </div>
+    <div class="fg2">
+      <div class="fg"><label class="fl">Qué cambió</label><input class="inp" id="ocn-f-campo" placeholder="Ej: Fecha de embarque, Precio, Unidades por caja"></div>
+      <div class="fg"><label class="fl">Motivo</label><select class="inp" id="ocn-f-motivo">${OCN_MOTIVOS_DEMORA.map(m=>`<option>${m}</option>`).join('')}</select></div>
+    </div>
+    <div class="fg2">
+      <div class="fg"><label class="fl">Antes</label><input class="inp" id="ocn-f-antes" placeholder="Ej: 15-oct"></div>
+      <div class="fg"><label class="fl">Después</label><input class="inp" id="ocn-f-despues" placeholder="Ej: 30-oct"></div>
+    </div>
+    <div class="fg2">
+      <div class="fg"><label class="fl">Días de impacto (opcional)</label><input class="inp" type="number" id="ocn-f-dias"></div>
+      <div class="fg"><label class="fl">Impacto US$ (opcional, + sube / − baja)</label><input class="inp" type="number" step="0.01" id="ocn-f-usd"></div>
+    </div>
+    <div class="fg"><label class="fl">Detalle</label><textarea class="inp" id="ocn-f-nota" rows="2" placeholder="Qué pasó y qué se acordó"></textarea></div>
+    <div style="display:flex;gap:6px;"><button class="btn btn-p btn-sm" style="padding:8px 14px;" onclick="ocnGuardarManual('${ocId}')">💾 Guardar novedad</button><button class="btn btn-g btn-sm" onclick="ocnFormManual('${ocId}')">Cancelar</button></div>
+  </div>`;
+  document.getElementById('ocn-f-tipo').value = 'demora';
+}
+async function ocnGuardarManual(ocId){
+  const v = id => (document.getElementById(id)||{}).value||'';
+  const tipo = v('ocn-f-tipo'), nota = v('ocn-f-nota').trim(), campo = v('ocn-f-campo').trim();
+  if(!campo && !nota){ if(typeof toast==='function') toast('Escribe qué cambió o el detalle','wa'); return; }
+  try{
+    await ocnAgregar(ocId, [{tipo, ref:v('ocn-f-ref')||null, campo, antes:v('ocn-f-antes'), despues:v('ocn-f-despues'), motivo:v('ocn-f-motivo'), nota,
+      impacto_dias: Number(v('ocn-f-dias'))||null, impacto_usd: Number(v('ocn-f-usd'))||null, origen:'registro manual'}]);
+    if(typeof toast==='function') toast('Novedad registrada','ok');
+  }catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); }
+}
+
+// ── Pestaña global: todas las novedades de todas las OC ──
+function reabastHtmlNovedadesShell(){ return `<div id="ocn-global"><div class="arte-mu" style="padding:20px;">⏳ Cargando novedades…</div></div>`; }
+async function ocnPintarGlobal(forzar){
+  const cont = document.getElementById('ocn-global'); if(!cont) return;
+  if(!OCN.global || forzar){
+    try{
+      const rows = await sb.get('configuracion','clave=like.oc_novedades_*&select=clave,valor');
+      OCN.global = [];
+      (rows||[]).forEach(r=>{ const ocId = r.clave.replace('oc_novedades_',''); let l = []; try{ l = JSON.parse(r.valor)||[]; }catch(e){}
+        const oc = (REABAST.ordenesCompra||[]).find(o=>String(o.id)===ocId) || {};
+        l.forEach(x=> OCN.global.push({...x, ocId, numero_oc: oc.numero_oc||'(OC borrada)', proveedor: oc.proveedor||''})); });
+      OCN.global.sort((a,b)=> new Date(b.t)-new Date(a.t));
+    }catch(e){ cont.innerHTML = `<div class="arte-mu" style="padding:20px;">No se pudieron cargar las novedades: ${reabastEsc(e.message)}</div>`; return; }
+  }
+  const f = OCN.gFiltro; const q = f.q.toLowerCase();
+  const lista = OCN.global.filter(x=> (!f.tipo || x.tipo===f.tipo) && (!f.prov || x.proveedor===f.prov) && (!q || JSON.stringify([x.numero_oc,x.ref,x.campo,x.motivo,x.nota,x.antes,x.despues]).toLowerCase().includes(q)));
+  const provs = [...new Set(OCN.global.map(x=>x.proveedor).filter(Boolean))].sort();
+  // ranking de motivos de demora
+  const dem = {}; lista.filter(x=>x.tipo==='demora').forEach(x=>{ const k = x.motivo||'Sin motivo'; (dem[k]=dem[k]||{n:0,d:0}); dem[k].n++; dem[k].d += Number(x.impacto_dias)||0; });
+  const demRank = Object.entries(dem).sort((a,b)=>b[1].d-a[1].d); const maxD = Math.max(1, ...demRank.map(x=>x[1].d));
+  const cam = {}; lista.filter(x=>x.tipo!=='demora').forEach(x=>{ const k = x.motivo||'Sin motivo'; cam[k] = (cam[k]||0)+1; });
+  const camRank = Object.entries(cam).sort((a,b)=>b[1]-a[1]); const maxC = Math.max(1, ...camRank.map(x=>x[1]));
+  const porProv = {}; lista.forEach(x=>{ const k = x.proveedor||'—'; (porProv[k]=porProv[k]||{d:0,c:0,usd:0}); if(x.tipo==='demora') porProv[k].d += Number(x.impacto_dias)||0; else porProv[k].c++; porProv[k].usd += Number(x.impacto_usd)||0; });
+  cont.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">
+      <input class="inp" style="max-width:240px;" placeholder="🔍 Buscar OC, referencia, motivo…" value="${reabastEsc(f.q)}" oninput="OCN.gFiltro.q=this.value;clearTimeout(OCN._t);OCN._t=setTimeout(()=>ocnPintarGlobal(),250)">
+      <select class="inp" style="width:auto;" onchange="OCN.gFiltro.tipo=this.value;ocnPintarGlobal()"><option value="">Todos los tipos</option>${Object.keys(OCN_TIPOS).filter(k=>k!=='arte').map(k=>`<option value="${k}" ${f.tipo===k?'selected':''}>${OCN_TIPOS[k].i} ${OCN_TIPOS[k].l}</option>`).join('')}</select>
+      <select class="inp" style="width:auto;" onchange="OCN.gFiltro.prov=this.value;ocnPintarGlobal()"><option value="">Todos los proveedores</option>${provs.map(p=>`<option ${f.prov===p?'selected':''}>${reabastEsc(p)}</option>`).join('')}</select>
+      <button class="btn btn-g btn-sm" onclick="ocnPintarGlobal(true)">↻ Actualizar</button>
+    </div>
+    <div class="ocn-grid">
+      <div class="arte-sec" style="margin:0;"><div class="arte-sec-h">⏱ ¿Por qué nos demoramos? <span class="arte-mu" style="margin-left:6px;">días de más por motivo</span></div>
+        ${demRank.length ? demRank.map(([m,v])=>`<div class="ocn-bar"><span>${reabastEsc(m)}</span><div><i style="width:${Math.max(4,v.d/maxD*100)}%;background:#dc2626;"></i></div><b>${reabastFmtDuracion(v.d)} · ${v.n}</b></div>`).join('') : '<div class="arte-mu">Sin demoras registradas.</div>'}</div>
+      <div class="arte-sec" style="margin:0;"><div class="arte-sec-h">🔁 ¿Por qué cambian las órdenes? <span class="arte-mu" style="margin-left:6px;">cantidad de cambios</span></div>
+        ${camRank.length ? camRank.map(([m,v])=>`<div class="ocn-bar"><span>${reabastEsc(m)}</span><div><i style="width:${Math.max(4,v/maxC*100)}%;background:#ea580c;"></i></div><b>${v}</b></div>`).join('') : '<div class="arte-mu">Sin cambios registrados.</div>'}</div>
+    </div>
+    ${Object.keys(porProv).length?`<div class="tw" style="margin:10px 0;"><table><thead><tr><th>Proveedor</th><th style="text-align:right;">Días de demora</th><th style="text-align:right;">Cambios</th><th style="text-align:right;">Impacto US$</th></tr></thead><tbody>
+      ${Object.entries(porProv).sort((a,b)=>b[1].d-a[1].d).map(([p,v])=>`<tr style="cursor:pointer;" onclick="OCN.gFiltro.prov='${reabastEsc(p)}';ocnPintarGlobal()"><td>${reabastEsc(p)}</td><td style="text-align:right;color:${v.d?'var(--rd)':'inherit'};">${v.d?'+'+reabastFmtDuracion(v.d):'—'}</td><td style="text-align:right;">${v.c}</td><td style="text-align:right;">${v.usd?(v.usd>0?'+':'')+ocpNum(v.usd):'—'}</td></tr>`).join('')}
+    </tbody></table></div>`:''}
+    <div class="arte-sec-h" style="margin-top:6px;">Detalle (${lista.length})</div>
+    <div class="ocn-tl">${lista.slice(0,300).map(x=>`<div style="cursor:pointer;" onclick="reabastAbrirDetalleOC('${x.ocId}')" title="Abrir la OC">
+      <div class="arte-mu" style="font-size:10.5px;margin:6px 0 -4px 36px;"><strong style="color:var(--tx);">OC ${reabastEsc(x.numero_oc)}</strong> · ${reabastEsc(x.proveedor||'')}</div>${ocnHtmlEntrada({...x, _soloLectura:true}, x.ocId)}</div>`).join('') || '<div class="arte-mu" style="padding:10px;">No hay novedades con esos filtros.</div>'}</div>`;
+}
+function ocnInjectCss(){
+  if(document.getElementById('ocn-css')) return;
+  const s = document.createElement('style'); s.id = 'ocn-css';
+  s.textContent = `
+  .ocn-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;}
+  .ocn-kpi{background:var(--s1);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;}
+  .ocn-kpi b{font-size:15px;} .ocn-kpi span{font-size:10px;color:var(--mu);}
+  .ocn-tl{position:relative;}
+  .ocn-it{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--b1);font-size:12px;}
+  .ocn-dot{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;background:color-mix(in srgb, var(--c) 14%, transparent);border:1.5px solid var(--c);}
+  .ocn-h strong{color:var(--c);}
+  .ocn-cambio{margin-top:3px;font-size:12px;}
+  .ocn-antes{text-decoration:line-through;color:var(--mu);} .ocn-desp{font-weight:800;}
+  .ocn-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;}
+  .ocn-bar{display:grid;grid-template-columns:minmax(110px,1.3fr) 2fr auto;gap:8px;align-items:center;font-size:11.5px;margin:5px 0;}
+  .ocn-bar div{height:8px;background:var(--b1);border-radius:6px;overflow:hidden;} .ocn-bar i{display:block;height:100%;border-radius:6px;}
+  .ocn-bar b{font-size:11px;white-space:nowrap;}
+  .ocp-attr{width:100%;border-collapse:collapse;margin:4px 0 2px;}
+  .ocp-attr td{padding:4px 6px;border-bottom:1px dashed var(--b1);font-size:11.5px;vertical-align:top;}
+  .ocp-attr tr.dif td,.ocp-attr tr.revisar td{background:rgba(234,88,12,.05);}
+  .ocp-ref{border:1px solid var(--b1);border-radius:9px;margin-bottom:6px;overflow:hidden;}
+  .ocp-ref-h{display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;font-size:12px;flex-wrap:wrap;}
+  .ocp-ref-b{display:none;padding:0 10px 8px;} .ocp-ref.abierta .ocp-ref-b{display:block;}
+  .ocp-ref.ok .ocp-ref-h{background:var(--s1);}
+  .ocp-mot{display:flex;gap:4px;flex-wrap:wrap;align-items:center;}
+  .ocp-mot select{font-size:11px;padding:3px 6px;width:auto;max-width:190px;}
+  .ocp-mot input{font-size:11px;padding:3px 6px;width:150px;}
+  @media(max-width:600px){ .ocn-kpis{grid-template-columns:1fr 1fr;} }
+  `;
+  document.head.appendChild(s);
+}
+
+// ═══ Comparación completa OC vs PI: todos los atributos (no solo cantidad y precio) ═══
+function ocpSpecs(txt){
+  const t = ' '+String(txt||'').replace(/\s+/g,' ')+' ';
+  const all = (rx, f) => { const out = []; let m; const r = new RegExp(rx.source, rx.flags.includes('g')?rx.flags:rx.flags+'g'); while((m = r.exec(t))) out.push(f(m)); return [...new Set(out.filter(v=>v!=null && v!==''))]; };
+  return {
+    potencia: all(/(?<![\/\d.])(\d{1,4}(?:\.\d+)?)\s*W(?![a-z\/])/i, m=>Number(m[1])),
+    voltaje:  all(/(\d{2,3})\s*[-~–]\s*(\d{2,3})\s*V(?:AC)?\b|(?<![\d.])(\d{2,3})\s*V(?:AC)?\b/i, m=> m[1] ? m[1]+'-'+m[2] : m[3]),
+    cct:      all(/(\d{4})\s*K\b/i, m=>Number(m[1])).concat(/\b3\s*CCT\b/i.test(t)?['3CCT']:[]),
+    lumenes:  all(/(\d{2,5})\s*lm\b(?!\s*\/)/i, m=>Number(m[1])),
+    vida:     all(/(\d{1,2})\s*KH\b|(\d{1,3}(?:[.,]\d{3})|\d{4,6})\s*(?:hrs?|hours|horas|h)\b/i, m=> m[1] ? Number(m[1])*1000 : Number(String(m[2]).replace(/[.,]/g,''))),
+    base:     all(/\b(E\d{2}|GU10|GU5\.3|MR16|G13|G9|B22|G5|R7S|E14|E27|E40)\b/i, m=>m[1].toUpperCase()),
+    ip:       all(/\bIP\s?(\d{2})\b/i, m=>'IP'+m[1]),
+    pf:       all(/\bPF\s*[>≥]?\s*(0?\.\d+)/i, m=>Number(m[1])),
+    ra:       all(/\b(?:RA|CRI)\s*[>≥]?\s*(\d{2})\b/i, m=>Number(m[1]))
+  };
+}
+const OCP_SPEC_LBL = {potencia:'Potencia (W)', voltaje:'Voltaje (V)', cct:'Temperatura de color (K)', lumenes:'Flujo luminoso (lm)', vida:'Vida útil (h)', base:'Base / casquillo', ip:'Grado IP', pf:'Factor de potencia', ra:'IRC / RA'};
+function ocpPrimerNum(v){ const m = String(v==null?'':v).match(/\d+(?:[.,]\d+)?/); return m ? Number(m[0].replace(',','.')) : NaN; }
+function ocpPalabrasEmpaque(s){
+  const t = String(s||'').toLowerCase(); const k = [];
+  if(/colou?r\s*box/.test(t)) k.push('color box'); if(/brown\s*box|kraft/.test(t)) k.push('brown box'); if(/window/.test(t)) k.push('window'); if(/zip|bag|bolsa/.test(t)) k.push('bag');
+  if(/blister/.test(t)) k.push('blister'); if(/foam/.test(t)) k.push('foam'); if(/white\s*box/.test(t)) k.push('white box'); if(/shining|glossy|film/.test(t)) k.push('film');
+  return k;
+}
+// Atributos de una referencia: OC (catálogo + ítem) vs PI. estado: ok | dif | revisar | info
+function ocpAtributosRef(ref, a, b){
+  const r = (REABAST.referenciasMaestro||{})[ref] || (REABAST.referenciasMaestro||{})[Object.keys(REABAST.referenciasMaestro||{}).find(k=>ocpNormRef(k)===ref)] || {};
+  const out = [];
+  const add = (k, l, oc, pi, estado) => out.push({k, l, oc, pi, estado});
+  const nf = (n,d)=> n==null||!isFinite(n) ? '—' : ocpNum(n, d);
+  // cantidad / precio / valor
+  const qOk = Math.abs(a.qty-b.qty) < 1e-9;
+  add('qty','Cantidad', nf(a.qty,0), nf(b.qty,0), qOk?'ok':'dif');
+  if(b.fob!=null) add('fob','Precio unitario FOB (US$)', nf(a.fob,4), nf(b.fob,4), Math.abs(a.fob-b.fob)<1e-6?'ok':'dif');
+  const amOc = a.qty*a.fob, amPi = b.amount!=null ? b.amount : (b.fob!=null ? b.fob*b.qty : null);
+  if(amPi!=null) add('amount','Valor total (US$)', nf(amOc,2), nf(amPi,2), Math.abs(amOc-amPi)<0.01?'ok':(qOk && b.fob!=null && Math.abs(a.fob-b.fob)<1e-6 ? 'revisar' : 'info'));
+  // empaque
+  const mOc = ocpPrimerNum(r.master_packaging), mPi = b.ctn;
+  if(isFinite(mOc) || b.ctn!=null) add('ctn','Unidades por caja master', isFinite(mOc)?nf(mOc,0):'—', b.ctn!=null?nf(b.ctn,0):'no aparece', isFinite(mOc)&&b.ctn!=null ? (mOc===mPi?'ok':'dif') : 'info');
+  const iOc = ocpPrimerNum(r.internal_packaging);
+  if(isFinite(iOc) || b.inner!=null) add('inner','Unidades por caja interna', isFinite(iOc)?nf(iOc,0):'—', b.inner!=null?nf(b.inner,0):'no aparece', isFinite(iOc)&&b.inner!=null ? (iOc===b.inner?'ok':'dif') : 'info');
+  if(r.tipo_empaque || b.pack){
+    const kOc = ocpPalabrasEmpaque(r.tipo_empaque), kPi = ocpPalabrasEmpaque(b.pack);
+    const faltan = kOc.filter(k=>!kPi.includes(k) && k!=='film');
+    add('pack','Tipo de empaque', r.tipo_empaque||'—', b.pack||'no aparece', r.tipo_empaque && b.pack ? (faltan.length ? 'revisar' : 'ok') : 'info');
+  }
+  if(r.cbm || b.cbm!=null){ const cOc = Number(r.cbm); add('cbm','CBM caja master', cOc?nf(cOc,4):'—', b.cbm!=null?nf(b.cbm,4):'no aparece', cOc && b.cbm!=null ? (Math.abs(cOc-b.cbm)/cOc <= 0.05 ? 'ok' : 'revisar') : 'info'); }
+  if(r.ean13 || b.ean) add('ean','EAN 13', r.ean13||'—', b.ean||'no aparece', r.ean13 && b.ean ? (String(r.ean13).replace(/\D/g,'')===String(b.ean).replace(/\D/g,'')?'ok':'dif') : 'info');
+  // especificaciones (de la descripción del catálogo vs la descripción de la PI)
+  const txtOc = [r.descripcion_en, r.nombre_comercial, r.descripcion, r.temperatura_color, r.horas?r.horas+' h':'', r.tipo_tapa].filter(Boolean).join(' ');
+  const sOc = ocpSpecs(txtOc), sPi = ocpSpecs(b.desc_full||b.desc||'');
+  Object.keys(OCP_SPEC_LBL).forEach(k=>{
+    const vo = sOc[k], vp = sPi[k];
+    if(!vo.length && !vp.length) return;
+    const coincide = vo.length && vp.length && vo.some(v=> vp.some(w=> String(v)===String(w)));
+    add('spec_'+k, OCP_SPEC_LBL[k], vo.length?vo.join(' / '):'—', vp.length?vp.join(' / '):'no aparece', vo.length && vp.length ? (coincide?'ok':'revisar') : 'info');
+  });
+  if(r.marca_caja && b.desc_full && !String(b.desc_full).toLowerCase().includes(String(r.marca_caja).toLowerCase().split(/\s+/)[0])) add('marca','Marca en la caja', r.marca_caja, 'no aparece en la PI', 'info');
+  return out;
+}
+// Condiciones generales de la orden (encabezado): anticipo, plazo de pago, entrega, lote, incoterm/puerto
+function ocpCondiciones(pi){
+  const o = OCP.oc, p = OCP.prov, t = String(pi.texto||'') + ' ' + (pi.terminos||'');
+  const out = []; const add = (k,l,oc,piv,estado)=> out.push({k,l,oc,pi:piv,estado});
+  if(pi.po_no){ const ok = ocpNormRef(pi.po_no).replace(/\s/g,'').includes(ocpNormRef(o.numero_oc).replace(/\s/g,'')); add('po','Número de OC (PO No.)', o.numero_oc, pi.po_no, ok?'ok':'dif'); }
+  const depOc = o.deposito_pct!=null ? Number(o.deposito_pct)*100 : (p.porcentaje_anticipo!=null ? Number(p.porcentaje_anticipo)*100 : null);
+  const mDep = t.match(/(\d{1,3})\s*%\s*(?:T\/T\s*)?(?:deposit|advance|anticipo|down\s*payment)/i) || t.match(/(?:deposit|advance|anticipo)[^%\d]{0,25}(\d{1,3})\s*%/i);
+  const depPi = mDep ? Number(mDep[1]) : null;
+  if(depOc!=null || depPi!=null) add('deposito','Anticipo (%)', depOc!=null?Math.round(depOc*10)/10+'%':'—', depPi!=null?depPi+'%':'no aparece', depOc!=null && depPi!=null ? (Math.abs(depOc-depPi)<0.5?'ok':'dif') : 'info');
+  const diasOc = p.dias_pago_despues_bl!=null && p.dias_pago_despues_bl!=='' ? Number(p.dias_pago_despues_bl) : ocpPrimerNum((String(o.terminos_pago||p.termino_pago||'').match(/(\d+)\s*(?:d[ií]as|days)/i)||[])[1]);
+  const mBl = t.match(/(\d{1,3})\s*days?\s*(?:from|after|against|of|since|de)?[^.;]{0,30}\bB\/?L\b/i);
+  const diasPi = mBl ? Number(mBl[1]) : null;
+  if(isFinite(diasOc) || diasPi!=null) add('dias_saldo','Plazo del saldo (días después del BL)', isFinite(diasOc)?diasOc+' días':'—', diasPi!=null?diasPi+' días':'no aparece', isFinite(diasOc) && diasPi!=null ? (diasOc===diasPi?'ok':'dif') : 'info');
+  const mLead = t.match(/(?:lead(?:ing)?\s*time|delivery|ready\s*time|production\s*time)[^.;]{0,60}?(\d{1,3})\s*(?:[-–~]|to)\s*(\d{1,3})\s*days/i) || t.match(/(?:lead(?:ing)?\s*time|delivery|ready\s*time|production\s*time)[^.;]{0,60}?(\d{1,3})\s*days/i);
+  if(mLead){
+    const dMax = Number(mLead[2]||mLead[1]); const base = /^\d{4}[\/-]\d{2}[\/-]\d{2}/.test(pi.fecha||'') ? new Date(String(pi.fecha).slice(0,10).replace(/\//g,'-')+'T12:00:00') : new Date();
+    const est = new Date(base.getTime()+dMax*86400000);
+    const fOc = String(o.terminos_entrega||'').match(/(\d{4})-(\d{2})-(\d{2})|(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    const dOc = fOc ? (fOc[1] ? new Date(fOc[1]+'-'+fOc[2]+'-'+fOc[3]+'T12:00:00') : new Date(fOc[6]+'-'+String(fOc[5]).padStart(2,'0')+'-'+String(fOc[4]).padStart(2,'0')+'T12:00:00')) : null;
+    const fmt = d=> d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'});
+    add('entrega','Entrega / tiempo de producción', o.terminos_entrega || '—', `${mLead[2]?mLead[1]+'-'+mLead[2]:mLead[1]} días (≈ ${fmt(est)})`, dOc ? (est <= dOc ? 'ok' : 'dif') : 'info');
+  }
+  const mBatch = t.match(/batch\s*(?:no\.?|number|#)?\s*:?\s*([A-Z0-9][A-Z0-9\-]{3,})/i);
+  if(o.lote || mBatch) add('lote','Lote (Batch)', o.lote||'—', mBatch?mBatch[1]:'no aparece', o.lote && mBatch ? (ocpNormRef(o.lote)===ocpNormRef(mBatch[1])?'ok':'dif') : 'info');
+  const inc = s=> (String(s||'').match(/\b(FOB|CIF|CFR|EXW|FCA|DAP|DDP|CPT|CIP)\b/i)||[])[1];
+  const incOc = inc(o.incoterm||p.incoterm), incPi = inc(t);
+  if(incOc || incPi) add('incoterm','INCOTERM', o.incoterm||p.incoterm||'—', incPi||'no aparece', incOc && incPi ? (incOc.toUpperCase()===incPi.toUpperCase()?'ok':'dif') : 'info');
+  const puertoPi = (t.match(/port\s*of\s*loading\s*:?\s*([A-Za-z]+)/i)||[])[1];
+  if(puertoPi && (o.incoterm||p.incoterm)) add('puerto','Puerto de embarque', o.incoterm||p.incoterm, puertoPi, String(o.incoterm||p.incoterm).toLowerCase().includes(puertoPi.toLowerCase()) ? 'ok' : 'revisar');
+  return out;
+}
+function ocpTipoNovedad(k){ return k==='qty'?'cantidad' : (k==='fob'||k==='amount')?'precio' : ['ctn','inner','pack','cbm'].includes(k)?'empaque' : (k.startsWith('spec_')||k==='ean'||k==='marca')?'especificacion' : k==='linea'?'referencia' : 'condiciones'; }
+// Lista de diferencias que necesitan motivo (clave única por referencia+atributo)
+function ocpDiferencias(){
+  const p = OCP.d.pi, out = [];
+  (p.filas||[]).forEach(f=>{
+    if(f.estado==='falta') out.push({key:f.ref+'|linea', ref:f.ref, k:'linea', l:'Referencia', oc:'En la OC ('+ocpNum(f.oc_qty,0)+' und)', pi:'No está en la PI', estado:'dif'});
+    else if(f.estado==='extra') out.push({key:f.ref+'|linea', ref:f.ref, k:'linea', l:'Referencia', oc:'No está en la OC', pi:'En la PI ('+ocpNum(f.pi_qty,0)+' und)', estado:'dif'});
+    (f.attrs||[]).filter(x=>x.estado==='dif'||x.estado==='revisar').forEach(x=> out.push({key:f.ref+'|'+x.k, ref:f.ref, ...x}));
+  });
+  (p.condiciones||[]).filter(x=>x.estado==='dif'||x.estado==='revisar').forEach(x=> out.push({key:'cond|'+x.k, ref:null, ...x}));
+  return out;
+}
+function ocpHtmlMotivo(key, estado){
+  const m = (OCP.d.pi.motivos||{})[key] || {}; const ed = OCP.editable ? '' : 'disabled';
+  const ops = (estado==='revisar' ? ['✓ Revisado: está bien'] : []).concat(OCN_MOTIVOS_CAMBIO);
+  return `<div class="ocp-mot"><select class="inp" ${ed} onchange="ocpSetMotivo('${reabastEsc(key)}','motivo',this.value)" style="${m.motivo?'':'border-color:var(--or);'}"><option value="">${estado==='revisar'?'¿Está bien? / motivo…':'¿Por qué cambió?…'}</option>${ops.map(o=>`<option ${m.motivo===o?'selected':''}>${o}</option>`).join('')}</select>
+    <input class="inp" ${ed} placeholder="detalle (opcional)" value="${reabastEsc(m.nota||'')}" oninput="ocpSetMotivo('${reabastEsc(key)}','nota',this.value)"></div>`;
+}
+function ocpSetMotivo(key, campo, val){
+  const p = OCP.d.pi; p.motivos = p.motivos || {}; p.motivos[key] = p.motivos[key] || {}; p.motivos[key][campo] = val;
+  if(campo==='motivo'){ const sel = document.querySelectorAll(`[data-mkey="${CSS.escape(key)}"] select`); sel.forEach(s=> s.style.borderColor = val ? '' : 'var(--or)'); ocpActualizarChipsDif(); }
+  ocpCambio();
+}
+function ocpMotivoATodas(){
+  const v = document.getElementById('ocp-mot-todas').value; if(!v) return;
+  const p = OCP.d.pi; p.motivos = p.motivos || {};
+  const soloRevisar = v==='✓ Revisado: está bien';
+  ocpDiferencias().forEach(d=>{ if((p.motivos[d.key]||{}).motivo) return; if(soloRevisar && d.estado!=='revisar') return; p.motivos[d.key] = {...(p.motivos[d.key]||{}), motivo:v}; });
+  ocpCambio(); ocpRefrescarPI();
+}
+function ocpActualizarChipsDif(){
+  const dif = ocpDiferencias(); const sin = dif.filter(d=>!((OCP.d.pi.motivos||{})[d.key]||{}).motivo).length;
+  const el = document.getElementById('ocp-dif-pend'); if(el) el.innerHTML = sin ? `<span class="bdg bdg-or2">${sin} sin motivo</span>` : (dif.length?'<span class="bdg bdg-verde">✓ todas justificadas</span>':'');
+}
+function ocpAttr(f,k){ return (f.attrs||[]).find(x=>x.k===k) || null; }
+function ocpHayDiferencias(){
+  const p = OCP.d.pi;
+  return (p.filas||[]).some(f=>f.estado!=='ok') || (p.condiciones||[]).some(x=>x.estado==='dif');
+}
+function ocpHtmlComparacion(){
+  const p = OCP.d.pi, t = ocpTotalesOC(), ed = OCP.editable;
+  const filas = p.filas||[];
+  const n = {ok:0,dif:0,falta:0,extra:0}; filas.forEach(f=>n[f.estado]++);
+  const hayDif = ocpHayDiferencias();
+  const difTot = (p.total||0) - t.tot;
+  const est = {ok:['✓','var(--gr)','Coincide'], dif:['≠','var(--or)','Diferente'], falta:['✗','var(--rd)','No está en la PI'], extra:['+','var(--pu)','No está en la OC']};
+  // columnas de empaque solo si alguna referencia tiene novedad en unidades por caja
+  const empDif = f => ['ctn','inner'].some(k=>{ const a = ocpAttr(f,k); return a && a.estado==='dif'; });
+  const verEmp = filas.some(empDif);
+  const otras = []; filas.forEach(f=> (f.attrs||[]).filter(x=>(x.estado==='dif'||x.estado==='revisar') && !['qty','fob','amount','ctn','inner'].includes(x.k)).forEach(x=>otras.push({ref:f.ref, ...x})));
+  (p.condiciones||[]).filter(x=>x.estado==='dif'||x.estado==='revisar').forEach(x=>otras.push({ref:null, ...x}));
+  return `<div class="arte-sec">
+    <div class="arte-sec-h">② Comparación PI vs OC
+      <span class="bdg bdg-verde" style="margin-left:6px;">${n.ok} ✓</span>
+      ${n.dif?`<span class="bdg bdg-or2">${n.dif} diferentes</span>`:''}${n.falta?`<span class="bdg bdg-rojo">${n.falta} faltan</span>`:''}${n.extra?`<span class="bdg" style="background:var(--pud);color:var(--pu);">${n.extra} de más</span>`:''}
+      ${n.ok?`<span class="arte-link" onclick="document.getElementById('ocp-tabla').classList.toggle('solo-dif')">ver / ocultar las que coinciden</span>`:''}</div>
+    <div class="tw" style="max-height:340px;overflow:auto;"><table id="ocp-tabla" class="ocp-tabla">
+      <thead><tr><th></th><th>Ref.</th><th>Descripción PI</th><th style="text-align:right;">Cant. OC</th><th style="text-align:right;">Cant. PI</th><th style="text-align:right;">FOB OC</th><th style="text-align:right;">FOB PI</th><th style="text-align:right;">Dif. precio</th>${verEmp?'<th style="text-align:right;">Und/caja OC</th><th style="text-align:right;">Und/caja PI</th>':''}</tr></thead>
+      <tbody>${filas.map(f=>{ const e = est[f.estado];
+        const dq = f.oc_qty!=null && f.pi_qty!=null && f.oc_qty!==f.pi_qty, df = f.oc_fob!=null && f.pi_fob!=null && Math.abs(f.oc_fob-f.pi_fob)>1e-6;
+        const dUni = df ? f.pi_fob - f.oc_fob : 0, dTotRef = df ? dUni*(f.pi_qty||0) : 0;
+        const ctn = ocpAttr(f,'ctn'), inner = ocpAttr(f,'inner'), eDif = empDif(f);
+        const emp = a => a ? a : {oc:'—', pi:'—'};
+        return `<tr class="ocp-${f.estado}" title="${e[2]}">
+        <td style="color:${e[1]};font-weight:800;">${e[0]}</td><td style="font-family:monospace;font-weight:700;">${ocpEsc(f.ref)}</td>
+        <td class="arte-mu" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${ocpEsc(f.desc||'')}</td>
+        <td style="text-align:right;">${f.oc_qty!=null?ocpNum(f.oc_qty,0):'—'}</td>
+        <td style="text-align:right;${dq?'color:var(--or);font-weight:800;':''}">${f.pi_qty!=null?ocpNum(f.pi_qty,0):'—'}${dq?` <small>(${f.pi_qty>f.oc_qty?'+':''}${ocpNum(f.pi_qty-f.oc_qty,0)})</small>`:''}</td>
+        <td style="text-align:right;">${f.oc_fob!=null?ocpNum(f.oc_fob,4):'—'}</td>
+        <td style="text-align:right;${df?'color:var(--or);font-weight:800;':''}">${f.pi_fob!=null?ocpNum(f.pi_fob,4):'—'}</td>
+        <td style="text-align:right;white-space:nowrap;">${df?`<span style="color:${dUni>0?'var(--rd)':'var(--gr)'};font-weight:800;">${dUni>0?'+':''}${ocpNum(dUni,4)}</span><div style="font-size:10px;color:${dUni>0?'var(--rd)':'var(--gr)'};">${dTotRef>0?'+':''}US$ ${ocpNum(dTotRef)}</div>`:'<span class="arte-mu">—</span>'}</td>
+        ${verEmp?`<td style="text-align:right;">${ocpEsc(emp(ctn).oc)}${inner&&inner.oc!=='—'?` <small class="arte-mu">(int. ${ocpEsc(inner.oc)})</small>`:''}</td>
+          <td style="text-align:right;${eDif?'color:var(--or);font-weight:800;':''}">${ocpEsc(emp(ctn).pi)}${inner&&inner.pi&&inner.pi!=='no aparece'?` <small>(int. ${ocpEsc(inner.pi)})</small>`:''}</td>`:''}</tr>`; }).join('')}</tbody>
+    </table></div>
+    <div class="arte-kvs" style="margin-top:8px;">
+      <span class="arte-kv"><em>Total OC</em>US$ ${ocpNum(t.tot)}</span>
+      <span class="arte-kv"><em>Total PI</em>US$ ${ocpNum(p.total)}</span>
+      <span class="arte-kv" style="${Math.abs(difTot)>0.005?'color:var(--or);border-color:var(--or);':'color:var(--gr);'}"><em>Diferencia</em>${difTot>0?'+':''}US$ ${ocpNum(difTot)}</span>
+    </div>
+    ${otras.length?`<details style="margin-top:8px;font-size:11.5px;"><summary style="cursor:pointer;color:var(--or);font-weight:700;">⚠ Otras diferencias detectadas (${otras.length}) — especificaciones y condiciones</summary>
+      <table class="ocp-attr" style="margin-top:4px;"><tr class="arte-mu"><td>Ref.</td><td>Atributo</td><td>OC</td><td>PI</td></tr>
+      ${otras.map(x=>`<tr class="${x.estado}"><td style="font-family:monospace;">${ocpEsc(x.ref||'Orden')}</td><td>${ocpEsc(x.l)}</td><td>${ocpEsc(x.oc)}</td><td style="font-weight:700;color:var(--or);">${ocpEsc(x.pi)}</td></tr>`).join('')}</table></details>`:''}
+    ${hayDif ? `<label class="arte-chk ${p.acepto_diferencias?'ok':''}" style="margin-top:10px;"><input type="checkbox" ${ed?'':'disabled'} ${p.acepto_diferencias?'checked':''} onchange="ocpSet('pi.acepto_diferencias',this.checked);this.closest('.arte-chk').classList.toggle('ok',this.checked)"> Revisé las diferencias y las acepto (o ya quedaron acordadas con el proveedor)</label>
+      <div class="fg"><label class="fl">Nota sobre las diferencias (queda en el histórico de la OC)</label><input class="inp" ${ed?'':'disabled'} value="${ocpEsc(p.nota||'')}" placeholder="Ej: 2554 sube a 1008 und para completar caja; 2559 MOQ 3000 aceptado" oninput="ocpSet('pi.nota',this.value)"></div>`
+      : `<div class="arte-mu" style="margin-top:8px;color:var(--gr);">✓ La PI coincide con la OC en referencias, cantidades, precios y empaque.</div>`}
+    ${ed && filas.some(f=>f.estado==='dif' && (f.attrs||[]).some(x=>(x.k==='qty'||x.k==='fob') && x.estado==='dif')) ? `<div style="margin-top:8px;"><button class="btn btn-bl btn-sm" onclick="ocpAplicarPIaOC()">${p.oc_actualizada?'✓ OC actualizada · volver a aplicar':'🔄 Actualizar la OC con las cantidades y precios de la PI'}</button></div>`:''}
+  </div>`;
+}
+// Pasa a los ítems de la OC la cantidad y el precio que quedaron en la PI (recalcula costo COP y margen).
+async function ocpAplicarPIaOC(){
+  const dif = (OCP.d.pi.filas||[]).filter(f=>f.estado==='dif' && (f.attrs||[]).some(x=>(x.k==='qty'||x.k==='fob') && x.estado==='dif'));
+  if(!confirm('Se actualizarán en la OC '+dif.length+' referencia(s) con la cantidad y el precio de la PI. ¿Continuar?')) return;
+  const o = OCP.oc; let n = 0, saltadas = [];
+  for(const f of dif){
+    const its = (REABAST.ocItems[o.id]||[]).filter(it=>ocpNormRef(it.referencia)===f.ref);
+    if(its.length!==1){ saltadas.push(f.ref); continue; }
+    const it = its[0]; const fob = f.pi_fob!=null ? f.pi_fob : it.precio_fob_usd;
+    const costo = (fob!=null && o.trm && o.factor_landeo) ? fob*o.factor_landeo*o.trm : it.costo_unitario_cop;
+    const margen = (costo && it.precio_venta_cop) ? Math.round((1-costo/it.precio_venta_cop)*1000)/10 : it.margen_pct;
+    const payload = {cantidad:f.pi_qty, precio_fob_usd:fob, costo_unitario_cop:costo, margen_pct:margen};
+    try{ await sbReabast.patch('oc_items','id=eq.'+it.id, payload); Object.assign(it, payload); n++; }catch(e){ saltadas.push(f.ref); }
+  }
+  OCP.d.pi.oc_actualizada = true; ocpLog('oc_actualizada', n+' ítem(s) actualizados con la PI'); ocpCambio();
+  if(typeof toast==='function') toast(`OC actualizada: ${n} ítem(s)`+(saltadas.length?` · revisar a mano: ${saltadas.join(', ')}`:''), saltadas.length?'wa':'ok');
+  ocpRefrescarPI();
+}
+// Novedades que deja la PI al confirmarse
+function ocpNovedadesDePI(){
+  const p = OCP.d.pi; const out = []; const motivo = 'Aceptado en la PI'; const nota = p.nota||'';
+  const base = {etapa:'pi_confirmada', etapa_nombre:'Confirmar PI', origen:'PI '+(p.pi_no||p.original_nombre||''), motivo, nota};
+  (p.filas||[]).forEach(f=>{
+    if(f.estado==='falta') return out.push({...base, tipo:'referencia', ref:f.ref, campo:'Referencia', antes:ocpNum(f.oc_qty,0)+' und', despues:'No está en la PI', impacto_usd: -Math.round((f.oc_qty||0)*(f.oc_fob||0)*100)/100});
+    if(f.estado==='extra') return out.push({...base, tipo:'referencia', ref:f.ref, campo:'Referencia', antes:'No está en la OC', despues:ocpNum(f.pi_qty,0)+' und', impacto_usd: Math.round((f.pi_qty||0)*(f.pi_fob||0)*100)/100});
+    const q = ocpAttr(f,'qty'), pr = ocpAttr(f,'fob');
+    const qD = q && q.estado==='dif', pD = pr && pr.estado==='dif';
+    if(qD) out.push({...base, tipo:'cantidad', ref:f.ref, campo:'Cantidad', antes:q.oc, despues:q.pi, impacto_usd: Math.round(((f.pi_qty||0)-(f.oc_qty||0))*(f.oc_fob||0)*100)/100 || null});
+    if(pD) out.push({...base, tipo:'precio', ref:f.ref, campo:'Precio FOB (US$/und)', antes:pr.oc, despues:pr.pi, impacto_usd: Math.round(((f.pi_fob||0)-(f.oc_fob||0))*(f.pi_qty||0)*100)/100 || null});
+    ['ctn','inner'].forEach(k=>{ const a = ocpAttr(f,k); if(a && a.estado==='dif') out.push({...base, tipo:'empaque', ref:f.ref, campo:a.l, antes:a.oc, despues:a.pi}); });
+  });
+  (p.condiciones||[]).filter(x=>x.estado==='dif').forEach(x=> out.push({...base, tipo:'condiciones', campo:x.l, antes:x.oc, despues:x.pi}));
+  return out;
+}
+
 // ── pintar / abrir / confirmar ──
 function ocpProgreso(){
   if(!OCP.tpl) return;
@@ -14023,13 +14599,13 @@ function ocpPintar(){
     ${tpl.id==='oc_creada' ? ocpHtmlEnvio() : `<div id="ocp-pi-zona">${ocpHtmlPI()}</div>`}
   </div>`;
   ocpProgreso();
-  if(tpl.id==='pi_confirmada' && OCP.d.pi.tipo==='pdf') ocpPdfPreview();
+  if(tpl.id==='pi_confirmada'){ ocpActualizarChipsDif(); if(OCP.d.pi.tipo==='pdf') ocpPdfPreview(); }
 }
 async function ocpAbrir(oc, e, tpl, items){
   Object.assign(OCP, {ocId:oc.id, oc, etapa:e, tpl, items, pi:null, d:null,
     prov: (REABAST.proveedores||[]).find(p=>(p.nombre||'').toLowerCase()===(oc.proveedor||'').toLowerCase()) || {}});
   OCP.editable = e.estado==='en_curso' && reabastPuedeMarcarEtapa(e);
-  arteInjectCss(); arteInjectCssGuia(); ocpInjectCss(); ARTE.guiaAbierta = undefined;
+  arteInjectCss(); arteInjectCssGuia(); ocpInjectCss(); ocnInjectCss(); ARTE.guiaAbierta = undefined;
   const mo = document.querySelector('#modal-etapa-adjunto .mo'); if(mo) mo.classList.add('arte-mo');
   document.getElementById('ea-com-wrap').style.display = 'none';
   document.getElementById('ea-file-wrap').style.display = 'none';
@@ -14038,20 +14614,34 @@ async function ocpAbrir(oc, e, tpl, items){
   document.getElementById('ea-contenido').innerHTML = '<div class="arte-mu" style="padding:30px;text-align:center;">⏳ Cargando…</div>';
   const [d] = await Promise.all([ocpCargar(oc.id), ocpCargarCC()]); if(OCP.ocId!==oc.id) return;
   OCP.d = d; ocpPintar();
+  // Si ya había una PI cargada, se trae el archivo guardado para mostrar la vista previa del sello
+  // y (si se cargó con una versión anterior) completar la comparación de empaque y precios.
+  if(tpl.id==='pi_confirmada' && d.pi.original_url && !OCP.pi){
+    try{
+      const r = await fetch(d.pi.original_url); if(!r.ok) throw new Error(r.status);
+      const buf = await r.arrayBuffer(); const info = await ocpLeerPIgenerico(buf, d.pi.original_nombre);
+      if(OCP.ocId!==oc.id) return;
+      OCP.pi = {buf, nombre:d.pi.original_nombre, info};
+      if(!(d.pi.filas||[]).some(f=>f.attrs) || !d.pi.condiciones){ d.pi.filas = ocpCompararPI(info); d.pi.condiciones = ocpCondiciones(info); if(!d.pi.tipo) d.pi.tipo = info.tipo; if(!d.pi.pos && info.posDefecto) d.pi.pos = {...info.posDefecto}; ocpCambio(); }
+      ocpRefrescarPI();
+    }catch(e){ console.warn('No pude recuperar la PI guardada:', e.message); }
+  }
 }
 function ocpCerrarLimpio(){ if(OCP.tpl && OCP.d) ocpGuardar(true).catch(()=>{}); OCP.tpl = null; }
 async function ocpConfirmar(){
   const lista = ocpProgreso();
   if(lista.length){ const fz = document.getElementById('arte-faltantes'); if(fz){ fz.classList.remove('shake'); void fz.offsetWidth; fz.classList.add('shake'); } if(typeof toast==='function') toast('Completa lo que falta antes de confirmar','wa'); return; }
   const {ocId, etapaId} = ETAPA_ADJUNTO_CTX; const extra = {};
+  const dm = await ocnAsegurarMotivoDemora(ocId, etapaId); if(!dm.ok) return; extra._demora = dm.demora;
   if(OCP.tpl.id==='oc_creada'){
     OCP.d.envio.enviado_en = new Date().toISOString();
     extra.adjunto_url = OCP.d.envio.pdf_url;
     extra.comentario_extra = OCP.d.envio.enviado_por_erp ? `OCI enviada desde el ERP a ${OCP.d.envio.enviado_a}${OCP.d.envio.enviado_cc?' (CC '+OCP.d.envio.enviado_cc+')':''} con el PDF adjunto.` : `OCI enviada por fuera del ERP a ${(document.getElementById('ocp-para')||{}).value || OCP.prov.correo || 'proveedor'}.`;
   } else {
-    const p = OCP.d.pi; const dif = (p.filas||[]).filter(x=>x.estado!=='ok').length;
+    const p = OCP.d.pi; const dif = ocpNovedadesDePI().length;
     extra.adjunto_url = p.sellado_url;
-    extra.comentario_extra = `PI ${p.pi_no||p.original_nombre} confirmada y sellada · Total US$ ${ocpNum(p.total)}${dif?' · '+dif+' diferencia(s) aceptada(s)'+(p.nota?': '+p.nota:''):' · coincide con la OC'}.`;
+    extra.comentario_extra = `PI ${p.pi_no||p.original_nombre} confirmada y sellada · Total US$ ${ocpNum(p.total)}${dif?' · '+dif+' cambio(s) del proveedor registrados en el histórico':' · coincide con la OC'}.`;
+    try{ await ocnAgregar(ocId, ocpNovedadesDePI()); }catch(e){ if(typeof toast==='function') toast('No se pudo guardar el histórico de cambios: '+e.message,'er'); return; }
   }
   ocpLog('completada', extra.comentario_extra);
   try{ await ocpGuardar(); }catch(e){ return; }
@@ -14126,9 +14716,13 @@ async function ocMarcarEtapaCompleta(ocId, etapaId, extra){
     ocAbrirTarjetaEtapa(ocId, etapaId);
     return;
   }
+  let demora = null;
+  if(extra && '_demora' in extra){ demora = extra._demora; extra = {...extra}; delete extra._demora; }
+  else { const dm = await ocnAsegurarMotivoDemora(ocId, etapaId); if(!dm.ok){ if(typeof toast==='function') toast('No se marcó: falta el motivo de la demora','wa'); return; } demora = dm.demora; }
   const ahora = new Date();
   const diasReales = Math.round(((ahora - new Date(e.fecha_inicio))/86400000)*100)/100;
   try{
+    if(demora) await ocnAgregar(ocId, [demora]).catch(err=>console.warn('Novedad de demora:', err.message));
     await sbReabast.patch('oc_etapas', 'id=eq.'+etapaId, {
       estado:'completada', fecha_fin: ahora.toISOString(), dias_reales: diasReales, completado_por: CU.nombre,
       ...(extra||{})
