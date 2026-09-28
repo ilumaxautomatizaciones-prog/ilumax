@@ -8487,7 +8487,9 @@ function reabastPromedioPresupuestado(referencia){
 //   la etapa se crea siempre. Así la OC sigue uno de los dos caminos de solicitud de arte:
 //   el corto (reimpresión al proveedor) o el largo (Calidad → Diseño → proveedor).
 const OC_ETAPAS_TEMPLATE = [
-  {id:'oc_creada',              nombre:'Creación de OC',                 dias:2,    area:'Compras'},
+  {id:'oc_creada',              nombre:'Enviar OCI al proveedor',        dias:2,    area:'Compras'},
+  // Paso 2: la PI se confirma cuando la OCI ya salió al proveedor.
+  {id:'pi_confirmada',          nombre:'Confirmar PI (sello ILUMAX TRADING)', dias:5, area:'Compras', independiente:true, dependeDe:'oc_creada'},
   // Camino corto: SKU existente sin actualización reciente — se pide la reimpresión directo al proveedor.
   {id:'arte_reimpresion_solicitada', nombre:'Solicitud de reimpresión al proveedor', dias:5, area:'Compras', independiente:true, soloSi:'existente'},
   {id:'arte_preprensa_corta',   nombre:'Preprensa recibida del proveedor', dias:1,  area:'Compras',   independiente:true, dependeDe:'arte_reimpresion_solicitada', requiereAdjunto:true, soloSi:'existente'},
@@ -8498,7 +8500,6 @@ const OC_ETAPAS_TEMPLATE = [
   {id:'arte_enviado_proveedor', nombre:'Link enviado al proveedor',      dias:1,    area:'Compras',   independiente:true, dependeDe:'arte_diseno_elaborado', soloSi:'nuevo'},
   {id:'arte_aprobado_proveedor',nombre:'Proveedor aprueba o pide cambios', dias:3,  area:'Compras',   independiente:true, dependeDe:'arte_enviado_proveedor', soloSi:'nuevo'},
   {id:'arte_preprensa_larga',   nombre:'Preprensa recibida del proveedor', dias:1,  area:'Compras',   independiente:true, dependeDe:'arte_aprobado_proveedor', requiereAdjunto:true, soloSi:'nuevo'},
-  {id:'pi_confirmada',          nombre:'PI confirmada con proveedor',    dias:5,    area:'Compras',   independiente:true},
   {id:'anticipo_pagado',        nombre:'Pago de anticipo',               dias:7,    area:'Cartera',   independiente:true, requiereAdjunto:true, tienePago:true},
   {id:'produccion',             nombre:'Producción',                     dias:48,   area:'Compras',  requiere:['arte_preprensa_corta','arte_preprensa_larga','anticipo_pagado','pi_confirmada']},
   {id:'inspeccion_calidad',     nombre:'Inspección de calidad',          dias:3,    area:'Calidad',   dependeDe:'produccion'},
@@ -11462,12 +11463,26 @@ const OC_DOC_ILUMAX_TRADING = {
   contacto: 'Luisa Jaramillo',
   correo: 'procurement@ilumaxtrading.com / supplyanager@ilumaxtrading.com',
 };
+// Precio unitario de la OC intercompañía (ILUMAX TRADING CORP le vende a ILUMAX SA): el FOB del
+// proveedor × 1.015, TRUNCADO a 4 decimales (sin redondear). Se hace con enteros (BigInt) para
+// que no aparezcan errores de punto flotante (ej. 1.23 × 1.015 = 1.24845 → 1.2484, nunca 1.2485).
+const OC_FACTOR_INTERCOMPANIA = 1.015;
+function ocPrecioIntercompania(usd){
+  const n = Number(usd); if(!n || !isFinite(n)) return {valor:0, txt:'0.0000'};
+  const neg = n < 0;
+  const base = BigInt(Math.round(Math.abs(n)*1e8));           // precio en unidades de 1e-8
+  const conFactor = base * 1015n;                              // × 1.015 → unidades de 1e-11
+  const trunc = conFactor / 10000000n;                         // corta (no redondea) a 1e-4
+  const ent = trunc / 10000n, dec = (trunc % 10000n).toString().padStart(4,'0');
+  const txt = (neg?'-':'') + ent.toString() + '.' + dec;
+  return {valor: Number(txt), txt};
+}
 // Genera el documento imprimible de la OC. `variante` decide qué dos partes aparecen:
 // 'china' (por defecto) = ILUMAX TRADING CORP le compra al proveedor real en China/Asia — es la
 // orden que ya se sube al proveedor. 'intercompania' = ILUMAX SA (Colombia) le compra a su propia
 // ILUMAX TRADING CORP — es la orden espejo que se maneja puertas adentro entre las dos compañías,
 // igual que la segunda hoja de la plantilla en Excel ("ILUMAX-ILUMAX TRADING").
-function reabastVerDocumentoOC(ocId, variante){
+function reabastHtmlDocOC(ocId, variante){
   variante = variante || 'china';
   const o = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId); if(!o) return;
   const items = REABAST.ocItems[ocId]||[];
@@ -11476,17 +11491,25 @@ function reabastVerDocumentoOC(ocId, variante){
   const fecha = o.fecha_orden ? new Date(o.fecha_orden+'T12:00:00') : (o.creado_en ? new Date(o.creado_en) : new Date());
   const fechaTxt = fecha.toLocaleDateString('es-CO', {day:'2-digit', month:'2-digit', year:'numeric'});
   const fmtMoney = n => n==null ? '' : Number(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const esInter = variante==='intercompania';
   const filas = items.map(it=>{
     const r = refPorCodigo[it.referencia] || {};
     const cant = Number(it.cantidad)||0;
-    const usd = it.precio_fob_usd!=null ? Number(it.precio_fob_usd) : 0;
+    const fob = it.precio_fob_usd!=null ? Number(it.precio_fob_usd) : 0;
+    // Intercompañía: precio × 1.015 truncado a 4 decimales; la orden al proveedor queda igual.
+    const pi = esInter ? ocPrecioIntercompania(fob) : null;
+    const usd = esInter ? pi.valor : fob;
+    const usdTxt = esInter ? Number(pi.txt.split('.')[0]).toLocaleString('en-US')+'.'+pi.txt.split('.')[1] : null;
     const amount = cant*usd;
-    return {it, r, cant, usd, amount};
+    return {it, r, cant, fob, usd, usdTxt, amount};
   });
   const totalQty = filas.reduce((a,f)=>a+f.cant,0);
   const totalAmount = filas.reduce((a,f)=>a+f.amount,0);
   const depositoPct = o.deposito_pct!=null ? o.deposito_pct : 0;
-  const deposito = totalAmount * depositoPct;
+  // El anticipo es el MISMO en las dos órdenes: siempre se calcula sobre el valor de la orden al
+  // proveedor (FOB sin el 1.015). En la intercompañía solo cambia el saldo.
+  const totalFob = filas.reduce((a,f)=>a+f.cant*f.fob,0);
+  const deposito = totalFob * depositoPct;
   const balance = totalAmount - deposito;
   // Mismo cálculo pero en pesos colombianos (costo landeado: FOB × factor × TRM), para que se vea
   // cuánto hay que pagar de anticipo y de saldo en ambas monedas.
@@ -11572,14 +11595,14 @@ function reabastVerDocumentoOC(ocId, variante){
       <th style="${celda}">Internal Packaging</th><th style="${celda}">EAN 14 Internal Packaging</th>
     </tr></thead>
     <tbody>
-      ${filas.map(({it,r,cant,usd,amount})=>`<tr>
+      ${filas.map(({it,r,cant,usd,usdTxt,amount})=>`<tr>
         <td style="${celdaC}">${reabastEsc(it.observacion||r.observaciones||'')}</td>
         <td style="${celdaC}">${reabastEsc(it.referencia)}</td>
         <td style="${celdaC};width:46px;">${r.foto_url?`<img src="${r.foto_url}" style="width:40px;height:40px;object-fit:cover;">`:''}</td>
         <td style="${celda}">${reabastEsc(r.descripcion_en||it.descripcion||'')}</td>
         <td style="${celdaC}">${reabastEsc(r.temperatura_color||'')}</td>
         <td style="${celdaN}">${reabastFmtN(cant)}</td>
-        <td style="${celdaN}">$ ${fmtMoney(usd)}</td>
+        <td style="${celdaN}">$ ${usdTxt!=null ? usdTxt : fmtMoney(usd)}</td>
         <td style="${celdaN}">$ ${fmtMoney(amount)}</td>
         <td style="${celdaC}">${reabastEsc(r.tipo_empaque||'')}</td>
         <td style="${celdaC}">${reabastEsc(r.horas||'')}</td>
@@ -11623,6 +11646,10 @@ function reabastVerDocumentoOC(ocId, variante){
     7. Please send .IES File Before production`}
   </div>
   </body></html>`;
+  return html;
+}
+function reabastVerDocumentoOC(ocId, variante){
+  const html = reabastHtmlDocOC(ocId, variante); if(!html) return;
   const w = window.open('', '_blank');
   if(!w){ if(typeof toast==='function') toast('El navegador bloqueó la ventana emergente — habilítala e inténtalo de nuevo','wa'); return; }
   w.document.open(); w.document.write(html); w.document.close();
@@ -11655,16 +11682,21 @@ async function reabastDescargarExcelOC(ocId, variante){
   const refPorCodigo = REABAST.referenciasMaestro||{};
   const fecha = o.fecha_orden ? new Date(o.fecha_orden+'T12:00:00') : (o.creado_en ? new Date(o.creado_en) : new Date());
   const fechaTxt = fecha.toLocaleDateString('es-CO', {day:'2-digit', month:'2-digit', year:'numeric'});
+  const esInter = variante==='intercompania';
   const filas = items.map(it=>{
     const r = refPorCodigo[it.referencia] || {};
     const cant = Number(it.cantidad)||0;
-    const usd = it.precio_fob_usd!=null ? Number(it.precio_fob_usd) : 0;
-    return {it, r, cant, usd, amount: cant*usd};
+    const fob = it.precio_fob_usd!=null ? Number(it.precio_fob_usd) : 0;
+    const usd = esInter ? ocPrecioIntercompania(fob).valor : fob; // intercompañía: × 1.015, 4 decimales truncados
+    return {it, r, cant, fob, usd, amount: cant*usd};
   });
   const totalQty = filas.reduce((a,f)=>a+f.cant,0);
   const totalAmount = filas.reduce((a,f)=>a+f.amount,0);
   const depositoPct = o.deposito_pct!=null ? o.deposito_pct : 0;
-  const deposito = totalAmount * depositoPct;
+  // El anticipo es el MISMO en las dos órdenes: siempre se calcula sobre el valor de la orden al
+  // proveedor (FOB sin el 1.015). En la intercompañía solo cambia el saldo.
+  const totalFob = filas.reduce((a,f)=>a+f.cant*f.fob,0);
+  const deposito = totalFob * depositoPct;
   const balance = totalAmount - deposito;
   const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*(Number(it.cantidad)||0),0);
   const depositoCop = totalCop * depositoPct;
@@ -11742,7 +11774,7 @@ async function reabastDescargarExcelOC(ocId, variante){
       const c = ws.getCell(fr, i2+1); c.value = v;
       const esNum = i2===4 || i2===5 || i2===6;
       c.style = { font:{size:9}, border:bordeCelda, alignment:{horizontal: esNum?'right':(i2===0||i2===1?'center':'left'), vertical:'middle'},
-        numFmt: (i2===5||i2===6) ? '$ #,##0.00' : undefined };
+        numFmt: i2===5 ? (esInter ? '$ #,##0.0000' : '$ #,##0.00') : (i2===6 ? '$ #,##0.00' : undefined) };
       if(i%2===1) c.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FFF8F8F8'}};
     });
   });
@@ -11901,11 +11933,13 @@ function ocAbrirTarjetaEtapa(ocId, etapaId){
   }
   document.getElementById('ea-confirmar').style.display = e.estado==='en_curso' ? 'inline-flex' : 'none';
   document.getElementById('ea-vertodo').setAttribute('onclick', `cerrarModalEtapaAdjunto();reabastAbrirDetalleOC('${ocId}')`);
+  if(typeof OCP_IDS!=='undefined' && OCP.tpl) ocpCerrarLimpio();
   if(typeof ARTE_IDS!=='undefined') arteCerrarLimpio();
   if(typeof ARTE_IDS!=='undefined' && ARTE_IDS.has(tpl.id)) arteAbrir(oc, e, tpl, items);
+  else if(typeof OCP_IDS!=='undefined' && OCP_IDS.has(tpl.id)) ocpAbrir(oc, e, tpl, items);
   document.getElementById('modal-etapa-adjunto').classList.add('on');
 }
-function cerrarModalEtapaAdjunto(){ document.getElementById('modal-etapa-adjunto').classList.remove('on'); if(typeof arteCerrarLimpio==='function' && ARTE.tpl) arteCerrarLimpio(); }
+function cerrarModalEtapaAdjunto(){ document.getElementById('modal-etapa-adjunto').classList.remove('on'); if(typeof ocpCerrarLimpio==='function' && OCP.tpl){ ocpCerrarLimpio(); arteCerrarLimpio(); } if(typeof arteCerrarLimpio==='function' && ARTE.tpl) arteCerrarLimpio(); }
 
 // Si escribes en un campo, calcula el otro al instante usando la TRM de la OC.
 function eaSincronizarMonto(origen){
@@ -11952,6 +11986,7 @@ function reabastInjectModalEtapaAdjunto(){
 async function confirmarEtapaAdjunto(){
   const {plantilla, ocId, etapaId, totalCop} = ETAPA_ADJUNTO_CTX;
   if(ARTE_IDS.has(plantilla.id) && ARTE.tpl) return arteConfirmar();
+  if(OCP_IDS.has(plantilla.id) && OCP.tpl) return ocpConfirmar();
   const estado = document.getElementById('ea-estado');
   const extra = { comentario_extra: document.getElementById('ea-comentario').value.trim()||null };
   if(plantilla.requiereAdjunto){
@@ -13054,12 +13089,51 @@ const ARTE_GUIAS = {
   }
 };
 ARTE_GUIAS.arte_preprensa_corta = ARTE_GUIAS.arte_preprensa_larga;
+ARTE_GUIAS.oc_creada = {
+  objetivo: 'Que el proveedor reciba la orden de compra oficial de ILUMAX TRADING CORP. en PDF, con todos los datos correctos, y quede registro de cuándo se envió.',
+  pasos: [
+    'Revisa el <b>resumen</b>: si sale el aviso naranja, entra al detalle de la OC y completa lo que falta (correo del proveedor, INCOTERM, términos de pago, fecha de entrega, lote, FOB).',
+    'Pulsa <b>📄 Generar PDF de la OCI</b>. Se descarga en tu computador y queda guardado en el expediente. Si el generador falla, usa <i>Ver / imprimir → Guardar como PDF</i> y súbelo con <i>Subir un PDF propio</i>.',
+    'Abre el PDF descargado y dale una última mirada: referencias, cantidades, precios y totales.',
+    'Revisa el <b>correo</b>: destinatario, asunto y mensaje (se arma solo con el total, INCOTERM, pago y fecha). Puedes editarlo.',
+    'Pulsa <b>✉️ Abrir en mi correo</b>, <b>adjunta el PDF descargado</b> y envía.',
+    'Marca <b>"Ya envié el correo…"</b> y confirma con <b>📤 OCI enviada al proveedor</b>. Con eso se habilita el paso de la PI.'
+  ],
+  listo: 'PDF generado (o subido), correo del proveedor definido y el envío marcado.',
+  errores: [
+    'Enviar la OC sin fecha de entrega o sin términos de pago: el proveedor los devuelve en la PI a su favor.',
+    'Olvidar adjuntar el PDF al correo (el navegador no lo adjunta solo).',
+    'Regenerar el PDF después de cambiar precios y no reenviarlo.'
+  ],
+  ejemplo: 'OCI137 · Para: sales@edisun.com · Asunto: "Purchase Order OCI137 – ILUMAX TRADING CORP" · PDF OC_OCI137_ILUMAX_TRADING.pdf adjunto · ✓ enviado.'
+};
+ARTE_GUIAS.pi_confirmada = {
+  objetivo: 'Verificar que la Proforma Invoice del proveedor corresponde a lo que pedimos y devolverla firmada con el sello de ILUMAX TRADING CORP.',
+  pasos: [
+    'Arrastra o selecciona el <b>Excel de la PI</b> que envió el proveedor.',
+    'Revisa que el <b>PO No.</b> de la PI sea el de esta OC (sale ✓ o ✗).',
+    'Revisa la <b>comparación</b>: ✓ coincide, <span style="color:var(--or)">≠</span> cantidad o precio diferente, <span style="color:var(--rd)">✗</span> referencia que pedimos y no está en la PI, <span style="color:var(--pu)">+</span> referencia que la PI trae de más.',
+    'Mira también los <b>términos de pago</b> que puso el proveedor y la diferencia en el total.',
+    'Si hay diferencias: acuérdalas con el proveedor. Si se aceptan (ej. cantidad ajustada a caja completa), marca <b>"Revisé las diferencias…"</b> y escribe la nota. Si no se aceptan, pide una PI corregida y cárgala de nuevo.',
+    'Pulsa <b>🖊 Poner sello y descargar</b>. El sello se pone encima de "THE BUYER"; si quieres otra posición, escribe la celda (ej. G43) y vuelve a sellar.',
+    'Abre el archivo sellado para verificarlo y envíalo al proveedor con <b>✉️ Enviar PI sellada</b> (adjunta el archivo descargado).',
+    'Confirma con <b>✅ PI confirmada y sellada</b>.'
+  ],
+  listo: 'PI cargada, diferencias revisadas (si hay) y el archivo sellado generado.',
+  errores: [
+    'Sellar una PI con un PO No. de otra orden.',
+    'Aceptar cambios de MOQ o de precio sin dejar la nota (luego nadie sabe por qué cambió).',
+    'No revisar los términos de pago: a veces el proveedor cambia el % de anticipo.'
+  ],
+  ejemplo: 'PI DS2026071302 · PO OCI137 ✓ · 2554: 1000 → 1008 und (caja completa) · Nota: "cantidades ajustadas a caja completa, aceptado" · sello en G42 · enviada por correo.'
+};
 
 function arteGuiaVista(id){ try{ return localStorage.getItem('arte_guia_vista_'+id)==='1'; }catch(e){ return false; } }
 function arteGuiaMarcarVista(id){ try{ localStorage.setItem('arte_guia_vista_'+id,'1'); }catch(e){} }
-function arteHtmlGuia(){
-  const g = ARTE_GUIAS[ARTE.tpl.id]; if(!g) return '';
-  const tpl = ARTE.tpl; const abierta = ARTE.guiaAbierta!==undefined ? ARTE.guiaAbierta : !arteGuiaVista(tpl.id);
+let GUIA_TPL = null;
+function arteHtmlGuia(tplParam){
+  const tpl = tplParam || ARTE.tpl; GUIA_TPL = tpl;
+  const g = ARTE_GUIAS[tpl.id]; if(!g) return ''; const abierta = ARTE.guiaAbierta!==undefined ? ARTE.guiaAbierta : !arteGuiaVista(tpl.id);
   return `<div class="arte-guia ${abierta?'abierta':''}" id="arte-guia">
     <div class="arte-guia-h" onclick="arteToggleGuia()">
       <span>📘 <b>Cómo se hace este paso</b> <span class="arte-mu">· ${arteEsc(tpl.nombre)}</span></span>
@@ -13086,7 +13160,7 @@ function arteToggleGuia(forzar){
   const el = document.getElementById('arte-guia'); if(!el) return;
   const abrir = forzar===undefined ? !el.classList.contains('abierta') : forzar;
   el.classList.toggle('abierta', abrir); ARTE.guiaAbierta = abrir;
-  if(!abrir && ARTE.tpl) arteGuiaMarcarVista(ARTE.tpl.id);
+  if(!abrir && GUIA_TPL) arteGuiaMarcarVista(GUIA_TPL.id);
   if(abrir) el.scrollIntoView({behavior:'smooth', block:'start'});
 }
 function arteInjectCssGuia(){
@@ -13111,6 +13185,514 @@ function arteInjectCssGuia(){
   .arte-guia-box.warn{background:var(--ord);}
   .arte-guia-box.ej{background:rgba(245,197,24,.12);}
   .arte-btn-guia{font-size:10.5px;font-weight:700;color:var(--bl);background:var(--bld);border:1px solid rgba(37,99,235,.2);border-radius:20px;padding:3px 9px;cursor:pointer;}
+  `;
+  document.head.appendChild(s);
+}
+
+const OCP_SELLO_DATAURI = 'data:image/png;base64,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';
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// ═══ PASOS 1 y 2 DE LA OC: Enviar la OCI al proveedor (PDF + correo) y Confirmar la PI (sello) ═══
+// Lo que se diligencia queda en `configuracion` (clave oc_pasos_<id>, tipo json), igual que el
+// expediente de arte — sin tocar el esquema de la base de Reabastecimiento.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+const OCP_IDS = new Set(['oc_creada','pi_confirmada']);
+const OCP_SELLO_EMU = {cx:2253191, cy:809625}; // mismo tamaño que el sello en la PI de ejemplo (≈ 6,3 × 2,2 cm)
+let OCP = { d:null, ocId:null, oc:null, etapa:null, tpl:null, items:[], prov:{}, editable:false, timer:null, pi:null };
+
+function ocpEsc(s){ return reabastEsc(s); }
+function ocpNum(n, dec){ return Number(n||0).toLocaleString('en-US',{minimumFractionDigits:dec==null?2:dec, maximumFractionDigits:dec==null?2:dec}); }
+function ocpCorreosProveedor(prov){ return String((prov&&prov.correo)||'').split(/[\s,;\/]+/).filter(x=>/@/.test(x)); }
+async function ocpCargarScript(url, globalName){
+  if(globalName && window[globalName]) return;
+  await new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=url; s.onload=res; s.onerror=()=>rej(new Error('No pude cargar '+url.split('/').pop()+' — revisa tu conexión')); document.head.appendChild(s); });
+}
+function ocpDescargar(blob, nombre){
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nombre; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+function ocpTotalesOC(){
+  const tot = OCP.items.reduce((a,it)=>a+(Number(it.precio_fob_usd)||0)*(Number(it.cantidad)||0),0);
+  const qty = OCP.items.reduce((a,it)=>a+(Number(it.cantidad)||0),0);
+  const pct = OCP.oc.deposito_pct!=null ? Number(OCP.oc.deposito_pct) : (OCP.prov.porcentaje_anticipo!=null?Number(OCP.prov.porcentaje_anticipo):0);
+  return {tot, qty, pct, dep: tot*pct};
+}
+
+// ── persistencia ──
+async function ocpCargar(ocId){
+  let d = null;
+  try{ const rows = await sb.get('configuracion','clave=eq.oc_pasos_'+ocId); if(rows && rows[0] && rows[0].valor) d = JSON.parse(rows[0].valor); }
+  catch(e){ console.warn('Pasos OC:', e.message); }
+  d = d || {};
+  d.envio = d.envio || {pdf_url:'', pdf_nombre:'', pdf_en:null, para:'', asunto:'', cuerpo:'', enviado:false, enviado_en:null};
+  d.pi = d.pi || {original_url:'', original_nombre:'', sellado_url:'', sellado_en:null, pi_no:'', po_no:'', fecha:'', total:null, terminos:'', filas:[], acepto_diferencias:false, nota:'', celda_manual:'', devolver_enviado:false};
+  d.log = d.log || [];
+  return d;
+}
+async function ocpGuardar(silencioso){
+  if(!OCP.d || !OCP.ocId) return;
+  clearTimeout(OCP.timer); arteEstadoGuardado('guardando');
+  try{ await sb.upsert('configuracion',{clave:'oc_pasos_'+OCP.ocId, valor:JSON.stringify(OCP.d), tipo:'json'},'clave'); arteEstadoGuardado('ok'); }
+  catch(e){ arteEstadoGuardado('error'); if(!silencioso && typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); throw e; }
+}
+function ocpCambio(){ arteEstadoGuardado('pendiente'); clearTimeout(OCP.timer); OCP.timer = setTimeout(()=>ocpGuardar(true).catch(()=>{}), 1200); ocpProgreso(); }
+function ocpSet(path, val){ arteSetPath(OCP.d, path, val); ocpCambio(); }
+function ocpLog(accion, msg){ OCP.d.log.push({t:new Date().toISOString(), quien:arteQuien(), etapa:OCP.tpl.id, accion, msg}); }
+
+// ══════════ PASO 1: Enviar la OCI ══════════
+function ocpFaltanDatosOC(){
+  const o = OCP.oc, p = OCP.prov, f = [];
+  if(!ocpCorreosProveedor(p).length) f.push('correo del proveedor (ficha del proveedor)');
+  if(!(o.incoterm||p.incoterm)) f.push('INCOTERM');
+  if(!(o.terminos_pago||p.termino_pago)) f.push('términos de pago');
+  if(!o.terminos_entrega) f.push('fecha de entrega');
+  if(!o.lote) f.push('lote (Batch)');
+  if(OCP.items.some(it=>!Number(it.precio_fob_usd))) f.push('precio FOB en todos los ítems');
+  return f;
+}
+function ocpMensajeOCI(){
+  const o = OCP.oc, t = ocpTotalesOC();
+  const link = OCP.d.envio.pdf_url;
+  return `Dear ${OCP.prov.nombre_contacto || 'supplier'},\n\nPlease find attached our Purchase Order ${o.numero_oc} from ILUMAX TRADING CORP.\n\n`+
+    `- Items: ${OCP.items.length} references · ${ocpNum(t.qty,0)} pcs\n- Total amount: US$ ${ocpNum(t.tot)}\n`+
+    `${(o.incoterm||OCP.prov.incoterm)?'- INCOTERM: '+(o.incoterm||OCP.prov.incoterm)+'\n':''}`+
+    `${(o.terminos_pago||OCP.prov.termino_pago)?'- Payment terms: '+(o.terminos_pago||OCP.prov.termino_pago)+'\n':''}`+
+    `${o.terminos_entrega?'- Delivery date: '+o.terminos_entrega+'\n':''}`+
+    `${link?'\nPDF: '+link+'\n':''}\nPlease send us the Proforma Invoice (PI) and Packing List, signed and stamped, confirming quantities, prices and delivery date.\n\nBest regards,\n${arteQuien()}\nILUMAX TRADING CORP`;
+}
+function ocpHtmlEnvio(){
+  const o = OCP.oc, e = OCP.d.envio, t = ocpTotalesOC(), ed = OCP.editable ? '' : 'disabled';
+  const faltan = ocpFaltanDatosOC();
+  const para = e.para || ocpCorreosProveedor(OCP.prov).join(', ');
+  const asunto = e.asunto || `Purchase Order ${o.numero_oc} – ILUMAX TRADING CORP`;
+  return `
+  <div class="arte-sec">
+    <div class="arte-sec-h">Resumen de la OCI</div>
+    <div class="arte-kvs">
+      <span class="arte-kv"><em>OC</em>${ocpEsc(o.numero_oc)}</span>
+      <span class="arte-kv"><em>Proveedor</em>${ocpEsc(o.proveedor||'—')}</span>
+      <span class="arte-kv"><em>Ítems</em>${OCP.items.length} · ${ocpNum(t.qty,0)} und</span>
+      <span class="arte-kv"><em>Total</em>US$ ${ocpNum(t.tot)}</span>
+      <span class="arte-kv"><em>Anticipo</em>${Math.round(t.pct*1000)/10}% · US$ ${ocpNum(t.dep)}</span>
+    </div>
+    ${faltan.length ? `<div class="arte-alerta" style="margin-top:8px;">⚠ Antes de enviar, completa en el detalle de la OC: <strong>${faltan.map(ocpEsc).join(', ')}</strong>.
+      <span class="arte-link" onclick="cerrarModalEtapaAdjunto();reabastAbrirDetalleOC('${o.id}')">Ir al detalle de la OC →</span></div>`
+      : `<div class="arte-mu" style="margin-top:8px;color:var(--gr);">✓ La OC tiene todos los datos que ve el proveedor.</div>`}
+  </div>
+  <div class="arte-sec">
+    <div class="arte-sec-h">① PDF de la orden</div>
+    <div id="ocp-pdf-zona">${ocpHtmlPdfZona()}</div>
+  </div>
+  <div class="arte-sec">
+    <div class="arte-sec-h">② Correo al proveedor</div>
+    <div class="arte-grid2">
+      <div class="fg"><label class="fl">Para</label><input class="inp" ${ed} id="ocp-para" value="${ocpEsc(para)}" placeholder="correo@proveedor.com" oninput="ocpSet('envio.para',this.value)"></div>
+      <div class="fg"><label class="fl">Asunto</label><input class="inp" ${ed} id="ocp-asunto" value="${ocpEsc(asunto)}" oninput="ocpSet('envio.asunto',this.value)"></div>
+    </div>
+    <textarea class="inp arte-msg" id="ocp-cuerpo" rows="11" ${ed} oninput="ocpSet('envio.cuerpo',this.value)">${ocpEsc(e.cuerpo || ocpMensajeOCI())}</textarea>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
+      <button class="btn btn-bl btn-sm" onclick="ocpAbrirCorreo()">✉️ Abrir en mi correo</button>
+      <button class="btn btn-g btn-sm" onclick="arteCopiarTexto(document.getElementById('ocp-cuerpo').value)">📋 Copiar mensaje</button>
+      ${OCP.editable?`<button class="btn btn-g btn-sm" onclick="OCP.d.envio.cuerpo='';document.getElementById('ocp-cuerpo').value=ocpMensajeOCI();ocpCambio()">↻ Regenerar</button>`:''}
+    </div>
+    <div class="arte-mu" style="margin-top:6px;">El correo se abre listo; <strong>adjunta el PDF que se descargó</strong> (los navegadores no permiten adjuntarlo solos). El link del PDF también va en el mensaje.</div>
+    <label class="arte-chk ${e.enviado?'ok':''}" style="margin-top:10px;"><input type="checkbox" ${ed} ${e.enviado?'checked':''} onchange="ocpSet('envio.enviado',this.checked);this.closest('.arte-chk').classList.toggle('ok',this.checked)"> Ya envié el correo al proveedor con el PDF adjunto</label>
+  </div>`;
+}
+function ocpHtmlPdfZona(){
+  const e = OCP.d.envio;
+  const btns = OCP.editable ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+      <button class="btn btn-bl btn-sm" onclick="ocpGenerarPdf()">📄 ${e.pdf_url?'Regenerar':'Generar'} PDF de la OCI</button>
+      <button class="btn btn-g btn-sm" onclick="reabastVerDocumentoOC('${OCP.ocId}')">👁 Ver / imprimir</button>
+      <label class="btn btn-g btn-sm" style="cursor:pointer;">⬆ Subir un PDF propio<input type="file" accept=".pdf" style="display:none;" onchange="ocpSubirPdfPropio(this)"></label>
+    </div>` : '';
+  return `${e.pdf_url ? `<div class="arte-adj"><span class="arte-adj-t">📄 PDF</span><a href="${ocpEsc(e.pdf_url)}" target="_blank" rel="noopener">${ocpEsc(e.pdf_nombre||'OCI.pdf')}</a><span class="arte-mu">${arteFmtFecha(e.pdf_en)}</span></div>` : `<div class="arte-mu" style="margin-bottom:6px;">Aún no se ha generado el PDF.</div>`}
+    ${btns}`;
+}
+// Genera el PDF con el mismo documento que "Ver / imprimir" (ILUMAX TRADING → proveedor).
+async function ocpPdfBlob(ocId){
+  const html = reabastHtmlDocOC(ocId, 'china'); if(!html) throw new Error('OC no encontrada');
+  const ifr = document.createElement('iframe');
+  ifr.style.cssText = 'position:fixed;left:-12000px;top:0;width:1500px;height:1100px;border:0;';
+  document.body.appendChild(ifr);
+  try{
+    const doc = ifr.contentDocument; doc.open(); doc.write(html.replace('<div class="noprint"','<div class="noprint" style="display:none"')); doc.close();
+    await new Promise((res,rej)=>{ const s = doc.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js'; s.onload = res; s.onerror = ()=>rej(new Error('No pude cargar el generador de PDF')); doc.head.appendChild(s); });
+    await Promise.all([...doc.images].map(im=> im.complete ? 0 : new Promise(r=>{ im.onload = im.onerror = r; })));
+    return await ifr.contentWindow.html2pdf().set({
+      margin:[6,6,6,6], image:{type:'jpeg', quality:0.96},
+      html2canvas:{scale:2, useCORS:true, backgroundColor:'#ffffff'},
+      jsPDF:{unit:'mm', format:'a4', orientation:'landscape'}, pagebreak:{mode:['css','legacy']}
+    }).from(doc.body).outputPdf('blob');
+  } finally { ifr.remove(); }
+}
+async function ocpGenerarPdf(){
+  const zona = document.getElementById('ocp-pdf-zona');
+  if(zona) zona.innerHTML = '<div class="arte-adj subiendo">⏳ Generando PDF…</div>';
+  try{
+    const blob = await ocpPdfBlob(OCP.ocId);
+    const nombre = `OC_${OCP.oc.numero_oc}_ILUMAX_TRADING.pdf`;
+    ocpDescargar(blob, nombre);
+    if(zona) zona.innerHTML = '<div class="arte-adj subiendo">⏳ Guardando copia en el expediente…</div>';
+    const url = await ocSubirAdjunto(new File([blob], nombre, {type:'application/pdf'}));
+    Object.assign(OCP.d.envio, {pdf_url:url, pdf_nombre:nombre, pdf_en:new Date().toISOString()});
+    ocpLog('pdf', 'PDF generado: '+nombre);
+    await ocpGuardar(true).catch(()=>{});
+    if(typeof toast==='function') toast('PDF descargado y guardado','ok');
+  }catch(err){
+    if(typeof toast==='function') toast(err.message+'. Usa "Ver / imprimir" → Guardar como PDF y luego "Subir un PDF propio".','er');
+  }
+  ocpRefrescarEnvio();
+}
+async function ocpSubirPdfPropio(inp){
+  const f = inp.files && inp.files[0]; if(!f) return;
+  const zona = document.getElementById('ocp-pdf-zona'); if(zona) zona.innerHTML = '<div class="arte-adj subiendo">⏳ Subiendo…</div>';
+  try{ const url = await ocSubirAdjunto(f); Object.assign(OCP.d.envio, {pdf_url:url, pdf_nombre:f.name, pdf_en:new Date().toISOString()}); ocpLog('pdf','PDF subido: '+f.name); await ocpGuardar(true).catch(()=>{}); }
+  catch(e){ if(typeof toast==='function') toast('Error subiendo: '+e.message,'er'); }
+  ocpRefrescarEnvio();
+}
+function ocpRefrescarEnvio(){
+  const zona = document.getElementById('ocp-pdf-zona'); if(zona) zona.innerHTML = ocpHtmlPdfZona();
+  const cuerpo = document.getElementById('ocp-cuerpo'); if(cuerpo && !OCP.d.envio.cuerpo) cuerpo.value = ocpMensajeOCI();
+  ocpProgreso();
+}
+function ocpAbrirCorreo(){
+  const para = document.getElementById('ocp-para').value, asunto = document.getElementById('ocp-asunto').value, cuerpo = document.getElementById('ocp-cuerpo').value;
+  window.open('mailto:'+encodeURIComponent(para.replace(/\s+/g,'')).replace(/%40/g,'@').replace(/%2C/g,',')+'?subject='+encodeURIComponent(asunto)+'&body='+encodeURIComponent(cuerpo));
+}
+function ocpFaltanEnvio(){
+  const f = [];
+  if(!OCP.d.envio.pdf_url) f.push('Generar o subir el PDF');
+  if(!ocpCorreosProveedor({correo: (document.getElementById('ocp-para')||{}).value || OCP.d.envio.para || OCP.prov.correo}).length) f.push('Correo del proveedor');
+  if(!OCP.d.envio.enviado) f.push('Marcar que ya enviaste el correo');
+  return f;
+}
+
+// ══════════ PASO 2: Confirmar la PI (sello ILUMAX TRADING) ══════════
+function ocpNormRef(v){ return String(v==null?'':v).trim().replace(/\.0+$/,'').toUpperCase(); }
+// Lee la PI del proveedor (cualquier formato parecido al de ejemplo): encabezado, filas de ítems y la celda "THE BUYER".
+function ocpLeerPI(buf){
+  const wb = XLSX.read(buf, {type:'array', cellDates:true});
+  let mejor = null;
+  wb.SheetNames.forEach((nombre, idx)=>{
+    const ws = wb.Sheets[nombre]; if(!ws || !ws['!ref']) return;
+    const filas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+    const rng = XLSX.utils.decode_range(ws['!ref']);
+    const hdr = filas.findIndex(r=> r && r.some(c=>/^\s*(code|item\s*no\.?|model|ref(erence)?)\s*$/i.test(String(c||''))) && r.some(c=>/quantity|qty/i.test(String(c||''))));
+    if(hdr<0) return;
+    if(!mejor || filas.length>mejor.filas.length) mejor = {nombre, idx, ws, filas, hdr, off:{r:rng.s.r, c:rng.s.c}};
+  });
+  if(!mejor) throw new Error('No encontré la tabla de ítems (una fila con "Code" y "Quantity") en el Excel');
+  const {filas, hdr} = mejor; const H = filas[hdr].map(c=>String(c||'').replace(/\s+/g,' ').trim());
+  const col = (...rx)=>{ for(const r of rx){ const i = H.findIndex(h=>r.test(h)); if(i>=0) return i; } return -1; };
+  const cCode = col(/^code$/i, /^item\s*no/i, /^model$/i, /^ref/i);
+  const cQty  = col(/^quantity$/i, /^qty$/i, /quantity/i);
+  const cFob  = col(/^fob/i, /unit\s*price/i, /price/i);
+  const cAmt  = col(/^amount/i, /total\s*(usd|amount)/i);
+  const cDesc = col(/customer.*item|cusomer.*item/i, /descrip/i);
+  const items = []; let vacias = 0, ultimaFila = hdr;
+  for(let r=hdr+1; r<filas.length; r++){
+    const row = filas[r]||[]; const code = row[cCode];
+    const txt0 = row.filter(c=>c!=null).map(String).join(' ');
+    if(/^\s*\d\)|TERMS OF PAYMENT|BANK INFORMATION/i.test(txt0)) break;
+    if(code==null || String(code).trim()===''){ if(++vacias>=3) break; continue; }
+    vacias = 0;
+    const qty = Number(row[cQty]); if(!isFinite(qty) || qty<=0) continue;
+    ultimaFila = r;
+    const fob = Number(row[cFob]);
+    items.push({code: ocpNormRef(code), qty, fob: isFinite(fob)?fob:null, amount: cAmt>=0 && isFinite(Number(row[cAmt])) ? Number(row[cAmt]) : (isFinite(fob)?fob*qty:null), desc: cDesc>=0 ? String(row[cDesc]||'').replace(/\s+/g,' ').trim().slice(0,80) : ''});
+  }
+  // Encabezado: P/I No., PO No., fecha, términos de pago, celda del comprador
+  const buscar = (rx)=>{ for(let r=0;r<filas.length;r++){ const row = filas[r]||[]; for(let c=0;c<row.length;c++){ if(row[c]!=null && rx.test(String(row[c]))){ for(let k=c+1;k<row.length;k++){ if(row[k]!=null && String(row[k]).trim()) return row[k]; } } } } return ''; };
+  let fecha = buscar(/^\s*date\s*:?\s*$/i); if(fecha instanceof Date) fecha = fecha.toISOString().slice(0,10); else if(/^\d{4}-\d{2}-\d{2}T/.test(String(fecha))) fecha = String(fecha).slice(0,10);
+  let terminos = ''; let buyer = null;
+  filas.forEach((row,r)=> (row||[]).forEach((v,c)=>{
+    const s = String(v==null?'':v);
+    if(!terminos && /terms?\s*of\s*payment/i.test(s)) terminos = s.replace(/^\s*\d\)\s*/,'').trim();
+    if(/buyer/i.test(s) && (!buyer || r+mejor.off.r>buyer.r)) buyer = {r:r+mejor.off.r, c:c+mejor.off.c, txt:s.trim()};
+  }));
+  return { hoja: mejor.nombre, hojaIdx: mejor.idx, pi_no: String(buscar(/p\s*\/?\s*i\s*no/i)||''), po_no: String(buscar(/^\s*p\.?\s*o\.?\s*no/i)||''), fecha: String(fecha||''), terminos, items, buyer, ultimaFila: ultimaFila+mejor.off.r };
+}
+function ocpColLetra(c){ let s=''; c++; while(c>0){ const m=(c-1)%26; s=String.fromCharCode(65+m)+s; c=Math.floor((c-1)/26); } return s; }
+function ocpCeldaAIndice(ref){ const m = String(ref||'').trim().toUpperCase().match(/^([A-Z]{1,3})(\d{1,6})$/); if(!m) return null; let c=0; for(const ch of m[1]) c = c*26 + (ch.charCodeAt(0)-64); return {c:c-1, r:Number(m[2])-1}; }
+
+// Compara la PI contra la OC (cantidades y FOB por referencia).
+function ocpCompararPI(pi){
+  const oc = {}; OCP.items.forEach(it=>{ const k = ocpNormRef(it.referencia); (oc[k]=oc[k]||{qty:0, fob:Number(it.precio_fob_usd)||0}); oc[k].qty += Number(it.cantidad)||0; });
+  const piMap = {}; pi.items.forEach(x=>{ (piMap[x.code]=piMap[x.code]||{qty:0, fob:x.fob, amount:0, desc:x.desc}); piMap[x.code].qty += x.qty; piMap[x.code].amount += x.amount||0; });
+  const refs = [...new Set([...Object.keys(oc), ...Object.keys(piMap)])];
+  return refs.map(r=>{
+    const a = oc[r], b = piMap[r];
+    const estado = !a ? 'extra' : !b ? 'falta' : (Math.abs(a.qty-b.qty)>1e-9 || (b.fob!=null && Math.abs(a.fob-b.fob)>1e-6)) ? 'dif' : 'ok';
+    return {ref:r, desc: b?b.desc:'', oc_qty:a?a.qty:null, pi_qty:b?b.qty:null, oc_fob:a?a.fob:null, pi_fob:b?b.fob:null, estado};
+  }).sort((x,y)=> ({falta:0,extra:1,dif:2,ok:3}[x.estado]-{falta:0,extra:1,dif:2,ok:3}[y.estado]) );
+}
+async function ocpCargarPI(inp){
+  const f = inp.files && inp.files[0]; if(!f) return;
+  const zona = document.getElementById('ocp-pi-zona'); if(zona) zona.innerHTML = '<div class="arte-adj subiendo">⏳ Leyendo la PI…</div>';
+  try{
+    const buf = await f.arrayBuffer();
+    const pi = ocpLeerPI(buf);
+    OCP.pi = {buf, nombre:f.name, info:pi};
+    const filas = ocpCompararPI(pi);
+    Object.assign(OCP.d.pi, {original_nombre:f.name, pi_no:pi.pi_no, po_no:pi.po_no, fecha:pi.fecha, terminos:pi.terminos,
+      total: pi.items.reduce((a,x)=>a+(x.amount||0),0), filas, sellado_url:'', sellado_en:null, acepto_diferencias:false,
+      buyer: pi.buyer ? {celda: ocpColLetra(pi.buyer.c)+(pi.buyer.r+1), txt: pi.buyer.txt} : null, hoja: pi.hoja});
+    ocpLog('pi_cargada', `PI ${pi.pi_no||f.name} cargada · ${pi.items.length} ítems`);
+    ocSubirAdjunto(f).then(url=>{ OCP.d.pi.original_url = url; ocpCambio(); }).catch(e=>console.warn('No pude guardar la PI original:', e.message));
+    ocpCambio();
+  }catch(err){ if(typeof toast==='function') toast(err.message,'er'); }
+  inp.value = '';
+  ocpRefrescarPI();
+}
+function ocpHtmlPI(){
+  const p = OCP.d.pi, ed = OCP.editable;
+  if(!p.original_nombre){
+    return `<div class="arte-sec"><div class="arte-sec-h">① Carga la PI que envió el proveedor</div>
+      ${ed?`<label class="ocp-drop" ondragover="event.preventDefault();this.classList.add('on')" ondragleave="this.classList.remove('on')" ondrop="event.preventDefault();this.classList.remove('on');const i=this.querySelector('input');i.files=event.dataTransfer.files;ocpCargarPI(i)">
+        <div style="font-size:26px;">📊</div><strong>Arrastra aquí el Excel de la PI</strong><div class="arte-mu">o toca para buscarlo (.xlsx)</div>
+        <input type="file" accept=".xlsx,.xlsm" style="display:none;" onchange="ocpCargarPI(this)"></label>`:'<div class="arte-mu">Aún no se ha cargado la PI.</div>'}
+    </div>`;
+  }
+  const t = ocpTotalesOC();
+  const n = {ok:0,dif:0,falta:0,extra:0}; (p.filas||[]).forEach(f=>n[f.estado]++);
+  const hayDif = n.dif+n.falta+n.extra>0;
+  const poOk = !p.po_no || ocpNormRef(p.po_no).replace(/\s/g,'').includes(ocpNormRef(OCP.oc.numero_oc).replace(/\s/g,''));
+  const difTot = (p.total||0) - t.tot;
+  const est = {ok:['✓','var(--gr)','Coincide'], dif:['≠','var(--or)','Diferente'], falta:['✗','var(--rd)','No está en la PI'], extra:['+','var(--pu)','No está en la OC']};
+  return `<div class="arte-sec">
+    <div class="arte-sec-h">① PI cargada ${ed?`<label class="arte-link" style="cursor:pointer;">cambiar archivo<input type="file" accept=".xlsx,.xlsm" style="display:none;" onchange="ocpCargarPI(this)"></label>`:''}</div>
+    <div class="arte-kvs">
+      <span class="arte-kv"><em>Archivo</em>${p.original_url?`<a href="${ocpEsc(p.original_url)}" target="_blank" rel="noopener">${ocpEsc(p.original_nombre)}</a>`:ocpEsc(p.original_nombre)}</span>
+      <span class="arte-kv"><em>P/I No.</em>${ocpEsc(p.pi_no||'—')}</span>
+      <span class="arte-kv" style="${poOk?'':'border-color:var(--rd);color:var(--rd);'}"><em>PO No.</em>${ocpEsc(p.po_no||'—')} ${poOk?'✓':'✗ no es '+ocpEsc(OCP.oc.numero_oc)}</span>
+      <span class="arte-kv"><em>Fecha</em>${ocpEsc(p.fecha||'—')}</span>
+    </div>
+    ${p.terminos?`<div class="arte-mu" style="margin-top:6px;">💳 ${ocpEsc(p.terminos)}</div>`:''}
+  </div>
+  <div class="arte-sec">
+    <div class="arte-sec-h">② Comparación PI vs OC
+      <span class="bdg bdg-verde" style="margin-left:6px;">${n.ok} ✓</span>
+      ${n.dif?`<span class="bdg bdg-or2">${n.dif} diferentes</span>`:''}${n.falta?`<span class="bdg bdg-rojo">${n.falta} faltan</span>`:''}${n.extra?`<span class="bdg" style="background:var(--pud);color:var(--pu);">${n.extra} de más</span>`:''}
+      ${n.ok?`<span class="arte-link" onclick="document.getElementById('ocp-tabla').classList.toggle('solo-dif')">ver / ocultar las que coinciden</span>`:''}</div>
+    <div class="tw" style="max-height:320px;overflow:auto;"><table id="ocp-tabla" class="ocp-tabla ${hayDif?'solo-dif':''}">
+      <thead><tr><th></th><th>Ref.</th><th>Descripción PI</th><th style="text-align:right;">Cant. OC</th><th style="text-align:right;">Cant. PI</th><th style="text-align:right;">FOB OC</th><th style="text-align:right;">FOB PI</th></tr></thead>
+      <tbody>${(p.filas||[]).map(f=>{ const e = est[f.estado];
+        const dq = f.oc_qty!=null && f.pi_qty!=null && f.oc_qty!==f.pi_qty, df = f.oc_fob!=null && f.pi_fob!=null && Math.abs(f.oc_fob-f.pi_fob)>1e-6;
+        return `<tr class="ocp-${f.estado}" title="${e[2]}">
+        <td style="color:${e[1]};font-weight:800;">${e[0]}</td><td style="font-family:monospace;font-weight:700;">${ocpEsc(f.ref)}</td>
+        <td class="arte-mu" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${ocpEsc(f.desc||'')}</td>
+        <td style="text-align:right;">${f.oc_qty!=null?ocpNum(f.oc_qty,0):'—'}</td>
+        <td style="text-align:right;${dq?'color:var(--or);font-weight:800;':''}">${f.pi_qty!=null?ocpNum(f.pi_qty,0):'—'}${dq?` <small>(${f.pi_qty>f.oc_qty?'+':''}${ocpNum(f.pi_qty-f.oc_qty,0)})</small>`:''}</td>
+        <td style="text-align:right;">${f.oc_fob!=null?ocpNum(f.oc_fob,4):'—'}</td>
+        <td style="text-align:right;${df?'color:var(--or);font-weight:800;':''}">${f.pi_fob!=null?ocpNum(f.pi_fob,4):'—'}</td></tr>`; }).join('')}</tbody>
+    </table></div>
+    <div class="arte-kvs" style="margin-top:8px;">
+      <span class="arte-kv"><em>Total OC</em>US$ ${ocpNum(t.tot)}</span>
+      <span class="arte-kv"><em>Total PI</em>US$ ${ocpNum(p.total)}</span>
+      <span class="arte-kv" style="${Math.abs(difTot)>0.005?'color:var(--or);border-color:var(--or);':'color:var(--gr);'}"><em>Diferencia</em>${difTot>0?'+':''}US$ ${ocpNum(difTot)}</span>
+    </div>
+    ${hayDif || !poOk ? `<label class="arte-chk ${p.acepto_diferencias?'ok':''}" style="margin-top:10px;"><input type="checkbox" ${ed?'':'disabled'} ${p.acepto_diferencias?'checked':''} onchange="ocpSet('pi.acepto_diferencias',this.checked);this.closest('.arte-chk').classList.toggle('ok',this.checked)"> Revisé las diferencias y las acepto (o ya quedaron acordadas con el proveedor)</label>
+      <div class="fg"><label class="fl">Nota sobre las diferencias</label><input class="inp" ${ed?'':'disabled'} value="${ocpEsc(p.nota||'')}" placeholder="Ej: 2554 sube a 1008 und para completar caja; 2559 MOQ 3000 aceptado" oninput="ocpSet('pi.nota',this.value)"></div>` : `<div class="arte-mu" style="margin-top:8px;color:var(--gr);">✓ La PI coincide con la OC en referencias, cantidades y precios.</div>`}
+  </div>
+  <div class="arte-sec">
+    <div class="arte-sec-h">③ Sello ILUMAX TRADING CORP.</div>
+    <div class="ocp-sello-fila">
+      <img src="${OCP_SELLO_DATAURI}" alt="Sello" class="ocp-sello-img">
+      <div style="flex:1;min-width:200px;">
+        <div style="font-size:12px;">Se pone ${p.buyer?`encima de <strong>"${ocpEsc(p.buyer.txt)}"</strong> (celda ${ocpEsc(p.buyer.celda)})`:'<strong>debajo de la tabla</strong> (no encontré "THE BUYER")'}, en la hoja ${ocpEsc(p.hoja||'')}. Todo lo demás del archivo del proveedor queda igual.</div>
+        <div class="fg" style="margin:6px 0 0;max-width:260px;"><label class="fl">¿Prefieres otra ubicación? Celda (opcional)</label>
+          <input class="inp" ${ed?'':'disabled'} value="${ocpEsc(p.celda_manual||'')}" placeholder="Ej: G43" oninput="this.value=this.value.toUpperCase();ocpSet('pi.celda_manual',this.value)"></div>
+      </div>
+    </div>
+    ${p.sellado_url ? `<div class="arte-adj" style="margin-top:8px;"><span class="arte-adj-t">✅ PI sellada</span><a href="${ocpEsc(p.sellado_url)}" target="_blank" rel="noopener">${ocpEsc(ocpNombreSellado())}</a><span class="arte-mu">${arteFmtFecha(p.sellado_en)}</span></div>`:''}
+    ${ed ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+      <button class="btn btn-p btn-sm" style="padding:9px 14px;" onclick="ocpSellarPI()">🖊 ${p.sellado_url?'Volver a sellar':'Poner sello y descargar'}</button>
+      ${p.sellado_url?`<button class="btn btn-g btn-sm" onclick="ocpCorreoPI()">✉️ Enviar PI sellada al proveedor</button>`:''}
+    </div>` : ''}
+  </div>`;
+}
+function ocpNombreSellado(){ const n = OCP.d.pi.original_nombre||'PI.xlsx'; return n.replace(/\.(xlsx|xlsm)$/i,'')+'_SELLADA.'+(/\.xlsm$/i.test(n)?'xlsm':'xlsx'); }
+function ocpRefrescarPI(){ const z = document.getElementById('ocp-pi-zona'); if(z) z.innerHTML = ocpHtmlPI(); ocpProgreso(); }
+
+// Inserta el sello como imagen en el .xlsx original, tocando solo el dibujo de la hoja (así no se
+// pierden las fotos, fórmulas, formatos ni figuras que trae el archivo del proveedor).
+async function ocpSellarXlsx(buf, hojaIdx, celda){
+  await ocpCargarScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js','JSZip');
+  const zip = await JSZip.loadAsync(buf);
+  const leer = p => zip.file(p) ? zip.file(p).async('string') : null;
+  const dir = p => p.slice(0, p.lastIndexOf('/')+1);
+  const resolver = (base, t) => { if(t.startsWith('/')) return t.slice(1); const parts = (dir(base)+t).split('/'); const out=[]; parts.forEach(x=>{ if(x==='..') out.pop(); else if(x!=='.' && x!=='') out.push(x); }); return out.join('/'); };
+  const relsDe = p => dir(p)+'_rels/'+p.slice(p.lastIndexOf('/')+1)+'.rels';
+  const RELS_VACIO = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+  const nuevoRid = xml => { let n=1; while(new RegExp('Id="rId'+n+'"').test(xml)) n++; return 'rId'+n; };
+  // 1) hoja
+  const wbXml = await leer('xl/workbook.xml'); const wbRels = await leer('xl/_rels/workbook.xml.rels');
+  const sheets = [...wbXml.matchAll(/<(?:\w+:)?sheet\b[^>]*?r:id="([^"]+)"[^>]*\/?>/g)].map(m=>m[1]);
+  const rid = sheets[hojaIdx] || sheets[0];
+  const relHoja = [...wbRels.matchAll(/<Relationship\b[^>]*>/g)].map(m=>m[0]).find(r=>r.includes('Id="'+rid+'"'));
+  const hojaPath = resolver('xl/workbook.xml', relHoja.match(/Target="([^"]+)"/)[1]);
+  let hojaXml = await leer(hojaPath); let hojaRels = (await leer(relsDe(hojaPath))) || RELS_VACIO;
+  // 2) dibujo de la hoja (se crea si no existe)
+  let ct = await leer('[Content_Types].xml');
+  let drawRel = [...hojaRels.matchAll(/<Relationship\b[^>]*>/g)].map(m=>m[0]).find(r=>/\/drawing"/.test(r));
+  let drawPath;
+  if(drawRel){ drawPath = resolver(hojaPath, drawRel.match(/Target="([^"]+)"/)[1]); }
+  else{
+    let n=1; while(zip.file('xl/drawings/drawing'+n+'.xml')) n++;
+    drawPath = 'xl/drawings/drawing'+n+'.xml';
+    zip.file(drawPath, '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"></xdr:wsDr>', {createFolders:false});
+    const r2 = nuevoRid(hojaRels);
+    hojaRels = hojaRels.replace('</Relationships>', `<Relationship Id="${r2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${n}.xml"/></Relationships>`);
+    const tag = `<drawing r:id="${r2}"/>`;
+    const antes = hojaXml.search(/<(legacyDrawing|legacyDrawingHF|drawingHF|picture|oleObjects|controls|webPublishItems|tableParts|extLst)\b/);
+    hojaXml = antes>=0 ? hojaXml.slice(0,antes)+tag+hojaXml.slice(antes) : hojaXml.replace('</worksheet>', tag+'</worksheet>');
+    if(!/xmlns:r=/.test(hojaXml.slice(0, hojaXml.indexOf('>', hojaXml.indexOf('<worksheet'))))) hojaXml = hojaXml.replace('<worksheet', '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"');
+    ct = ct.replace('</Types>', `<Override PartName="/${drawPath}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`);
+    zip.file(hojaPath, hojaXml, {createFolders:false}); zip.file(relsDe(hojaPath), hojaRels, {createFolders:false});
+  }
+  // 3) imagen del sello
+  let m=1; while(zip.file('xl/media/sello_ilumax'+m+'.png')) m++;
+  const mediaPath = 'xl/media/sello_ilumax'+m+'.png';
+  zip.file(mediaPath, OCP_SELLO_DATAURI.split(',')[1], {base64:true, createFolders:false});
+  if(!/Extension="png"/i.test(ct)) ct = ct.replace('<Types', '<Types').replace(/(<Types[^>]*>)/, '$1<Default Extension="png" ContentType="image/png"/>');
+  zip.file('[Content_Types].xml', ct, {createFolders:false});
+  let drawRels = (await leer(relsDe(drawPath))) || RELS_VACIO;
+  const imgRid = nuevoRid(drawRels);
+  drawRels = drawRels.replace('</Relationships>', `<Relationship Id="${imgRid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/sello_ilumax${m}.png"/></Relationships>`);
+  zip.file(relsDe(drawPath), drawRels, {createFolders:false});
+  // 4) ancla de la imagen en el dibujo
+  let dXml = await leer(drawPath);
+  const pre = (dXml.match(/<(\w+:)?wsDr\b/)||[])[1] || '';
+  const ids = [...dXml.matchAll(/cNvPr[^>]*\sid="(\d+)"/g)].map(x=>Number(x[1]));
+  const nid = (ids.length ? Math.max(...ids) : 1) + 1;
+  const A = 'http://schemas.openxmlformats.org/drawingml/2006/main', R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const anc = `<${pre}oneCellAnchor><${pre}from><${pre}col>${celda.c}</${pre}col><${pre}colOff>${celda.colOff||0}</${pre}colOff><${pre}row>${celda.r}</${pre}row><${pre}rowOff>${celda.rowOff||0}</${pre}rowOff></${pre}from>`+
+    `<${pre}ext cx="${OCP_SELLO_EMU.cx}" cy="${OCP_SELLO_EMU.cy}"/><${pre}pic><${pre}nvPicPr><${pre}cNvPr id="${nid}" name="Sello ILUMAX TRADING"/><${pre}cNvPicPr><a:picLocks xmlns:a="${A}" noChangeAspect="1"/></${pre}cNvPicPr></${pre}nvPicPr>`+
+    `<${pre}blipFill><a:blip xmlns:a="${A}" xmlns:r="${R}" r:embed="${imgRid}"/><a:stretch xmlns:a="${A}"><a:fillRect/></a:stretch></${pre}blipFill>`+
+    `<${pre}spPr><a:xfrm xmlns:a="${A}"><a:off x="0" y="0"/><a:ext cx="${OCP_SELLO_EMU.cx}" cy="${OCP_SELLO_EMU.cy}"/></a:xfrm><a:prstGeom xmlns:a="${A}" prst="rect"><a:avLst/></a:prstGeom></${pre}spPr></${pre}pic><${pre}clientData/></${pre}oneCellAnchor>`;
+  dXml = dXml.replace(new RegExp('</'+pre+'wsDr>'), anc+'</'+pre+'wsDr>');
+  zip.file(drawPath, dXml, {createFolders:false});
+  return await zip.generateAsync({type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', compression:'DEFLATE'});
+}
+async function ocpSellarPI(){
+  const p = OCP.d.pi;
+  if(!OCP.pi || !OCP.pi.buf){
+    // se recargó la página: volvemos a traer la PI original guardada
+    if(!p.original_url){ if(typeof toast==='function') toast('Vuelve a cargar el Excel de la PI','wa'); return; }
+    try{ const r = await fetch(p.original_url); OCP.pi = {buf: await r.arrayBuffer(), nombre:p.original_nombre, info: null}; OCP.pi.info = ocpLeerPI(OCP.pi.buf); }
+    catch(e){ if(typeof toast==='function') toast('No pude traer la PI guardada, cárgala de nuevo','er'); return; }
+  }
+  const info = OCP.pi.info;
+  let celda;
+  if(p.celda_manual){ const ix = ocpCeldaAIndice(p.celda_manual); if(!ix){ if(typeof toast==='function') toast('Celda no válida (ej: G43)','wa'); return; } celda = {c:ix.c, r:ix.r, colOff:0, rowOff:0}; }
+  else if(info.buyer) celda = {c:info.buyer.c, r:Math.max(0, info.buyer.r-7), colOff:400000, rowOff:180000};
+  else celda = {c:6, r:(info.ultimaFila||20)+12, colOff:0, rowOff:0};
+  try{
+    if(typeof toast==='function') toast('⏳ Poniendo el sello…','inf');
+    const blob = await ocpSellarXlsx(OCP.pi.buf, info.hojaIdx, celda);
+    const nombre = ocpNombreSellado();
+    ocpDescargar(blob, nombre);
+    const url = await ocSubirAdjunto(new File([blob], nombre, {type:blob.type}));
+    Object.assign(p, {sellado_url:url, sellado_en:new Date().toISOString(), celda_sello: ocpColLetra(celda.c)+(celda.r+1)});
+    ocpLog('pi_sellada', 'PI sellada en '+p.celda_sello);
+    await ocpGuardar(true).catch(()=>{});
+    if(typeof toast==='function') toast('PI sellada y descargada','ok');
+  }catch(err){ console.error(err); if(typeof toast==='function') toast('No pude sellar la PI: '+err.message,'er'); }
+  ocpRefrescarPI();
+}
+function ocpCorreoPI(){
+  const p = OCP.d.pi; const para = ocpCorreosProveedor(OCP.prov).join(',');
+  const cuerpo = `Dear ${OCP.prov.nombre_contacto||'supplier'},\n\nPlease find attached the Proforma Invoice ${p.pi_no||''} for our PO ${OCP.oc.numero_oc}, signed and stamped by ILUMAX TRADING CORP.\n${p.nota?'\nNotes: '+p.nota+'\n':''}\nFile: ${p.sellado_url}\n\nPlease proceed accordingly and keep us updated on artwork and production timing.\n\nBest regards,\n${arteQuien()}\nILUMAX TRADING CORP`;
+  window.open('mailto:'+para+'?subject='+encodeURIComponent('PI '+(p.pi_no||'')+' / PO '+OCP.oc.numero_oc+' – signed and stamped')+'&body='+encodeURIComponent(cuerpo));
+}
+function ocpFaltanPI(){
+  const p = OCP.d.pi, f = [];
+  if(!p.original_nombre) return ['Cargar el Excel de la PI'];
+  const hayDif = (p.filas||[]).some(x=>x.estado!=='ok');
+  const poOk = !p.po_no || ocpNormRef(p.po_no).replace(/\s/g,'').includes(ocpNormRef(OCP.oc.numero_oc).replace(/\s/g,''));
+  if((hayDif || !poOk) && !p.acepto_diferencias) f.push('Revisar y aceptar las diferencias');
+  if(!p.sellado_url) f.push('Poner el sello');
+  return f;
+}
+
+// ── pintar / abrir / confirmar ──
+function ocpProgreso(){
+  if(!OCP.tpl) return;
+  const lista = OCP.tpl.id==='oc_creada' ? ocpFaltanEnvio() : ocpFaltanPI();
+  const total = OCP.tpl.id==='oc_creada' ? 3 : 3; const pct = Math.round((total-Math.min(total,lista.length))/total*100);
+  const fill = document.getElementById('arte-prog-fill'); if(fill){ fill.style.width = pct+'%'; fill.style.background = lista.length ? 'var(--acc)' : 'var(--gr)'; }
+  const txt = document.getElementById('arte-prog-txt'); if(txt) txt.textContent = lista.length ? pct+'% completo' : '✓ Todo listo para confirmar';
+  const fz = document.getElementById('arte-faltantes'); if(fz) fz.innerHTML = lista.length && OCP.editable ? `<strong>Para confirmar falta:</strong> ${lista.map(x=>`<span>${ocpEsc(x)}</span>`).join('')}` : '';
+  const btn = document.getElementById('ea-confirmar'); if(btn){ btn.classList.toggle('arte-bloq', lista.length>0); btn.title = lista.join(' · '); }
+  return lista;
+}
+function ocpPintar(){
+  const e = OCP.etapa, tpl = OCP.tpl;
+  const dt = e.fecha_inicio ? (Date.now()-new Date(e.fecha_inicio))/86400000 : 0;
+  const sem = e.estado==='en_curso' ? ocSemaforo(dt, e.dias_esperado) : null;
+  const intro = tpl.id==='oc_creada'
+    ? 'Genera el PDF de la OCI y envíaselo al proveedor por correo. Con esto arranca el proceso con el proveedor.'
+    : 'Carga la PI (Proforma Invoice) que mandó el proveedor. El sistema la compara contra la OC y le pone el sello de ILUMAX TRADING CORP. listo para devolverla.';
+  document.getElementById('ea-contenido').innerHTML = `<div class="arte-wrap">
+    <div class="arte-meta">
+      <span class="arte-btn-guia" onclick="arteToggleGuia(true)">📘 Guía del paso</span>
+      <span class="bdg bdg-gris">🏢 ${ocpEsc(tpl.area)}</span>
+      ${sem?`<span class="bdg ${sem.cls}">⏱ ${reabastFmtDuracion(dt)} de ${reabastFmtDuracion(e.dias_esperado)}</span>`:''}
+      ${!OCP.editable?'<span class="bdg bdg-gris">👁 Solo lectura</span>':''}
+    </div>
+    <div class="arte-progreso"><div class="arte-progreso-bar"><div id="arte-prog-fill"></div></div><div id="arte-prog-txt" class="arte-mu"></div></div>
+    <div id="arte-faltantes" class="arte-faltantes"></div>
+    ${arteHtmlGuia(tpl)}
+    <div class="arte-intro">${intro}</div>
+    ${tpl.id==='oc_creada' ? ocpHtmlEnvio() : `<div id="ocp-pi-zona">${ocpHtmlPI()}</div>`}
+  </div>`;
+  ocpProgreso();
+}
+async function ocpAbrir(oc, e, tpl, items){
+  Object.assign(OCP, {ocId:oc.id, oc, etapa:e, tpl, items, pi:null, d:null,
+    prov: (REABAST.proveedores||[]).find(p=>(p.nombre||'').toLowerCase()===(oc.proveedor||'').toLowerCase()) || {}});
+  OCP.editable = e.estado==='en_curso' && reabastPuedeMarcarEtapa(e);
+  arteInjectCss(); arteInjectCssGuia(); ocpInjectCss(); ARTE.guiaAbierta = undefined;
+  const mo = document.querySelector('#modal-etapa-adjunto .mo'); if(mo) mo.classList.add('arte-mo');
+  document.getElementById('ea-com-wrap').style.display = 'none';
+  document.getElementById('ea-file-wrap').style.display = 'none';
+  document.getElementById('ea-devolver').style.display = 'none';
+  const btn = document.getElementById('ea-confirmar'); btn.textContent = tpl.id==='oc_creada' ? '📤 OCI enviada al proveedor' : '✅ PI confirmada y sellada'; btn.style.display = OCP.editable ? 'inline-flex' : 'none';
+  document.getElementById('ea-contenido').innerHTML = '<div class="arte-mu" style="padding:30px;text-align:center;">⏳ Cargando…</div>';
+  const d = await ocpCargar(oc.id); if(OCP.ocId!==oc.id) return;
+  OCP.d = d; ocpPintar();
+}
+function ocpCerrarLimpio(){ if(OCP.tpl && OCP.d) ocpGuardar(true).catch(()=>{}); OCP.tpl = null; }
+async function ocpConfirmar(){
+  const lista = ocpProgreso();
+  if(lista.length){ const fz = document.getElementById('arte-faltantes'); if(fz){ fz.classList.remove('shake'); void fz.offsetWidth; fz.classList.add('shake'); } if(typeof toast==='function') toast('Completa lo que falta antes de confirmar','wa'); return; }
+  const {ocId, etapaId} = ETAPA_ADJUNTO_CTX; const extra = {};
+  if(OCP.tpl.id==='oc_creada'){
+    OCP.d.envio.enviado_en = new Date().toISOString();
+    extra.adjunto_url = OCP.d.envio.pdf_url;
+    extra.comentario_extra = `OCI enviada por correo a ${(document.getElementById('ocp-para')||{}).value || OCP.d.envio.para || OCP.prov.correo || 'proveedor'} con PDF.`;
+  } else {
+    const p = OCP.d.pi; const dif = (p.filas||[]).filter(x=>x.estado!=='ok').length;
+    extra.adjunto_url = p.sellado_url;
+    extra.comentario_extra = `PI ${p.pi_no||p.original_nombre} confirmada y sellada · Total US$ ${ocpNum(p.total)}${dif?' · '+dif+' diferencia(s) aceptada(s)'+(p.nota?': '+p.nota:''):' · coincide con la OC'}.`;
+  }
+  ocpLog('completada', extra.comentario_extra);
+  try{ await ocpGuardar(); }catch(e){ return; }
+  cerrarModalEtapaAdjunto();
+  await ocMarcarEtapaCompleta(ocId, etapaId, extra);
+}
+function ocpInjectCss(){
+  if(document.getElementById('ocp-css')) return;
+  const s = document.createElement('style'); s.id = 'ocp-css';
+  s.textContent = `
+  .ocp-drop{display:flex;flex-direction:column;align-items:center;gap:4px;padding:26px 12px;border:2px dashed var(--b2);border-radius:12px;cursor:pointer;text-align:center;transition:all .15s;background:var(--s1);}
+  .ocp-drop:hover,.ocp-drop.on{border-color:var(--bl);background:var(--bld);}
+  .ocp-tabla td,.ocp-tabla th{font-size:11.5px;padding:5px 7px;}
+  .ocp-tabla tr.ocp-dif{background:rgba(234,88,12,.06);} .ocp-tabla tr.ocp-falta{background:rgba(220,38,38,.06);} .ocp-tabla tr.ocp-extra{background:rgba(124,58,237,.06);}
+  .ocp-tabla.solo-dif tr.ocp-ok{display:none;}
+  .ocp-sello-fila{display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
+  .ocp-sello-img{width:180px;height:auto;border:1px dashed var(--b2);border-radius:8px;padding:6px;background:#fff;}
   `;
   document.head.appendChild(s);
 }
@@ -13159,7 +13741,7 @@ async function ocMarcarEtapaCompleta(ocId, etapaId, extra){
   // En ese caso la tratamos como una etapa simple (sin adjunto ni dependientes) para no romper
   // OC viejas — solo se completa y avanza si tiene dependientes registrados por dependeDe/requiere.
   const plantilla = OC_ETAPAS_POR_ID[e.etapa_id] || {id:e.etapa_id, area:'—', requiereAdjunto:false};
-  if((plantilla.requiereAdjunto || ARTE_IDS.has(plantilla.id)) && !extra){
+  if((plantilla.requiereAdjunto || ARTE_IDS.has(plantilla.id) || OCP_IDS.has(plantilla.id)) && !extra){
     ocAbrirTarjetaEtapa(ocId, etapaId);
     return;
   }
