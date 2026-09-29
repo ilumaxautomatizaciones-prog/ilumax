@@ -21330,16 +21330,24 @@ function pvRenderTabla() {
         coberturaTitle = 'Con el stock actual (' + stock.toLocaleString('es-CO') + ' und.) y el ritmo promedio presupuestado, alcanza para aprox. ' + coberturaTxt;
       }
 
+      const refEsc = String(r.referencia).replace(/'/g,"\\'");
+      const refId  = String(r.referencia).replace(/[^a-zA-Z0-9_-]/g,'_');
       htmlRows += `<tr style="border-bottom:1px solid var(--b1);"
         onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
         <td style="padding:7px 10px;font-family:monospace;font-size:10px;color:var(--mu);white-space:nowrap;position:sticky;left:0;background:inherit;z-index:5;">${esLibre?'💰 sin SKU':r.referencia}</td>
         <td style="padding:7px 10px;font-size:11px;font-weight:600;max-width:160px;position:sticky;left:70px;background:inherit;z-index:5;" title="${r.descripcion||''}">${(r.descripcion||'').substring(0,35)}</td>
-        <td style="padding:7px 8px;text-align:right;font-size:10px;color:var(--bl);white-space:nowrap;" title="${esLibre?'Línea sin SKU — lo que escribas en cada mes ES el monto en $ directamente':(precio ? '' : 'Sin precio registrado para este SKU en la lista actual (puede existir en otras listas)')}">${esLibre?'—':(precio ? '$'+Math.round(precio).toLocaleString('es-CO') : '—')}</td>
+        <td style="padding:4px 6px;text-align:right;white-space:nowrap;" title="${esLibre?'Precio por unidad de esta línea. Déjalo en 1 para escribir el monto en $ directo cada mes, o pon un precio real y cada mes escribe la cantidad (se multiplica cantidad × precio).':(precio ? '' : 'Sin precio registrado para este SKU en la lista actual (puede existir en otras listas)')}">
+          ${esLibre
+            ? `<input type="number" min="0" step="1" value="${precio||1}" data-ref="${r.referencia}"
+                 onchange="pvPrecioLibreCambio('${refEsc}', this.value)" onfocus="this.select()"
+                 style="width:82px;border:1px solid var(--b1);border-radius:6px;padding:3px 5px;text-align:right;font-size:10px;font-family:inherit;color:${PV_SOLO_LECTURA?'var(--mu)':'var(--tx)'};outline:none;" ${PV_SOLO_LECTURA?'disabled':''}>`
+            : (precio ? '$'+Math.round(precio).toLocaleString('es-CO') : '—')}
+        </td>
         <td style="padding:7px 8px;text-align:right;font-size:10px;color:${stock>0?'var(--gr)':'var(--mu)'};" title="Existencia total en todas las bodegas">${esLibre?'—':stock.toLocaleString('es-CO')}</td>
         <td style="padding:7px 8px;text-align:right;font-size:10px;font-weight:700;color:${coberturaColor};" title="${coberturaTitle}">${coberturaTxt}</td>
         ${celdas}
-        <td style="padding:7px 8px;text-align:right;font-size:11px;font-weight:700;color:var(--tx);white-space:nowrap;" title="${esLibre?'No aplica en una línea sin SKU — ver Total COP':''}">${esLibre?'—':totalUnd.toLocaleString('es-CO')}</td>
-        <td style="padding:7px 8px;text-align:right;font-size:11px;font-weight:700;color:var(--bl);white-space:nowrap;">${totalCOP ? '$'+Math.round(totalCOP).toLocaleString('es-CO') : '—'}</td>
+        <td id="pv-totund-${refId}" style="padding:7px 8px;text-align:right;font-size:11px;font-weight:700;color:var(--tx);white-space:nowrap;" title="${esLibre?'Unidades × precio unitario':''}">${esLibre&&precio<=1?'—':totalUnd.toLocaleString('es-CO')}</td>
+        <td id="pv-totcop-${refId}" style="padding:7px 8px;text-align:right;font-size:11px;font-weight:700;color:var(--bl);white-space:nowrap;">${totalCOP ? '$'+Math.round(totalCOP).toLocaleString('es-CO') : '—'}</td>
         ${comp ? `<td style="padding:7px 8px;text-align:right;font-size:10px;color:#60a5fa;">${histTot ? histTot.toLocaleString('es-CO') : '—'}</td>
         <td style="padding:7px 8px;text-align:right;font-size:10px;font-weight:700;color:${pctCompC};">${pctComp!==null ? pctComp+'%' : '—'}</td>` : ''}
         <td style="padding:4px;text-align:center;">
@@ -21377,8 +21385,8 @@ function pvRenderTabla() {
   tfoot.innerHTML = `<tr style="border-top:2px solid var(--b2);">
     <td colspan="5" style="padding:8px 10px;font-size:11px;font-weight:800;color:#0f172a;background:#f8fafc;">TOTAL GENERAL</td>
     ${mesesTotales}
-    <td style="padding:8px;text-align:right;font-size:11px;font-weight:800;color:#0f172a;background:#f8fafc;">${totalUndGlobal.toLocaleString('es-CO')}</td>
-    <td style="padding:8px;text-align:right;font-size:11px;font-weight:800;color:var(--bl);background:#f8fafc;white-space:nowrap;">$${Math.round(totalCOPGlobal).toLocaleString('es-CO')}</td>
+    <td id="pv-totund-global" style="padding:8px;text-align:right;font-size:11px;font-weight:800;color:#0f172a;background:#f8fafc;">${totalUndGlobal.toLocaleString('es-CO')}</td>
+    <td id="pv-totcop-global" style="padding:8px;text-align:right;font-size:11px;font-weight:800;color:var(--bl);background:#f8fafc;white-space:nowrap;">$${Math.round(totalCOPGlobal).toLocaleString('es-CO')}</td>
     ${comp ? '<td colspan="2" style="background:#f8fafc;"></td>' : ''}
     <td style="background:#f8fafc;"></td>
   </tr>`;
@@ -21435,11 +21443,58 @@ function pvCeldaCambio(ref, mes, valor) {
   }
   // Actualizar totales sin re-renderizar toda la tabla
   pvActualizarTotalesColumna(mes);
+  pvActualizarTotalesFila(ref);
   pvActualizarBadgeGuardar();
   pvRenderKPIs(
     PV.detalle.reduce((a,r)=>{ for(let m=1;m<=12;m++) a+=(parseFloat(r['u'+String(m).padStart(2,'0')])||0); return a; },0),
     PV.detalle.reduce((a,r)=>{ let t=0; for(let m=1;m<=12;m++) t+=(parseFloat(r['u'+String(m).padStart(2,'0')])||0); return a+t*(parseFloat(r.precio_lista)||0); },0)
   );
+}
+
+// Cambia el precio unitario de una línea "sin SKU" (dejarlo en 1 = escribir el monto en $ directo
+// cada mes; ponerle un precio real = escribir cantidad y que se multiplique cantidad × precio).
+function pvPrecioLibreCambio(ref, valor) {
+  if(PV_SOLO_LECTURA) { toast('🔒 Estás en modo consulta — no puedes editar este canal','wa'); return; }
+  const row = PV.detalle.find(r=>r.referencia===ref);
+  if(row) {
+    row.precio_lista = Math.max(0, parseFloat(valor)||0);
+    row._dirty = true;
+  }
+  pvActualizarTotalesFila(ref);
+  pvActualizarTotalesGlobales();
+  pvActualizarBadgeGuardar();
+}
+
+// Recalcula y repinta en vivo Total Und./Total COP de UNA fila (sin re-render de toda la tabla)
+function pvActualizarTotalesFila(ref) {
+  const row = PV.detalle.find(r=>r.referencia===ref);
+  if(!row) return;
+  const refId = String(ref).replace(/[^a-zA-Z0-9_-]/g,'_');
+  const esLibre = pvEsLineaLibre(row);
+  const precio = parseFloat(row.precio_lista)||0;
+  let totalUnd = 0;
+  for(let m=1;m<=12;m++) totalUnd += parseFloat(row['u'+String(m).padStart(2,'0')])||0;
+  const totalCOP = totalUnd * precio;
+  const elUnd = document.getElementById('pv-totund-'+refId);
+  if(elUnd) elUnd.textContent = (esLibre && precio<=1) ? '—' : totalUnd.toLocaleString('es-CO');
+  const elCop = document.getElementById('pv-totcop-'+refId);
+  if(elCop) elCop.textContent = totalCOP ? '$'+Math.round(totalCOP).toLocaleString('es-CO') : '—';
+  pvActualizarTotalesGlobales();
+}
+
+// Recalcula y repinta en vivo el pie "TOTAL GENERAL" (Total Und. / Total COP)
+function pvActualizarTotalesGlobales() {
+  let totalUndGlobal = 0, totalCOPGlobal = 0;
+  PV.detalle.forEach(r=>{
+    let t = 0;
+    for(let m=1;m<=12;m++) t += parseFloat(r['u'+String(m).padStart(2,'0')])||0;
+    totalUndGlobal += t;
+    totalCOPGlobal += t * (parseFloat(r.precio_lista)||0);
+  });
+  const elUnd = document.getElementById('pv-totund-global');
+  if(elUnd) elUnd.textContent = totalUndGlobal.toLocaleString('es-CO');
+  const elCop = document.getElementById('pv-totcop-global');
+  if(elCop) elCop.textContent = '$'+Math.round(totalCOPGlobal).toLocaleString('es-CO');
 }
 
 function pvActualizarTotalesColumna(mes) {
@@ -21579,7 +21634,14 @@ async function pvActualizarPrecios() {
 // (unidades × precio = unidades × 1 = el mismo monto). El prefijo "LIBRE-" en la referencia es lo
 // que usa la pantalla para reconocer estas filas y no mostrarles precio/stock, que no aplican.
 const PV_REF_LIBRE_PREFIJO = 'LIBRE-';
-function pvEsLineaLibre(r) { return !!(r && String(r.referencia||'').startsWith(PV_REF_LIBRE_PREFIJO)); }
+function pvEsLineaLibre(r) {
+  if(!r) return false;
+  const ref = String(r.referencia||'').trim();
+  if(ref.startsWith(PV_REF_LIBRE_PREFIJO)) return true;
+  // Compatibilidad con filas creadas a mano antes de este botón (ej. referencia literal "sin SKU")
+  const refLow = ref.toLowerCase();
+  return refLow === 'sin sku' || refLow === 'sin-sku' || refLow === '' || refLow === 'general';
+}
 function pvAgregarLineaLibre() {
   if(PV_SOLO_LECTURA) { toast('🔒 Estás en modo consulta — no puedes editar este canal','wa'); return; }
   const mo = document.createElement('div');
@@ -22577,7 +22639,7 @@ async function pvExportarPorPersona() {
     let catActual = null;
     lista.forEach(x=>{
       if(x.cat!==catActual){ catActual = x.cat; rows.push([`📁 ${catActual}`]); }
-      const esLibre = x.ref.startsWith(PV_REF_LIBRE_PREFIJO);
+      const esLibre = pvEsLineaLibre({referencia:x.ref});
       const stock = esLibre ? '' : (stockMap[x.ref]||0);
       rows.push([esLibre?'💰 sin SKU':x.ref, x.desc, x.cat, stock, esLibre?'—':coberturaTxt(stock,x.totalUnd), ...x.meses, esLibre?'':x.totalUnd, Math.round(x.cop)]);
       totalUndGlobal += x.totalUnd; totalCOPGlobal += x.cop;
