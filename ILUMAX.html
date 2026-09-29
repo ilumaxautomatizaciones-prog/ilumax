@@ -8986,7 +8986,7 @@ function reabastPintar(){
   else if(REABAST.tab==='sobrestock'){ body.innerHTML = reabastHtmlSobrestockShell(); reabastRepintarSobrestock(); }
   else if(REABAST.tab==='vendidos'){ body.innerHTML = reabastHtmlVendidosShell(); reabastRepintarVendidos(); }
   else if(REABAST.tab==='abc'){ body.innerHTML = reabastHtmlAbcShell(); reabastRepintarAbc(); }
-  else if(REABAST.tab==='proveedores'){ body.innerHTML = reabastHtmlProveedores(); }
+  else if(REABAST.tab==='proveedores'){ body.innerHTML = reabastHtmlProveedores(); reabastRepintarProveedores(); }
   else if(REABAST.tab==='panelcompras'){ body.innerHTML = reabastHtmlPanelCompras(); reabastCargarPanelCompras(); }
   else if(REABAST.tab==='referencias'){ body.innerHTML = reabastHtmlReferenciasShell(); reabastRepintarReferencias(); }
   else if(REABAST.tab==='dashboard') body.innerHTML = reabastHtmlDashboard();
@@ -9037,7 +9037,7 @@ function reabastFilasUrgentesHtml(urgentes){
       </div>
       <div class="sc2-foot"><div class="sc2-acts">
         <button class="btn btn-bl btn-sm" data-item='${JSON.stringify(u).replace(/'/g,"&#39;")}' data-sug="${sugerido}" onclick="const it=JSON.parse(this.dataset.item); it.sugerido=Number(this.dataset.sug); abrirModalReabast(it)">🔁 Solicitar ${sugerido}</button>
-        <button class="btn btn-g btn-sm" onclick="reabastVerClientes('${reabastEsc(u.referencia)}', this)">👥 Ver clientes</button>
+        <button class="btn btn-g btn-sm" onclick="reabastVerClientes('${reabastEsc(u.referencia)}', this)" title="Ver en tránsito, ventas por mes y clientes">👥 Ver detalle</button>
         <button class="btn btn-g btn-sm" data-item2='${JSON.stringify({...u,sugerido}).replace(/'/g,"&#39;")}' onclick="reabastVerJustificacion(JSON.parse(this.dataset.item2), this)">📊 ¿Por qué?</button>
         <button class="btn btn-g btn-sm" onclick="reabastVerPresupuesto('${reabastEsc(u.referencia)}', this)">📆 Presupuesto mes a mes</button>
       </div></div>
@@ -9136,7 +9136,11 @@ function reabastVerJustificacion(u, btn){
   cont.style.display = 'block';
 }
 
-function reabastVerClientes(referencia, btn){
+// Ficha rápida de una referencia al desplegarla: qué está en tránsito y cuándo llega (Panel de
+// compras + OC de la app, con la fecha ya corregida/validada de Comercio Exterior cuando aplica),
+// su tendencia de ventas mes a mes (se trae aparte, bajo demanda, para no cargar todo el histórico
+// de ventas de una vez), y sus principales clientes históricos.
+async function reabastVerClientes(referencia, btn){
   let cont = null;
   const card = btn.closest('.sc2');
   if(card) cont = card.querySelector('.reabast-clientes');
@@ -9147,11 +9151,60 @@ function reabastVerClientes(referencia, btn){
   }
   if(!cont) return;
   if(cont.style.display==='block'){ cont.style.display='none'; return; }
-  const clientes = (REABAST.clientesPorRef[referencia]||[]).slice(0,8);
-  cont.innerHTML = clientes.length
-    ? '<div class="hist-inline">' + clientes.map(c=>`<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11.5px;"><span>${reabastEsc(c.cliente_nombre)}</span><strong>${reabastFmtN(c.unidades)} und · $${reabastFmtN(c.valor_cop)}</strong></div>`).join('') + '</div>'
-    : '<div class="hist-inline" style="color:var(--mu);">Sin clientes registrados para esta referencia</div>';
   cont.style.display = 'block';
+  cont.innerHTML = reabastHtmlDetalleVentaReferencia(referencia, null);
+  try{
+    const rows = await sb.get('ventas_historico', 'select=anio,mes,unidades,valor_cop&referencia=eq.'+encodeURIComponent(referencia));
+    if(cont.style.display==='block') cont.innerHTML = reabastHtmlDetalleVentaReferencia(referencia, rows||[]);
+  }catch(e){ console.warn('No se pudo traer la tendencia mensual de '+referencia+':', e.message); }
+}
+// mensualRows===null mientras se está trayendo la tendencia mensual (muestra "Cargando…" ahí).
+function reabastHtmlDetalleVentaReferencia(referencia, mensualRows){
+  const hoy = new Date();
+  const transito = reabastEnTransitoPanelCompras(referencia);
+  const transitoHtml = transito.filas.length ? `
+    <div style="font-weight:700;font-size:11.5px;margin:2px 0 4px;">🚢 En tránsito · ${reabastFmtN(transito.total)} und en camino</div>
+    ${transito.filas.slice(0,8).map(f=>{
+      const d = f.fila||{};
+      const cant = reabastFmtN(Number(d[PC_COL_CANTIDAD])||0);
+      const prov = d[PC_COL_PROVEEDOR] || '—';
+      const ocApp = (REABAST.ordenesCompra||[]).find(o=>o.numero_oc===f.oi);
+      const L = ocApp ? ceLlegada(ocApp) : null;
+      const fEst = (L && L.fecha) || pcFecha(d[PC_COL_FECHA_ESTIMADA]);
+      let etiqueta;
+      if(fEst){
+        const dd = Math.round((fEst-hoy)/86400000);
+        etiqueta = (dd<0 ? `⚠️ atrasado ${-dd} d` : `llega en ${dd} d`) + ` (${fEst.toLocaleDateString('es-CO')})`;
+        if(L && L.corregida) etiqueta += ' · fecha corregida ⚠️';
+      } else etiqueta = 'sin fecha estimada';
+      return `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:11.5px;"><span>${reabastEsc(f.oi||'—')} · ${reabastEsc(prov)}</span><strong style="text-align:right;white-space:nowrap;">${cant} und · ${etiqueta}</strong></div>`;
+    }).join('')}` : `<div style="font-weight:700;font-size:11.5px;margin:2px 0 4px;">🚢 En tránsito</div><div style="color:var(--mu);font-size:11.5px;">Nada en camino ahora mismo según el Panel de compras.</div>`;
+
+  let mensualHtml;
+  if(mensualRows===null){
+    mensualHtml = `<div style="font-weight:700;font-size:11.5px;margin:10px 0 4px;">📈 Ventas por mes</div><div style="color:var(--mu);font-size:11px;">Cargando…</div>`;
+  } else {
+    const porMes = {};
+    mensualRows.forEach(r=>{ const k = r.anio+'-'+String(r.mes).padStart(2,'0'); if(!porMes[k]) porMes[k] = {unidades:0, valor_cop:0}; porMes[k].unidades += Number(r.unidades)||0; porMes[k].valor_cop += Number(r.valor_cop)||0; });
+    const meses = Object.entries(porMes).sort((a,b)=>a[0]<b[0]?-1:1).slice(-12);
+    const max = Math.max(1, ...meses.map(([,v])=>v.unidades));
+    mensualHtml = `<div style="font-weight:700;font-size:11.5px;margin:10px 0 4px;">📈 Ventas por mes (últimos ${meses.length})</div>
+      ${meses.length ? meses.map(([k,v])=>{
+        const [anio,mes] = k.split('-'); const lbl = (typeof MC_MESES!=='undefined' && MC_MESES[+mes-1]) ? MC_MESES[+mes-1].slice(0,3) : mes;
+        const pct = Math.round(v.unidades/max*100);
+        return `<div style="display:flex;align-items:center;gap:6px;font-size:11px;padding:1px 0;">
+          <span style="width:56px;color:var(--mu);">${lbl} ${anio}</span>
+          <span style="flex:1;background:var(--s1);border-radius:4px;overflow:hidden;height:10px;"><span style="display:block;height:100%;width:${pct}%;background:var(--bl);"></span></span>
+          <strong style="width:60px;text-align:right;">${reabastFmtN(v.unidades)}</strong>
+        </div>`;
+      }).join('') : '<div style="color:var(--mu);font-size:11px;">Sin histórico mensual cargado para esta referencia.</div>'}`;
+  }
+
+  const clientes = (REABAST.clientesPorRef[referencia]||[]).slice(0,8);
+  const clientesHtml = `<div style="font-weight:700;font-size:11.5px;margin:10px 0 4px;">👥 Principales clientes (histórico total)</div>
+    ${clientes.length ? clientes.map(c=>`<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11.5px;"><span>${reabastEsc(c.cliente_nombre)}</span><strong>${reabastFmtN(c.unidades)} und · $${reabastFmtN(c.valor_cop)}</strong></div>`).join('') : '<div style="color:var(--mu);font-size:11.5px;">Sin clientes registrados para esta referencia.</div>'}`;
+
+  return `<div class="hist-inline">${transitoHtml}${mensualHtml}${clientesHtml}</div>`;
 }
 
 // ═══ Tab: Agotados ═══
@@ -9244,7 +9297,7 @@ function reabastRepintarVendidos(){
         <td><span class="bdg ${rot.cls}">${rot.lbl}</span></td>
         <td style="text-align:right;">${f2.existencia!=null?reabastFmtN(f2.existencia):'—'}</td>
         <td style="text-align:right;font-size:11px;">${cob.lbl}</td>
-        <td><button class="btn btn-g btn-sm" onclick="reabastVerClientes('${reabastEsc(f2.referencia)}', this)">👥</button></td>
+        <td><button class="btn btn-g btn-sm" onclick="reabastVerClientes('${reabastEsc(f2.referencia)}', this)" title="Ver en tránsito, ventas por mes y clientes">🔎</button></td>
       </tr>
       <tr><td colspan="9" style="padding:0;"><div class="reabast-clientes" style="display:none;padding:6px 12px;"></div></td></tr>`;
     }).join('')}</tbody>
@@ -9893,14 +9946,63 @@ function reabastHtmlCalendario(){
 }
 
 // ═══ Tab: Proveedores (maestro + desempeño) ═══
+function reabastFiltroProv(){ return reabastFiltro('proveedores', {q:'', ciudad:'', incoterm:'', condiciones:'', orden:'nombre'}); }
 function reabastHtmlProveedores(){
+  segCss(); // reutiliza .seg-bar / .seg-adv (buscador + panel de filtros avanzados)
   const esAdmin = reabastEsAdmin();
   const provs = REABAST.proveedores||[];
+  const f = reabastFiltroProv(), sel = (v,a)=> v===a?'selected':'';
+  const ciudades = [...new Set(provs.map(p=>p.ciudad).filter(Boolean))].sort();
+  const incoterms = [...new Set(provs.map(p=>p.incoterm).filter(Boolean))].sort();
+  const nAdv = ['ciudad','incoterm','condiciones'].filter(k=>f[k]).length;
   return `
-    ${esAdmin?`<div style="margin-bottom:12px;"><button class="btn btn-bl btn-sm" onclick="abrirModalProveedor()">+ Nuevo proveedor</button></div>`:''}
-    <div class="tw" style="margin-bottom:20px;"><table>
+  <div class="seg-bar">
+    <input class="inp" id="prov-q" placeholder="🔎 Buscar por siglas, nombre, NIT, ciudad, correo, contacto…" style="flex:1;min-width:220px;max-width:420px;" value="${reabastEsc(f.q)}" oninput="REABAST.filtros.proveedores.q=this.value;reabastRepintarProveedores()">
+    <button class="btn btn-g btn-sm" onclick="REABAST.provAbiertos=!REABAST.provAbiertos;reabastPintar()">⚙️ Filtros avanzados${nAdv?` <span class="bdg bpu" style="font-size:9px;">${nAdv}</span>`:''}</button>
+    ${nAdv||f.q?`<button class="btn btn-g btn-sm" onclick="reabastLimpiarFiltroProv()">✕ Limpiar</button>`:''}
+    <span id="prov-count" class="arte-mu" style="font-size:11px;margin-left:auto;"></span>
+    ${esAdmin?`<button class="btn btn-bl btn-sm" onclick="abrirModalProveedor()">+ Nuevo proveedor</button>`:''}
+  </div>
+  ${REABAST.provAbiertos?`<div class="seg-adv">
+    <div><label>Ciudad</label><select class="inp" onchange="REABAST.filtros.proveedores.ciudad=this.value;reabastRepintarProveedores()"><option value="">Todas</option>${ciudades.map(c=>`<option ${sel(f.ciudad,c)} value="${reabastEsc(c)}">${reabastEsc(c)}</option>`).join('')}</select></div>
+    <div><label>Incoterm</label><select class="inp" onchange="REABAST.filtros.proveedores.incoterm=this.value;reabastRepintarProveedores()"><option value="">Todos</option>${incoterms.map(c=>`<option ${sel(f.incoterm,c)} value="${reabastEsc(c)}">${reabastEsc(c)}</option>`).join('')}</select></div>
+    <div><label>Condiciones para saldo (término de pago, % anticipo, días pago post-BL)</label><select class="inp" onchange="REABAST.filtros.proveedores.condiciones=this.value;reabastRepintarProveedores()"><option value="">Cualquiera</option><option value="completas" ${sel(f.condiciones,'completas')}>Completas</option><option value="incompletas" ${sel(f.condiciones,'incompletas')}>Incompletas (falta algo)</option></select></div>
+    <div><label>Ordenar por</label><select class="inp" onchange="REABAST.filtros.proveedores.orden=this.value;reabastRepintarProveedores()"><option value="nombre" ${sel(f.orden,'nombre')}>Nombre</option><option value="ciudad" ${sel(f.orden,'ciudad')}>Ciudad</option><option value="valor" ${sel(f.orden,'valor')}>Valor de compras (mayor primero)</option></select></div>
+  </div>`:''}
+  <div id="prov-wrap"></div>
+  <div class="admin-sec-t" style="margin-bottom:8px;">📊 Desempeño por proveedor (tiempos reales vs. esperados en sus OC)</div>
+  ${reabastHtmlDesempenoProveedores()}`;
+}
+function reabastLimpiarFiltroProv(){ REABAST.filtros.proveedores = {q:'', ciudad:'', incoterm:'', condiciones:'', orden:'nombre'}; reabastPintar(); }
+function reabastFiltrarProveedores(){
+  const f = reabastFiltroProv();
+  const qq = (f.q||'').toLowerCase();
+  const condOk = p => {
+    if(!f.condiciones) return true;
+    const completas = !!(p.termino_pago && p.porcentaje_anticipo!=null && p.porcentaje_anticipo!=='' && p.dias_pago_despues_bl!=null && p.dias_pago_despues_bl!=='');
+    return f.condiciones==='completas' ? completas : !completas;
+  };
+  let filas = (REABAST.proveedores||[]).filter(p=>{
+    if(f.ciudad && p.ciudad!==f.ciudad) return false;
+    if(f.incoterm && p.incoterm!==f.incoterm) return false;
+    if(!condOk(p)) return false;
+    if(!qq) return true;
+    return [p.siglas,p.nombre,p.nombre_comercial,p.nit,p.ciudad,p.correo,p.nombre_contacto].some(v=>(v||'').toLowerCase().includes(qq));
+  });
+  if(f.orden==='ciudad') filas.sort((a,b)=>(a.ciudad||'').localeCompare(b.ciudad||''));
+  else if(f.orden==='valor') filas.sort((a,b)=>(Number(b.valor_compras)||0)-(Number(a.valor_compras)||0));
+  else filas.sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  return filas;
+}
+function reabastRepintarProveedores(){
+  const wrap = document.getElementById('prov-wrap'); if(!wrap) return;
+  const esAdmin = reabastEsAdmin();
+  const filas = reabastFiltrarProveedores();
+  const total = (REABAST.proveedores||[]).length;
+  const cnt = document.getElementById('prov-count'); if(cnt) cnt.textContent = `${filas.length} de ${total} proveedor(es)`;
+  wrap.innerHTML = `<div class="tw" style="margin-bottom:20px;"><table>
       <thead><tr><th>Siglas</th><th>Nombre</th><th>Nombre comercial</th><th>Ciudad</th><th>NIT</th><th>Correo</th>${esAdmin?'<th></th>':''}</tr></thead>
-      <tbody>${provs.map(p=>`<tr>
+      <tbody>${filas.map(p=>`<tr>
         <td style="font-family:monospace;font-weight:700;">${reabastEsc(p.siglas||'—')}</td>
         <td>${reabastEsc(p.nombre)}</td>
         <td>${reabastEsc(p.nombre_comercial||'—')}</td>
@@ -9908,10 +10010,8 @@ function reabastHtmlProveedores(){
         <td>${reabastEsc(p.nit||'—')}</td>
         <td>${reabastEsc(p.correo||'—')}</td>
         ${esAdmin?`<td><button class="btn btn-g btn-sm" data-p='${JSON.stringify(p).replace(/'/g,"&#39;")}' onclick="abrirModalProveedor(JSON.parse(this.dataset.p))">✎</button></td>`:''}
-      </tr>`).join('') || `<tr><td colspan="${esAdmin?7:6}" style="text-align:center;padding:16px;color:var(--mu);">Aún no has registrado proveedores</td></tr>`}</tbody>
-    </table></div>
-    <div class="admin-sec-t" style="margin-bottom:8px;">📊 Desempeño por proveedor (tiempos reales vs. esperados en sus OC)</div>
-    ${reabastHtmlDesempenoProveedores()}`;
+      </tr>`).join('') || `<tr><td colspan="${esAdmin?7:6}" style="text-align:center;padding:16px;color:var(--mu);">${total?'Ningún proveedor coincide con este filtro':'Aún no has registrado proveedores'}</td></tr>`}</tbody>
+    </table></div>`;
 }
 
 function reabastHtmlDesempenoProveedores(){
@@ -20770,6 +20870,7 @@ function renderPVShell(el, canales) {
         <button class="btn btn-bl btn-sm" onclick="pvAgregarSKU()">➕ SKU</button>
         <button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>`}
         <button class="btn btn-g btn-sm" onclick="pvExportar()">📊 Excel</button>
+        <button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>
       </div>
     </div>
 
@@ -22178,6 +22279,138 @@ async function pvExportar() {
   // Descargar
   XLSX.writeFile(wb, `Presupuesto_Ventas_ILUMAX_${anio}.xlsx`);
   toast(`✅ Excel generado — ${skuList.length} SKUs, ${canales.length} canales`,'ok');
+}
+
+// Cada persona manda su presupuesto por su canal (Ferroeléctrico = Cindy, Mixto = Johanna, etc. —
+// el nombre real de quien lo hizo queda en "jefe_zona" al guardar). Este Excel arma una hoja por
+// persona con la MISMA tabla que ve en pantalla (agrupada por categoría, con precio, stock y
+// cobertura), y al final una hoja "Combinado" con todos los canales sumados SKU por SKU — así se
+// unifica lo que mandó cada uno sin tener que pegar Excels a mano.
+function pvNombreHojaExcel(txt, usados){
+  let base = String(txt||'Hoja').replace(/[:\\\/\?\*\[\]]/g,' ').trim().slice(0,31) || 'Hoja';
+  let nombre = base, i = 2;
+  while(usados.has(nombre.toLowerCase())){ const suf = ' ('+i+')'; nombre = base.slice(0, 31-suf.length)+suf; i++; }
+  usados.add(nombre.toLowerCase());
+  return nombre;
+}
+async function pvExportarPorPersona() {
+  if(typeof XLSX === 'undefined') {
+    await new Promise((res,rej)=>{
+      const s=document.createElement('script');
+      s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      s.onload=res; s.onerror=rej;
+      document.head.appendChild(s);
+    });
+  }
+  toast('⏳ Generando Excel consolidado por persona...','inf');
+  const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const anio = PV.anio;
+
+  let canales = [...CANALES_DEFAULT];
+  try {
+    const cfg = await sb.get('configuracion','clave=eq.canales_comerciales');
+    if(cfg?.[0]) canales = cfg[0].valor.split(',').map(s=>s.trim()).filter(Boolean);
+  } catch(e){}
+
+  // Encabezado (jefe_zona, lista_id) + detalle de cada canal
+  const porCanal = [];
+  for(const canal of canales){
+    try{
+      const hdr = await sb.get('presupuesto_ventas', `anio=eq.${anio}&canal=eq.${encodeURIComponent(canal)}&order=creado_en.desc&limit=1`);
+      if(!hdr?.length){ continue; }
+      const detalle = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${hdr[0].id}&order=categoria.asc,referencia.asc`);
+      if(!detalle?.length) continue;
+      const listaNombre = (PV.catalogo.find(c=>c.lista_id===hdr[0].lista_id)||{}).nombre || hdr[0].lista_id || '—';
+      porCanal.push({ canal, jefeZona: hdr[0].jefe_zona || '', listaNombre, detalle });
+    }catch(e){ console.warn('Consolidado por persona — '+canal+':', e.message); }
+  }
+  if(!porCanal.length){ toast('No hay presupuestos guardados para '+anio+' en ningún canal','err'); return; }
+
+  // Stock real (compartido entre todos, es el mismo inventario físico) de todas las referencias que aparezcan.
+  const todasRefs = [...new Set(porCanal.flatMap(c=>c.detalle.map(r=>r.referencia)))];
+  const stockMap = {};
+  try{
+    const rows = await sb.get('inventario', `referencia=in.(${todasRefs.join(',')})&select=referencia,bodega,existencia`);
+    const porRefBodega = {};
+    (rows||[]).forEach(r=>{ if(!invBodegaCuenta(r.bodega)) return; porRefBodega[r.referencia+'||'+(r.bodega||'')] = {ref:r.referencia, existencia:parseFloat(r.existencia)||0}; });
+    Object.values(porRefBodega).forEach(x=>{ stockMap[x.ref] = (stockMap[x.ref]||0) + x.existencia; });
+  }catch(e){ console.warn('Consolidado por persona — stock:', e.message); }
+
+  const coberturaTxt = (stock, totalUndAnual) => {
+    if(totalUndAnual<=0) return '∞';
+    const meses = stock/(totalUndAnual/12);
+    return meses<1 ? Math.max(0,Math.round(meses*30))+' d' : meses.toFixed(1)+' m';
+  };
+
+  // ── Una hoja por persona/canal, con la misma tabla que ven en pantalla ──
+  const buildHojaPersona = (info) => {
+    const rows = [];
+    rows.push(['PRESUPUESTO DE VENTAS '+anio]);
+    rows.push(['Canal', info.canal, 'Jefe de zona', info.jefeZona||'—', 'Lista de precios', info.listaNombre]);
+    rows.push([]);
+    rows.push(['SKU','Descripción','Precio Lista','Stock Bodega','Meses Stock',...MESES_CORTOS,'Total Und','Total COP']);
+    const grupos = {};
+    info.detalle.forEach(r=>{ const cat = r.categoria||'Sin categoría'; (grupos[cat]=grupos[cat]||[]).push(r); });
+    let totalUndHoja = 0, totalCOPHoja = 0;
+    Object.entries(grupos).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([cat,items])=>{
+      rows.push([`📁 ${cat} (${items.length} SKUs)`]);
+      items.forEach(r=>{
+        const precio = parseFloat(r.precio_lista)||0;
+        const meses = Array.from({length:12},(_,i)=>parseFloat(r['u'+String(i+1).padStart(2,'0')])||0);
+        const totalUnd = meses.reduce((a,v)=>a+v,0);
+        const totalCOP = totalUnd*precio;
+        totalUndHoja += totalUnd; totalCOPHoja += totalCOP;
+        const stock = stockMap[r.referencia]||0;
+        rows.push([r.referencia, r.descripcion||'', precio||'', stock, coberturaTxt(stock,totalUnd), ...meses, totalUnd, Math.round(totalCOP)]);
+      });
+    });
+    rows.push(['','TOTAL GENERAL','','','', ...Array(12).fill(''), totalUndHoja, Math.round(totalCOPHoja)]);
+    return rows;
+  };
+
+  // ── Hoja combinada: mismos SKU sumados entre todos los canales ──
+  const buildHojaCombinado = () => {
+    const rows = [];
+    rows.push(['PRESUPUESTO DE VENTAS '+anio+' — COMBINADO ('+porCanal.length+' canales/personas)']);
+    rows.push(['Canales incluidos', porCanal.map(c=>c.jefeZona?`${c.canal} (${c.jefeZona})`:c.canal).join(' · ')]);
+    rows.push([]);
+    rows.push(['SKU','Descripción','Categoría','Stock Bodega','Meses Stock',...MESES_CORTOS,'Total Und','Total COP']);
+    const combinado = {}; // referencia -> {desc, cat, meses:[12], cop}
+    porCanal.forEach(info=>{
+      info.detalle.forEach(r=>{
+        const precio = parseFloat(r.precio_lista)||0;
+        if(!combinado[r.referencia]) combinado[r.referencia] = {desc:r.descripcion||'', cat:r.categoria||'Sin categoría', meses:Array(12).fill(0), cop:0};
+        const c = combinado[r.referencia];
+        for(let i=0;i<12;i++){ const u = parseFloat(r['u'+String(i+1).padStart(2,'0')])||0; c.meses[i]+=u; c.cop += u*precio; }
+      });
+    });
+    const lista = Object.entries(combinado).map(([ref,c])=>({ref,...c, totalUnd:c.meses.reduce((a,v)=>a+v,0)})).sort((a,b)=>a.cat.localeCompare(b.cat)||a.ref.localeCompare(b.ref));
+    let totalUndGlobal=0, totalCOPGlobal=0;
+    let catActual = null;
+    lista.forEach(x=>{
+      if(x.cat!==catActual){ catActual = x.cat; rows.push([`📁 ${catActual}`]); }
+      const stock = stockMap[x.ref]||0;
+      rows.push([x.ref, x.desc, x.cat, stock, coberturaTxt(stock,x.totalUnd), ...x.meses, x.totalUnd, Math.round(x.cop)]);
+      totalUndGlobal += x.totalUnd; totalCOPGlobal += x.cop;
+    });
+    rows.push(['','TOTAL GENERAL','','','', ...Array(12).fill(''), totalUndGlobal, Math.round(totalCOPGlobal)]);
+    return rows;
+  };
+
+  const wb = XLSX.utils.book_new();
+  const usados = new Set();
+  porCanal.forEach(info=>{
+    const nombreHoja = pvNombreHojaExcel(info.jefeZona ? 'P '+info.jefeZona.split(' ')[0] : 'P '+info.canal, usados);
+    const ws = XLSX.utils.aoa_to_sheet(buildHojaPersona(info));
+    ws['!cols'] = [{wch:10},{wch:38},{wch:11},{wch:11},{wch:11},...Array(12).fill({wch:8}),{wch:11},{wch:14}];
+    XLSX.utils.book_append_sheet(wb, ws, nombreHoja);
+  });
+  const wsComb = XLSX.utils.aoa_to_sheet(buildHojaCombinado());
+  wsComb['!cols'] = [{wch:10},{wch:38},{wch:14},{wch:11},{wch:11},...Array(12).fill({wch:8}),{wch:11},{wch:14}];
+  XLSX.utils.book_append_sheet(wb, wsComb, pvNombreHojaExcel('Combinado', usados));
+
+  XLSX.writeFile(wb, `Presupuesto_Ventas_por_Persona_ILUMAX_${anio}.xlsx`);
+  toast(`✅ Excel generado — ${porCanal.length} persona(s)/canal + 1 hoja combinada`,'ok');
 }
 
 // ── Helper estado ──────────────────────────────────────────────────────
