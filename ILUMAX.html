@@ -20452,19 +20452,30 @@ const CANALES_DEFAULT = ['Ferroeléctrico','Mixto','Distribuidores','Institucion
 // (para autorizar). Todos los demás → solo sus canales asignados, edición.
 var PV_SOLO_LECTURA = false;
 var PV_CANALES_PERMITIDOS = null; // null = todos (admin/aprobador); [] o [...] = restringido
+// Un usuario restringido a sus propios canales puede, aun así, querer ECHAR UN OJO a lo que
+// presupuestaron los demás (sin poder editarlo) — este flag activa esa vista. Se recuerda por
+// usuario (ver renderPresupuestoVentas) para que no se le olvide activada/desactivada cada vez.
+var PV_VER_TODOS = false;
 
 function pvEsAprobador() {
   return CU?.rolPres==='contabilidad' || CU?.rolPres==='gerencia';
 }
 async function pvCargarCanalesPermitidos() {
-  if(CU?.rol==='admin' || pvEsAprobador()) { PV_CANALES_PERMITIDOS = null; PV_SOLO_LECTURA = pvEsAprobador() && CU?.rol!=='admin'; return null; }
-  PV_SOLO_LECTURA = false;
+  if(CU?.rol==='admin' || pvEsAprobador()) { PV_CANALES_PERMITIDOS = null; return null; }
   try {
     const rows = await sb.get('permisos_ventas_canal', `email_usuario=eq.${encodeURIComponent(CU?.email||'')}`);
     PV_CANALES_PERMITIDOS = (rows||[]).map(r=>r.canal);
   } catch(e) { console.warn('Error cargando permisos de canal:', e); PV_CANALES_PERMITIDOS = []; }
   return PV_CANALES_PERMITIDOS;
 }
+// Único lugar que decide si el usuario puede EDITAR el canal que está viendo ahora mismo (ver
+// solo controla qué aparece en el selector; esto controla si puede tocar los números).
+function pvPuedeEditarCanal(canal) {
+  if(CU?.rol==='admin') return true;
+  if(pvEsAprobador()) return false; // contabilidad/gerencia: consulta de todos los canales, nunca edita
+  return PV_CANALES_PERMITIDOS===null || PV_CANALES_PERMITIDOS.includes(canal);
+}
+function pvActualizarSoloLectura() { PV_SOLO_LECTURA = !pvPuedeEditarCanal(PV.canal); }
 
 // ══════════════════════════════════════════════════════════════════════
 // MI EQUIPO — cada líder (Cindy, Johana, etc.) gestiona su lista de
@@ -20813,19 +20824,23 @@ async function renderPresupuestoVentas() {
 
   // Filtrar por permisos: admin y contabilidad/gerencia ven todos los canales
   // (estos últimos en solo lectura); el resto solo ve los canales que el
-  // administrador le asignó en Admin Center → 🎯 Permisos Ventas.
+  // administrador le asignó en Admin Center → 🎯 Permisos Ventas — a menos que hayan
+  // activado "👥 Ver todos" para echar un ojo a lo que presupuestaron los demás.
   await pvCargarCanalesPermitidos();
-  if(PV_CANALES_PERMITIDOS !== null) {
+  PV_VER_TODOS = PV_CANALES_PERMITIDOS!==null && !!dbGet('pv_ver_todos_'+(CU&&CU.email||''));
+  const todosLosCanales = canales; // se guarda sin filtrar, por si activan "Ver todos" más tarde
+  if(PV_CANALES_PERMITIDOS !== null && !PV_VER_TODOS) {
     canales = canales.filter(c => PV_CANALES_PERMITIDOS.includes(c));
     if(!canales.length) {
       el.innerHTML = `
       <div style="padding:50px 20px;text-align:center;">
         <div style="font-size:36px;margin-bottom:10px;">🔒</div>
         <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:6px;">No tienes canales asignados</div>
-        <div style="font-size:12px;color:var(--mu);max-width:360px;margin:0 auto;">
+        <div style="font-size:12px;color:var(--mu);max-width:360px;margin:0 auto 14px;">
           Todavía no tienes ningún canal asignado en Ppto. de Ventas. Pídele al administrador que te asigne uno en
           Admin Center → 🎯 Permisos Ventas.
         </div>
+        <button class="btn btn-g btn-sm" onclick="pvToggleVerTodos(true)">👥 Mientras tanto, ver los presupuestos de los demás (solo consulta)</button>
       </div>`;
       return;
     }
@@ -20833,12 +20848,19 @@ async function renderPresupuestoVentas() {
 
   if(!canales.includes(PV.canal)) PV.canal = canales[0];
   PV.canal = PV.canal || canales[0];
+  pvActualizarSoloLectura();
 
-  renderPVShell(el, canales);
+  renderPVShell(el, canales, todosLosCanales);
   await cargarPresupuestoActivo();
 }
+// Prende/apaga "ver los presupuestos de los demás" — solo existe para usuarios restringidos
+// a sus propios canales (admin y contabilidad/gerencia ya ven todo siempre).
+function pvToggleVerTodos(v) {
+  dbSet('pv_ver_todos_'+(CU&&CU.email||''), !!v);
+  renderPresupuestoVentas();
+}
 
-function renderPVShell(el, canales) {
+function renderPVShell(el, canales, todosLosCanales) {
   const listasOpts = PV.catalogo.filter(c=>c.activa).map(c =>
     `<option value="${c.lista_id}" ${c.lista_id===PV.listaId?'selected':''}>${c.nombre} — ${c.descripcion}</option>`
   ).join('');
@@ -20855,14 +20877,17 @@ function renderPVShell(el, canales) {
       `<option value="${a}" ${a===PV.anioComp?'selected':''}>${a}</option>`).join('');
 
   const canalesOpts = canales.map(c=>
-    `<option value="${c}" ${c===PV.canal?'selected':''}>${c}</option>`).join('');
+    `<option value="${c}" ${c===PV.canal?'selected':''}>${c}${pvPuedeEditarCanal(c)?'':' (solo consulta)'}</option>`).join('');
+  // Solo tiene sentido el toggle "solo el mío / ver todos" para alguien con canales restringidos
+  // (admin y contabilidad/gerencia ya ven todo siempre, no necesitan elegir).
+  const mostrarToggleVer = PV_CANALES_PERMITIDOS !== null;
 
   el.innerHTML = `
   <div style="padding:14px;">
 
     ${PV_SOLO_LECTURA ? `
     <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#92400e;display:flex;align-items:center;gap:8px;">
-      🔒 <strong>Modo consulta</strong> — puedes ver todos los canales para autorizar, pero solo las personas asignadas a cada canal pueden editarlo.
+      🔒 <strong>Modo consulta</strong> — estás viendo el canal <strong>${reabastEsc(PV.canal)}</strong>${pvEsAprobador()&&CU?.rol!=='admin'?' para autorizar':''}, pero solo la(s) persona(s) asignada(s) a ese canal pueden editarlo.
     </div>` : ''}
 
     <!-- HEADER -->
@@ -20903,6 +20928,12 @@ function renderPVShell(el, canales) {
         </div>
       </div>
 
+      ${mostrarToggleVer ? `
+      <div style="margin-top:12px;display:inline-flex;border:1px solid rgba(255,255,255,.2);border-radius:8px;overflow:hidden;">
+        <button class="btn btn-sm" style="border-radius:0;${!PV_VER_TODOS?'background:#f5c518;color:#0f172a;font-weight:800;':'background:transparent;color:rgba(255,255,255,.7);'}" onclick="pvToggleVerTodos(false)">👤 Solo el mío</button>
+        <button class="btn btn-sm" style="border-radius:0;${PV_VER_TODOS?'background:#f5c518;color:#0f172a;font-weight:800;':'background:transparent;color:rgba(255,255,255,.7);'}" onclick="pvToggleVerTodos(true)">👥 Ver todos (${(todosLosCanales||canales).length})</button>
+      </div>` : ''}
+
       <!-- KPIs rápidos -->
       <div id="pv-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-top:14px;"></div>
     </div>
@@ -20924,6 +20955,7 @@ function renderPVShell(el, canales) {
           <span id="pv-guardar-badge" style="display:none;position:absolute;top:-7px;right:-7px;background:var(--rd);color:#fff;border-radius:10px;min-width:16px;height:16px;padding:0 4px;font-size:9px;font-weight:800;line-height:16px;text-align:center;"></span>
         </button>
         <button class="btn btn-bl btn-sm" onclick="pvAgregarSKU()">➕ SKU</button>
+        <button class="btn btn-bl btn-sm" onclick="pvAgregarLineaLibre()" title="Para cuando no hay una referencia real que presupuestar (ej. Proyectos) — presupuesta un monto en $ directamente, mes a mes">💰 Línea sin SKU</button>
         <button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>`}
         <button class="btn btn-g btn-sm" onclick="pvExportar()">📊 Excel</button>
         <button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>
@@ -21241,6 +21273,7 @@ function pvRenderTabla() {
     </tr>`;
 
     items.forEach(r => {
+      const esLibre = pvEsLineaLibre(r);
       const precio = parseFloat(r.precio_lista)||0;
       let totalUnd = 0;
       const celdas = MESES.map((_,i) => {
@@ -21275,10 +21308,13 @@ function pvRenderTabla() {
       const pctComp  = histTot>0 && totalUnd>0 ? Math.round(totalUnd/histTot*100) : null;
       const pctCompC = pctComp===null?'var(--mu)' : pctComp>=100?'var(--gr)' : pctComp>=70?'var(--or)':'var(--rd)';
 
-      // Stock — cobertura aproximada al ritmo promedio mensual presupuestado
-      const stock = pvGetStock(r.referencia);
+      // Stock — cobertura aproximada al ritmo promedio mensual presupuestado (no aplica en
+      // líneas sin SKU real: no hay inventario que cubrir, es solo un monto en $).
+      const stock = esLibre ? 0 : pvGetStock(r.referencia);
       let coberturaTxt, coberturaColor, coberturaTitle;
-      if(totalUnd <= 0) {
+      if(esLibre) {
+        coberturaTxt = '—'; coberturaColor = 'var(--mu)'; coberturaTitle = 'No aplica — línea sin SKU (monto en $)';
+      } else if(totalUnd <= 0) {
         coberturaTxt = '∞';
         coberturaColor = 'var(--mu)';
         coberturaTitle = 'Sin unidades presupuestadas este año';
@@ -21296,13 +21332,13 @@ function pvRenderTabla() {
 
       htmlRows += `<tr style="border-bottom:1px solid var(--b1);"
         onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
-        <td style="padding:7px 10px;font-family:monospace;font-size:10px;color:var(--mu);white-space:nowrap;position:sticky;left:0;background:inherit;z-index:5;">${r.referencia}</td>
+        <td style="padding:7px 10px;font-family:monospace;font-size:10px;color:var(--mu);white-space:nowrap;position:sticky;left:0;background:inherit;z-index:5;">${esLibre?'💰 sin SKU':r.referencia}</td>
         <td style="padding:7px 10px;font-size:11px;font-weight:600;max-width:160px;position:sticky;left:70px;background:inherit;z-index:5;" title="${r.descripcion||''}">${(r.descripcion||'').substring(0,35)}</td>
-        <td style="padding:7px 8px;text-align:right;font-size:10px;color:var(--bl);white-space:nowrap;" title="${precio ? '' : 'Sin precio registrado para este SKU en la lista actual (puede existir en otras listas)'}">${precio ? '$'+Math.round(precio).toLocaleString('es-CO') : '—'}</td>
-        <td style="padding:7px 8px;text-align:right;font-size:10px;color:${stock>0?'var(--gr)':'var(--mu)'};" title="Existencia total en todas las bodegas">${stock.toLocaleString('es-CO')}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:10px;color:var(--bl);white-space:nowrap;" title="${esLibre?'Línea sin SKU — lo que escribas en cada mes ES el monto en $ directamente':(precio ? '' : 'Sin precio registrado para este SKU en la lista actual (puede existir en otras listas)')}">${esLibre?'—':(precio ? '$'+Math.round(precio).toLocaleString('es-CO') : '—')}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:10px;color:${stock>0?'var(--gr)':'var(--mu)'};" title="Existencia total en todas las bodegas">${esLibre?'—':stock.toLocaleString('es-CO')}</td>
         <td style="padding:7px 8px;text-align:right;font-size:10px;font-weight:700;color:${coberturaColor};" title="${coberturaTitle}">${coberturaTxt}</td>
         ${celdas}
-        <td style="padding:7px 8px;text-align:right;font-size:11px;font-weight:700;color:var(--tx);white-space:nowrap;">${totalUnd.toLocaleString('es-CO')}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:11px;font-weight:700;color:var(--tx);white-space:nowrap;" title="${esLibre?'No aplica en una línea sin SKU — ver Total COP':''}">${esLibre?'—':totalUnd.toLocaleString('es-CO')}</td>
         <td style="padding:7px 8px;text-align:right;font-size:11px;font-weight:700;color:var(--bl);white-space:nowrap;">${totalCOP ? '$'+Math.round(totalCOP).toLocaleString('es-CO') : '—'}</td>
         ${comp ? `<td style="padding:7px 8px;text-align:right;font-size:10px;color:#60a5fa;">${histTot ? histTot.toLocaleString('es-CO') : '—'}</td>
         <td style="padding:7px 8px;text-align:right;font-size:10px;font-weight:700;color:${pctCompC};">${pctComp!==null ? pctComp+'%' : '—'}</td>` : ''}
@@ -21534,6 +21570,60 @@ async function pvActualizarPrecios() {
       r._dirty = true;
     });
   } catch(e) { console.warn('Error precios:', e); }
+}
+
+// ── Línea de presupuesto SIN SKU real (para canales como Proyectos, que no tienen una referencia
+// fija que vender — ahí se presupuesta directo en pesos, mes a mes, en vez de unidades × precio) ──
+// Se guarda como una fila normal de presupuesto_detalle (no hace falta tocar la base de datos):
+// precio_lista queda en 1, así que lo que se escriba en cada mes ES el monto en pesos de ese mes
+// (unidades × precio = unidades × 1 = el mismo monto). El prefijo "LIBRE-" en la referencia es lo
+// que usa la pantalla para reconocer estas filas y no mostrarles precio/stock, que no aplican.
+const PV_REF_LIBRE_PREFIJO = 'LIBRE-';
+function pvEsLineaLibre(r) { return !!(r && String(r.referencia||'').startsWith(PV_REF_LIBRE_PREFIJO)); }
+function pvAgregarLineaLibre() {
+  if(PV_SOLO_LECTURA) { toast('🔒 Estás en modo consulta — no puedes editar este canal','wa'); return; }
+  const mo = document.createElement('div');
+  mo.id = 'mo-pv-libre';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:420px;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-size:14px;font-weight:800;">💰 Línea sin SKU (monto en $)</div>
+      <button onclick="document.getElementById('mo-pv-libre').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button>
+    </div>
+    <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div style="font-size:11.5px;color:var(--mu);">Úsalo cuando no hay una referencia/producto fijo que presupuestar (ej. un proyecto puntual) — después de crearla, escribe el monto en pesos directo en cada mes de la tabla, igual que con un SKU normal.</div>
+      <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">DESCRIPCIÓN</label>
+        <input class="inp" id="pv-libre-desc" placeholder="Ej: Proyecto Torre Norte — luminarias"></div>
+      <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">CATEGORÍA</label>
+        <input class="inp" id="pv-libre-cat" value="Proyectos"></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-sm" onclick="document.getElementById('mo-pv-libre').remove()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="pvConfirmarLineaLibre()">➕ Agregar</button>
+    </div>
+  </div>`;
+  document.body.appendChild(mo);
+  document.getElementById('pv-libre-desc')?.focus();
+}
+function pvConfirmarLineaLibre() {
+  const desc = document.getElementById('pv-libre-desc')?.value.trim();
+  const cat  = document.getElementById('pv-libre-cat')?.value.trim() || 'Proyectos';
+  if(!desc) { toast('Escribe una descripción','wa'); return; }
+  const r = {
+    referencia: PV_REF_LIBRE_PREFIJO + Date.now(),
+    descripcion: desc, categoria: cat, precio_lista: 1,
+    u01:0,u02:0,u03:0,u04:0,u05:0,u06:0,u07:0,u08:0,u09:0,u10:0,u11:0,u12:0,
+    r01:0,r02:0,r03:0,r04:0,r05:0,r06:0,r07:0,r08:0,r09:0,r10:0,r11:0,r12:0,
+    _dirty: true
+  };
+  PV.detalle.push(r);
+  const cats = [...new Set(PV.detalle.map(x=>x.categoria))].sort();
+  const sel = document.getElementById('pv-cat-filtro');
+  if(sel) sel.innerHTML = '<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${c}">${c}</option>`).join('');
+  document.getElementById('mo-pv-libre')?.remove();
+  toast('💰 Línea agregada — escribe el monto mes a mes en la tabla y recuerda guardar 💾','ok');
+  pvActualizarBadgeGuardar();
+  pvRenderTabla();
 }
 
 // ── Modal agregar SKU ──────────────────────────────────────────────────
@@ -22441,13 +22531,14 @@ async function pvExportarPorPersona() {
     Object.entries(grupos).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([cat,items])=>{
       rows.push([`📁 ${cat} (${items.length} SKUs)`]);
       items.forEach(r=>{
+        const esLibre = pvEsLineaLibre(r);
         const precio = parseFloat(r.precio_lista)||0;
         const meses = Array.from({length:12},(_,i)=>parseFloat(r['u'+String(i+1).padStart(2,'0')])||0);
         const totalUnd = meses.reduce((a,v)=>a+v,0);
         const totalCOP = totalUnd*precio;
         totalUndHoja += totalUnd; totalCOPHoja += totalCOP;
-        const stock = stockMap[r.referencia]||0;
-        rows.push([r.referencia, r.descripcion||'', precio||'', stock, coberturaTxt(stock,totalUnd), ...meses, totalUnd, Math.round(totalCOP)]);
+        const stock = esLibre ? '' : (stockMap[r.referencia]||0);
+        rows.push([esLibre?'💰 sin SKU':r.referencia, r.descripcion||'', esLibre?'':(precio||''), stock, esLibre?'—':coberturaTxt(stock,totalUnd), ...meses, esLibre?'':totalUnd, Math.round(totalCOP)]);
       });
     });
     rows.push(['','TOTAL GENERAL','','','', ...Array(12).fill(''), totalUndHoja, Math.round(totalCOPHoja)]);
@@ -22475,8 +22566,9 @@ async function pvExportarPorPersona() {
     let catActual = null;
     lista.forEach(x=>{
       if(x.cat!==catActual){ catActual = x.cat; rows.push([`📁 ${catActual}`]); }
-      const stock = stockMap[x.ref]||0;
-      rows.push([x.ref, x.desc, x.cat, stock, coberturaTxt(stock,x.totalUnd), ...x.meses, x.totalUnd, Math.round(x.cop)]);
+      const esLibre = x.ref.startsWith(PV_REF_LIBRE_PREFIJO);
+      const stock = esLibre ? '' : (stockMap[x.ref]||0);
+      rows.push([esLibre?'💰 sin SKU':x.ref, x.desc, x.cat, stock, esLibre?'—':coberturaTxt(stock,x.totalUnd), ...x.meses, esLibre?'':x.totalUnd, Math.round(x.cop)]);
       totalUndGlobal += x.totalUnd; totalCOPGlobal += x.cop;
     });
     rows.push(['','TOTAL GENERAL','','','', ...Array(12).fill(''), totalUndGlobal, Math.round(totalCOPGlobal)]);
@@ -22844,7 +22936,7 @@ const CANAL_LISTA_MAP = {
 
 // Al cambiar canal → asignar lista automáticamente
 async function pvCambiarCanal(v) {
-  if(PV_CANALES_PERMITIDOS !== null && !PV_CANALES_PERMITIDOS.includes(v)) {
+  if(!pvPuedeEditarCanal(v) && !PV_VER_TODOS && CU?.rol!=='admin' && !pvEsAprobador()) {
     toast('🔒 No tienes ese canal asignado','wa');
     const selCanal = document.getElementById('pv-canal');
     if(selCanal) selCanal.value = PV.canal;
@@ -22856,6 +22948,7 @@ async function pvCambiarCanal(v) {
     return;
   }
   PV.canal = v;
+  pvActualizarSoloLectura();
   // Autocomplete lista según canal — solo si aún no hay un presupuesto guardado
   // para este canal+año (cargarPresupuestoActivo() corrige lista_id si ya existe uno)
   const listaAuto = CANAL_LISTA_MAP[v];
