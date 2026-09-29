@@ -21870,6 +21870,7 @@ function pvToggleSelTodos(checked) {
   });
   pvRenderListadoSKU();
   pvActualizarSelCount();
+  pvPrefillPeriodoActual();
 }
 
 function pvActualizarSelCount() {
@@ -21906,6 +21907,47 @@ function pvSetPeriodo(tipo) {
       }).join('');
       rango.style.display = 'grid';
     }
+  }
+  pvActualizarDescPeriodo();
+  pvPrefillPeriodoActual();
+}
+
+// Si el SKU buscado/seleccionado a la izquierda (PV_SKU_ACTUAL) ya tiene valores cargados
+// en el presupuesto, los muestra en los campos de "Período" para que se puedan ver y editar
+// ahí mismo en vez de partir de "0". Si el mes a mes no es uniforme dentro de un rango
+// (ej. Ene≠Feb≠Mar), no se inventa un promedio: se deja vacío con un aviso, para no pisar
+// datos reales distintos por mes con un solo número. Solo aplica cuando hay UN solo SKU
+// objetivo (el buscado, sin nada más marcado a la derecha) — con varios seleccionados no
+// tendría sentido mezclar sus valores.
+function pvPrefillPeriodoActual() {
+  const ref = PV_SKU_ACTUAL && PV_SKU_ACTUAL.referencia;
+  const cantEl = document.getElementById('pv-sku-cant-mensual');
+  if(!ref || PV_SKU_SEL.size > 0) {
+    if(cantEl) cantEl.placeholder = 'Cant. mensual';
+    return;
+  }
+  const row = (PV.detalle||[]).find(r=>String(r.referencia)===String(ref));
+  if(!row) { if(cantEl) cantEl.placeholder = 'Cant. mensual'; return; }
+  const meses = Array.from({length:12},(_,i)=>parseFloat(row['u'+String(i+1).padStart(2,'0')])||0);
+  const uniforme = arr => arr.every(v=>v===arr[0]) ? arr[0] : null;
+
+  if(PV_SKU_PERIODO === 'anio') {
+    if(!cantEl) return;
+    const v = uniforme(meses);
+    if(v && v>0) { cantEl.value = v; cantEl.placeholder = 'Cant. mensual'; }
+    else if(meses.some(x=>x>0)) { cantEl.value = ''; cantEl.placeholder = 'Ya tiene valores distintos por mes — edítalos en 👁 Ver histórico'; }
+    else cantEl.placeholder = 'Cant. mensual';
+  } else {
+    const opts = PV_PERIODOS[PV_SKU_PERIODO].opciones;
+    opts.forEach(o=>{
+      const el = document.getElementById('pv-sku-cant-'+o.value);
+      if(!el) return;
+      const sub = o.meses.map(m=>meses[m-1]);
+      const v = uniforme(sub);
+      if(v && v>0) { el.value = v; el.placeholder = '0'; }
+      else if(sub.some(x=>x>0)) { el.value = ''; el.placeholder = 'valores distintos'; }
+      else el.placeholder = '0';
+    });
   }
   pvActualizarDescPeriodo();
 }
@@ -22156,6 +22198,7 @@ function pvSeleccionarRef(ref, desc, precio, categoria) {
   pvCargarHistoricoSKU(ref);
   PV_SKU_ACTUAL = { referencia: String(ref), descripcion: desc, categoria: categoria || 'General' };
   pvActualizarSelCount();
+  pvPrefillPeriodoActual();
 }
 
 const MESES_HIST_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
@@ -22176,6 +22219,23 @@ function pvEditarSugerido(input) {
   d.meses[mes] = Math.max(0, parseFloat(input.value)||0);
   const totalEl = document.getElementById('sug-tot-'+key);
   if(totalEl) totalEl.textContent = Math.round(d.meses.reduce((a,v)=>a+v,0)).toLocaleString('es-CO');
+}
+
+// Edita en vivo la fila "📌 Ya presupuestado" del panel de histórico: escribe directo sobre
+// PV.detalle (el presupuesto real, no una sugerencia) usando el mismo camino que la tabla
+// principal, así queda _dirty y se refleja donde sea que esa fila esté visible.
+function pvEditarYaPresupuestado(input) {
+  const ref = input.dataset.yapresref;
+  const mes = parseInt(input.dataset.mes);
+  const totId = input.dataset.tot;
+  pvCeldaCambio(ref, mes, input.value);
+  const row = (PV.detalle||[]).find(r=>String(r.referencia)===String(ref));
+  const totalEl = document.getElementById(totId);
+  if(totalEl && row) {
+    let total = 0;
+    for(let m=1;m<=12;m++) total += parseFloat(row['u'+String(m).padStart(2,'0')])||0;
+    totalEl.textContent = Math.round(total).toLocaleString('es-CO');
+  }
 }
 
 // Toma la fila "🎯 Sugerido" de una tabla de histórico y la escribe directo en el presupuesto
@@ -22260,6 +22320,27 @@ function pvHistoricoTablaDetalle(rows, canalActual, ref, descripcion) {
         ${ref?'<td></td>':''}
       </tr>`;
     });
+    // Fila "Ya presupuestado" — lo REAL que el usuario ya escribió en el presupuesto activo
+    // (PV.detalle) para este SKU en este canal/año. Es distinto del histórico de ventas y
+    // del Sugerido: es lo que ya está guardado (o pendiente de guardar) ahora mismo.
+    if(esActual && ref) {
+      const rowActual = (PV.detalle||[]).find(r=>String(r.referencia)===String(ref));
+      if(rowActual) {
+        const mesesActual = Array.from({length:12},(_,i)=>parseFloat(rowActual['u'+String(i+1).padStart(2,'0')])||0);
+        const totalActual = mesesActual.reduce((a,v)=>a+v,0);
+        const totId = 'yapres-tot-' + String(ref).replace(/[^a-zA-Z0-9_-]/g,'_') + '-' + (_pvSugSeq++);
+        f += `<tr style="background:rgba(37,99,235,.08);border-bottom:2px solid var(--b1);">
+          <td colspan="2" style="padding:6px 8px;font-weight:700;color:var(--bl);white-space:nowrap;">📌 Ya presupuestado (${PV.anio}) <span style="font-weight:400;font-size:9px;">✏️ editable</span></td>
+          ${mesesActual.map((v,i)=>`<td style="padding:3px 4px;">
+            <input type="number" min="0" step="1" value="${Math.round(v)||''}" data-yapresref="${reabastEsc(String(ref))}" data-mes="${i+1}" data-tot="${totId}"
+              onchange="pvEditarYaPresupuestado(this)" onfocus="this.select()"
+              style="width:64px;border:1px solid rgba(37,99,235,.35);border-radius:5px;padding:5px 4px;text-align:right;font-size:12px;font-weight:700;color:var(--bl);background:#fff;outline:none;">
+          </td>`).join('')}
+          <td id="${totId}" style="padding:6px 8px;text-align:right;font-weight:800;color:var(--bl);white-space:nowrap;">${Math.round(totalActual).toLocaleString('es-CO')}</td>
+          <td></td>
+        </tr>`;
+      }
+    }
     // Fila "Sugerido" — SOLO se calcula con 2025 y/o 2026 (el año más reciente de esos dos que
     // tenga datos para este canal). 2023/2024 quedan solo como referencia visual arriba, nunca
     // alimentan la sugerencia. Si el canal no tiene ni 2025 ni 2026, no se muestra fila sugerido.
