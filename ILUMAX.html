@@ -8674,6 +8674,7 @@ function ocFechaInicioOC(o){
 // creó la OC. Si quedaron con una fecha de inicio posterior (por un "deshacer", un cambio de
 // plantilla o porque la OC se cargó días después), se corrige y se recalcula su duración real.
 async function ocCorregirInicioEtapas(){
+  const tareas = [];
   for(const o of (REABAST.ordenesCompra||[])){
     const ini = ocFechaInicioOC(o); if(!ini || isNaN(ini)) continue;
     for(const e of (REABAST.ocEtapas[o.id]||[])){
@@ -8682,10 +8683,15 @@ async function ocCorregirInicioEtapas(){
       if(new Date(e.fecha_inicio) - ini < 60000) continue; // ya arranca con la OC
       const patch = {fecha_inicio: ini.toISOString()};
       if(e.estado==='completada' && e.fecha_fin) patch.dias_reales = Math.round(((new Date(e.fecha_fin)-ini)/86400000)*100)/100;
-      try{ await sbReabast.patch('oc_etapas','id=eq.'+e.id, patch); Object.assign(e, patch); }
-      catch(err){ console.warn('No pude corregir el inicio de la etapa '+e.id+':', err.message); }
+      tareas.push(async()=>{
+        try{ await sbReabast.patch('oc_etapas','id=eq.'+e.id, patch); Object.assign(e, patch); }
+        catch(err){ console.warn('No pude corregir el inicio de la etapa '+e.id+':', err.message); }
+      });
     }
   }
+  if(!tareas.length) return;
+  let i = 0; const trab = async()=>{ while(i<tareas.length){ await tareas[i++](); } };
+  await Promise.all(Array.from({length:8}, trab));
 }
 // Permite ajustar a mano las fechas de una etapa (cuándo empezó / cuándo terminó) — queda en el histórico.
 function ocEditarFechasEtapa(ocId, etapaId){
@@ -8761,17 +8767,23 @@ async function ocMigrarEtapasEmbarque(){
 }
 async function ocRepararEtapasHuerfanas(){
   const ahora = new Date().toISOString();
+  const tareas = [];
   for(const ocId in REABAST.ocEtapas){
     for(const e of REABAST.ocEtapas[ocId]){
       if(e.estado!=='pendiente') continue;
       const t = OC_ETAPAS_POR_ID[e.etapa_id];
       if(!t || t.dependeDe || t.requiere) continue;
-      try{
-        await sbReabast.patch('oc_etapas', 'id=eq.'+e.id, {estado:'en_curso', fecha_inicio: ahora});
-        e.estado = 'en_curso'; e.fecha_inicio = ahora;
-      }catch(err){ console.warn('Error reparando etapa huérfana:', err.message); }
+      tareas.push(async()=>{
+        try{
+          await sbReabast.patch('oc_etapas', 'id=eq.'+e.id, {estado:'en_curso', fecha_inicio: ahora});
+          e.estado = 'en_curso'; e.fecha_inicio = ahora;
+        }catch(err){ console.warn('Error reparando etapa huérfana:', err.message); }
+      });
     }
   }
+  if(!tareas.length) return;
+  let i = 0; const trab = async()=>{ while(i<tareas.length){ await tareas[i++](); } };
+  await Promise.all(Array.from({length:8}, trab));
 }
 
 // Tiempo de entrega por defecto cuando no está configurado por referencia: 180 días
@@ -11198,7 +11210,10 @@ async function ceEjecutar(){
 // Vuelve a aplicar el último resumen guardado (tras una carga de Base compras).
 async function ceReaplicar(numeros){
   await ceCargarResumen(true);
-  for(const num of numeros){ const r = ceDe(num); const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===ceNum(num)); if(r && oc){ try{ await ceAplicarOC(oc, r); }catch(e){ console.warn('CE', num, e.message); } } }
+  const pendientes = numeros.filter(num=>{ const r = ceDe(num); const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===ceNum(num)); return r && oc; });
+  let idx = 0;
+  const trabajador = async()=>{ while(idx<pendientes.length){ const num = pendientes[idx++]; const r = ceDe(num); const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===ceNum(num)); try{ await ceAplicarOC(oc, r); }catch(e){ console.warn('CE', num, e.message); } } };
+  await Promise.all(Array.from({length:Math.min(6, pendientes.length)}, trabajador));
 }
 
 // Recuadro en el detalle de la OC
@@ -11228,13 +11243,54 @@ function ceGruposPanel(){
   return CE._grp || {};
 }
 // Fin de producción: fecha estimada de entrega del proveedor (Base compras); si no hay, cuando vence la etapa de producción en el ERP.
+// Fin de producción proyectado.
+//  · Producción en curso: fecha estimada de entrega del proveedor (Base compras); si no hay, cuando vence en el ERP.
+//  · Producción sin empezar (falta PI, artes o anticipo): se proyecta todo → PI confirmada → anticipo pagado
+//    (7 días hábiles después de la PI) → artes (15 d) → + plazo de entrega del proveedor (Base compras "Plazo de
+//    entrega ofrecido", o 48 d). Si Base compras trae una entrega más tarde, se respeta la más tarde.
 function ceFinProduccion(o){
   const filas = ceGruposPanel()[ceNum(o.numero_oc)] || [];
-  let b = null; filas.forEach(f=>{ const d = pciFecha(f['FECHA ESTIMADA DE ENTREGA (PROVEEDOR)']); if(d && (!b || d>b)) b = d; });
-  if(b) return {fecha:b, fuente:'entrega del proveedor (Base compras)'};
-  const e = (REABAST.ocEtapas[o.id]||[]).find(x=>x.etapa_id==='produccion');
-  if(e && e.estado!=='completada'){ const v = ocVenceEtapa(e) || (e.fecha_inicio ? null : null); if(v) return {fecha:v, fuente:'vence producción (ERP)'}; }
-  return null;
+  let bc = null; filas.forEach(f=>{ const d = pciFecha(f['FECHA ESTIMADA DE ENTREGA (PROVEEDOR)']); if(d && (!bc || d>bc)) bc = d; });
+  const es = REABAST.ocEtapas[o.id]||[], by = {}; es.forEach(e=>{ by[e.etapa_id] = e; });
+  const prod = by.produccion;
+  if(prod && prod.estado==='completada' && prod.fecha_fin) return {fecha:new Date(prod.fecha_fin), fuente:'producción terminada'};
+  // también cuenta como "en producción" si Comercio Exterior o Base compras ya la reportan en producción
+  const rce = typeof ceDe==='function' ? ceDe(o.numero_oc) : null;
+  const enProd = (prod && prod.estado==='en_curso') || (rce && rce.fase!=null && rce.fase>=3) || filas.some(f=>/produc/.test(pciNorm(f['ESTADO DIANA'])));
+  if(enProd){
+    if(bc) return {fecha:bc, fuente:'entrega del proveedor (Base compras)'};
+    const v = prod && prod.estado==='en_curso' ? ocVenceEtapa(prod) : null; if(v) return {fecha:v, fuente:'vence producción (ERP)'};
+  }
+  // producción aún no arranca: proyectar la cadena completa
+  const hoy = new Date(); hoy.setHours(12,0,0,0);
+  const mx = (...a) => new Date(Math.max(...a.filter(Boolean).map(Number)));
+  const mas = (d,n) => new Date(new Date(d).getTime()+n*86400000);
+  const pasos = [];
+  const pi = by.pi_confirmada, oc = by.oc_creada;
+  let piFin;
+  if(pi && pi.estado==='completada' && pi.fecha_fin) piFin = new Date(pi.fecha_fin);
+  else { const base = oc && oc.estado==='completada' && oc.fecha_fin ? new Date(oc.fecha_fin) : mas(ocFechaInicioOC(o)||hoy, 2);
+         piFin = mx(hoy, ocSumarHabiles(pi && pi.fecha_inicio ? pi.fecha_inicio : base, 5)); pasos.push(`PI ≈ ${segDM(piFin)}`); }
+  const ant = by.anticipo_pagado;
+  let antFin = piFin;
+  if(ant && !segSinAnticipo(o, ant)){
+    if(ant.estado==='completada' && ant.fecha_fin) antFin = new Date(ant.fecha_fin);
+    else { const reg = typeof tesoRegDe==='function' ? tesoRegDe(o.id) : null;
+           antFin = reg && reg.estado==='autorizado' && reg.pago_programado ? new Date(reg.pago_programado) : mx(hoy, ocSumarHabiles(piFin, 7));
+           pasos.push(`anticipo ≈ ${segDM(antFin)}`); }
+  }
+  const artes = es.filter(e=>/^arte_/.test(e.etapa_id));
+  let arteFin = null;
+  if(artes.length){
+    if(artes.every(e=>e.estado==='completada')) arteFin = new Date(Math.max(...artes.map(e=>+new Date(e.fecha_fin||0))));
+    else { const A = typeof segInicioArte==='function' ? segInicioArte(o) : {ini:null}; arteFin = mx(hoy, mas(A.ini || piFin, typeof SEG_ARTE_OBJ!=='undefined' ? SEG_ARTE_OBJ : 15)); pasos.push(`artes ≈ ${segDM(arteFin)}`); }
+  }
+  const inicio = mx(piFin, antFin, arteFin);
+  const plazo = (()=>{ const n = filas.map(f=>Number(f['Plazo de entrega ofrecido'])).find(x=>isFinite(x) && x>0); return n || Number(prod && prod.dias_esperado) || 48; })();
+  const proy = mas(inicio, plazo);
+  const txt = `${pasos.length ? pasos.join(' → ')+' → ' : ''}arranca producción ${segDM(inicio)} + ${plazo} d de plazo del proveedor`;
+  if(bc && bc > proy) return {fecha:bc, fuente:'entrega del proveedor (Base compras)', proyectada:true};
+  return {fecha:proy, fuente:`proyección: ${txt}${bc?' (Base compras decía '+segDM(bc)+', no alcanza)':''}`, proyectada:true};
 }
 // Revisa si las fechas de Comercio Exterior son posibles y, si no, las recalcula.
 function ceValidar(o, r){
@@ -11256,9 +11312,14 @@ function ceValidar(o, r){
     pasos.push(`zarpó ${dm(etdCE)}`);
   } else {
     const P = ceFinProduccion(o);
-    if(fase===5){ sale = hoy; pasos.push('está en proceso de embarque y aún no zarpa'); }
+    if(fase===5){
+      // ya está en proceso de embarque: sale a los 15 d de terminar producción (y nunca antes de hoy)
+      const f = P && P.fecha ? mas(P.fecha, CE_DIAS_EMBARQUE) : null;
+      sale = f && f > hoy ? f : mas(hoy, 7);
+      pasos.push(f && f > hoy ? `en proceso de embarque · producción ${dm(P.fecha)} + ${CE_DIAS_EMBARQUE} d` : 'en proceso de embarque y aún no zarpa → ≈ 7 d');
+    }
     else if(P && P.fecha > hoy){ sale = mas(P.fecha, CE_DIAS_EMBARQUE); pasos.push(`producción lista ${dm(P.fecha)} (${P.fuente}) + ${CE_DIAS_EMBARQUE} d de embarque`); }
-    else { sale = hoy; pasos.push(P ? `producción debía estar lista ${dm(P.fecha)} y aún no zarpa` : 'aún no zarpa'); }
+    else { sale = mas(hoy, CE_DIAS_EMBARQUE); pasos.push(P ? `producción debía estar lista ${dm(P.fecha)} y aún no pasa a embarque → hoy + ${CE_DIAS_EMBARQUE} d` : `aún no pasa a embarque → hoy + ${CE_DIAS_EMBARQUE} d`); }
     minEta = mas(sale, CE_TRANSITO_MIN - TOL);
   }
   const incons = !!(etaCE && etaCE < minEta);
@@ -11445,7 +11506,7 @@ function ppConstruir(){
             // sin forma de pago clara ni proyección: se programa en la fecha base (BL o, si no hay, fecha de entrega autorizada)
             fecha = blBase; origen = `${blFuente}${nota}`;
           }
-          pagos.push({...base, tipo:'saldo', usd:pendUsd, fecha, fAT:fPago, estado:'pendiente', origen: origen || 'Sin fecha (falta BL / ETD)', nota: A.saldo && A.saldo.nota, emb, rev});
+          pagos.push({...base, tipo:'saldo', usd:pendUsd, fecha, fAT:fPago, certero: zarpo && !(A.saldo && A.saldo.fecha), estado:'pendiente', origen: origen || 'Sin fecha (falta BL / ETD)', nota: A.saldo && A.saldo.nota, emb, rev});
         }
       }
     }
@@ -11526,7 +11587,7 @@ function ppPintarInterno(el){
       <td>${p.tipo==='anticipo'?'<span class="bdg bpu" style="font-size:9.5px;">Anticipo</span>':'<span class="bdg bb" style="font-size:9.5px;background:#e0f2fe;color:#075985;">Saldo</span>'}</td>
       <td style="text-align:right;font-weight:800;">${usd(p.usd)}</td>
       <td style="text-align:right;" class="arte-mu">${cop(p.usd)}</td>
-      <td class="arte-mu" style="font-size:10.5px;">${reabastEsc(p.origen||'')}${p.nota?` · <em>${reabastEsc(p.nota)}</em>`:''}</td>
+      <td class="arte-mu" style="font-size:10.5px;">${p.tipo==='saldo' && p.estado!=='pagado' ? (p.certero ? '<span class="bdg ba" style="font-size:9px;">✔ Certera</span> ' : '<span class="bdg bp" style="font-size:9px;">≈ Proyectada</span> ') : ''}${reabastEsc(p.origen||'')}${p.nota?` · <em>${reabastEsc(p.nota)}</em>`:''}</td>
       <td style="font-size:10.5px;white-space:nowrap;">${p.tipo==='saldo' && p.emb ? `<span style="color:${p.emb.cls==='ok'?'var(--gr)':p.emb.cls==='med'?'#b45309':'var(--mu)'};font-weight:700;">${reabastEsc(p.emb.txt)}</span>` : ''}</td>
       <td style="white-space:nowrap;">${ppHtmlRevision(p, puede)}</td>
       <td>${filaEstado(p)}</td>
@@ -11566,6 +11627,7 @@ function ppPintarInterno(el){
       <div class="seg-kpi" onclick="PP.f.tipo=PP.f.tipo==='anticipo'?'':'anticipo';ppPintar()"><b>${usd(sum(pend.filter(p=>p.tipo==='anticipo')))}</b><span>💸 Anticipos pendientes (${pend.filter(p=>p.tipo==='anticipo').length})</span></div>
       <div class="seg-kpi" onclick="PP.f.tipo=PP.f.tipo==='saldo'?'':'saldo';ppPintar()"><b>${usd(sum(pend.filter(p=>p.tipo==='saldo')))}</b><span>🧾 Saldos pendientes (${pend.filter(p=>p.tipo==='saldo').length})</span></div>
       <div class="seg-kpi"><b style="color:var(--bl);">${usd(sum(en30))}</b><span>📆 Próximos 30 días (${en30.length})</span></div>
+      <div class="seg-kpi" title="Saldos cuya fecha sale del zarpe real (Com. Ext.) vs. los que se proyectan"><b>${usd(sum(pend.filter(p=>p.tipo==='saldo'&&p.certero)))}</b><span>✔ Saldos con fecha certera · ≈ ${usd(sum(pend.filter(p=>p.tipo==='saldo'&&!p.certero)))} proyectados</span></div>
       <div class="seg-kpi"><b style="color:var(--gr);">${usd(sum(pend.filter(p=>p.tipo==='saldo' && p.emb && p.emb.cls==='ok' && p.fecha && p.fecha<=finSem)))}</b><span>🟢 Saldos listos para pagar esta semana (zarparon)</span></div>
       <div class="seg-kpi"><b style="color:var(--rd);">${usd(sum(pend.filter(p=>p.vencido && ppMesKey(p.fecha)>=mesAct)))}</b><span>⚠️ Vencidos este mes</span></div>
       <div class="seg-kpi"><b>${usd(sum(programados))}</b><span>Total programado desde ${PP_MESES[hoy.getMonth()]} · ≈ ${cop(sum(programados))}</span></div>
@@ -11676,7 +11738,7 @@ function ppExcel(){
   const det = lista.sort((a,b)=>(a.fecha||Infinity)-(b.fecha||Infinity)).map(p=>({
     'Mes': p.fecha ? ppMesLbl(ppMesKey(p.fecha)) : 'Sin fecha', 'Semana (lunes)': p.fecha ? ppIso(ppLunes(p.fecha)) : '', 'Fecha': p.fecha ? ppIso(p.fecha) : '',
     'OC': p.num, 'Proveedor': p.prov, 'Tipo': p.tipo==='anticipo'?'Anticipo':'Saldo', 'Valor US$': Math.round(p.usd*100)/100, ['Valor COP (TRM '+trm+')']: Math.round(p.usd*trm),
-    'Estado': p.estado==='pagado'?'Pagado':p.vencido?'Vencido':p.estado==='autorizado'?'Autorizado':'Pendiente', 'Origen de la fecha': p.origen||'',
+    'Estado': p.estado==='pagado'?'Pagado':p.vencido?'Vencido':p.estado==='autorizado'?'Autorizado':'Pendiente', 'Tipo de fecha': p.tipo==='saldo' && p.estado!=='pagado' ? (p.certero ? 'Certera (ya zarpó)' : 'Proyectada') : '', 'Origen de la fecha': p.origen||'',
     'Embarque': p.emb ? p.emb.txt.replace(/^\W+\s*/,'') : '', 'Revisión semanal': p.rev ? (p.rev.estado==='ok'?'Se paga':'Aún no')+' (semana '+p.rev.semana+')'+(p.rev.nota?' · '+p.rev.nota:'') : '', 'Nota': p.nota||'' }));
   const agr = (keyFn) => { const m = {}; lista.filter(p=>p.fecha && p.estado!=='pagado').forEach(p=>{ const k = keyFn(p); const x = m[k] = m[k] || {ant:0, sal:0}; x[p.tipo==='anticipo'?'ant':'sal'] += p.usd; }); return m; };
   const mes = agr(p=>ppMesKey(p.fecha)), sem = agr(p=>ppIso(ppLunes(p.fecha)));
