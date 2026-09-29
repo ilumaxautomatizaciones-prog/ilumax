@@ -20385,7 +20385,9 @@ function filtrarPrecios() {
 // MÓDULO PRESUPUESTO DE VENTAS ANUAL
 // ══════════════════════════════════════════════════════════════════════
 var PV = {
-  anio: new Date().getFullYear(),
+  // El presupuesto de ventas siempre se hace para el año SIGUIENTE (se arma con meses de
+  // anticipación) — por eso el año por defecto es el que viene, no el año calendario actual.
+  anio: new Date().getFullYear() + 1,
   anioComp: null,          // año de comparación (null = ninguno)
   listaId: '1',            // lista seleccionada por defecto (P1)
   canal: '',
@@ -20398,7 +20400,8 @@ var PV = {
   mesActual: new Date().getMonth() + 1,
   MESES: ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'],
   guardando: false,
-  stockMap: {}             // {referencia: existencia total en todas las bodegas} — ver pvActualizarStock()
+  stockMap: {},            // {referencia: existencia total en todas las bodegas} — ver pvActualizarStock()
+  _anioCargado: false      // ya se leyó el último año que eligió este usuario (ver renderPresupuestoVentas)
 };
 
 const CANALES_DEFAULT = ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara','Proyectos','Especializado','Online','Hard Discount','Canal Moderno','Constructoras','Empleados'];
@@ -20746,6 +20749,14 @@ async function renderPresupuestoVentas() {
   if(!el) return;
   el.innerHTML = '<div style="padding:30px;text-align:center;color:var(--mu);">⏳ Cargando módulo...</div>';
 
+  // Cada usuario elige su propio año (queda guardado en su navegador) — así cada quien puede
+  // estar viendo/trabajando el año que le corresponda sin que se lo pise el valor por defecto.
+  if(!PV._anioCargado) {
+    PV._anioCargado = true;
+    const guardado = dbGet('pv_anio_'+(CU&&CU.email||''));
+    if(guardado) PV.anio = guardado;
+  }
+
   // Cargar catálogo si no está
   if(!PV.catalogo.length && LISTAS_CATALOGO.length) PV.catalogo = LISTAS_CATALOGO;
   if(!PV.catalogo.length) {
@@ -20791,11 +20802,15 @@ function renderPVShell(el, canales) {
     `<option value="${c.lista_id}" ${c.lista_id===PV.listaId?'selected':''}>${c.nombre} — ${c.descripcion}</option>`
   ).join('');
 
-  const anioOpts = [2024,2025,2026,2027].map(a =>
+  // Años disponibles: desde 3 atrás hasta 2 adelante del año calendario actual — así el próximo
+  // año ya aparece "el que viene" sin tener que tocar el código cada vez.
+  const anioBase = new Date().getFullYear();
+  const aniosDisponibles = Array.from({length:6}, (_,i)=> anioBase-3+i);
+  const anioOpts = aniosDisponibles.map(a =>
     `<option value="${a}" ${a===PV.anio?'selected':''}>${a}</option>`).join('');
 
   const anioCompOpts = `<option value="">— Sin comparar —</option>` +
-    [2024,2025,2026].filter(a=>a!==PV.anio).map(a=>
+    aniosDisponibles.filter(a=>a!==PV.anio).map(a=>
       `<option value="${a}" ${a===PV.anioComp?'selected':''}>${a}</option>`).join('');
 
   const canalesOpts = canales.map(c=>
@@ -20871,6 +20886,7 @@ function renderPVShell(el, canales) {
         <button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>`}
         <button class="btn btn-g btn-sm" onclick="pvExportar()">📊 Excel</button>
         <button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>
+        ${CU?.rol==='admin' ? `<button class="btn btn-or btn-sm" onclick="pvMigrarAnio()" title="Mueve lo que ya está cargado al año correcto (sin tocar ningún dato, solo le cambia el año)">📅 Mover a 2027</button>` : ''}
       </div>
     </div>
 
@@ -21418,8 +21434,37 @@ async function pvCambiarAnio(v) {
     return;
   }
   PV.anio = parseInt(v);
+  dbSet('pv_anio_'+(CU&&CU.email||''), PV.anio); // recuerda la elección para la próxima vez que este usuario entre
   PV.presId = null; PV.detalle = [];
   await cargarPresupuestoActivo();
+}
+// Todo lo que ya se cargó (Cindy, Johanna, etc.) se guardó bajo 2026 antes de darnos cuenta de que
+// en realidad era el presupuesto de 2027. Esto NO toca ni un solo número de lo que ya llenaron —
+// solo le cambia la etiqueta de año a cada canal, de un año a otro. Si algún canal ya tiene algo
+// guardado en el año destino (por ejemplo porque alguien ya empezó a llenar 2027 aparte), ese canal
+// se deja tal cual para no mezclar ni perder datos, y queda reportado para revisarlo a mano.
+async function pvMigrarAnio(origen, destino) {
+  origen = origen || 2026; destino = destino || 2027;
+  if(!confirm(`Esto va a mover TODO lo que esté guardado en ${origen} para que quede en ${destino} (no cambia ni un dato, solo el año). Si algún canal ya tiene algo en ${destino}, ese se deja igual y te aviso al final. ¿Continuar?`)) return;
+  toast(`⏳ Moviendo presupuestos de ${origen} a ${destino}...`,'inf');
+  try{
+    const [rowsOrigen, rowsDestino] = await Promise.all([
+      sb.get('presupuesto_ventas', `anio=eq.${origen}`),
+      sb.get('presupuesto_ventas', `anio=eq.${destino}`),
+    ]);
+    const canalesConDestino = new Set((rowsDestino||[]).map(r=>r.canal));
+    const migrar    = (rowsOrigen||[]).filter(r=>!canalesConDestino.has(r.canal));
+    const conflicto = (rowsOrigen||[]).filter(r=> canalesConDestino.has(r.canal));
+    for(const r of migrar) {
+      await sb.patch('presupuesto_ventas', `id=eq.${r.id}`, {anio:destino, actualizado:new Date().toISOString()});
+    }
+    if(migrar.length) { try{ registrarAuditoria('presupuesto_ventas', 'varios', 'migrar_anio', {de:origen, a:destino, canales:migrar.map(r=>r.canal)}); }catch(e){} }
+    let msg = migrar.length ? `✅ ${migrar.length} canal(es) movido(s) a ${destino}: ${migrar.map(r=>r.canal).join(', ')}` : `No había nada en ${origen} para mover`;
+    if(conflicto.length) msg += ` · ⚠️ ${conflicto.length} canal(es) NO se movieron porque ya tenían algo en ${destino}: ${conflicto.map(r=>r.canal).join(', ')} (revísalos a mano)`;
+    toast(msg, conflicto.length?'wa':'ok');
+    // Si el canal/año que se está viendo ahora mismo fue uno de los movidos, recarga para reflejarlo.
+    if(PV.canal) { PV.presId = null; PV.detalle = []; await cargarPresupuestoActivo(); }
+  } catch(e) { toast('❌ '+e.message,'er'); }
 }
 async function pvCambiarAnioComp(v) {
   PV.anioComp = v ? parseInt(v) : null;
