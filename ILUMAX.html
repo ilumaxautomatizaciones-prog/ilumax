@@ -8070,6 +8070,46 @@ async function invCargarBodegasCuentan() {
     }
   } catch(e) { /* se usa la lista por defecto */ }
 }
+// Qué bodegas suman se define UNA sola vez acá (INV_BODEGAS_CUENTAN) y de ahí lo toman por igual
+// el inventario, el stock/cobertura de Ppto. de Ventas, lo "en tránsito" de una referencia y
+// cualquier otro sitio que llame invBodegaCuenta() — así que marcar/desmarcar una bodega aquí la
+// incluye o la saca de TODO a la vez, sin tener que tocar nada más.
+function invAbrirConfigBodegas() {
+  const vistas = new Set([...INV_BODEGAS_CUENTAN, ...new Set(INV_DATA.map(r=>r.bodega).filter(Boolean))]);
+  const bodegas = [...vistas].sort();
+  const mo = document.createElement('div');
+  mo.id = 'mo-inv-bodegas';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:420px;max-height:90vh;overflow-y:auto;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-size:14px;font-weight:800;">⚙️ Bodegas que suman al inventario</div>
+      <button onclick="document.getElementById('mo-inv-bodegas').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button>
+    </div>
+    <div style="padding:16px 20px;">
+      <div style="font-size:11.5px;color:var(--mu);margin-bottom:12px;">Marca las bodegas que SÍ cuentan como stock disponible (esto afecta inventario, cobertura en Ppto. de Ventas, lo "en tránsito" de una referencia y los reportes que dependen de existencia real).</div>
+      ${bodegas.map(b=>`<label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;cursor:pointer;">
+        <input type="checkbox" data-bod="${reabastEsc(b)}" ${INV_BODEGAS_CUENTAN.includes(b)?'checked':''}> <span style="font-family:monospace;font-weight:700;">${reabastEsc(b)}</span>
+      </label>`).join('') || '<div style="color:var(--mu);font-size:12px;">Todavía no hay inventario cargado para ver qué bodegas existen.</div>'}
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-sm" onclick="document.getElementById('mo-inv-bodegas').remove()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="invGuardarConfigBodegas()">💾 Guardar</button>
+    </div>
+  </div>`;
+  document.body.appendChild(mo);
+}
+async function invGuardarConfigBodegas() {
+  const mo = document.getElementById('mo-inv-bodegas'); if(!mo) return;
+  const marcadas = [...mo.querySelectorAll('input[data-bod]:checked')].map(el=>el.dataset.bod);
+  if(!marcadas.length) { toast('Marca al menos una bodega','wa'); return; }
+  try {
+    await sb.upsert('configuracion', {clave:'inv_bodegas_cuentan', valor:JSON.stringify(marcadas), tipo:'json'}, 'clave');
+    INV_BODEGAS_CUENTAN = marcadas;
+    mo.remove();
+    toast('✅ Bodegas actualizadas — '+marcadas.join(', '),'ok');
+    if(typeof renderInvVista==='function' && document.getElementById('inv-content')) renderInvVista();
+  } catch(e) { toast('❌ '+e.message,'er'); }
+}
 var INV_PERIODO = '';
 var INV_SUBIDO_POR = '';
 var INV_ACTUALIZADO = ''; // fecha/hora ISO de la última sincronización exitosa (Excel o SIESA)
@@ -8159,6 +8199,7 @@ function renderInvVista() {
       </div>
       <div style="font-size:10px;color:rgba(255,255,255,.55);margin-top:10px;">
         Solo suman las bodegas disponibles: <strong style="color:#fff;">${INV_BODEGAS_CUENTAN.filter(b => b !== 'BB').join(', ')}</strong> · no incluye averías, garantías, muestras, cuarentena, devoluciones, proyectos ni tránsito
+        ${CU?.rol==='admin' ? `<button class="btn btn-g btn-sm" style="margin-left:8px;padding:2px 8px;font-size:10px;" onclick="invAbrirConfigBodegas()">⚙️ Configurar</button>` : ''}
       </div>
     </div>
 
