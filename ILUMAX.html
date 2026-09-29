@@ -20990,6 +20990,7 @@ function renderPVShell(el, canales, todosLosCanales) {
         <button class="btn btn-pu btn-sm" onclick="pvAbrirSugerirHistorico()" title="Prellena las cantidades de cada mes con la venta real histórica de este canal (con el % de crecimiento que definas)">🧠 Sugerir desde histórico</button>`}
         <button class="btn btn-g btn-sm" onclick="pvExportar()">📊 Excel</button>
         <button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>
+        <button class="btn btn-g btn-sm" onclick="pvExportarCombinadoTodo()" title="Una sola hoja de Excel con TODAS las filas de TODOS los canales juntas, una debajo de otra (con una columna Canal), tal como una tabla normal de Excel — no las suma, las lista todas">📋 Excel combinado (todos)</button>
         ${CU?.rol==='admin' ? `<button class="btn btn-or btn-sm" onclick="pvMigrarAnio()" title="Mueve lo que ya está cargado al año correcto (sin tocar ningún dato, solo le cambia el año)">📅 Mover a 2027</button>` : ''}
       </div>
     </div>
@@ -23193,6 +23194,68 @@ async function pvExportarPorPersona() {
 
   XLSX.writeFile(wb, `Presupuesto_Ventas_por_Persona_ILUMAX_${anio}.xlsx`);
   toast(`✅ Excel generado — ${porCanal.length} persona(s)/canal + 1 hoja combinada`,'ok');
+}
+
+// ── Excel combinado (todos): UNA sola hoja con TODAS las filas de TODOS los canales,
+// una debajo de otra (con columna Canal), sin sumar ni agrupar — igual que si en Excel
+// pegaras la tabla de cada persona una tras otra en una misma pestaña. ──
+async function pvExportarCombinadoTodo() {
+  if(typeof XLSX === 'undefined') {
+    await new Promise((res,rej)=>{
+      const s=document.createElement('script');
+      s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      s.onload=res; s.onerror=rej;
+      document.head.appendChild(s);
+    });
+  }
+  toast('⏳ Generando Excel combinado de todos los canales...','inf');
+  const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const anio = PV.anio;
+
+  let canales = [...CANALES_DEFAULT];
+  try {
+    const cfg = await sb.get('configuracion','clave=eq.canales_comerciales');
+    if(cfg?.[0]) canales = cfg[0].valor.split(',').map(s=>s.trim()).filter(Boolean);
+  } catch(e){}
+
+  const filas = [];
+  for(const canal of canales){
+    try{
+      const hdr = await sb.get('presupuesto_ventas', `anio=eq.${anio}&canal=eq.${encodeURIComponent(canal)}&order=creado_en.desc&limit=1`);
+      if(!hdr?.length) continue;
+      const detalle = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${hdr[0].id}&order=categoria.asc,referencia.asc`);
+      if(!detalle?.length) continue;
+      const listaNombre = (PV.catalogo.find(c=>c.lista_id===hdr[0].lista_id)||{}).nombre || hdr[0].lista_id || '—';
+      detalle.forEach(r=>{
+        const esLibre = pvEsLineaLibre(r);
+        const precio = parseFloat(r.precio_lista)||0;
+        const meses = Array.from({length:12},(_,i)=>parseFloat(r['u'+String(i+1).padStart(2,'0')])||0);
+        const totalUnd = meses.reduce((a,v)=>a+v,0);
+        const totalCOP = totalUnd*precio;
+        filas.push({
+          Canal: canal,
+          'Jefe de zona': hdr[0].jefe_zona || '',
+          'Lista de precios': listaNombre,
+          SKU: esLibre?'sin SKU':r.referencia,
+          Descripción: r.descripcion||'',
+          Categoría: r.categoria||'Sin categoría',
+          'Precio Lista': esLibre?'':precio,
+          Ene:meses[0], Feb:meses[1], Mar:meses[2], Abr:meses[3], May:meses[4], Jun:meses[5],
+          Jul:meses[6], Ago:meses[7], Sep:meses[8], Oct:meses[9], Nov:meses[10], Dic:meses[11],
+          'Total Und': esLibre?'':totalUnd,
+          'Total COP': Math.round(totalCOP),
+        });
+      });
+    }catch(e){ console.warn('Excel combinado (todos) — '+canal+':', e.message); }
+  }
+  if(!filas.length){ toast('No hay presupuestos guardados para '+anio+' en ningún canal','err'); return; }
+
+  const ws = XLSX.utils.json_to_sheet(filas);
+  ws['!cols'] = [{wch:16},{wch:16},{wch:16},{wch:10},{wch:38},{wch:14},{wch:11},...Array(12).fill({wch:8}),{wch:11},{wch:14}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Todos los canales');
+  XLSX.writeFile(wb, `Presupuesto_Ventas_Combinado_Todos_ILUMAX_${anio}.xlsx`);
+  toast(`✅ Excel combinado generado — ${filas.length} filas de ${canales.length} canales`,'ok');
 }
 
 // ── Helper estado ──────────────────────────────────────────────────────
