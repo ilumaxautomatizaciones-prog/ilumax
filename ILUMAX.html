@@ -20442,7 +20442,8 @@ var PV = {
   MESES: ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'],
   guardando: false,
   stockMap: {},            // {referencia: existencia total en todas las bodegas} — ver pvActualizarStock()
-  _anioCargado: false      // ya se leyó el último año que eligió este usuario (ver renderPresupuestoVentas)
+  _anioCargado: false,     // ya se leyó el último año que eligió este usuario (ver renderPresupuestoVentas)
+  meta: null               // {anioBase, pct, totalUnd, totalCOP} — meta histórica calculada por "Sugerir desde histórico"
 };
 
 const CANALES_DEFAULT = ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara','Proyectos','Especializado','Online','Hard Discount','Canal Moderno','Constructoras','Empleados'];
@@ -20956,7 +20957,8 @@ function renderPVShell(el, canales, todosLosCanales) {
         </button>
         <button class="btn btn-bl btn-sm" onclick="pvAgregarSKU()">➕ SKU</button>
         <button class="btn btn-bl btn-sm" onclick="pvAgregarLineaLibre()" title="Para cuando no hay una referencia real que presupuestar (ej. Proyectos) — presupuesta un monto en $ directamente, mes a mes">💰 Línea sin SKU</button>
-        <button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>`}
+        <button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>
+        <button class="btn btn-pu btn-sm" onclick="pvAbrirSugerirHistorico()" title="Prellena las cantidades de cada mes con la venta real histórica de este canal (con el % de crecimiento que definas)">🧠 Sugerir desde histórico</button>`}
         <button class="btn btn-g btn-sm" onclick="pvExportar()">📊 Excel</button>
         <button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>
         ${CU?.rol==='admin' ? `<button class="btn btn-or btn-sm" onclick="pvMigrarAnio()" title="Mueve lo que ya está cargado al año correcto (sin tocar ningún dato, solo le cambia el año)">📅 Mover a 2027</button>` : ''}
@@ -21001,6 +21003,7 @@ function renderPVShell(el, canales, todosLosCanales) {
           <option value="2026" selected>2026</option>
         </select>
         <button class="btn btn-bl btn-sm" onclick="pvAbrirModalExcelVentas()">📤 Excel Ventas</button>
+        ${CU?.rol==='admin' ? `<button class="btn btn-rd btn-sm" onclick="pvBorrarDatosVCM()" title="Borra TODOS los registros de este año en Ventas Reales por Canal — útil para limpiar una carga que quedó mal">🧹 Borrar datos de este año</button>` : ''}
         <div style="flex:1;"></div>
         <div style="font-size:10px;color:var(--mu);">Datos del reporte de ventas por canal</div>
       </div>
@@ -21043,16 +21046,18 @@ function renderPVShell(el, canales, todosLosCanales) {
     <div id="pv-modal-hist" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;display:none;align-items:center;justify-content:center;">
       <div style="background:var(--w);border-radius:16px;padding:24px;width:92%;max-width:480px;box-shadow:0 24px 64px rgba(0,0,0,.3);">
         <div style="font-size:14px;font-weight:700;margin-bottom:12px;">📤 Subir Histórico de Ventas</div>
-        <p style="font-size:12px;color:var(--mu);margin-bottom:14px;">Sube un CSV con columnas: <code>anio,mes,referencia,descripcion,categoria,canal,unidades,valor_cop,lista_id</code></p>
+        <p style="font-size:12px;color:var(--mu);margin-bottom:14px;">Sube un CSV con columnas: <code>anio,mes,referencia,descripcion,categoria,canal,unidades,valor_cop,lista_id</code>. El archivo puede traer <strong>varios años y varios canales mezclados</strong> — cada fila usa su propia columna <code>canal</code> (y <code>anio</code>, si la trae) automáticamente.</p>
         <div class="fg">
-          <label class="fl">Año del histórico</label>
+          <label class="fl">Año del histórico <span style="font-weight:400;color:var(--mu);">(solo se usa si una fila no trae su propio año)</span></label>
           <select id="hist-anio" class="inp">
+            <option value="2023">2023</option>
             <option value="2024">2024</option>
-            <option value="2025">2025</option>
+            <option value="2025" selected>2025</option>
+            <option value="2026">2026</option>
           </select>
         </div>
         <div class="fg">
-          <label class="fl">Canal</label>
+          <label class="fl">Canal <span style="font-weight:400;color:var(--mu);">(solo se usa si una fila no trae su propio canal)</span></label>
           <input id="hist-canal" class="inp" placeholder="Ej: Mixto, Ferroeléctrico...">
         </div>
         <div class="fg">
@@ -21069,7 +21074,7 @@ function renderPVShell(el, canales, todosLosCanales) {
 
     <!-- MODAL agregar SKU -->
     <div id="pv-modal-sku" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center;">
-      <div style="background:var(--w);border-radius:16px;padding:24px;width:94%;max-width:840px;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.3);">
+      <div style="background:var(--w);border-radius:16px;padding:24px;width:96%;max-width:1320px;max-height:92vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.3);">
         <div style="font-size:14px;font-weight:700;margin-bottom:12px;">➕ Agregar SKU al presupuesto</div>
         <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
           <!-- Columna izquierda: agregar un SKU puntual -->
@@ -21130,11 +21135,16 @@ function renderPVShell(el, canales, todosLosCanales) {
               <div id="pv-sku-periodo-rango" style="display:none;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:8px;"></div>
               <div style="display:flex;align-items:center;gap:8px;">
                 <span id="pv-sku-sel-count" style="font-size:10px;font-weight:700;color:var(--bl);white-space:nowrap;">0 seleccionados</span>
+                <button class="btn btn-pu btn-sm" onclick="pvVerHistoricoSeleccionados()" title="Ver el histórico real mes a mes, por canal, de todos los SKUs seleccionados">👁 Ver histórico</button>
                 <button class="btn btn-gr btn-sm" style="margin-left:auto;" onclick="pvPresupuestarSeleccionados()">📊 Presupuestar</button>
               </div>
             </div>
             <div id="pv-sku-periodo-desc" style="font-size:9px;color:var(--mu);margin-top:5px;">La cantidad se aplica igual en los 12 meses (Ene-Dic) de cada SKU seleccionado.</div>
           </div>
+        </div>
+        <div class="fg" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--b1);">
+          <label class="fl">📊 Histórico de ventas <span id="sku-historico-canal" style="font-weight:400;color:var(--mu);"></span></label>
+          <div id="sku-historico" style="border:1px solid var(--b1);border-radius:10px;padding:12px 14px;font-size:12px;color:var(--mu);">Selecciona una referencia para ver el histórico</div>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;padding-top:14px;border-top:1px solid var(--b1);">
           <button class="btn btn-g btn-sm" onclick="cerrarModalSKU()">Cerrar</button>
@@ -21148,6 +21158,7 @@ function renderPVShell(el, canales, todosLosCanales) {
 // ── Cargar o crear presupuesto activo ──────────────────────────────────
 async function cargarPresupuestoActivo() {
   pvEstado('⏳ Cargando presupuesto...');
+  PV.meta = null; // la meta histórica es por canal — se recalcula si se usa "Sugerir desde histórico" de nuevo
   try {
     // Buscar presupuesto existente para este año+canal
     const rows = await sb.get('presupuesto_ventas',
@@ -21424,12 +21435,23 @@ function pvRenderKPIs(und, cop) {
   const el = document.getElementById('pv-kpis');
   if(!el) return;
   const listaNombre = (PV.catalogo.find(c=>c.lista_id===PV.listaId)||{}).nombre || PV.listaId;
+  let metaHtml = '';
+  if(PV.meta && PV.meta.totalCOP > 0) {
+    const pctArmado = Math.round((cop / PV.meta.totalCOP) * 100);
+    const color = pctArmado>=90 ? '#22c55e' : pctArmado>=70 ? '#f59e0b' : '#ef4444';
+    const semaforo = pctArmado>=90 ? '🟢' : pctArmado>=70 ? '🟡' : '🔴';
+    metaHtml = `<div title="Meta calculada con la venta real de ${PV.meta.anioBase} (todas las referencias que vendió el canal) ${PV.meta.pct>=0?'+':''}${PV.meta.pct}% de crecimiento">
+      <div style="font-size:16px;font-weight:800;color:${color};">${semaforo} ${pctArmado}%</div>
+      <div style="font-size:9px;color:rgba(255,255,255,.5);">Armado vs. meta ${PV.meta.anioBase}${PV.meta.pct>=0?'+':''}${PV.meta.pct}% ($${(PV.meta.totalCOP/1e6).toFixed(1)}M)</div>
+    </div>`;
+  }
   el.innerHTML = `
     <div><div style="font-size:18px;font-weight:800;color:#f5c518;">${und.toLocaleString('es-CO')}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Unidades presupuestadas</div></div>
     <div><div style="font-size:18px;font-weight:800;color:#f5c518;">$${(cop/1e6).toFixed(1)}M</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Total COP</div></div>
     <div><div style="font-size:18px;font-weight:800;color:#f5c518;">${PV.detalle.length}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">SKUs activos</div></div>
     <div><div style="font-size:16px;font-weight:800;color:#f5c518;">${listaNombre}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Lista de precios</div></div>
-    <div><div style="font-size:16px;font-weight:800;color:#f5c518;">${PV.canal}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Canal</div></div>`;
+    <div><div style="font-size:16px;font-weight:800;color:#f5c518;">${PV.canal}</div><div style="font-size:9px;color:rgba(255,255,255,.5);">Canal</div></div>
+    ${metaHtml}`;
 }
 
 // ── Edición de celda ───────────────────────────────────────────────────
@@ -21694,6 +21716,10 @@ function pvAgregarSKU() {
   if(m){ m.style.display='flex'; }
   const ex = document.getElementById('sku-existencias');
   if(ex) ex.innerHTML = 'Selecciona una referencia para ver existencias';
+  const hist = document.getElementById('sku-historico');
+  if(hist) hist.innerHTML = 'Selecciona una referencia para ver el histórico';
+  const histCanal = document.getElementById('sku-historico-canal');
+  if(histCanal) histCanal.textContent = 'por canal';
   // Resetear selector de precio alternativo
   SKU_PRECIOS_ORIGEN = {};
   const precioOrigen = document.getElementById('sku-precio-origen');
@@ -22098,9 +22124,10 @@ async function pvBuscarRef(q) {
           ? `<span style="color:var(--bl);font-size:10px;">$${Math.round(r.precio).toLocaleString('es-CO')}</span>`
           : (r._soloInv ? `<span style="color:var(--mu);font-size:9px;">Sin precio en lista</span>` : '');
         return `
-        <div onclick="${yaEsta ? '' : `pvSeleccionarRef('${r.referencia}','${(r.descripcion||'').replace(/'/g,"\\'")}',${r.precio||0},'${(r.categoria||'').replace(/'/g,"\\'")}');`}"
-          style="padding:7px 10px;cursor:${yaEsta?'default':'pointer'};border-bottom:1px solid var(--b1);font-size:12px;opacity:${yaEsta?'.7':'1'};"
-          onmouseover="this.style.background='${yaEsta?'':'var(--bg)'}'" onmouseout="this.style.background=''">
+        <div onclick="pvSeleccionarRef('${r.referencia}','${(r.descripcion||'').replace(/'/g,"\\'")}',${r.precio||0},'${(r.categoria||'').replace(/'/g,"\\'")}');"
+          style="padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--b1);font-size:12px;opacity:${yaEsta?'.85':'1'};"
+          title="${yaEsta?'Ya está en el presupuesto — haz clic para ver su histórico y detalle (no se duplica)':''}"
+          onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
           <div style="display:flex;align-items:center;gap:6px;">
             <strong style="color:${yaEsta?'var(--gr)':'var(--tx)'};">${r.referencia}</strong>
             <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(r.descripcion||'').substring(0,45)}</span>
@@ -22126,8 +22153,250 @@ function pvSeleccionarRef(ref, desc, precio, categoria) {
   document.getElementById('sku-sugerencias').innerHTML = '';
   pvCargarExistencias(ref);
   pvCargarPreciosOrigenSKU(ref, precio);
+  pvCargarHistoricoSKU(ref);
   PV_SKU_ACTUAL = { referencia: String(ref), descripcion: desc, categoria: categoria || 'General' };
   pvActualizarSelCount();
+}
+
+const MESES_HIST_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+
+// Guarda temporalmente los datos de cada fila "Sugerido" para que el botón "✅ Usar" no
+// tenga que meter arrays dentro de un atributo onclick (con comillas/escapes problemáticos).
+var PV_SUG_CACHE = {};
+var _pvSugSeq = 0;
+
+// El usuario puede editar a mano cualquier casilla de la fila "🎯 Sugerido" antes de usarla
+// (por si el histórico no refleja bien lo que se espera para 2027) — esto solo actualiza el
+// caché en memoria; "✅ Usar" es lo que realmente lo escribe en el presupuesto.
+function pvEditarSugerido(input) {
+  const key = input.dataset.sugkey;
+  const mes = parseInt(input.dataset.mes);
+  const d = PV_SUG_CACHE[key];
+  if(!d) return;
+  d.meses[mes] = Math.max(0, parseFloat(input.value)||0);
+  const totalEl = document.getElementById('sug-tot-'+key);
+  if(totalEl) totalEl.textContent = Math.round(d.meses.reduce((a,v)=>a+v,0)).toLocaleString('es-CO');
+}
+
+// Toma la fila "🎯 Sugerido" de una tabla de histórico y la escribe directo en el presupuesto
+// para esa referencia (la agrega si aún no está en la tabla), sin tener que pasar por el
+// formulario de la izquierda ni por "🧠 Sugerir desde histórico" para un solo SKU puntual.
+async function pvUsarSugeridoDesdeModal(key) {
+  const d = PV_SUG_CACHE[key];
+  if(!d) return;
+  if(PV_SOLO_LECTURA) { toast('🔒 Estás en modo consulta — no puedes editar este canal','wa'); return; }
+  let row = PV.detalle.find(r=>String(r.referencia)===String(d.ref));
+  if(!row) {
+    let precio = 0, descripcion = d.descripcion||'', categoria = 'General';
+    const enCache = (PV_SKU_LISTADO||[]).find(p=>String(p.referencia)===String(d.ref));
+    if(enCache) { precio = parseFloat(enCache.precio)||0; descripcion = enCache.descripcion||descripcion; categoria = enCache.categoria||categoria; }
+    else {
+      try {
+        const pr = await sb.get('precios_lista', `lista=eq.${PV.listaId}&referencia=eq.${encodeURIComponent(d.ref)}&select=precio,descripcion,categoria&limit=1`);
+        if(pr && pr[0]) { precio = parseFloat(pr[0].precio)||0; descripcion = pr[0].descripcion||descripcion; categoria = pr[0].categoria||categoria; }
+      } catch(e){ console.warn('Error precio para usar sugerido:', e); }
+    }
+    row = {
+      referencia: String(d.ref), descripcion, categoria, precio_lista: precio, _dirty: true,
+      u01:0,u02:0,u03:0,u04:0,u05:0,u06:0,u07:0,u08:0,u09:0,u10:0,u11:0,u12:0,
+      r01:0,r02:0,r03:0,r04:0,r05:0,r06:0,r07:0,r08:0,r09:0,r10:0,r11:0,r12:0
+    };
+    PV.detalle.push(row);
+  }
+  for(let m=1;m<=12;m++) row['u'+String(m).padStart(2,'0')] = Math.round(d.meses[m-1]||0);
+  row._dirty = true;
+
+  const cats = [...new Set(PV.detalle.map(x=>x.categoria))].filter(Boolean).sort();
+  const selCat = document.getElementById('pv-cat-filtro');
+  if(selCat) selCat.innerHTML = '<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${c}">${c}</option>`).join('');
+
+  pvActualizarBadgeGuardar();
+  pvRenderTabla();
+  pvRenderListadoSKU();
+  toast(`✅ Sugerido de ${d.canal} aplicado a ${d.ref} — recuerda guardar 💾`, 'ok');
+}
+
+// Construye la tabla detallada mes a mes (Ene-Dic) por canal y año, a partir de filas ya
+// traídas de ventas_historico de UNA referencia — y le agrega una fila "🎯 Sugerido" por
+// canal con el mismo cálculo que usa "🧠 Sugerir desde histórico" (año más reciente, tal cual,
+// 0% de crecimiento — el crecimiento real se aplica desde ese botón si se quiere ajustar).
+// `ref` y `descripcion` son opcionales — si se pasan, la fila Sugerido del canal actual
+// incluye un botón "✅ Usar" que llena el presupuesto directamente con esos valores.
+function pvHistoricoTablaDetalle(rows, canalActual, ref, descripcion) {
+  if(!rows || !rows.length) return null;
+  const porCanal = {};
+  rows.forEach(r=>{
+    const c = r.canal || '(sin canal)';
+    if(!porCanal[c]) porCanal[c] = {};
+    if(!porCanal[c][r.anio]) porCanal[c][r.anio] = { meses:{}, totalUnd:0, totalCop:0 };
+    const a = porCanal[c][r.anio];
+    a.meses[r.mes] = (a.meses[r.mes]||0) + (parseFloat(r.unidades)||0);
+    a.totalUnd += parseFloat(r.unidades)||0;
+    a.totalCop += parseFloat(r.valor_cop)||0;
+  });
+  const canalesOrd = Object.keys(porCanal).sort((c1,c2)=>{
+    const t = c => Object.values(porCanal[c]).reduce((a,d)=>a+d.totalUnd,0);
+    return t(c2) - t(c1);
+  });
+
+  // Canal "destacado": el actualmente seleccionado en el presupuesto si tiene datos,
+  // si no, el de mayor volumen — así siempre hay algo relevante visible sin saturar.
+  const canalDestacado = canalesOrd.includes(canalActual) ? canalActual : canalesOrd[0];
+
+  const generarFilasCanal = (c) => {
+    const esActual = c === canalActual;
+    let f = '';
+    const aniosOrd = Object.keys(porCanal[c]).sort((a,b)=>b-a);
+    aniosOrd.forEach(a=>{
+      const d = porCanal[c][a];
+      f += `<tr style="${esActual?'background:var(--bld);':''}">
+        <td style="padding:6px 8px;font-weight:${esActual?'800':'600'};color:${esActual?'var(--bl)':'var(--tx)'};white-space:nowrap;">${esActual?'▶ ':''}${reabastEsc(c)}</td>
+        <td style="padding:6px 8px;color:var(--mu);text-align:center;">${a}</td>
+        ${MESES_HIST_CORTOS.map((_,i)=>{
+          const v = d.meses[i+1]||0;
+          return `<td style="padding:6px 7px;text-align:right;color:${v?'var(--tx)':'var(--b2)'};">${v?Math.round(v).toLocaleString('es-CO'):'—'}</td>`;
+        }).join('')}
+        <td style="padding:6px 8px;text-align:right;font-weight:700;color:var(--bl);white-space:nowrap;">${Math.round(d.totalUnd).toLocaleString('es-CO')}</td>
+        ${ref?'<td></td>':''}
+      </tr>`;
+    });
+    // Fila "Sugerido" — SOLO se calcula con 2025 y/o 2026 (el año más reciente de esos dos que
+    // tenga datos para este canal). 2023/2024 quedan solo como referencia visual arriba, nunca
+    // alimentan la sugerencia. Si el canal no tiene ni 2025 ni 2026, no se muestra fila sugerido.
+    const aniosSugeribles = Object.keys(porCanal[c]).map(Number).filter(a=>a===2025||a===2026);
+    if(aniosSugeribles.length) {
+      const anioBaseSug = Math.max(...aniosSugeribles);
+      const dSug = porCanal[c][anioBaseSug];
+      const puedeEditar = esActual && ref;
+      let key = null;
+      if(puedeEditar) {
+        key = 'sug_' + (_pvSugSeq++);
+        PV_SUG_CACHE[key] = { ref, canal: c, descripcion, meses: MESES_HIST_CORTOS.map((_,i)=>Math.round(dSug.meses[i+1]||0)) };
+      }
+      const botonUsar = puedeEditar
+        ? `<td style="padding:6px 8px;"><button class="btn btn-gr btn-sm" style="padding:4px 12px;font-size:11px;white-space:nowrap;" onclick="pvUsarSugeridoDesdeModal('${key}')" title="Llena el presupuesto de este SKU en ${reabastEsc(c)} con estos valores">✅ Usar</button></td>`
+        : (ref ? '<td></td>' : '');
+      f += `<tr style="background:${esActual?'rgba(22,163,74,.10)':'#f8fafc'};border-bottom:2px solid var(--b1);">
+        <td colspan="2" style="padding:6px 8px;font-weight:700;color:var(--gr);white-space:nowrap;">🎯 Sugerido (=${anioBaseSug})${puedeEditar?' <span style="font-weight:400;font-size:9px;">✏️ editable</span>':''}</td>
+        ${MESES_HIST_CORTOS.map((_,i)=>{
+          const v = dSug.meses[i+1]||0;
+          if(puedeEditar) {
+            return `<td style="padding:3px 4px;">
+              <input type="number" min="0" step="1" value="${Math.round(v)||''}" data-sugkey="${key}" data-mes="${i}"
+                onchange="pvEditarSugerido(this)" onfocus="this.select()"
+                style="width:64px;border:1px solid rgba(22,163,74,.35);border-radius:5px;padding:5px 4px;text-align:right;font-size:12px;font-weight:700;color:var(--gr);background:#fff;outline:none;">
+            </td>`;
+          }
+          return `<td style="padding:6px 7px;text-align:right;font-weight:700;color:var(--gr);">${v?Math.round(v).toLocaleString('es-CO'):'—'}</td>`;
+        }).join('')}
+        <td id="${key?('sug-tot-'+key):''}" style="padding:6px 8px;text-align:right;font-weight:800;color:var(--gr);white-space:nowrap;">${Math.round(dSug.totalUnd).toLocaleString('es-CO')}</td>
+        ${botonUsar}
+      </tr>`;
+    }
+    return f;
+  };
+
+  const otrosCanales = canalesOrd.filter(c=>c!==canalDestacado);
+  const filasDestacado = generarFilasCanal(canalDestacado);
+  const filasOtros = otrosCanales.map(generarFilasCanal).join('');
+  const nCols = 2 + MESES_HIST_CORTOS.length + 1 + (ref?1:0);
+  const wrapId = 'histotros_' + (_pvSugSeq++);
+
+  const filaToggle = filasOtros ? `<tr>
+    <td colspan="${nCols}" style="padding:6px 8px;text-align:center;border-top:1px solid var(--b1);">
+      <button type="button" id="${wrapId}-btn"
+        onclick="var w=document.getElementById('${wrapId}');var b=document.getElementById('${wrapId}-btn');var v=w.style.display==='none';w.style.display=v?'table-row-group':'none';b.textContent=v?'▾ Ocultar los otros ${otrosCanales.length} canales':'▸ Ver histórico de los otros ${otrosCanales.length} canales';"
+        style="background:none;border:1px dashed var(--b2);border-radius:8px;padding:5px 14px;font-size:11px;color:var(--mu);cursor:pointer;">▸ Ver histórico de los otros ${otrosCanales.length} canales</button>
+    </td>
+  </tr>` : '';
+
+  return `<div style="overflow-x:auto;">
+    <table style="width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap;">
+      <thead><tr style="border-bottom:1px solid var(--b1);">
+        <th style="text-align:left;padding:6px 8px;color:var(--mu);font-weight:700;">Canal</th>
+        <th style="text-align:center;padding:6px 8px;color:var(--mu);font-weight:700;">Año</th>
+        ${MESES_HIST_CORTOS.map(m=>`<th style="text-align:right;padding:6px 7px;color:var(--mu);font-weight:700;">${m}</th>`).join('')}
+        <th style="text-align:right;padding:6px 8px;color:var(--mu);font-weight:700;">Total</th>
+        ${ref?'<th></th>':''}
+      </tr></thead>
+      <tbody>${filasDestacado}${filaToggle}</tbody>
+      ${filasOtros?`<tbody id="${wrapId}" style="display:none;">${filasOtros}</tbody>`:''}
+    </table>
+  </div>`;
+}
+
+// ── Histórico de ventas real de la referencia seleccionada, TODOS los canales, mes a mes ──
+// Se apoya en ventas_historico (la misma tabla que usa "🧠 Sugerir desde histórico"),
+// así que en cuanto se sube un Excel de histórico, esta info aparece sola aquí.
+async function pvCargarHistoricoSKU(ref) {
+  const el = document.getElementById('sku-historico');
+  const canalEl = document.getElementById('sku-historico-canal');
+  if(!el) return;
+  if(canalEl) canalEl.textContent = 'por canal, mes a mes';
+  if(!ref) { el.innerHTML = 'Selecciona una referencia para ver el histórico'; return; }
+  el.innerHTML = '⏳ Consultando histórico...';
+  try {
+    const rows = await sb.get('ventas_historico',
+      `referencia=eq.${encodeURIComponent(ref)}&select=anio,mes,canal,unidades,valor_cop&order=anio.desc,mes.asc`);
+    if(!rows || !rows.length) {
+      el.innerHTML = `Sin histórico subido para este SKU en ningún canal — usa "📤 Subir histórico" o "🧠 Sugerir desde histórico"`;
+      return;
+    }
+    PV_SUG_CACHE = {};
+    const desc = (document.getElementById('sku-desc')||{}).value || '';
+    el.innerHTML = pvHistoricoTablaDetalle(rows, PV.canal, ref, desc) || 'Sin histórico';
+  } catch(e) {
+    el.innerHTML = '❌ Error consultando histórico';
+    console.warn('pvCargarHistoricoSKU:', e);
+  }
+}
+
+// ── Ver histórico detallado de TODOS los SKUs seleccionados a la vez (panel derecho) ──
+async function pvVerHistoricoSeleccionados() {
+  const refs = new Set([...PV_SKU_SEL]);
+  if(PV_SKU_ACTUAL && PV_SKU_ACTUAL.referencia) refs.add(PV_SKU_ACTUAL.referencia);
+  if(!refs.size) { toast('Selecciona al menos un SKU primero (o búscalo a la izquierda)','wa'); return; }
+
+  const mo = document.createElement('div');
+  mo.id = 'mo-pv-hist-sel';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:1400px;max-height:88vh;overflow-y:auto;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--w);z-index:1;">
+      <div style="font-size:14px;font-weight:800;">📊 Histórico detallado — ${refs.size} SKU(s) seleccionados</div>
+      <button onclick="document.getElementById('mo-pv-hist-sel').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button>
+    </div>
+    <div id="pv-hist-sel-body" style="padding:16px 20px;">⏳ Consultando histórico de ${refs.size} SKU(s)...</div>
+  </div>`;
+  document.body.appendChild(mo);
+
+  try {
+    const listaRefs = [...refs];
+    const rows = await sb.get('ventas_historico',
+      `referencia=in.(${listaRefs.join(',')})&select=anio,mes,canal,referencia,unidades,valor_cop&order=anio.desc,mes.asc`);
+    const porRef = {};
+    (rows||[]).forEach(r=>{
+      if(!porRef[r.referencia]) porRef[r.referencia] = [];
+      porRef[r.referencia].push(r);
+    });
+    // Descripción de cada SKU, tomada del listado ya cargado del canal (si está cacheado)
+    const descPorRef = {};
+    (PV_SKU_LISTADO||[]).forEach(p=>{ descPorRef[p.referencia] = p.descripcion; });
+
+    const body = document.getElementById('pv-hist-sel-body');
+    if(body) {
+      PV_SUG_CACHE = {};
+      body.innerHTML = listaRefs.map(ref=>{
+        const tabla = pvHistoricoTablaDetalle(porRef[ref], PV.canal, ref, descPorRef[ref]||'');
+        return `<div style="margin-bottom:18px;">
+          <div style="font-size:12px;font-weight:800;margin-bottom:6px;">${ref} <span style="font-weight:400;color:var(--mu);">${reabastEsc(descPorRef[ref]||'')}</span></div>
+          ${tabla || `<div style="font-size:11px;color:var(--mu);padding:8px;background:var(--bg);border-radius:8px;">Sin histórico subido para este SKU en ningún canal</div>`}
+        </div>`;
+      }).join('');
+    }
+  } catch(e) {
+    const body = document.getElementById('pv-hist-sel-body');
+    if(body) body.innerHTML = '❌ Error consultando histórico: ' + e.message;
+  }
 }
 
 // ── Precio de respaldo cuando el SKU no tiene precio en la lista del canal ──
@@ -22228,14 +22497,147 @@ function pvSubirHistorico() {
   const m = document.getElementById('pv-modal-hist');
   if(m){ m.style.display='flex'; }
 }
+
+// ── Sugerir presupuesto desde histórico real (ventas_historico) ───────────
+// Prellena las 12 casillas de cada SKU con la venta real de un año base (aplicando el
+// % de crecimiento que se indique) y de paso calcula la "meta" del canal completo
+// (todas las referencias que vendió, no solo las que ya están en el presupuesto) para
+// mostrarla como semáforo contra lo que se lleva armado.
+function pvAbrirSugerirHistorico() {
+  if(PV_SOLO_LECTURA) { toast('🔒 Estás en modo consulta — no puedes editar este canal','wa'); return; }
+  if(!PV.canal) { toast('Selecciona un canal primero','wa'); return; }
+  const mo = document.createElement('div');
+  mo.id = 'mo-pv-sugerir';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:440px;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-size:14px;font-weight:800;">🧠 Sugerir desde histórico — ${reabastEsc(PV.canal)}</div>
+      <button onclick="document.getElementById('mo-pv-sugerir').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button>
+    </div>
+    <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div style="font-size:11.5px;color:var(--mu);">Trae la venta real de este canal mes a mes y la usa para prellenar el presupuesto — respeta la estacionalidad real (no reparte igual los 12 meses).</div>
+      <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">AÑO BASE (histórico a usar)</label>
+        <select class="inp" id="sug-anio">
+          <option value="2025" selected>2025</option>
+          <option value="2024">2024</option>
+          <option value="2023">2023</option>
+          <option value="2026">2026 (parcial, Ene-Ago)</option>
+        </select></div>
+      <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">% CRECIMIENTO vs. ese año (puede ser negativo)</label>
+        <input class="inp" id="sug-pct" type="number" step="1" value="0" placeholder="Ej: 10"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--tx);cursor:pointer;">
+        <input type="checkbox" id="sug-agregar" checked> Agregar también SKUs que vendió el canal y que no están todavía en este presupuesto
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--tx);cursor:pointer;">
+        <input type="checkbox" id="sug-sobrescribir"> Sobrescribir meses que ya tienen un valor puesto a mano (si no, solo llena los que están en 0)
+      </label>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-sm" onclick="document.getElementById('mo-pv-sugerir').remove()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="pvAplicarSugerirHistorico()">🧠 Aplicar sugerencia</button>
+    </div>
+  </div>`;
+  document.body.appendChild(mo);
+}
+
+async function pvAplicarSugerirHistorico() {
+  const anioBase = parseInt(document.getElementById('sug-anio')?.value) || 2025;
+  const pct = parseFloat(document.getElementById('sug-pct')?.value) || 0;
+  const agregarNuevos = !!document.getElementById('sug-agregar')?.checked;
+  const sobrescribir = !!document.getElementById('sug-sobrescribir')?.checked;
+  const factor = 1 + (pct/100);
+  const btn = document.querySelector('#mo-pv-sugerir .btn-bl');
+  if(btn) { btn.disabled = true; btn.textContent = '⏳ Calculando...'; }
+  try {
+    const rows = await sb.get('ventas_historico',
+      `anio=eq.${anioBase}&canal=eq.${encodeURIComponent(PV.canal)}&select=referencia,descripcion,categoria,mes,unidades,valor_cop`);
+    if(!rows || !rows.length) {
+      toast(`⚠️ No hay histórico subido para ${PV.canal} en ${anioBase} — usa "📤 Subir histórico" primero`, 'wa');
+      if(btn){ btn.disabled=false; btn.textContent='🧠 Aplicar sugerencia'; }
+      return;
+    }
+
+    // Agrupar por referencia: {mes: unidades}, más descripción/categoría y totales del canal
+    const porRef = {};
+    let metaUndTotal = 0, metaCopTotal = 0;
+    rows.forEach(r=>{
+      const ref = r.referencia;
+      if(!porRef[ref]) porRef[ref] = { meses:{}, descripcion:r.descripcion||'', categoria:r.categoria||'' };
+      porRef[ref].meses[r.mes] = (porRef[ref].meses[r.mes]||0) + (parseFloat(r.unidades)||0);
+      metaUndTotal += parseFloat(r.unidades)||0;
+      metaCopTotal += parseFloat(r.valor_cop)||0;
+    });
+
+    // Referencias que faltan en el presupuesto actual
+    const refsEnPres = new Set(PV.detalle.map(r=>String(r.referencia)));
+    const refsFaltantes = agregarNuevos ? Object.keys(porRef).filter(ref=>!refsEnPres.has(String(ref))) : [];
+
+    // Precios para las que se van a agregar (una sola consulta en bloque)
+    let preciosMap = {};
+    if(refsFaltantes.length) {
+      try {
+        const pr = await sb.get('precios_lista',
+          `lista=eq.${PV.listaId}&referencia=in.(${refsFaltantes.join(',')})&select=referencia,precio`);
+        (pr||[]).forEach(p=>{ preciosMap[p.referencia] = parseFloat(p.precio)||0; });
+      } catch(e) { console.warn('Error precios para sugerencia:', e); }
+    }
+
+    let actualizados = 0, agregados = 0;
+    PV.detalle.forEach(row=>{
+      const hist = porRef[row.referencia];
+      if(!hist) return;
+      let tocado = false;
+      for(let m=1;m<=12;m++) {
+        const key = 'u'+String(m).padStart(2,'0');
+        const actual = parseFloat(row[key])||0;
+        if(!sobrescribir && actual > 0) continue;
+        const sugerido = Math.round((hist.meses[m]||0) * factor);
+        if(sugerido !== actual) { row[key] = sugerido; tocado = true; }
+      }
+      if(tocado) { row._dirty = true; actualizados++; }
+    });
+
+    refsFaltantes.forEach(ref=>{
+      const hist = porRef[ref];
+      const nueva = {
+        referencia: ref,
+        descripcion: hist.descripcion, categoria: hist.categoria || 'Sin categoría',
+        precio_lista: preciosMap[ref]||0, _dirty: true
+      };
+      for(let m=1;m<=12;m++) {
+        const key = 'u'+String(m).padStart(2,'0');
+        nueva[key] = Math.round((hist.meses[m]||0) * factor);
+        nueva['r'+String(m).padStart(2,'0')] = 0;
+      }
+      PV.detalle.push(nueva);
+      agregados++;
+    });
+
+    // Meta del canal completo (todas las referencias históricas, con el mismo % de crecimiento)
+    PV.meta = { anioBase, pct, totalUnd: Math.round(metaUndTotal*factor), totalCOP: Math.round(metaCopTotal*factor) };
+
+    // Refrescar filtro de categorías por si se agregaron nuevas
+    const cats = [...new Set(PV.detalle.map(x=>x.categoria))].filter(Boolean).sort();
+    const selCat = document.getElementById('pv-cat-filtro');
+    if(selCat) selCat.innerHTML = '<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${c}">${c}</option>`).join('');
+
+    document.getElementById('mo-pv-sugerir')?.remove();
+    toast(`🧠 ${actualizados} SKU(s) actualizados${agregados?` · ${agregados} agregados`:''} — revisa y guarda 💾`, 'ok');
+    pvActualizarBadgeGuardar();
+    pvRenderTabla();
+  } catch(e) {
+    toast('❌ '+e.message, 'er');
+    if(btn){ btn.disabled=false; btn.textContent='🧠 Aplicar sugerencia'; }
+  }
+}
 function cerrarModalHist() {
   const m = document.getElementById('pv-modal-hist');
   if(m){ m.style.display='none'; }
 }
 async function confirmarSubirHist() {
   const file  = (document.getElementById('hist-file')||{}).files?.[0];
-  const anio  = parseInt((document.getElementById('hist-anio')||{}).value);
-  const canal = (document.getElementById('hist-canal')||{}).value.trim() || PV.canal;
+  const anioDefecto  = parseInt((document.getElementById('hist-anio')||{}).value);
+  const canalDefecto = (document.getElementById('hist-canal')||{}).value.trim() || PV.canal;
   if(!file){ toast('Selecciona un archivo CSV','err'); return; }
 
   const text = await file.text();
@@ -22248,30 +22650,49 @@ async function confirmarSubirHist() {
     return obj;
   }).filter(r=>r.referencia);
 
+  // Cada fila puede traer su propio año y canal (archivo con varios años/canales mezclados);
+  // si una fila no lo trae, se usa lo elegido arriba en el formulario.
+  const anios = new Set();
+  const canales = new Set();
+  const payload = rows.map(r=>{
+    const anio  = parseInt(r.anio) || anioDefecto;
+    const canal = (r.canal||'').trim() || canalDefecto;
+    anios.add(anio); canales.add(canal);
+    return {
+      anio, mes: parseInt(r.mes)||1,
+      referencia: r.referencia,
+      descripcion: r.descripcion||'',
+      categoria: r.categoria||'',
+      canal: canal,
+      unidades: parseFloat(r.unidades)||0,
+      valor_cop: parseFloat(r.valor_cop)||0,
+      lista_id: r.lista_id || PV.listaId,
+      subido_por: CU.email
+    };
+  });
+
   const preview = document.getElementById('hist-preview');
-  if(preview) preview.textContent = `📋 ${rows.length} filas detectadas. Canal: ${canal}`;
+  if(preview) preview.textContent = `📋 ${rows.length} filas · ${anios.size} año(s): ${[...anios].sort().join(', ')} · ${canales.size} canal(es): ${[...canales].sort().join(', ')}`;
 
   try {
-    pvEstado('📤 Subiendo histórico...');
-    // Subir en lotes de 100
-    for(let i=0;i<rows.length;i+=100){
-      const lote = rows.slice(i,i+100).map(r=>({
-        anio: anio,
-        mes: parseInt(r.mes)||1,
-        referencia: r.referencia,
-        descripcion: r.descripcion||'',
-        categoria: r.categoria||'',
-        canal: canal,
-        unidades: parseFloat(r.unidades)||0,
-        valor_cop: parseFloat(r.valor_cop)||0,
-        lista_id: r.lista_id || PV.listaId,
-        subido_por: CU.email
-      }));
-      await sb.upsert('ventas_historico', lote, 'anio,mes,referencia,canal');
-    }
+    pvEstado('📤 Subiendo histórico (' + payload.length + ' filas)...');
+    // Subir en lotes de 200, con 6 lotes en paralelo (igual que otras cargas masivas del sistema)
+    const lotes = [];
+    for(let i=0;i<payload.length;i+=200) lotes.push(payload.slice(i,i+200));
+    let hechos = 0;
+    let idx = 0;
+    const trabajador = async () => {
+      while(idx < lotes.length) {
+        const mio = idx++;
+        await sb.upsert('ventas_historico', lotes[mio], 'anio,mes,referencia,canal');
+        hechos++;
+        pvEstado(`📤 Subiendo histórico... ${hechos}/${lotes.length} lotes`);
+      }
+    };
+    await Promise.all(Array.from({length:6}, trabajador));
     cerrarModalHist();
-    pvEstado(`✅ ${rows.length} registros subidos — año ${anio}`, false, 4000);
-    if(PV.anioComp === anio) await cargarHistorico(anio);
+    pvEstado(`✅ ${payload.length} registros subidos (${anios.size} año(s), ${canales.size} canal(es))`, false, 5000);
+    if(PV.anioComp && anios.has(PV.anioComp)) await cargarHistorico(PV.anioComp);
     pvRenderTabla();
   } catch(e) {
     pvEstado('❌ Error subiendo: ' + e.message, true);
@@ -23147,10 +23568,39 @@ function renderDashVentasTabla(el) {
 function pvAbrirModalExcelVentas() {
   const m = document.getElementById('pv-modal-excel-vcm');
   if(m) m.style.display = 'flex';
+  // El "Año de los datos" del modal siempre arranca igual al año que se está viendo en el
+  // dashboard — así no queda pegado al último valor que alguien haya dejado seleccionado
+  // (esa era la causa de que los datos se guardaran bajo el año equivocado).
+  const selModal = document.getElementById('vcm-anio');
+  const selDash  = document.getElementById('vcm-anio-sel');
+  if(selModal && selDash) selModal.value = selDash.value;
+  const prev = document.getElementById('vcm-preview');
+  if(prev) prev.innerHTML = '';
+  const fileInp = document.getElementById('vcm-file');
+  if(fileInp) fileInp.value = '';
+  window._vcmRows = null;
 }
 function pvCerrarModalExcelVentas() {
   const m = document.getElementById('pv-modal-excel-vcm');
   if(m) m.style.display = 'none';
+}
+
+// Limpieza de una carga que quedó mal (ej. datos guardados bajo el año equivocado) —
+// borra TODOS los registros de ventas_canal_mes del año que se está viendo, para volver
+// a subir el Excel correcto desde cero. Solo admin.
+async function pvBorrarDatosVCM() {
+  if(CU?.rol !== 'admin') return;
+  const anio = VCM.anio;
+  if(!confirm(`¿Borrar TODOS los registros de "Ventas Reales por Canal" del año ${anio}?\n\nEsto no afecta el presupuesto ni el histórico usado por "Sugerir desde histórico" — solo el dashboard de Ventas Reales por Canal. No se puede deshacer.`)) return;
+  try {
+    pvEstado(`🗑️ Borrando datos de ${anio}...`);
+    await sb.delete('ventas_canal_mes', `anio=eq.${anio}`);
+    pvEstado(`✅ Datos de ${anio} borrados — ya puedes volver a subir el Excel correcto`, false, 5000);
+    VCM.cargado = false;
+    await renderDashVentas();
+  } catch(e) {
+    pvEstado('❌ Error borrando: ' + e.message, true);
+  }
 }
 
 async function pvParsearExcelVentas() {
@@ -23189,8 +23639,9 @@ async function pvParsearExcelVentas() {
       });
     });
 
-    if(prev) prev.innerHTML = `✅ <strong>${filas.length} canales · ${rows.length} registros</strong> detectados.<br>
-      <span style="font-size:10px;color:var(--mu);">Canales: ${filas.map(r=>r[0]).join(', ')}</span>`;
+    if(prev) prev.innerHTML = `✅ <strong>${filas.length} canales · ${rows.length} registros</strong> detectados — se van a guardar como año <strong style="color:var(--bl);">${anio}</strong>.<br>
+      <span style="font-size:10px;color:var(--mu);">Canales: ${filas.map(r=>r[0]).join(', ')}</span>
+      <span style="font-size:10px;color:var(--or);display:block;margin-top:4px;">⚠️ Revisa que ese año sea el correcto antes de subir — si no, cámbialo arriba en "Año de los datos" y vuelve a elegir el archivo.</span>`;
 
     // Guardar en estado temporal
     window._vcmRows = rows;
@@ -23209,6 +23660,10 @@ async function pvConfirmarSubirExcelVentas() {
     pvEstado(`✅ ${rows.length} registros subidos`, false, 3000);
     window._vcmRows = null;
     VCM.anio  = parseInt((document.getElementById('vcm-anio')||{}).value) || VCM.anio;
+    // Sincronizar el selector visible del dashboard con el año que realmente se acaba de subir,
+    // para que no quede mostrando un año distinto al que en verdad se guardó.
+    const selDash = document.getElementById('vcm-anio-sel');
+    if(selDash) selDash.value = String(VCM.anio);
     VCM.cargado = false;
     await renderDashVentas();
   } catch(e) {
