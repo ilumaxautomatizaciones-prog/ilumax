@@ -24842,9 +24842,9 @@ function acModalUsuario(u) {
       <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">NOMBRE COMPLETO</label>
         <input class="inp" id="ac-u-nombre" value="${u.nombre||''}" placeholder="Nombre completo"></div>
       <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">EMAIL</label>
-        <input class="inp" id="ac-u-email" value="${u.email||''}" placeholder="correo@ilumax.com.co" type="email" ${!esNuevo?'disabled':''}></div>
-      ${esNuevo?`<div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">CONTRASEÑA INICIAL</label>
-        <input class="inp" id="ac-u-pass" placeholder="Contraseña inicial" type="password"></div>`:''}
+        <input class="inp" id="ac-u-email" value="${u.email||''}" placeholder="correo@ilumax.com.co" type="email"></div>
+      <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">${esNuevo?'CONTRASEÑA INICIAL':'NUEVA CONTRASEÑA (déjalo en blanco para no cambiarla)'}</label>
+        <input class="inp" id="ac-u-pass" placeholder="${esNuevo?'Contraseña inicial':'Solo si quieres cambiarla'}" type="password"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <div><label style="font-size:10px;font-weight:700;color:var(--mu);display:block;margin-bottom:4px;">ROL EN SISTEMA</label>
           <select class="inp" id="ac-u-rol" onchange="acActualizarNivelRol(this)">
@@ -24906,19 +24906,21 @@ async function acGuardarUsuario(uid, emailOrig) {
     } catch(e) { console.warn('No se pudo registrar el área nueva en el catálogo:', e.message); }
   }
 
-  const data = { nombre, rol, rol_pres:rolpres, area, color, actualizado:new Date().toISOString() };
+  const data = { nombre, email, rol, rol_pres:rolpres, area, color, actualizado:new Date().toISOString() };
+  // Hash simple (mismo formato que usa el login: btoa) — se aplica tanto al crear como al
+  // editar, pero solo si se escribió algo en el campo; si se deja en blanco al editar, la
+  // contraseña actual no se toca.
+  if(passEl?.value) data.pass_hash = btoa(passEl.value);
 
   try {
     if(uid) {
       await sb.patch('usuarios', `id=eq.${uid}`, data);
       const i = AC.usuarios.findIndex(u=>u.id===uid);
       if(i>=0) AC.usuarios[i] = {...AC.usuarios[i], ...data};
-    } else {
-      if(passEl?.value) {
-        // Hash simple para demo — en producción usar función de Supabase
-        data.pass_hash = btoa(passEl.value);
+      if(email!==emailOrig || passEl?.value) {
+        try{ registrarAuditoria('usuarios', email, 'admin_edito_usuario', { email_anterior: emailOrig, email_nuevo: email, cambio_pass: !!passEl?.value }); }catch(e){}
       }
-      data.email = email;
+    } else {
       data.activo = true;
       data.creado_en = new Date().toISOString();
       const res = await sb.post('usuarios', data);
