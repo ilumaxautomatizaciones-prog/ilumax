@@ -8219,6 +8219,9 @@ function renderInvVista() {
         <input type="file" accept=".xlsx,.xlsm,.xls" style="display:none;" onchange="invduvSincronizar(this)">
         🔄 Sincronizar INV - DUV
       </label>
+      <button onclick="invExportarExcelPorBodega()" style="display:inline-flex;align-items:center;gap:6px;background:#0f172a;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;" title="Descarga un Excel con SKU, Descripción, Categoría, Existencia y Bodega — una fila por cada SKU+bodega con existencia real (solo bodegas disponibles, sin averías/muestras/etc.)">
+        📥 Excel existencias por bodega
+      </button>
       <div id="inv-siesa-status" style="font-size:11px;color:var(--mu);">Sincroniza el inventario directo desde la API de SIESA</div>
     </div>
     <div id="invduv-status" style="display:none;background:#0f172a;color:#e2e8f0;border-radius:10px;padding:10px 12px;font:11px/1.6 monospace;margin-bottom:12px;white-space:pre-wrap;max-height:220px;overflow:auto;"></div>
@@ -8282,6 +8285,29 @@ function renderInvVista() {
   poblarBodegas();
   poblarListasInv();
   filtrarInvMod();
+}
+
+// Excel con lo que SÍ hay: una fila por SKU+bodega con existencia > 0, solo bodegas
+// disponibles (las que suman según INV_BODEGAS_CUENTAN) — no incluye averías, muestras,
+// cuarentena, devoluciones, proyectos ni tránsito.
+function invExportarExcelPorBodega() {
+  const filas = (INV_DATA||[])
+    .filter(r => invBodegaCuenta(r.bodega) && (parseFloat(r.existencia||0) > 0))
+    .sort((a,b) => (a.referencia||'').localeCompare(b.referencia||'') || (a.bodega||'').localeCompare(b.bodega||''))
+    .map(r => ({
+      'SKU': r.referencia || '',
+      'DESCRIPCION': r.descripcion || '',
+      'CATEGORIA': r.categoria || '',
+      'EXISTENCIA': Math.round(parseFloat(r.existencia||0)),
+      'BODEGA': r.bodega || '',
+    }));
+  if(!filas.length) { toast('No hay existencias para exportar','wa'); return; }
+  const ws = XLSX.utils.json_to_sheet(filas);
+  ws['!cols'] = [{wch:12},{wch:45},{wch:20},{wch:12},{wch:10}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Existencias por bodega');
+  XLSX.writeFile(wb, 'Existencias_por_bodega_' + new Date().toISOString().slice(0,10) + '.xlsx');
+  toast('📥 Excel descargado: ' + filas.length + ' filas','ok');
 }
 
 async function poblarListasInv() {
