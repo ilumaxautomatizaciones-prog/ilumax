@@ -21213,7 +21213,7 @@ function renderPVShell(el, canales, todosLosCanales) {
         <button class="btn btn-bl btn-sm" onclick="pvAgregarLineaLibre()" title="Para cuando no hay una referencia real que presupuestar (ej. Proyectos) — presupuesta un monto en $ directamente, mes a mes">💰 Línea sin SKU</button>
         <button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>
         <button class="btn btn-pu btn-sm" onclick="pvAbrirSugerirHistorico()" title="Prellena las cantidades de cada mes con la venta real histórica de este canal (con el % de crecimiento que definas)">🧠 Sugerir desde histórico</button>`}
-        <button class="btn btn-g btn-sm" onclick="pvExportar()" title="Excel a color solo del canal que tienes abierto ahora (Cant, Precio, Venta, Resumen) — para todos los canales juntos usa 'Excel combinado (todos)'">📊 Excel</button>
+        <button class="btn btn-g btn-sm" onclick="pvExportar()" title="Excel a color con TODOS tus canales (los que tienes asignados en Permisos Ventas), no solo el que tienes abierto — para TODOS los canales de TODAS las personas usa 'Excel combinado (todos)'">📊 Excel</button>
         <button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>
         <button class="btn btn-g btn-sm" onclick="pvExportarCombinadoTodo()" title="Excel a color con las mismas hojas que el botón Excel (Cant, Precio, Venta, Resumen) más una hoja de todas las filas juntas — con fórmulas en vivo (Venta = Cant × Precio) y una hoja de Instrucciones">📋 Excel combinado (todos)</button>
         ${CU?.rol==='admin' ? `<button class="btn btn-or btn-sm" onclick="pvMigrarAnio()" title="Mueve lo que ya está cargado al año correcto (sin tocar ningún dato, solo le cambia el año)">📅 Mover a 2027</button>` : ''}
@@ -23278,25 +23278,28 @@ async function pvExcelCargarDatos(anio, canalesFiltro){
 }
 
 // ── Exportar Excel (a color, con fórmulas vivas: Cant, Precio, Venta y Resumen) ─────────────
-// Este botón exporta SOLO el canal que está abierto en la sesión (el que ve/edita la persona
-// que inició sesión) — para el Excel con TODOS los canales juntos está "📋 Excel combinado (todos)".
+// Este botón exporta TODOS los canales de la persona que inició sesión (los que tiene asignados
+// en Permisos Ventas, no solo el que tiene abierto ahora) — para admin/aprobador (sin restricción
+// de canal) exporta solo el canal abierto. Para TODOS los canales de TODAS las personas está
+// "📋 Excel combinado (todos)".
 async function pvExportar() {
-  if(!PV.canal){ toast('Selecciona un canal primero','wa'); return; }
+  const canalesPersona = (PV_CANALES_PERMITIDOS && PV_CANALES_PERMITIDOS.length) ? PV_CANALES_PERMITIDOS : [PV.canal];
+  if(!canalesPersona[0]){ toast('Selecciona un canal primero','wa'); return; }
   await reabastCargarExcelJS().catch(()=>{});
   if(typeof ExcelJS === 'undefined'){ toast('No pude cargar el generador de Excel — revisa tu conexión','er'); return; }
-  toast(`⏳ Generando Excel a color de ${PV.canal}...`,'inf');
+  toast(`⏳ Generando Excel a color de ${canalesPersona.join(', ')}...`,'inf');
   const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const anio = PV.anio;
-  const {canales, skuList, getVal, getPrice} = await pvExcelCargarDatos(anio, [PV.canal]);
-  if(!skuList.length){ toast('No hay presupuesto guardado para '+PV.canal+' en '+anio,'err'); return; }
+  const {canales, skuList, getVal, getPrice} = await pvExcelCargarDatos(anio, canalesPersona);
+  if(!skuList.length){ toast('No hay presupuesto guardado para '+canalesPersona.join(', ')+' en '+anio,'err'); return; }
 
   const EST = pvExcelEstilos();
   const wb = new ExcelJS.Workbook();
   wb.creator = 'ILUMAX'; wb.created = new Date();
 
   pvExcelHojaInstrucciones(wb, EST, {
-    titulo: `📊 PRESUPUESTO DE VENTAS ${anio} — ${PV.canal.toUpperCase()}`,
-    resumenTxt: `Generado el ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})} · Canal: ${PV.canal}.`,
+    titulo: `📊 PRESUPUESTO DE VENTAS ${anio} — ${canales.join(' / ').toUpperCase()}`,
+    resumenTxt: `Generado el ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})} · Canal(es): ${canales.join(', ')}.`,
     secciones: [
       {sub:'¿Qué hoja abro según lo que necesito?', items: [
         '• "Cant" → cuántas unidades se presupuestaron, mes a mes, por SKU.',
@@ -23317,9 +23320,9 @@ async function pvExportar() {
   const {colMes, colTotalCanal, colGranTotal, filaTot:ventaTotalRow} = pvExcelHojaMatriz(wb, {nombre:'Venta', tipo:'Venta', canales, skuList, getVal, getPrice, MESES_CORTOS, anio, EST});
   pvExcelHojaResumen(wb, {canales, skuList, MESES_CORTOS, anio, EST, ventaTotalRow, colMes, colTotalCanal, colGranTotal});
 
-  const nombreArchivo = `Presupuesto_Ventas_${PV.canal.replace(/[^\w-]+/g,'_')}_ILUMAX_${anio}.xlsx`;
+  const nombreArchivo = `Presupuesto_Ventas_${canales.join('_').replace(/[^\w-]+/g,'_')}_ILUMAX_${anio}.xlsx`;
   await pvExcelDescargar(wb, nombreArchivo);
-  toast(`✅ Excel generado — ${skuList.length} SKUs de ${PV.canal}`,'ok');
+  toast(`✅ Excel generado — ${skuList.length} SKUs de ${canales.join(', ')}`,'ok');
 }
 
 // Cada persona manda su presupuesto por su canal (Ferroeléctrico = Cindy, Mixto = Johanna, etc. —
