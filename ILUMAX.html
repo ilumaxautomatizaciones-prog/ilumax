@@ -19699,11 +19699,14 @@ async function actualizarDesdeSiesa() {
     setStatus('🔍 Comparando con inventario anterior...', '#60a5fa');
     toast('🔍 Comparando con inventario anterior...', 'inf');
 
-    let existentes = {};
+    let existentes = {}, categoriaPorRef = {};
     try {
-      const rows = await invTodasLasFilas('referencia,bodega,existencia,costo_prom');
+      const rows = await invTodasLasFilas('referencia,bodega,existencia,costo_prom,categoria');
       (rows||[]).forEach(r => {
         existentes[r.referencia + '_' + (r.bodega||'')] = r;
+        // Categoría ya asignada a esa referencia en OTRA bodega — se conserva al crear filas
+        // nuevas (p. ej. cuando el ítem se mueve o aparece en una bodega distinta).
+        if(r.categoria && String(r.categoria).trim() && !categoriaPorRef[r.referencia]) categoriaPorRef[r.referencia] = r.categoria;
       });
     } catch(e) { console.warn('No se pudo cargar anterior:', e); }
 
@@ -19714,6 +19717,9 @@ async function actualizarDesdeSiesa() {
       const key = r.referencia + '_' + (r.bodega||'');
       const ant = existentes[key];
       if(!ant) {
+        // Fila nueva (referencia+bodega no existía) — si esa referencia ya tiene categoría en
+        // otra bodega, se la asignamos de una vez para no dejarla en "General" sin necesidad.
+        if(categoriaPorRef[r.referencia]) r.categoria = categoriaPorRef[r.referencia];
         nuevos.push(r);
       } else {
         const existCambio = Math.abs(parseFloat(r.existencia||0) - parseFloat(ant.existencia||0)) > 0.01;
@@ -20121,8 +20127,14 @@ async function invduvSincronizar(inputEl) {
     // ── Subir inventario (actualizar + agregar, sin borrar) ──
     log('🔍 Comparando con el inventario de Supabase…');
     let exist = [], off = 0;
-    while(true){ const rows = await req('GET','inventario?select=id,referencia,bodega&order=id.asc&limit=1000&offset='+off); exist = exist.concat(rows); if(rows.length<1000) break; off += 1000; }
-    const idx = {}; exist.forEach(r => { const k = r.referencia+'|'+(r.bodega||''); (idx[k]=idx[k]||[]).push(r.id); });
+    while(true){ const rows = await req('GET','inventario?select=id,referencia,bodega,categoria&order=id.asc&limit=1000&offset='+off); exist = exist.concat(rows); if(rows.length<1000) break; off += 1000; }
+    const idx = {}; const categoriaPorRef = {};
+    exist.forEach(r => {
+      const k = r.referencia+'|'+(r.bodega||''); (idx[k]=idx[k]||[]).push(r.id);
+      // Categoría ya asignada a esa referencia en OTRA bodega — se conserva al crear filas
+      // nuevas (p. ej. cuando el ítem se mueve o aparece en una bodega distinta).
+      if(r.categoria && String(r.categoria).trim() && !categoriaPorRef[r.referencia]) categoriaPorRef[r.referencia] = r.categoria;
+    });
     const hoy = new Date(); const periodo = hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0')+'-'+String(hoy.getDate()).padStart(2,'0');
     const ahora = hoy.toISOString(); const quien = (CU && CU.nombre) || 'Portal';
     const upd = [], ins = [];
@@ -20130,7 +20142,7 @@ async function invduvSincronizar(inputEl) {
       const f = {descripcion:x.descripcion, existencia:x.existencia, costo_prom:x.costo_prom, um:x.um, periodo, subido_por:quien, actualizado:ahora, fecha_creacion:x.fecha_creacion||null};
       const ids = idx[x.referencia+'|'+x.bodega];
       if(ids) ids.forEach(id => upd.push({id, referencia:x.referencia, bodega:x.bodega, ...f}));
-      else ins.push({referencia:x.referencia, bodega:x.bodega, ubicacion:'', lote:'', ...f});
+      else ins.push({referencia:x.referencia, bodega:x.bodega, ubicacion:'', lote:'', categoria:categoriaPorRef[x.referencia]||null, ...f});
     });
     log('⬆️ Inventario: ' + upd.length + ' a actualizar · ' + ins.length + ' nuevas');
     if(exist.length > 1000 && upd.length === 0 && ins.length > 500) throw new Error('Ninguna fila del Excel coincidió con el inventario de Supabase; se cancela para no duplicar.');
@@ -20231,11 +20243,14 @@ async function subirExcelInventario(inputEl) {
     if(!MODO_OFFLINE) {
       // Cargar inventario actual de Supabase para comparar
       toast('🔍 Comparando con inventario anterior...', 'inf');
-      let existentes = {};
+      let existentes = {}, categoriaPorRef = {};
       try {
-        const rows = await invTodasLasFilas('referencia,bodega,existencia,costo_prom');
+        const rows = await invTodasLasFilas('referencia,bodega,existencia,costo_prom,categoria');
         rows.forEach(function(r){
           existentes[r.referencia + '_' + (r.bodega||'')] = r;
+          // Categoría ya asignada a esa referencia en OTRA bodega — se conserva al crear filas
+          // nuevas (p. ej. cuando el ítem se mueve o aparece en una bodega distinta).
+          if(r.categoria && String(r.categoria).trim() && !categoriaPorRef[r.referencia]) categoriaPorRef[r.referencia] = r.categoria;
         });
       } catch(e) { console.warn('No se pudo cargar anterior:', e); }
 
@@ -20247,6 +20262,7 @@ async function subirExcelInventario(inputEl) {
         var key = r.referencia + '_' + (r.bodega||'');
         var ant = existentes[key];
         if(!ant) {
+          if(categoriaPorRef[r.referencia]) r.categoria = categoriaPorRef[r.referencia];
           nuevos.push(r);
         } else {
           // Verificar si cambió existencia o costo
@@ -21197,7 +21213,7 @@ function renderPVShell(el, canales, todosLosCanales) {
         <button class="btn btn-bl btn-sm" onclick="pvAgregarLineaLibre()" title="Para cuando no hay una referencia real que presupuestar (ej. Proyectos) — presupuesta un monto en $ directamente, mes a mes">💰 Línea sin SKU</button>
         <button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>
         <button class="btn btn-pu btn-sm" onclick="pvAbrirSugerirHistorico()" title="Prellena las cantidades de cada mes con la venta real histórica de este canal (con el % de crecimiento que definas)">🧠 Sugerir desde histórico</button>`}
-        <button class="btn btn-g btn-sm" onclick="pvExportar()">📊 Excel</button>
+        <button class="btn btn-g btn-sm" onclick="pvExportar()" title="Excel a color solo del canal que tienes abierto ahora (Cant, Precio, Venta, Resumen) — para todos los canales juntos usa 'Excel combinado (todos)'">📊 Excel</button>
         <button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>
         <button class="btn btn-g btn-sm" onclick="pvExportarCombinadoTodo()" title="Excel a color con las mismas hojas que el botón Excel (Cant, Precio, Venta, Resumen) más una hoja de todas las filas juntas — con fórmulas en vivo (Venta = Cant × Precio) y una hoja de Instrucciones">📋 Excel combinado (todos)</button>
         ${CU?.rol==='admin' ? `<button class="btn btn-or btn-sm" onclick="pvMigrarAnio()" title="Mueve lo que ya está cargado al año correcto (sin tocar ningún dato, solo le cambia el año)">📅 Mover a 2027</button>` : ''}
@@ -23225,12 +23241,13 @@ async function pvExcelDescargar(wb, nombreArchivo){
 }
 
 // Trae canales + datos de presupuesto guardados para el año (compartido por los 3 exportadores).
-async function pvExcelCargarDatos(anio){
+async function pvExcelCargarDatos(anio, canalesFiltro){
   let canales = [...CANALES_DEFAULT];
   try {
     const cfg = await sb.get('configuracion','clave=eq.canales_comerciales');
     if(cfg?.[0]) canales = cfg[0].valor.split(',').map(s=>s.trim()).filter(Boolean);
   } catch(e){}
+  if(canalesFiltro && canalesFiltro.length) canales = canales.filter(c=>canalesFiltro.includes(c));
   const dataPorCanal = {}, hdrPorCanal = {};
   for(const canal of canales){
     try {
@@ -23261,28 +23278,31 @@ async function pvExcelCargarDatos(anio){
 }
 
 // ── Exportar Excel (a color, con fórmulas vivas: Cant, Precio, Venta y Resumen) ─────────────
+// Este botón exporta SOLO el canal que está abierto en la sesión (el que ve/edita la persona
+// que inició sesión) — para el Excel con TODOS los canales juntos está "📋 Excel combinado (todos)".
 async function pvExportar() {
+  if(!PV.canal){ toast('Selecciona un canal primero','wa'); return; }
   await reabastCargarExcelJS().catch(()=>{});
   if(typeof ExcelJS === 'undefined'){ toast('No pude cargar el generador de Excel — revisa tu conexión','er'); return; }
-  toast('⏳ Generando Excel a color con todos los canales...','inf');
+  toast(`⏳ Generando Excel a color de ${PV.canal}...`,'inf');
   const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const anio = PV.anio;
-  const {canales, skuList, getVal, getPrice} = await pvExcelCargarDatos(anio);
-  if(!skuList.length){ toast('No hay presupuestos guardados para '+anio+' en ningún canal','err'); return; }
+  const {canales, skuList, getVal, getPrice} = await pvExcelCargarDatos(anio, [PV.canal]);
+  if(!skuList.length){ toast('No hay presupuesto guardado para '+PV.canal+' en '+anio,'err'); return; }
 
   const EST = pvExcelEstilos();
   const wb = new ExcelJS.Workbook();
   wb.creator = 'ILUMAX'; wb.created = new Date();
 
   pvExcelHojaInstrucciones(wb, EST, {
-    titulo: `📊 PRESUPUESTO DE VENTAS ${anio} — EXCEL POR CANAL`,
-    resumenTxt: `Generado el ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})} · Incluye ${canales.length} canal(es) con presupuesto guardado.`,
+    titulo: `📊 PRESUPUESTO DE VENTAS ${anio} — ${PV.canal.toUpperCase()}`,
+    resumenTxt: `Generado el ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})} · Canal: ${PV.canal}.`,
     secciones: [
       {sub:'¿Qué hoja abro según lo que necesito?', items: [
-        '• "Cant" → cuántas unidades se presupuestaron, mes a mes, por SKU y por canal.',
-        '• "Precio" → el precio de lista usado en cada canal. En cada bloque de canal, el precio de Enero es el dato editable; Feb a Dic SOLO lo copian con una fórmula, así que si corriges Enero, los demás meses se actualizan solos.',
+        '• "Cant" → cuántas unidades se presupuestaron, mes a mes, por SKU.',
+        '• "Precio" → el precio de lista usado. El precio de Enero es el dato editable; Feb a Dic SOLO lo copian con una fórmula, así que si corriges Enero, los demás meses se actualizan solos.',
         '• "Venta" → el resultado en pesos (Cantidad × Precio), celda por celda, calculado automáticamente — no la edites a mano, es una fórmula que apunta a "Cant" y "Precio".',
-        '• "Resumen" → el total del año por canal y por categoría, con el % que representa cada uno — también son fórmulas que suman lo que hay en "Venta".',
+        '• "Resumen" → el total del año y por categoría, con el % que representa cada una — también son fórmulas que suman lo que hay en "Venta".',
       ]},
       {sub:'Fórmulas vivas: si algo no cuadra, revisa aquí antes de editar a mano', items: [
         'Todas las columnas "Total" y la fila "TOTAL GENERAL" son SUMAS de Excel (=SUMA), no números pegados — si cambias una cantidad o un precio, los totales de esa misma hoja se recalculan solos al abrir o recalcular el archivo.',
@@ -23297,8 +23317,9 @@ async function pvExportar() {
   const {colMes, colTotalCanal, colGranTotal, filaTot:ventaTotalRow} = pvExcelHojaMatriz(wb, {nombre:'Venta', tipo:'Venta', canales, skuList, getVal, getPrice, MESES_CORTOS, anio, EST});
   pvExcelHojaResumen(wb, {canales, skuList, MESES_CORTOS, anio, EST, ventaTotalRow, colMes, colTotalCanal, colGranTotal});
 
-  await pvExcelDescargar(wb, `Presupuesto_Ventas_ILUMAX_${anio}.xlsx`);
-  toast(`✅ Excel generado — ${skuList.length} SKUs, ${canales.length} canales`,'ok');
+  const nombreArchivo = `Presupuesto_Ventas_${PV.canal.replace(/[^\w-]+/g,'_')}_ILUMAX_${anio}.xlsx`;
+  await pvExcelDescargar(wb, nombreArchivo);
+  toast(`✅ Excel generado — ${skuList.length} SKUs de ${PV.canal}`,'ok');
 }
 
 // Cada persona manda su presupuesto por su canal (Ferroeléctrico = Cindy, Mixto = Johanna, etc. —
