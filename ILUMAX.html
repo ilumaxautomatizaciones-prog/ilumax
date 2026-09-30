@@ -8704,6 +8704,58 @@ async function ocSubirAdjunto(file){
   return `${SB_REABAST_URL}/storage/v1/object/public/oc-adjuntos/${nombre}`;
 }
 
+// ═══ Carga del catálogo de referencias en dos tiempos ═══
+// La tabla referencias_maestro pesa decenas de MB porque guarda las fotos dentro (base64). Pedirla completa con select=*
+// se caía por tiempo y dejaba el catálogo vacío. Ahora: 1) datos sin foto (rápido, aparece ya) y 2) fotos en segundo plano.
+const REF_COLS_LIVIANAS = 'id,referencia,descripcion_en,temperatura_color,fob_usd,tipo_empaque,horas,tipo_tapa,marca_caja,ean13,master_packaging,ean14_master,internal_packaging,ean14_internal,observaciones,actualizado,categoria,referencia_ilumax,cbm,proveedor_predeterminado,nombre_comercial,ficha_tecnica_compra_url,moq,canal,clasificacion_abc_manual,fecha_creacion,fecha_inicio_ventas,quantity,amount,ean14_adicionales,potencia,potencia_cod,linea,linea_cod,categoria_cod,subcategoria,subcategoria_cod,marca_producto,marca_producto_cod,activo';
+const REF_FOTOS = { cache:{}, cargando:null, timer:null };   // cache[referencia] = {url, act}
+async function reabastCargarRefsLiviano(){
+  const rows = await sbReabast.get('referencias_maestro', 'select='+REF_COLS_LIVIANAS+'&order=referencia.asc&limit=10000');
+  (rows||[]).forEach(r=>{ const c = REF_FOTOS.cache[r.referencia]; if(c && c.act===r.actualizado){ r.foto_url = c.url; r._fotoPend = false; } else { r._fotoPend = false; } });
+  return rows||[];
+}
+function reabastRefrescarFotosUI(){
+  clearTimeout(REF_FOTOS.timer);
+  // Solo repinta la lista (tabla / tarjetas / lista), sin tocar los filtros ni el buscador, para no quitarle el foco a quien esté escribiendo.
+  REF_FOTOS.timer = setTimeout(()=>{ if(REABAST.tab!=='referencias') return; ['reabastActualizarTbodyReferencias','reabastActualizarCardsReferencias','reabastActualizarListaReferencias'].forEach(fn=>{ try{ if(typeof window[fn]==='function') window[fn](); }catch(e){} }); }, 500);
+}
+async function reabastCargarFotosRef(){
+  if(REF_FOTOS.cargando) return REF_FOTOS.cargando;
+  REF_FOTOS.cargando = (async()=>{
+    try{
+      const M = REABAST.referenciasMaestro || {};
+      const conFoto = await sbReabast.get('referencias_maestro', 'select=referencia,actualizado&foto_url=not.is.null&limit=10000');
+      const faltan = (conFoto||[]).filter(x=>M[x.referencia] && M[x.referencia].foto_url===undefined);
+      faltan.forEach(x=>{ M[x.referencia]._fotoPend = true; });
+      const poner = rows => (rows||[]).forEach(x=>{ const r = REABAST.referenciasMaestro[x.referencia]; if(!r) return; r.foto_url = x.foto_url; r._fotoPend = false; REF_FOTOS.cache[x.referencia] = {url:x.foto_url, act:r.actualizado}; });
+      // fotos livianas (enlaces normales): una sola consulta
+      poner(await sbReabast.get('referencias_maestro', 'select=referencia,foto_url&foto_url=not.is.null&foto_url=not.like.data*&limit=10000'));
+      reabastRefrescarFotosUI();
+      // fotos pesadas (base64): en lotes pequeños y 3 a la vez
+      const grandes = faltan.map(x=>x.referencia).filter(k=>M[k] && M[k]._fotoPend), LOTE = 5, lotes = [];
+      for(let i=0;i<grandes.length;i+=LOTE) lotes.push(grandes.slice(i,i+LOTE));
+      let sig = 0;
+      const obrero = async()=>{ while(sig<lotes.length){ const lote = lotes[sig++];
+        try{ poner(await sbReabast.get('referencias_maestro', 'select=referencia,foto_url&referencia=in.('+lote.map(k=>'"'+String(k).replace(/"/g,'')+'"').join(',')+')')); }catch(e){ console.warn('Fotos de referencias (lote):', e.message); }
+        reabastRefrescarFotosUI(); } };
+      await Promise.all([obrero(), obrero(), obrero()]);
+    }catch(e){ console.warn('Fotos de referencias:', e.message); }
+    finally{ REF_FOTOS.cargando = null; reabastRefrescarFotosUI(); }
+  })();
+  return REF_FOTOS.cargando;
+}
+// Foto de una referencia puntual a demanda (al abrir su ficha o su edición antes de que termine la carga en segundo plano)
+async function reabastRefConFoto(c){
+  const r = (REABAST.referenciasMaestro||{})[c]; if(!r) return null;
+  if(r.foto_url===undefined){
+    try{ const rows = await sbReabast.get('referencias_maestro', 'select=referencia,foto_url&referencia=eq.'+encodeURIComponent(c)); if(rows && rows[0]){ r.foto_url = rows[0].foto_url; REF_FOTOS.cache[c] = {url:r.foto_url, act:r.actualizado}; } }catch(e){}
+    r._fotoPend = false;
+  }
+  return r;
+}
+async function reabastVerDetalleReferenciaPorCodigo(c){ const r = await reabastRefConFoto(c); if(r) reabastVerDetalleReferencia(r); }
+async function reabastEditarReferenciaPorCodigo(c){ const r = await reabastRefConFoto(c); if(r) abrirModalReferencia(r); }
+
 async function cargarOC(){
   const [ordenes, etapasRows, itemsRows, proveedores, fichasRows, refsRows, panelFilas] = await Promise.all([
     sbReabastTodo('ordenes_compra', 'select=*&order=creado_en.desc').catch(e=>{ console.warn('Error cargando OC:', e.message); return []; }),
@@ -8711,7 +8763,7 @@ async function cargarOC(){
     sbReabastTodo('oc_items', 'select=*&order=oc_id.asc').catch(e=>{ console.warn('Error cargando ítems OC:', e.message); return []; }),
     sbReabast.get('proveedores', 'select=*&order=nombre.asc').catch(e=>{ console.warn('Error cargando proveedores:', e.message); return []; }),
     sbReabast.get('fichas_tecnicas', 'select=*').catch(e=>{ console.warn('Error cargando fichas técnicas:', e.message); return []; }),
-    sbReabast.get('referencias_maestro', 'select=*').catch(e=>{ console.warn('Error cargando catálogo de referencias:', e.message); return []; }),
+    reabastCargarRefsLiviano().catch(e=>{ console.warn('Error cargando catálogo de referencias:', e.message); if(typeof toast==='function') toast('No se pudo cargar el catálogo de referencias: '+e.message,'er'); return []; }),
     // Cargamos también el Panel de compras aquí (no solo cuando se visita esa pestaña) porque el
     // formulario de nueva OC y los cálculos de "en tránsito" lo necesitan para saber qué ya está
     // pedido a proveedor (viene del Excel real de seguimiento), no solo las OC creadas desde la app.
@@ -8723,6 +8775,7 @@ async function cargarOC(){
   REABAST.proveedores = proveedores||[];
   REABAST.fichasTecnicas = {}; (fichasRows||[]).forEach(f => { REABAST.fichasTecnicas[f.referencia] = f.datos||{}; });
   REABAST.referenciasMaestro = {}; (refsRows||[]).forEach(r => { REABAST.referenciasMaestro[r.referencia] = r; });
+  reabastCargarFotosRef();
   REABAST.panelCompras = panelFilas||[];
   await ocMigrarEtapasEmbarque();
   await ocRepararEtapasHuerfanas();
@@ -13392,7 +13445,7 @@ function reabastActualizarListaReferencias(){
   cont.innerHTML = `<div style="background:var(--w);border:1px solid var(--b1);border-radius:10px;overflow:hidden;">
     ${filas.map(r=>{
       const activo = r.activo!==false;
-      return `<div data-r='${JSON.stringify(r).replace(/'/g,"&#39;")}' onclick="reabastVerDetalleReferencia(JSON.parse(this.dataset.r))" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--b1);cursor:pointer;${activo?'':'opacity:.55;'}">
+      return `<div data-c="${reabastEsc(r.referencia)}" onclick="reabastVerDetalleReferenciaPorCodigo(this.dataset.c)" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--b1);cursor:pointer;${activo?'':'opacity:.55;'}">
         ${reabastFotoMiniHtml(r.foto_url, 32)}
         <div style="min-width:0;flex:1;">
           <div style="font-size:12px;"><strong style="font-family:monospace;">${reabastEsc(r.referencia)}</strong> ${r.nombre_comercial?'— '+reabastEsc(r.nombre_comercial):''}</div>
@@ -13433,7 +13486,7 @@ function reabastActualizarTbodyReferencias(){
       return `<td style="${c.mono?'font-family:monospace;':''}${c.num?'text-align:right;':''}${anchoCss}${activo?'':'opacity:.5;'}">${txt}</td>`;
     }).join('');
     const accionesTd = `<td style="white-space:nowrap;">
-      <button class="btn btn-g btn-sm" data-r='${JSON.stringify(r).replace(/'/g,"&#39;")}' onclick="abrirModalReferencia(JSON.parse(this.dataset.r))" title="Editar">✎</button>
+      <button class="btn btn-g btn-sm" data-c="${reabastEsc(r.referencia)}" onclick="reabastEditarReferenciaPorCodigo(this.dataset.c)" title="Editar">✎</button>
       <button class="btn btn-g btn-sm" style="color:var(--rd);" onclick="reabastEliminarReferencia('${r.id}','${String(r.referencia).replace(/'/g,"\\'")}')" title="Eliminar">🗑</button>
     </td>`;
     return `<tr>${fotoTd}${estadoTd}${filaTds}${accionesTd}</tr>`;
@@ -13447,7 +13500,7 @@ function reabastActualizarCardsReferencias(){
   if(!filas.length){ cont.innerHTML = `<div style="grid-column:1/-1;padding:16px;text-align:center;color:var(--mu);">Sin referencias que coincidan con los filtros.</div>`; return; }
   cont.innerHTML = filas.map(r=>{
     const activo = r.activo!==false;
-    return `<div class="card" data-r='${JSON.stringify(r).replace(/'/g,"&#39;")}' onclick="reabastVerDetalleReferencia(JSON.parse(this.dataset.r))" style="cursor:pointer;padding:10px;display:flex;flex-direction:column;gap:6px;${activo?'':'opacity:.55;'}">
+    return `<div class="card" data-c="${reabastEsc(r.referencia)}" onclick="reabastVerDetalleReferenciaPorCodigo(this.dataset.c)" style="cursor:pointer;padding:10px;display:flex;flex-direction:column;gap:6px;${activo?'':'opacity:.55;'}">
       <div style="display:flex;justify-content:center;">${reabastFotoMiniHtml(r.foto_url, 96)}</div>
       <div style="font-family:monospace;font-weight:700;font-size:12.5px;text-align:center;">${reabastEsc(r.referencia)}</div>
       <div style="font-size:11.5px;text-align:center;color:var(--tx);min-height:15px;">${reabastEsc(r.nombre_comercial||'—')}</div>
@@ -14143,6 +14196,7 @@ async function guardarReferencia(){
   payload.ean14_adicionales = document.getElementById('rf-ean14-adicionales').value.trim() || null;
   const fotoPrev = document.getElementById('rf-foto-preview');
   payload.foto_url = (fotoPrev && fotoPrev.dataset.valor) ? fotoPrev.dataset.valor : null;
+  if(!payload.foto_url && REFERENCIA_EDIT_ID){ const ex = Object.values(REABAST.referenciasMaestro||{}).find(x=>String(x.id)===String(REFERENCIA_EDIT_ID)); if(ex && ex.foto_url===undefined) delete payload.foto_url; }   // foto aún sin cargar: no la borres
   try{
     if(REFERENCIA_EDIT_ID){
       await sbReabast.patch('referencias_maestro', 'id=eq.'+REFERENCIA_EDIT_ID, payload);
@@ -14163,8 +14217,8 @@ async function guardarReferencia(){
           // insert con "duplicate key" — en vez de solo mostrar ese error críptico, se refresca el
           // catálogo desde la base, se calcula un código nuevo de verdad y se reintenta una vez sola.
           if(/duplicate key|already exists|unique constraint/i.test(eInsert.message||'')){
-            const refsRows = await sbReabast.get('referencias_maestro', 'select=*');
-            REABAST.referenciasMaestro = {}; (refsRows||[]).forEach(x => { REABAST.referenciasMaestro[x.referencia] = x; });
+            const refsRows = await reabastCargarRefsLiviano();
+            REABAST.referenciasMaestro = {}; (refsRows||[]).forEach(x => { REABAST.referenciasMaestro[x.referencia] = x; }); reabastCargarFotosRef();
             const nuevoCodigo = reabastSiguienteReferencia();
             payload.referencia = nuevoCodigo;
             await sbReabast.post('referencias_maestro', payload);
