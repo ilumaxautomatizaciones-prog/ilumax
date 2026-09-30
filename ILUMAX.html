@@ -21199,7 +21199,7 @@ function renderPVShell(el, canales, todosLosCanales) {
         <button class="btn btn-pu btn-sm" onclick="pvAbrirSugerirHistorico()" title="Prellena las cantidades de cada mes con la venta real histórica de este canal (con el % de crecimiento que definas)">🧠 Sugerir desde histórico</button>`}
         <button class="btn btn-g btn-sm" onclick="pvExportar()">📊 Excel</button>
         <button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>
-        <button class="btn btn-g btn-sm" onclick="pvExportarCombinadoTodo()" title="Una sola hoja de Excel con TODAS las filas de TODOS los canales juntas, una debajo de otra (con una columna Canal), tal como una tabla normal de Excel — no las suma, las lista todas">📋 Excel combinado (todos)</button>
+        <button class="btn btn-g btn-sm" onclick="pvExportarCombinadoTodo()" title="Excel a color con las mismas hojas que el botón Excel (Cant, Precio, Venta, Resumen) más una hoja de todas las filas juntas — con fórmulas en vivo (Venta = Cant × Precio) y una hoja de Instrucciones">📋 Excel combinado (todos)</button>
         ${CU?.rol==='admin' ? `<button class="btn btn-or btn-sm" onclick="pvMigrarAnio()" title="Mueve lo que ya está cargado al año correcto (sin tocar ningún dato, solo le cambia el año)">📅 Mover a 2027</button>` : ''}
       </div>
     </div>
@@ -23405,19 +23405,19 @@ async function pvExportarPorPersona() {
   toast(`✅ Excel generado — ${porCanal.length} persona(s)/canal + 1 hoja combinada`,'ok');
 }
 
-// ── Excel combinado (todos): UNA sola hoja con TODAS las filas de TODOS los canales,
-// una debajo de otra (con columna Canal), sin sumar ni agrupar — igual que si en Excel
-// pegaras la tabla de cada persona una tras otra en una misma pestaña. ──
+// ── Excel combinado (todos): mismas hojas que el botón "Excel" (Cant, Precio, Venta, Resumen)
+// más una hoja de Instrucciones y la hoja plana "Todos los canales" (todas las filas de todos los
+// canales, una debajo de otra) — a color, con fórmulas VIVAS de Excel (no números fijos):
+//   · Precio: en cada canal el precio de Ene es el dato; Feb..Dic solo lo REFERENCIAN (cambia Ene
+//     y cambian los 12 meses). El "Total" de esa hoja es la venta resultante (SUMPRODUCT contra Cant).
+//   · Venta = Cant × Precio, celda por celda, con fórmula que apunta a las otras dos hojas.
+//   · Resumen referencia los totales ya calculados en Venta (por canal y por categoría, con SUMIF).
+// Usa ExcelJS (igual que las OC en Excel) porque SheetJS gratis no guarda colores de celda.
 async function pvExportarCombinadoTodo() {
-  if(typeof XLSX === 'undefined') {
-    await new Promise((res,rej)=>{
-      const s=document.createElement('script');
-      s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-      s.onload=res; s.onerror=rej;
-      document.head.appendChild(s);
-    });
-  }
-  toast('⏳ Generando Excel combinado de todos los canales...','inf');
+  await reabastCargarExcelJS().catch(()=>{});
+  if(typeof ExcelJS === 'undefined'){ toast('No pude cargar el generador de Excel — revisa tu conexión','er'); return; }
+
+  toast('⏳ Generando Excel combinado a color de todos los canales...','inf');
   const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const anio = PV.anio;
 
@@ -23427,44 +23427,261 @@ async function pvExportarCombinadoTodo() {
     if(cfg?.[0]) canales = cfg[0].valor.split(',').map(s=>s.trim()).filter(Boolean);
   } catch(e){}
 
-  const filas = [];
+  // ── Cargar datos de todos los canales ──
+  const dataPorCanal = {}, hdrPorCanal = {};
   for(const canal of canales){
     try{
-      const hdr = await sb.get('presupuesto_ventas', `anio=eq.${anio}&canal=eq.${encodeURIComponent(canal)}&order=creado_en.desc&limit=1`);
-      if(!hdr?.length) continue;
-      const detalle = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${hdr[0].id}&order=categoria.asc,referencia.asc`);
-      if(!detalle?.length) continue;
-      const listaNombre = (PV.catalogo.find(c=>c.lista_id===hdr[0].lista_id)||{}).nombre || hdr[0].lista_id || '—';
-      detalle.forEach(r=>{
-        const esLibre = pvEsLineaLibre(r);
-        const precio = parseFloat(r.precio_lista)||0;
-        const meses = Array.from({length:12},(_,i)=>parseFloat(r['u'+String(i+1).padStart(2,'0')])||0);
-        const totalUnd = meses.reduce((a,v)=>a+v,0);
-        const totalCOP = totalUnd*precio;
-        filas.push({
-          Canal: canal,
-          'Jefe de zona': hdr[0].jefe_zona || '',
-          'Lista de precios': listaNombre,
-          SKU: esLibre?'sin SKU':r.referencia,
-          Descripción: r.descripcion||'',
-          Categoría: r.categoria||'Sin categoría',
-          'Precio Lista': esLibre?'':precio,
-          Ene:meses[0], Feb:meses[1], Mar:meses[2], Abr:meses[3], May:meses[4], Jun:meses[5],
-          Jul:meses[6], Ago:meses[7], Sep:meses[8], Oct:meses[9], Nov:meses[10], Dic:meses[11],
-          'Total Und': esLibre?'':totalUnd,
-          'Total COP': Math.round(totalCOP),
-        });
-      });
-    }catch(e){ console.warn('Excel combinado (todos) — '+canal+':', e.message); }
+      const pvRows = await sb.get('presupuesto_ventas', `anio=eq.${anio}&canal=eq.${encodeURIComponent(canal)}&order=creado_en.desc&limit=1`);
+      if(!pvRows?.length){ dataPorCanal[canal]=[]; continue; }
+      hdrPorCanal[canal] = pvRows[0];
+      const detalle = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${pvRows[0].id}&order=categoria.asc,referencia.asc`);
+      dataPorCanal[canal] = detalle || [];
+    }catch(e){ dataPorCanal[canal]=[]; console.warn('Excel combinado (todos) — '+canal+':', e.message); }
   }
-  if(!filas.length){ toast('No hay presupuestos guardados para '+anio+' en ningún canal','err'); return; }
+  if(!canales.some(c=>(dataPorCanal[c]||[]).length)){ toast('No hay presupuestos guardados para '+anio+' en ningún canal','err'); return; }
 
-  const ws = XLSX.utils.json_to_sheet(filas);
-  ws['!cols'] = [{wch:16},{wch:16},{wch:16},{wch:10},{wch:38},{wch:14},{wch:11},...Array(12).fill({wch:8}),{wch:11},{wch:14}];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Todos los canales');
-  XLSX.writeFile(wb, `Presupuesto_Ventas_Combinado_Todos_ILUMAX_${anio}.xlsx`);
-  toast(`✅ Excel combinado generado — ${filas.length} filas de ${canales.length} canales`,'ok');
+  const allSkus = {};
+  canales.forEach(canal=>{
+    (dataPorCanal[canal]||[]).forEach(r=>{
+      if(!allSkus[r.referencia]) allSkus[r.referencia] = {sku:r.referencia, desc:r.descripcion||'', cat:r.categoria||'Sin categoría'};
+    });
+  });
+  const skuList = Object.values(allSkus).sort((a,b)=>a.cat.localeCompare(b.cat)||a.sku.localeCompare(b.sku));
+
+  const getVal = (canal, sku, campoBase) => {
+    const row = (dataPorCanal[canal]||[]).find(r=>r.referencia===sku);
+    if(!row) return Array(12).fill(0);
+    return Array.from({length:12},(_,i)=>parseFloat(row[campoBase+String(i+1).padStart(2,'0')])||0);
+  };
+  const getPrice = (canal, sku) => {
+    const row = (dataPorCanal[canal]||[]).find(r=>r.referencia===sku);
+    return parseFloat(row?.precio_lista)||0;
+  };
+
+  // ── Colores de marca ILUMAX (mismos que la OC en Excel) ──
+  const AZUL_OSC='FF1F2937', NARANJA='FFFFC000', GRIS='FFF2F2F2', GRIS_OSC='FFE2E8F0', BLANCO='FFFFFFFF', FILA_PAR='FFF8FAFC', AZUL_TXT='FF1D4ED8';
+  const bordeFino = {style:'thin', color:{argb:'FFCBD5E1'}};
+  const bordeCelda = {top:bordeFino, left:bordeFino, bottom:bordeFino, right:bordeFino};
+  const estiloCanalHdr = {font:{bold:true, size:10, color:{argb:BLANCO}}, fill:{type:'pattern',pattern:'solid',fgColor:{argb:AZUL_OSC}}, border:bordeCelda, alignment:{horizontal:'center', vertical:'middle'}};
+  const estiloTh        = {font:{bold:true, size:9, color:{argb:AZUL_OSC}}, fill:{type:'pattern',pattern:'solid',fgColor:{argb:NARANJA}}, border:bordeCelda, alignment:{horizontal:'center', vertical:'middle', wrapText:true}};
+  const estiloCat        = {font:{bold:true, size:10, color:{argb:AZUL_OSC}}, fill:{type:'pattern',pattern:'solid',fgColor:{argb:GRIS_OSC}}, border:bordeCelda};
+  const estiloTotal      = {font:{bold:true, size:9, color:{argb:AZUL_OSC}}, fill:{type:'pattern',pattern:'solid',fgColor:{argb:GRIS}}, border:bordeCelda};
+  const colLetter = n => { let s=''; while(n>0){ const m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26); } return s; };
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'ILUMAX'; wb.created = new Date();
+
+  // ═══ Hoja 0: Instrucciones ═══
+  const wsI = wb.addWorksheet('Instrucciones');
+  wsI.columns = [{width:4},{width:100}];
+  let ri = 1;
+  const tit = (txt,color) => { const c=wsI.getCell(ri,2); c.value=txt; c.style={font:{bold:true,size:13,color:{argb:color||AZUL_OSC}}}; ri+=1; };
+  const sub = txt => { const c=wsI.getCell(ri,2); c.value=txt; c.style={font:{bold:true,size:11,color:{argb:AZUL_TXT}}}; ri+=1; };
+  const par = txt => { const c=wsI.getCell(ri,2); c.value=txt; c.style={font:{size:10}, alignment:{wrapText:true}}; ri+=1; };
+  tit(`📊 PRESUPUESTO DE VENTAS ${anio} — EXCEL COMBINADO DE TODOS LOS CANALES`);
+  par(`Generado el ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})} · Incluye ${canales.filter(c=>(dataPorCanal[c]||[]).length).length} de ${canales.length} canales con presupuesto guardado.`);
+  ri++;
+  sub('¿Qué hoja abro según lo que necesito?');
+  par('• "Cant" → cuántas unidades se presupuestaron, mes a mes, por SKU y por canal.');
+  par('• "Precio" → el precio de lista usado en cada canal. En cada bloque de canal, el precio de Enero es el dato editable; Feb a Dic SOLO lo copian con una fórmula, así que si corriges Enero, los demás meses se actualizan solos.');
+  par('• "Venta" → el resultado en pesos (Cantidad × Precio), celda por celda, calculado automáticamente — no la edites a mano, es una fórmula que apunta a "Cant" y "Precio".');
+  par('• "Resumen" → el total del año por canal y por categoría, con el % que representa cada uno — también son fórmulas que suman lo que hay en "Venta".');
+  par('• "Todos los canales" → la misma información pero en una sola tabla plana, una fila por SKU y canal (para filtrar, dinamizar o pegar en otro reporte).');
+  ri++;
+  sub('Cómo leer los colores');
+  const leyenda = [['Encabezado azul oscuro','Nombre del canal / fila de TOTAL GENERAL', AZUL_OSC, BLANCO],['Encabezado naranja','Nombre de columna (mes, total, etc.)', NARANJA, AZUL_OSC],['Fila gris clara','Categoría del producto', GRIS_OSC, AZUL_OSC],['Franjas grises','Solo para que sea más fácil seguir la fila con la vista', FILA_PAR, AZUL_OSC]];
+  leyenda.forEach(([nom,desc,bg,fg])=>{
+    const c1=wsI.getCell(ri,1); c1.value=''; c1.style={fill:{type:'pattern',pattern:'solid',fgColor:{argb:bg}}, font:{color:{argb:fg}}};
+    const c2=wsI.getCell(ri,2); c2.value=`${nom} — ${desc}`; c2.style={font:{size:10}};
+    ri++;
+  });
+  ri++;
+  sub('Fórmulas vivas: si algo no cuadra, revisa aquí antes de editar a mano');
+  par('Todas las columnas "Total" y la fila "TOTAL GENERAL" son SUMAS de Excel (=SUMA), no números pegados — si cambias una cantidad o un precio, los totales de esa misma hoja se recalculan solos al abrir o recalcular el archivo.');
+  par('La hoja "Venta" y la hoja "Resumen" dependen de "Cant" y "Precio": edítalas siempre a ellas, nunca "Venta" ni "Resumen" directamente, o se rompe la fórmula de esa celda.');
+  wsI.getColumn(1).width = 3;
+
+  // ── Plan de filas: SKUs agrupados por categoría con una fila de categoría antes de cada grupo ──
+  const filasPlan = [];
+  let catActual = null;
+  skuList.forEach(s=>{ if(s.cat!==catActual){ catActual=s.cat; filasPlan.push({tipo:'cat', cat:catActual}); } filasPlan.push({tipo:'sku', ...s}); });
+
+  const DATA_START = 4;
+  const nCanales = canales.length;
+  const blockStart = ci => 4 + ci*13;              // col donde empieza Ene del canal ci
+  const colMes = (ci,mi) => blockStart(ci)+mi;
+  const colTotalCanal = ci => blockStart(ci)+12;
+  const colGranTotal = () => 4 + nCanales*13;
+  const nCols = colGranTotal();
+
+  // ═══ Hojas Cant / Precio / Venta (misma estructura, distinta fórmula por celda) ═══
+  function addHojaMatriz(nombre, tipo){
+    const ws = wb.addWorksheet(nombre, {views:[{state:'frozen', xSplit:3, ySplit:3}]});
+    const numFmt = tipo==='Cant' ? '#,##0' : '$ #,##0';
+    const tituloTxt = tipo==='Cant' ? `CANTIDADES (unidades) — Presupuesto de Ventas ${anio} — Todos los canales`
+                     : tipo==='Precio' ? `PRECIO DE LISTA — Presupuesto de Ventas ${anio} — Todos los canales`
+                     : `VENTA EN COP (Cantidad × Precio) — Presupuesto de Ventas ${anio} — Todos los canales`;
+    ws.mergeCells(1,1,1,nCols);
+    const c1 = ws.getCell(1,1); c1.value = tituloTxt; c1.style = {font:{bold:true,size:13,color:{argb:AZUL_OSC}}};
+    ws.getRow(1).height = 22;
+
+    ws.mergeCells(2,1,2,3); ws.getCell(2,1).style = estiloCanalHdr;
+    canales.forEach((canal,ci)=>{ const c0=blockStart(ci); ws.mergeCells(2,c0,2,c0+12); const cc=ws.getCell(2,c0); cc.value=canal; cc.style=estiloCanalHdr; });
+    ws.mergeCells(2, colGranTotal(), 2, colGranTotal());
+    const ccg = ws.getCell(2, colGranTotal()); ccg.value = 'TOTAL GENERAL'; ccg.style = estiloCanalHdr;
+
+    ['SKU','Descripción','Categoría'].forEach((h,i)=>{ const c=ws.getCell(3,i+1); c.value=h; c.style=estiloTh; });
+    const sufijoTotal = tipo==='Cant' ? 'Total Und' : 'Total COP';
+    canales.forEach((canal,ci)=>{
+      MESES_CORTOS.forEach((m,mi)=>{ const c=ws.getCell(3, colMes(ci,mi)); c.value=m; c.style=estiloTh; });
+      const ct = ws.getCell(3, colTotalCanal(ci)); ct.value = sufijoTotal; ct.style = estiloTh;
+    });
+    const cgt = ws.getCell(3, colGranTotal()); cgt.value = tipo==='Cant' ? 'Total Und General' : 'Total COP General'; cgt.style = estiloTh;
+
+    let r = DATA_START;
+    filasPlan.forEach(item=>{
+      if(item.tipo==='cat'){
+        ws.mergeCells(r,1,r,nCols);
+        const cc = ws.getCell(r,1); cc.value = `📁 ${item.cat}`; cc.style = estiloCat;
+        r++; return;
+      }
+      const {sku,desc,cat} = item;
+      const parImpar = (r-DATA_START)%2===1;
+      ws.getCell(r,1).value = sku; ws.getCell(r,2).value = desc; ws.getCell(r,3).value = cat;
+      [1,2,3].forEach(ci2=>{ const c=ws.getCell(r,ci2); c.style = {font:{size:9}, border:bordeCelda, alignment:{vertical:'middle'}, fill: parImpar?{type:'pattern',pattern:'solid',fgColor:{argb:FILA_PAR}}:undefined}; });
+      canales.forEach((canal,ci)=>{
+        const c0 = blockStart(ci);
+        for(let mi=0; mi<12; mi++){
+          const col = colMes(ci,mi);
+          const cell = ws.getCell(r, col);
+          if(tipo==='Cant'){
+            cell.value = getVal(canal, sku, 'u')[mi] || 0;
+          } else if(tipo==='Precio'){
+            if(mi===0) cell.value = getPrice(canal, sku);
+            else cell.value = {formula: `${colLetter(c0)}${r}`};
+          } else {
+            const ref = `${colLetter(col)}${r}`;
+            cell.value = {formula: `Cant!${ref}*Precio!${ref}`};
+          }
+          cell.style = {font:{size:9}, border:bordeCelda, alignment:{horizontal:'right'}, numFmt, fill: parImpar?{type:'pattern',pattern:'solid',fgColor:{argb:FILA_PAR}}:undefined};
+        }
+        const cT = ws.getCell(r, colTotalCanal(ci));
+        if(tipo==='Precio'){
+          const rangeCant = `Cant!${colLetter(c0)}${r}:${colLetter(c0+11)}${r}`;
+          const rangePrecio = `${colLetter(c0)}${r}:${colLetter(c0+11)}${r}`;
+          cT.value = {formula: `SUMPRODUCT(${rangeCant},${rangePrecio})`};
+        } else {
+          cT.value = {formula: `SUM(${colLetter(c0)}${r}:${colLetter(c0+11)}${r})`};
+        }
+        cT.style = {...estiloTotal, alignment:{horizontal:'right'}, numFmt};
+      });
+      const refsTotales = canales.map((_,ci)=>`${colLetter(colTotalCanal(ci))}${r}`);
+      const cg = ws.getCell(r, colGranTotal());
+      cg.value = {formula: `SUM(${refsTotales.join(',')})`};
+      cg.style = {...estiloTotal, font:{bold:true,size:9,color:{argb:AZUL_OSC}}, alignment:{horizontal:'right'}, numFmt};
+      r++;
+    });
+
+    const filaTot = r;
+    ws.mergeCells(filaTot,1,filaTot,3);
+    const ctg = ws.getCell(filaTot,1); ctg.value = 'TOTAL GENERAL'; ctg.style = {...estiloTotal, font:{bold:true,size:10,color:{argb:AZUL_OSC}}};
+    for(let col=4; col<=nCols; col++){
+      const c = ws.getCell(filaTot, col);
+      c.value = {formula: `SUM(${colLetter(col)}${DATA_START}:${colLetter(col)}${filaTot-1})`};
+      c.style = {...estiloTotal, alignment:{horizontal:'right'}, numFmt};
+    }
+    ws.columns = [{width:11},{width:38},{width:16}, ...Array(nCanales*13+1).fill({width:10})];
+    return {ws, filaTot};
+  }
+
+  addHojaMatriz('Cant', 'Cant');
+  addHojaMatriz('Precio', 'Precio');
+  const {filaTot: ventaTotalRow} = addHojaMatriz('Venta', 'Venta');
+
+  // ═══ Hoja Resumen (referencia lo ya calculado en "Venta", nada recalculado a mano) ═══
+  const wsR = wb.addWorksheet('Resumen');
+  wsR.mergeCells(1,1,1,15);
+  wsR.getCell(1,1).value = `RESUMEN EJECUTIVO — PRESUPUESTO DE VENTAS ${anio}`;
+  wsR.getCell(1,1).style = {font:{bold:true,size:14,color:{argb:AZUL_OSC}}};
+  wsR.getRow(1).height = 22;
+  wsR.getCell(3,1).value = 'VENTA PRESUPUESTADA POR CANAL (COP)';
+  wsR.getCell(3,1).style = {font:{bold:true,size:11,color:{argb:AZUL_TXT}}};
+  const hdrR = ['CANAL',...MESES_CORTOS,'TOTAL AÑO','% PART.'];
+  hdrR.forEach((h,i)=>{ const c=wsR.getCell(4,i+1); c.value=h; c.style=estiloTh; });
+  canales.forEach((canal,ci)=>{
+    const fr = 5+ci;
+    const c0 = wsR.getCell(fr,1); c0.value = canal; c0.style = {font:{bold:true,size:9}, border:bordeCelda};
+    MESES_CORTOS.forEach((_,mi)=>{
+      const c = wsR.getCell(fr, 2+mi);
+      c.value = {formula: `Venta!${colLetter(colMes(ci,mi))}${ventaTotalRow}`};
+      c.style = {font:{size:9}, border:bordeCelda, alignment:{horizontal:'right'}, numFmt:'$ #,##0'};
+    });
+    const cTot = wsR.getCell(fr,14); cTot.value = {formula:`Venta!${colLetter(colTotalCanal(ci))}${ventaTotalRow}`}; cTot.style = {...estiloTotal, alignment:{horizontal:'right'}, numFmt:'$ #,##0'};
+    const cPct = wsR.getCell(fr,15); cPct.value = {formula:`N${fr}/N${5+nCanales}`}; cPct.style = {font:{size:9}, border:bordeCelda, numFmt:'0.0%'};
+  });
+  const filaTotCanal = 5+nCanales;
+  wsR.getCell(filaTotCanal,1).value = 'TOTAL GENERAL'; wsR.getCell(filaTotCanal,1).style = {...estiloTotal, font:{bold:true,size:10,color:{argb:AZUL_OSC}}};
+  for(let mi=0; mi<12; mi++){
+    const refs = canales.map((_,ci)=>`Venta!${colLetter(colMes(ci,mi))}${ventaTotalRow}`);
+    const c = wsR.getCell(filaTotCanal, 2+mi); c.value = {formula:`SUM(${refs.join(',')})`}; c.style = {...estiloTotal, alignment:{horizontal:'right'}, numFmt:'$ #,##0'};
+  }
+  wsR.getCell(filaTotCanal,14).value = {formula:`Venta!${colLetter(colGranTotal())}${ventaTotalRow}`}; wsR.getCell(filaTotCanal,14).style = {...estiloTotal, alignment:{horizontal:'right'}, numFmt:'$ #,##0'};
+  wsR.getCell(filaTotCanal,15).value = 1; wsR.getCell(filaTotCanal,15).style = {...estiloTotal, numFmt:'0.0%'};
+
+  let rr = filaTotCanal+2;
+  wsR.getCell(rr,1).value = 'VENTA POR CATEGORÍA (COP)'; wsR.getCell(rr,1).style = {font:{bold:true,size:11,color:{argb:AZUL_TXT}}}; rr++;
+  ['CATEGORÍA','TOTAL AÑO COP','% PART.'].forEach((h,i)=>{ const c=wsR.getCell(rr,i+1); c.value=h; c.style=estiloTh; }); rr++;
+  const filaCatHdr = rr-1;
+  const cats = [...new Set(skuList.map(s=>s.cat))].sort();
+  const filaCatIni = rr;
+  const filaCatTotal = filaCatIni + cats.length; // fila fija de TOTAL, debajo de todas las categorías
+  cats.forEach(cat=>{
+    wsR.getCell(rr,1).value = cat; wsR.getCell(rr,1).style = {font:{size:9}, border:bordeCelda};
+    const cTot = wsR.getCell(rr,2); cTot.value = {formula:`SUMIF(Venta!C:C,"${cat.replace(/"/g,'""')}",Venta!${colLetter(colGranTotal())}:${colLetter(colGranTotal())})`}; cTot.style = {font:{size:9}, border:bordeCelda, alignment:{horizontal:'right'}, numFmt:'$ #,##0'};
+    const cPct = wsR.getCell(rr,3); cPct.value = {formula:`B${rr}/B${filaCatTotal}`}; cPct.style = {font:{size:9}, border:bordeCelda, numFmt:'0.0%'};
+    rr++;
+  });
+  wsR.getCell(rr,1).value = 'TOTAL'; wsR.getCell(rr,1).style = {...estiloTotal, font:{bold:true,size:10,color:{argb:AZUL_OSC}}};
+  wsR.getCell(rr,2).value = {formula:`SUM(B${filaCatIni}:B${rr-1})`}; wsR.getCell(rr,2).style = {...estiloTotal, alignment:{horizontal:'right'}, numFmt:'$ #,##0'};
+  wsR.getCell(rr,3).value = 1; wsR.getCell(rr,3).style = {...estiloTotal, numFmt:'0.0%'};
+  wsR.columns = [{width:20},...Array(12).fill({width:11}),{width:15},{width:10}];
+
+  // ═══ Hoja "Todos los canales": una fila por SKU × canal, en una sola tabla plana ═══
+  const wsT = wb.addWorksheet('Todos los canales', {views:[{state:'frozen', ySplit:1}]});
+  const encT = ['Canal','Jefe de zona','Lista de precios','SKU','Descripción','Categoría','Precio Lista',...MESES_CORTOS,'Total Und','Total COP'];
+  encT.forEach((h,i)=>{ const c=wsT.getCell(1,i+1); c.value=h; c.style=estiloTh; });
+  let rt = 2;
+  canales.forEach(canal=>{
+    const hdr = hdrPorCanal[canal]; const detalle = dataPorCanal[canal]||[];
+    if(!hdr || !detalle.length) return;
+    const listaNombre = (PV.catalogo.find(c=>c.lista_id===hdr.lista_id)||{}).nombre || hdr.lista_id || '—';
+    detalle.forEach(r=>{
+      const esLibre = pvEsLineaLibre(r);
+      const precio = parseFloat(r.precio_lista)||0;
+      const parImpar = (rt-2)%2===1;
+      const vals = [canal, hdr.jefe_zona||'', listaNombre, esLibre?'sin SKU':r.referencia, r.descripcion||'', r.categoria||'Sin categoría', esLibre?'':precio];
+      vals.forEach((v,i)=>{ const c=wsT.getCell(rt,i+1); c.value=v; c.style={font:{size:9}, border:bordeCelda, fill: parImpar?{type:'pattern',pattern:'solid',fgColor:{argb:FILA_PAR}}:undefined, numFmt: i===6?'$ #,##0':undefined}; });
+      for(let mi=0; mi<12; mi++){
+        const c = wsT.getCell(rt, 8+mi);
+        c.value = parseFloat(r['u'+String(mi+1).padStart(2,'0')])||0;
+        c.style = {font:{size:9}, border:bordeCelda, alignment:{horizontal:'right'}, numFmt:'#,##0', fill: parImpar?{type:'pattern',pattern:'solid',fgColor:{argb:FILA_PAR}}:undefined};
+      }
+      const cTU = wsT.getCell(rt,20); cTU.value = {formula:`SUM(H${rt}:S${rt})`}; cTU.style = {font:{bold:true,size:9}, border:bordeCelda, alignment:{horizontal:'right'}, numFmt:'#,##0', fill: parImpar?{type:'pattern',pattern:'solid',fgColor:{argb:FILA_PAR}}:undefined};
+      const cTC = wsT.getCell(rt,21); cTC.value = esLibre ? '' : {formula:`T${rt}*G${rt}`}; cTC.style = {font:{bold:true,size:9}, border:bordeCelda, alignment:{horizontal:'right'}, numFmt:'$ #,##0', fill: parImpar?{type:'pattern',pattern:'solid',fgColor:{argb:FILA_PAR}}:undefined};
+      rt++;
+    });
+  });
+  if(rt===2){ toast('No hay presupuestos guardados para '+anio+' en ningún canal','err'); return; }
+  wsT.autoFilter = { from:{row:1,column:1}, to:{row:rt-1,column:21} };
+  wsT.columns = [{width:16},{width:16},{width:16},{width:10},{width:38},{width:16},{width:11},...Array(12).fill({width:9}),{width:11},{width:14}];
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `Presupuesto_Ventas_Combinado_Todos_ILUMAX_${anio}.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  toast(`✅ Excel combinado a color generado — ${skuList.length} SKUs, ${canales.length} canales`,'ok');
 }
 
 // ── Helper estado ──────────────────────────────────────────────────────
