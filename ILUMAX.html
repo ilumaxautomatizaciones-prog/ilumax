@@ -26073,11 +26073,18 @@ async function rvCargarConfig() {
       if(r.clave==='rv_comp_anio_anterior' && r.valor) {
         try { RV.compAnioAnterior = JSON.parse(r.valor); } catch(e) { /* valor corrupto, se ignora */ }
       }
+      if(r.clave==='rv_ppto_ejecutivo' && r.valor) {
+        try { RV.pptoEje = JSON.parse(r.valor); } catch(e) { /* corrupto */ }
+      }
+      if(r.clave==='rv_asignadores' && r.valor) {
+        try { RV.asignadores = JSON.parse(r.valor); } catch(e) {}
+      }
       if(r.clave==='rv_ppto_canal' && r.valor) {
         try { RV.pptoCanalCfg = JSON.parse(r.valor); } catch(e) { /* valor corrupto, se ignora */ }
       }
     });
     RV.configCargada = true;
+    try{ rvAplicarPptoEje(); }catch(e){}
   } catch(e){ console.warn('Config RV:', e.message); }
 }
 
@@ -29950,6 +29957,7 @@ function rvSincronizarVentaConsolidado() {
     const v = vpe[rvNormNombre(nom)] || {ESP:0,MIX:0,PRO:0,ONL:0,total:0};
     c.ventaEsp = v.ESP; c.ventaMix = v.MIX; c.ventaPro = v.PRO; c.ventaOnl = v.ONL; c.ventaTotal = v.total;
   });
+  try{ rvAplicarPptoEje(); }catch(e){}
 }
 // Suma real de ventas del rango filtrado, por ejecutivo y por canal (ESP/MIX/PRO/ONL),
 // leyendo directo de las facturas — esto sí tiene fecha por transacción.
@@ -30705,6 +30713,121 @@ function rvRenderResumen(el) {
 }
 
 // ── EJECUTIVOS ────────────────────────────────────────────────────────
+
+// ═══ Asignación de presupuesto por ejecutivo × canal ═══════════════════════
+// Se guarda en configuracion.clave='rv_ppto_ejecutivo' = {meses:{'YYYY-MM':{NOMBRE:{ESP,MIX,PRO,ONL}}}, log:[...]}
+// y sobrescribe los ppto de RV.consolidado (que alimentan tabla, semáforo, correo y descargable).
+const RV_ASIG_CANALES=[['ESP','Especializado','ESPECIALIZADO','#2f6fd0'],['MIX','Mixto','CANAL MIXTO','#6b8e23'],['PRO','Proyectos','PROYECTOS','#e36c0a'],['ONL','Online','ONLINE','#8e7cc3']];
+function rvMesKey(){ if(!RV.fechas||!RV.fechas.length) return null; const d=rvFecha(RV.fechas[RV.fechas.length-1]); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+function rvPuedeAsignar(){
+  if(typeof CU==='undefined'||!CU) return false;
+  const n=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
+  const txt=n(CU.nombre)+' '+n(CU.email);
+  const lista=(RV.asignadores&&RV.asignadores.length?RV.asignadores:['duvier','cindy','johana','liderdata']);
+  return lista.some(x=>txt.includes(n(x)));
+}
+function rvAplicarPptoEje(){
+  const k=rvMesKey(); const m=RV.pptoEje&&RV.pptoEje.meses&&RV.pptoEje.meses[k];
+  if(!m||!RV.consolidado) return;
+  const mapK={ESP:'Esp',MIX:'Mix',PRO:'Pro',ONL:'Onl'};
+  const idx={}; Object.keys(RV.consolidado).forEach(n=>idx[rvNormNombre(n)]=n);
+  Object.entries(m).forEach(([nom,v])=>{
+    let key=idx[rvNormNombre(nom)];
+    if(!key){ key=nom; RV.consolidado[key]={pptoEsp:0,ventaEsp:0,pptoMix:0,ventaMix:0,pptoPro:0,ventaPro:0,pptoOnl:0,ventaOnl:0,pptoTotal:0,ventaTotal:0}; }
+    const c=RV.consolidado[key]; let t=0;
+    Object.entries(mapK).forEach(([a,b])=>{ c['ppto'+b]=+v[a]||0; t+=+v[a]||0; });
+    c.pptoTotal=t;
+  });
+}
+function rvAsigAbrir(){
+  if(!rvPuedeAsignar()){ toast('No tienes permiso para asignar presupuesto','wa'); return; }
+  const k=rvMesKey(); if(!k){ toast('Primero carga los datos del mes','wa'); return; }
+  const base=(RV.pptoEje&&RV.pptoEje.meses&&RV.pptoEje.meses[k])||null;
+  const vals={};
+  Object.entries(rvRosterCompleto()).forEach(([nom,c])=>{
+    const b=base&&base[nom];
+    vals[nom]=b?Object.assign({ESP:0,MIX:0,PRO:0,ONL:0},b):{ESP:c.pptoEsp||0,MIX:c.pptoMix||0,PRO:c.pptoPro||0,ONL:c.pptoOnl||0};
+  });
+  // ejecutivos ya asignados que hoy no aparecen en el roster
+  if(base) Object.keys(base).forEach(n=>{ if(!vals[n]) vals[n]=Object.assign({ESP:0,MIX:0,PRO:0,ONL:0},base[n]); });
+  RV.asig={k,modo:'$',vals,bolsa:rvAsigBolsa()};
+  rvAsigPintar();
+}
+function rvAsigBolsa(){
+  const pc=rvPptoCanalMes()||{}; const b={};
+  RV_ASIG_CANALES.forEach(([k,,n])=>{ b[k]=pc[n]||0; });
+  if(!Object.values(b).some(x=>x>0)){ // sin ppto por canal: suma del consolidado
+    Object.values(RV.consolidado).forEach(c=>{ b.ESP+=c.pptoEsp||0; b.MIX+=c.pptoMix||0; b.PRO+=c.pptoPro||0; b.ONL+=c.pptoOnl||0; });
+  }
+  return b;
+}
+function rvAsigPintar(){
+  const A=RV.asig; if(!A) return;
+  let ov=document.getElementById('rv-asig-ov');
+  if(!ov){ ov=document.createElement('div'); ov.id='rv-asig-ov'; ov.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:12px;'; document.body.appendChild(ov); }
+  const $f=n=>'$ '+Math.round(n||0).toLocaleString('es-CO');
+  const noms=Object.keys(A.vals).sort();
+  const tot={}; RV_ASIG_CANALES.forEach(([k])=>{ tot[k]=noms.reduce((a,n)=>a+(+A.vals[n][k]||0),0); });
+  const pctModo=A.modo==='%';
+  const inp=(n,k)=>{ const v=+A.vals[n][k]||0, b=A.bolsa[k]||0; const show=pctModo?(b>0?(v/b*100).toFixed(1).replace('.',','):'0'):Math.round(v).toLocaleString('es-CO');
+    return `<input value="${show}" onchange="rvAsigEdit('${encodeURIComponent(n)}','${k}',this.value)" style="width:${pctModo?70:105}px;text-align:right;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:11px;">`; };
+  const rowsH=noms.map(n=>{ const t=RV_ASIG_CANALES.reduce((a,[k])=>a+(+A.vals[n][k]||0),0);
+    return `<tr><td style="padding:4px 8px;font-weight:600;white-space:nowrap;">${sselEsc(n)}</td>${RV_ASIG_CANALES.map(([k])=>`<td style="padding:3px 4px;text-align:right;">${inp(n,k)}</td>`).join('')}<td style="padding:4px 8px;text-align:right;font-weight:700;white-space:nowrap;">${$f(t)}</td></tr>`; }).join('');
+  const estado=k=>{ const d=(A.bolsa[k]||0)-tot[k]; const ok=Math.abs(d)<1; return {d,ok,c:ok?'#16a34a':(d<0?'#dc2626':'#ea580c')}; };
+  ov.innerHTML=`<div style="background:#fff;border-radius:14px;max-width:1000px;width:100%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.4);">
+    <div style="padding:14px 18px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div><div style="font-size:14px;font-weight:800;">⚙️ Asignar presupuesto a ejecutivos — ${A.k}</div><div style="font-size:10px;color:#64748b;">Reparte el ppto de cada canal entre los vendedores. Se refleja en tabla, semáforo, correo y descargable.</div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn btn-sm ${!pctModo?'btn-bl':''}" onclick="rvAsigModo('$')">Valor $</button>
+        <button class="btn btn-sm ${pctModo?'btn-bl':''}" onclick="rvAsigModo('%')">% del canal</button>
+        <button class="btn btn-sm" onclick="rvAsigAtajo('iguales')">Partes iguales</button>
+        <button class="btn btn-sm" onclick="rvAsigAtajo('venta')">Según venta actual</button>
+        <button class="btn btn-sm" onclick="rvAsigAtajo('anterior')">Copiar mes anterior</button>
+      </div></div>
+    <div style="overflow:auto;padding:0 10px;"><table style="border-collapse:collapse;width:100%;font-size:11px;">
+      <thead><tr><th style="text-align:left;padding:8px;background:#000;color:#fff;position:sticky;top:0;">Ejecutivo</th>${RV_ASIG_CANALES.map(([k,l,,c])=>`<th style="background:${c};color:#fff;padding:8px;position:sticky;top:0;">${l}<div style="font-weight:400;font-size:9px;">Ppto canal ${$f(A.bolsa[k])}</div></th>`).join('')}<th style="background:#000;color:#fff;padding:8px;position:sticky;top:0;">Total ejecutivo</th></tr></thead>
+      <tbody>${rowsH}</tbody>
+      <tfoot><tr style="background:#f1f5f9;font-weight:800;"><td style="padding:6px 8px;">Asignado</td>${RV_ASIG_CANALES.map(([k])=>`<td style="padding:6px 8px;text-align:right;">${$f(tot[k])}</td>`).join('')}<td style="padding:6px 8px;text-align:right;">${$f(Object.values(tot).reduce((a,b)=>a+b,0))}</td></tr>
+      <tr style="font-weight:800;"><td style="padding:6px 8px;">Por asignar</td>${RV_ASIG_CANALES.map(([k])=>{const e=estado(k);return `<td style="padding:6px 8px;text-align:right;color:${e.c};">${e.ok?'✅ cuadra':(e.d>0?'Falta ':'Sobra ')+$f(Math.abs(e.d))}</td>`;}).join('')}<td></td></tr></tfoot>
+    </table></div>
+    <div style="padding:12px 18px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span style="font-size:10px;color:#64748b;">Si un canal no cuadra con su ppto se avisa, pero se puede guardar.</span>
+      <div style="display:flex;gap:8px;"><button class="btn btn-sm" onclick="rvAsigCerrar()">Cancelar</button><button class="btn btn-bl btn-sm" onclick="rvAsigGuardar()">💾 Guardar asignación</button></div></div></div>`;
+}
+function rvAsigCerrar(){ const o=document.getElementById('rv-asig-ov'); if(o) o.remove(); RV.asig=null; }
+function rvAsigModo(m){ RV.asig.modo=m; rvAsigPintar(); }
+function rvAsigEdit(nomEnc,k,txt){
+  const A=RV.asig, nom=decodeURIComponent(nomEnc);
+  let v;
+  if(A.modo==='%'){ v=(parseFloat(String(txt).replace(',','.'))||0)/100*(A.bolsa[k]||0); }
+  else { v=parseFloat(String(txt).replace(/[^\d]/g,''))||0; }
+  A.vals[nom][k]=Math.max(0,Math.round(v)); rvAsigPintar();
+}
+function rvAsigAtajo(tipo){
+  const A=RV.asig, noms=Object.keys(A.vals); if(!noms.length) return;
+  if(tipo==='iguales'){ RV_ASIG_CANALES.forEach(([k])=>{ const b=A.bolsa[k]||0; noms.forEach(n=>A.vals[n][k]=Math.round(b/noms.length)); }); }
+  else if(tipo==='venta'){
+    const r=rvRosterCompleto(); const mk={ESP:'ventaEsp',MIX:'ventaMix',PRO:'ventaPro',ONL:'ventaOnl'};
+    RV_ASIG_CANALES.forEach(([k])=>{ const tv=noms.reduce((a,n)=>a+((r[n]&&r[n][mk[k]])||0),0); const b=A.bolsa[k]||0;
+      noms.forEach(n=>{ A.vals[n][k]=tv>0?Math.round(b*((r[n]&&r[n][mk[k]])||0)/tv):Math.round(b/noms.length); }); });
+  } else if(tipo==='anterior'){
+    const d=rvFecha(RV.fechas[RV.fechas.length-1]); d.setDate(1); d.setMonth(d.getMonth()-1);
+    const pk=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); const pm=RV.pptoEje&&RV.pptoEje.meses&&RV.pptoEje.meses[pk];
+    if(!pm){ toast('No hay asignación guardada para '+pk,'wa'); return; }
+    noms.forEach(n=>{ if(pm[n]) RV_ASIG_CANALES.forEach(([k])=>A.vals[n][k]=+pm[n][k]||0); });
+  }
+  rvAsigPintar();
+}
+async function rvAsigGuardar(){
+  const A=RV.asig; if(!A||!rvPuedeAsignar()) return;
+  const cfg=RV.pptoEje||{meses:{},log:[]}; cfg.meses=cfg.meses||{}; cfg.log=cfg.log||[];
+  cfg.meses[A.k]=JSON.parse(JSON.stringify(A.vals));
+  cfg.log.unshift({u:(CU&&CU.nombre)||'',f:new Date().toISOString(),m:A.k}); cfg.log=cfg.log.slice(0,30);
+  try{
+    await sb.upsert('configuracion',{clave:'rv_ppto_ejecutivo',valor:JSON.stringify(cfg),tipo:'json'},'clave');
+    RV.pptoEje=cfg; rvAplicarPptoEje(); rvAsigCerrar(); toast('✅ Presupuestos asignados','ok'); rvTab('ejecutivos');
+  }catch(e){ toast('⚠️ No se pudo guardar: '+e.message,'err'); }
+}
 function rvRenderEjecutivos(el) {
   const rows = Object.entries(rvRosterCompleto()).sort((a,b)=>b[1].ventaTotal-a[1].ventaTotal);
   const GR=[['Esp','Especializado','#2f6fd0','#dbe6f7'],['Mix','Mixto','#6b8e23','#e3ecd0'],['Pro','Proyectos','#e36c0a','#fde3cf'],['Onl','Online','#8e7cc3','#e6e0f0']];
@@ -30714,7 +30837,7 @@ function rvRenderEjecutivos(el) {
   const tot={};['Esp','Mix','Pro','Onl'].forEach(k=>tot[k]={p:0,v:0});let totDis=0,totP=0,totV=0;
   rows.forEach(([,c])=>{['Esp','Mix','Pro','Onl'].forEach(k=>{tot[k].p+=c['ppto'+k]||0;tot[k].v+=c['venta'+k]||0;});totDis+=c.ventaDis||0;totP+=c.pptoTotal;totV+=c.ventaTotal;});
   const celdas=(p,v,bg)=>`<td style="background:${bg};padding:4px 8px;text-align:right;white-space:nowrap;">${p?$(p):'$ -'}</td><td style="background:${bg};padding:4px 8px;text-align:right;white-space:nowrap;font-weight:700;">${v?$(v):'$ -'}</td><td style="background:${bg};padding:4px 8px;text-align:right;font-weight:700;color:${p>0&&v/p>=1?'#16a34a':'inherit'};">${pc(v,p)}</td>`;
-  el.innerHTML = rvNotaFiltroProrrateado() + `
+  el.innerHTML = rvNotaFiltroProrrateado() + (rvPuedeAsignar()?`<div style="margin-bottom:8px;text-align:right;"><button class="btn btn-bl btn-sm" onclick="rvAsigAbrir()">⚙️ Asignar presupuesto a ejecutivos</button></div>`:'') + `
     <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
       <div style="overflow-x:auto;">
         <table style="width:100%;border-collapse:collapse;font-size:11px;">
