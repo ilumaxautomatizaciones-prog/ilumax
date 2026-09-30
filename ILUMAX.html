@@ -9654,6 +9654,75 @@ function reabastHtmlKanban(){
   </div>`;
 }
 
+// ═══ Vista "Por lotes" — agrupa cada OC con sus ramas (envíos parciales del proveedor) ═══
+// Una OC queda dividida en ramas (numero-1, numero-2…) cuando el proveedor despacha la orden
+// por partes — a mano o automático desde "🚢 Actualizar Comercio Exterior" (ver ceDetectarYSepararLotes).
+// Aquí se ven agrupadas bajo su número original, con su lote (No. IMPO), fase y fechas.
+function reabastHtmlPorLotes(){
+  const todas = (REABAST.ordenesCompra||[]).filter(o=>o.estado_general!=='cancelada');
+  const familias = {};
+  todas.forEach(o=>{ const base = String(o.numero_oc||'').replace(/-\d+$/,''); (familias[base]=familias[base]||[]).push(o); });
+  const grupos = Object.entries(familias).filter(([,os])=>os.length>1)
+    .map(([base,os])=>({base, os: os.slice().sort((a,b)=>a.numero_oc.localeCompare(b.numero_oc, undefined, {numeric:true}))}))
+    .sort((a,b)=>a.base.localeCompare(b.base, undefined, {numeric:true}));
+  if(!grupos.length) return `<div class="empty"><div class="empty-t">Ninguna OC está dividida en lotes todavía</div>
+    <div class="arte-mu" style="margin-top:6px;">Cuando "🚢 Actualizar Comercio Exterior" detecte que un proveedor despachó una OC por partes, las ramas aparecerán aquí agrupadas con su OC original.</div></div>`;
+  const fd = s => s ? new Date(s+'T12:00:00').toLocaleDateString('es-CO') : '—';
+  return `<div class="arte-mu" style="font-size:11px;margin-bottom:10px;">${grupos.length} OC despachada(s) por lotes — cada rama es un envío parcial de la misma orden original.</div>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+    ${grupos.map(g=>{
+      const filas = g.os.map(o=>{
+        const r = ceDe(o.numero_oc); const L = ceLlegada(o); const esRama = o.numero_oc!==g.base;
+        const abierta = !!(SEG.exp && SEG.exp[o.id]);
+        const filaOC = `<tr>
+          <td style="${esRama?'':'font-weight:800;'}"><span onclick="event.stopPropagation();SEG.exp=SEG.exp||{};SEG.exp['${o.id}']=!SEG.exp['${o.id}'];reabastPintar();" title="Ver ítems de esta OC" style="cursor:pointer;display:inline-block;width:13px;color:var(--mu);user-select:none;">${abierta?'▾':'▸'}</span><a href="javascript:void 0" style="color:var(--tx);font-weight:inherit;" onclick="reabastAbrirDetalleOC('${o.id}')">${reabastEsc(o.numero_oc)}</a>${esRama?' <span class="bdg bp" style="font-size:9px;">rama</span>':''}</td>
+          <td>${reabastEsc(o.lote||'—')}</td>
+          <td>${reabastEsc(ceEtapaActualTxt(o))}</td>
+          <td>${r&&r.fase!=null?reabastEsc(CE_FASE_TXT[r.fase]||'—'):'—'}</td>
+          <td>${r?fd(r.etd):'—'}</td>
+          <td>${r?fd(r.eta):'—'}</td>
+          <td>${L&&L.fecha?fd(L.fecha.toISOString().slice(0,10)):'—'}</td>
+          <td style="text-align:right;">${(REABAST.ocItems[o.id]||[]).length}</td>
+        </tr>`;
+        return abierta ? filaOC + lotesHtmlItemsFila(o) : filaOC;
+      }).join('');
+      return `<div class="sc2" style="padding:10px 12px;">
+        <div style="font-size:12.5px;font-weight:800;margin-bottom:6px;">${reabastEsc(g.base)} <span class="arte-mu" style="font-weight:600;font-size:10.5px;">· ${reabastEsc(g.os[0].proveedor||'')} · ${g.os.length} envíos</span></div>
+        <div class="tw"><table style="font-size:11px;"><thead><tr><th>OC</th><th>Lote (No. IMPO)</th><th>Etapa actual</th><th>Fase Com. Ext.</th><th>ETD</th><th>ETA</th><th>Llegada planta</th><th style="text-align:right;">Ítems</th></tr></thead><tbody>${filas}</tbody></table></div>
+      </div>`;
+    }).join('')}
+    </div>`;
+}
+function lotesHtmlItemsFila(o){
+  const items = REABAST.ocItems[o.id]||[];
+  const colspan = 8;
+  if(!items.length) return `<tr class="seg-exp-row"><td colspan="${colspan}" style="background:var(--s1);font-size:11px;padding:8px 14px 8px 30px;" class="arte-mu">Esta OC no tiene ítems cargados todavía.</td></tr>`;
+  const r = ceDe(o.numero_oc);
+  const estadoCE = (r && r.estados && r.estados.length) ? r.estados.join(' / ') : '—';
+  const llegadaTxt = lotesLlegadaTxt(o);
+  const filasIt = items.map(it=>`<tr>
+      <td style="padding:3px 8px;font-family:monospace;">${reabastEsc(it.referencia||it.sku||it.codigo||'—')}</td>
+      <td style="padding:3px 8px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${reabastEsc(it.descripcion||'—')}</td>
+      <td style="padding:3px 8px;text-align:right;">${Number(it.cantidad)||0}</td>
+      <td style="padding:3px 8px;text-align:right;">${it.precio_fob_usd!=null?'US$ '+Number(it.precio_fob_usd).toFixed(2):'—'}</td>
+      <td style="padding:3px 8px;">${reabastEsc(it.lote||'—')}</td>
+      <td style="padding:3px 8px;"><span class="bdg bp" style="font-size:9.5px;">${reabastEsc(estadoCE)}</span></td>
+      <td style="padding:3px 8px;font-size:10px;" class="arte-mu">${reabastEsc(it.observacion||'')}</td>
+    </tr>`).join('');
+  return `<tr class="seg-exp-row"><td colspan="${colspan}" style="background:var(--s1);padding:6px 14px 10px 30px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;"><b style="font-size:11px;">📦 Ítems de ${reabastEsc(o.numero_oc)}</b><span class="arte-mu" style="font-size:10.5px;">${items.length} referencia(s) · etapa actual: ${reabastEsc(ceEtapaActualTxt(o))} · llega: ${llegadaTxt}</span></div>
+    <div class="tw" style="max-height:220px;"><table style="font-size:11px;"><thead><tr><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">FOB</th><th>Lote</th><th>Estado CE</th><th>Obs.</th></tr></thead><tbody>${filasIt}</tbody></table></div>
+  </td></tr>`;
+}
+// Texto corto "llega: 18 oct (en 12 d)" reutilizado en las filas de ítems (Por lotes y Seguimiento).
+function lotesLlegadaTxt(o){
+  const L = ceLlegada(o); if(!L) return '—';
+  const dd = Math.ceil((L.fecha - Date.now())/86400000);
+  const fd2 = L.fecha.toLocaleDateString('es-CO',{day:'2-digit', month:'short'});
+  const sub = L.llegó ? 'ya llegó' : L.estimada ? 'estimada' : dd<0 ? `vencida ${-dd} d` : dd===0 ? 'hoy' : `en ${dd} d`;
+  return `${L.llegó?'✅ ':''}${fd2} (${sub})`;
+}
+
 // ═══ Tablero de seguimiento (dash) — una fila por OC, una columna por etapa ═══
 // Cada celda: OK (verde si se cumplió en el objetivo, con +N días en rojo si se pasó), P si está
 // en curso (con +N si ya va tarde) o vacía si aún no le toca. Clic en el encabezado = zoom de esa
@@ -9671,7 +9740,7 @@ const SEG_COLS = [
   {id:'nacional',   lbl:'Nacionalización',   etapas:['nacionalizacion']},
   {id:'recepcion',  lbl:'Ingreso a bodega',  etapas:['recepcion_bodega']},
 ];
-const SEG = { vista:'seguimiento', f:{q:'', prov:'', estado:'activa', etapa:'', sem:'', area:'', desde:'', hasta:'', llega:'', orden:'num'}, abiertos:false };
+const SEG = { vista:'seguimiento', f:{q:'', prov:'', estado:'activa', etapa:'', sem:'', area:'', desde:'', hasta:'', llega:'', orden:'num'}, abiertos:false, exp:{} };
 
 function segObjetivoCol(col){
   if(col.id==='arte') return SEG_ARTE_OBJ+' d';
@@ -9833,8 +9902,8 @@ function reabastHtmlSeguimiento(){
   segCss();
   const toggle = `<div style="display:inline-flex;border:1px solid var(--b2);border-radius:8px;overflow:hidden;">
     <button class="btn btn-sm ${SEG.vista==='seguimiento'?'btn-bl':'btn-g'}" style="border-radius:0;" onclick="SEG.vista='seguimiento';reabastPintar()">📊 Seguimiento</button>
-    <button class="btn btn-sm ${SEG.vista==='area'?'btn-bl':'btn-g'}" style="border-radius:0;" onclick="SEG.vista='area';reabastPintar()">🗂️ Por área</button></div>`;
-  if(SEG.vista==='area') return `<div style="margin-bottom:10px;">${toggle}</div>` + reabastHtmlKanban();
+    <button class="btn btn-sm ${SEG.vista==='lotes'?'btn-bl':'btn-g'}" style="border-radius:0;" onclick="SEG.vista='lotes';reabastPintar()">🚢 Por lotes</button></div>`;
+  if(SEG.vista==='lotes') return `<div style="margin-bottom:10px;">${toggle}</div>` + reabastHtmlPorLotes();
   const provs = [...new Set((REABAST.ordenesCompra||[]).map(o=>o.proveedor).filter(Boolean))].sort();
   const f = SEG.f, sel = (v,a)=> v===a?'selected':'';
   const nAdv = ['prov','etapa','sem','area','desde','hasta','llega'].filter(k=>f[k]).length + (f.estado!=='activa'?1:0);
@@ -9897,12 +9966,36 @@ function segRepintar(repintarTodo){
   }).join('');
   const body = filas.map(r=>{
     const o = r.o;
-    return `<tr><td class="seg-oc"><a href="javascript:void 0" style="font-weight:800;color:var(--tx);" onclick="reabastAbrirDetalleOC('${o.id}')">${reabastEsc(o.numero_oc)}</a>
+    const abierta = !!(SEG.exp && SEG.exp[o.id]);
+    const filaOC = `<tr><td class="seg-oc"><span onclick="event.stopPropagation();SEG.exp=SEG.exp||{};SEG.exp['${o.id}']=!SEG.exp['${o.id}'];segRepintar();" title="Ver ítems de esta OC" style="cursor:pointer;display:inline-block;width:13px;color:var(--mu);user-select:none;">${abierta?'▾':'▸'}</span><a href="javascript:void 0" style="font-weight:800;color:var(--tx);" onclick="reabastAbrirDetalleOC('${o.id}')">${reabastEsc(o.numero_oc)}</a>
       <div class="arte-mu" style="font-size:10px;max-width:190px;overflow:hidden;text-overflow:ellipsis;" title="${reabastEsc(o.proveedor||'')}">${reabastEsc(o.proveedor||'—')}</div></td>
       <td style="text-align:center;">${segHtmlLlegada(o)}</td>
       ${SEG_COLS.map(c=>`<td style="text-align:center;">${segHtmlCelda(o, c, r.celdas[c.id])}</td>`).join('')}</tr>`;
+    return abierta ? filaOC + segHtmlItemsFila(o) : filaOC;
   }).join('');
   t.innerHTML = `<div class="seg-wrap"><table class="seg-t"><thead><tr><th class="seg-oc" style="text-align:left;">Orden<div class="arte-mu" style="font-weight:600;font-size:9.5px;">🎯 días objetivo por etapa</div></th><th title="Fecha de llegada a planta según Seguimiento comercio exterior">🚢 Llegada<small style="display:block;font-weight:600;font-size:9.5px;color:var(--mu);">Com. Exterior</small></th>${head1}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+// Fila expandible bajo la OC: ítems (SKU) y su lote/observación, como vista rápida sin abrir el detalle.
+function segHtmlItemsFila(o){
+  const items = REABAST.ocItems[o.id]||[];
+  const colspan = SEG_COLS.length+2;
+  if(!items.length) return `<tr class="seg-exp-row"><td colspan="${colspan}" style="background:var(--s1);font-size:11px;padding:8px 14px 8px 30px;" class="arte-mu">Esta OC no tiene ítems cargados todavía.</td></tr>`;
+  const r = ceDe(o.numero_oc);
+  const estadoCE = (r && r.estados && r.estados.length) ? r.estados.join(' / ') : '—';
+  const llegadaTxt = lotesLlegadaTxt(o);
+  const filasIt = items.map(it=>`<tr>
+      <td style="padding:3px 8px;font-family:monospace;">${reabastEsc(it.referencia||it.sku||it.codigo||'—')}</td>
+      <td style="padding:3px 8px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${reabastEsc(it.descripcion||'—')}</td>
+      <td style="padding:3px 8px;text-align:right;">${Number(it.cantidad)||0}</td>
+      <td style="padding:3px 8px;text-align:right;">${it.precio_fob_usd!=null?'US$ '+Number(it.precio_fob_usd).toFixed(2):'—'}</td>
+      <td style="padding:3px 8px;">${reabastEsc(it.lote||'—')}</td>
+      <td style="padding:3px 8px;"><span class="bdg bp" style="font-size:9.5px;">${reabastEsc(estadoCE)}</span></td>
+      <td style="padding:3px 8px;font-size:10px;" class="arte-mu">${reabastEsc(it.observacion||'')}</td>
+    </tr>`).join('');
+  return `<tr class="seg-exp-row"><td colspan="${colspan}" style="background:var(--s1);padding:6px 14px 10px 30px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;"><b style="font-size:11px;">📦 Ítems de ${reabastEsc(o.numero_oc)}</b><span class="arte-mu" style="font-size:10.5px;">${items.length} referencia(s) · etapa actual: ${reabastEsc(ceEtapaActualTxt(o))} · llega: ${llegadaTxt}</span></div>
+    <div class="tw" style="max-height:220px;"><table style="font-size:11px;"><thead><tr><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">FOB</th><th>Lote</th><th>Estado CE</th><th>Obs.</th></tr></thead><tbody>${filasIt}</tbody></table></div>
+  </td></tr>`;
 }
 function segExcelIncons(){
   const filas = (REABAST.ordenesCompra||[]).filter(o=>o.estado_general==='activa').map(o=>({o, L:ceLlegada(o)})).filter(x=>x.L && x.L.corregida);
@@ -11181,6 +11274,59 @@ function ceAgrupar(lineas){
 
 const ceMax = arr => { const xs = arr.filter(Boolean); return xs.length ? new Date(Math.max(...xs)) : null; };
 const ceUnicos = arr => [...new Set(arr.map(x=>x==null?'':String(x).trim()).filter(x=>x && !/^#ref/i.test(x)))];
+
+// ── Lotes de despacho sin dividir ───────────────────────────────────────────
+// El informe a veces trae, bajo una misma OC, más de un "No. IMPO" (lote) en fases distintas
+// (parte ya en tránsito, parte todavía en producción/embarque) porque el proveedor despachó por partes.
+// Si esa OC no tiene sub-OC propia para cada lote, ceResumir toma la fase MÍNIMA de todas las líneas y
+// arrastra el estado visible al lote más atrasado, aunque el resto ya esté avanzado. Aquí se detecta ese
+// caso y se separa automáticamente en ramas (numero-N), igual al patrón manual que ya usa el equipo
+// (p.ej. OI1886-2/3/5, OCI106-1).
+function ceRefKey(s){ return ceNum(s); }
+function ceLotesDeGrupo(lineas){
+  const porLote = {};
+  lineas.forEach(l=>{ const key = ceNum(l.impo) || '·sin no. impo·'; (porLote[key] = porLote[key] || []).push(l); });
+  return Object.entries(porLote).map(([key, ls])=>{
+    const fases = ls.map(l=>ceFaseLinea(l.estado, l.comentario)).filter(x=>x.fase!=null && x.fase>=0);
+    return {key, lineas: ls, fase: fases.length ? Math.min(...fases.map(x=>x.fase)) : null};
+  });
+}
+function ceSiguienteSufijo(numero, erp){ let n = 1; while(erp[numero+'-'+n]) n++; return n; }
+
+// Separa, dentro de g/erp (mutados in-place), los lotes de cada OC base que aún no tienen sub-OC propia
+// y cuyas fases difieren. El lote con más líneas se queda con el número original; el resto pasa a ramas
+// nuevas (numero-N). Devuelve la lista de ramas nuevas creadas.
+function ceDetectarYSepararLotes(g, erp){
+  const nuevas = [];
+  Object.keys(g).forEach(numero=>{
+    const oc = erp[numero]; if(!oc) return;
+    const todos = ceLotesDeGrupo(g[numero]);
+    const validos = todos.filter(x=>x.fase!=null);
+    if(validos.length<2) return;
+    if(new Set(validos.map(x=>x.fase)).size<2) return;   // mismos lotes, misma fase → diferencia solo cosmética, no hace falta dividir
+    const sinFase = todos.filter(x=>x.fase==null);
+    const lotes = validos.slice().sort((a,b)=>b.lineas.length-a.lineas.length);
+    const refLoteMap = {};
+    lotes.forEach((lote,i)=>{ lote.lineas.forEach(l=>{ if(l.ref==null || l.ref==='') return; (refLoteMap[ceRefKey(l.ref)] = refLoteMap[ceRefKey(l.ref)] || new Set()).add(i); }); });
+    sinFase.forEach(lote=>{ lote.lineas.forEach(l=>{ if(l.ref==null || l.ref==='') return; (refLoteMap[ceRefKey(l.ref)] = refLoteMap[ceRefKey(l.ref)] || new Set()).add('sinFase'); }); });
+    g[numero] = lotes[0].lineas.concat(...sinFase.map(x=>x.lineas));   // el lote con más líneas (+ las de estado no reconocible) se queda con el número original
+    // referencias que aparecen en más de un lote: no se pueden mover sin ambigüedad — se dejan en la OC padre
+    // pero quedan marcadas, para que siempre quede claro de qué OC/lote es cada SKU.
+    oc._refsAmbiguos = Object.entries(refLoteMap).filter(([,s])=>s.size>1).map(([k])=>k);
+    lotes.slice(1).forEach(lote=>{
+      const idxLote = lotes.indexOf(lote);
+      const suf = ceSiguienteSufijo(numero, erp);
+      const numNuevo = numero+'-'+suf;
+      const refsLote = ceUnicos(lote.lineas.map(l=>l.ref));
+      // solo se mueven al ERP los ítems cuya referencia aparece exclusivamente en este lote (sin ambigüedad de cantidades/empaques)
+      const refsAMover = refsLote.filter(ref=>{ const s = refLoteMap[ceRefKey(ref)]; return s && s.size===1 && s.has(idxLote); });
+      const ramaOc = {...oc, id:null, numero_oc:numNuevo, _nueva:true, _baseId:oc.id, _baseNumero:numero, _impo:lote.key, _refsAMover:refsAMover};
+      erp[numNuevo] = ramaOc; g[numNuevo] = lote.lineas;
+      nuevas.push(ramaOc);
+    });
+  });
+  return nuevas;
+}
 // Resumen de una OC a partir de sus líneas.
 function ceResumir(numero, lineas){
   const fases = lineas.map(l=>({l, ...ceFaseLinea(l.estado, l.comentario)}));
@@ -11280,6 +11426,62 @@ async function ceAplicarOC(oc, r){
   return {cambios};
 }
 
+// Crea en el ERP una rama nueva detectada por ceDetectarYSepararLotes: la OC (clonando proveedor/incoterm/
+// términos de la OC base), sus etapas previas a producción (clonadas tal cual de la OC base) y mueve los
+// ítems que se identificaron sin ambigüedad. Las etapas de Comercio Exterior (producción en adelante) las
+// crea después ceAplicarOC, igual que para cualquier OC.
+async function ceCrearRama(ramaOc){
+  const baseId = ramaOc._baseId;
+  const lote = ramaOc._impo && ramaOc._impo!=='·sin no. impo·' ? ramaOc._impo : null;
+  const filas = await sbReabast.post('ordenes_compra', [{
+    numero_oc: ramaOc.numero_oc, proveedor: ramaOc.proveedor, creado_por: ramaOc.creado_por, creado_en: new Date().toISOString(),
+    etapa_actual_orden: 1, estado_general: 'activa', factor_landeo: ramaOc.factor_landeo, incoterm: ramaOc.incoterm,
+    terminos_pago: ramaOc.terminos_pago, deposito_pct: ramaOc.deposito_pct, fecha_orden: ramaOc.fecha_orden, lote
+  }]);
+  const oc = filas[0];
+  const previas = (REABAST.ocEtapas[baseId]||[]).filter(e=>!CE_ETAPAS.includes(e.etapa_id));
+  if(previas.length){
+    await sbReabast.post('oc_etapas', previas.map(e=>({
+      oc_id: oc.id, etapa_id: e.etapa_id, nombre: e.nombre, orden: e.orden, dias_esperado: e.dias_esperado,
+      estado: e.estado, fecha_inicio: e.fecha_inicio, fecha_fin: e.fecha_fin, dias_reales: e.dias_reales,
+      completado_por: e.completado_por, comentario_extra: e.comentario_extra
+    })));
+  }
+  REABAST.ordenesCompra.push(oc);
+  REABAST.ocEtapas[oc.id] = previas.map(e=>({...e, id:undefined, oc_id: oc.id}));
+  // mueve, con trazabilidad, solo los ítems (SKU) cuya OC de destino quedó inequívoca
+  if(ramaOc._refsAMover && ramaOc._refsAMover.length){
+    const nota = 'Rama separada automáticamente de '+(ramaOc._baseNumero||'la OC original')+' por lote de despacho distinto ('+(lote?('No. IMPO '+lote):'Comercio Exterior')+')';
+    const claves = new Set(ramaOc._refsAMover.map(ceRefKey));
+    const baseItems = REABAST.ocItems[baseId]||[];
+    const items = baseItems.filter(it=>claves.has(ceRefKey(it.referencia||it.sku||it.codigo)));
+    for(const it of items){
+      const observacion = it.observacion ? it.observacion+' · '+nota : nota;
+      await sbReabast.patch('oc_items','id=eq.'+it.id, {oc_id: oc.id, observacion});
+      it.oc_id = oc.id; it.observacion = observacion;
+    }
+    if(items.length){
+      REABAST.ocItems[baseId] = baseItems.filter(it=>!claves.has(ceRefKey(it.referencia||it.sku||it.codigo)));
+      REABAST.ocItems[oc.id] = (REABAST.ocItems[oc.id]||[]).concat(items);
+    }
+  }
+  return oc;
+}
+// Deja marcado, en la OC padre, qué referencias (SKU) no se pudieron mover a una rama sin ambigüedad
+// (aparecen repartidas entre más de un lote de despacho) — para que siempre quede claro por qué esa
+// referencia sigue ahí y no en la rama nueva.
+async function ceMarcarAmbiguos(oc, refs){
+  if(!refs || !refs.length) return;
+  const nota = 'Esta referencia aparece en más de un lote de despacho del Seguimiento de Comercio Exterior — revisar cantidad/empaque antes de mover a una rama';
+  const claves = new Set(refs.map(ceRefKey));
+  const items = (REABAST.ocItems[oc.id]||[]).filter(it=>claves.has(ceRefKey(it.referencia||it.sku||it.codigo)));
+  for(const it of items){
+    if(it.observacion && it.observacion.includes(nota)) continue;
+    const observacion = it.observacion ? it.observacion+' · '+nota : nota;
+    try{ await sbReabast.patch('oc_items','id=eq.'+it.id, {observacion}); it.observacion = observacion; }catch(e){ console.warn('ceMarcarAmbiguos', it.id, e.message); }
+  }
+}
+
 // Etapa actual (texto) de una OC en el ERP, para la vista previa.
 function ceEtapaActualTxt(oc){
   const es = REABAST.ocEtapas[oc.id]||[];
@@ -11320,10 +11522,12 @@ async function ceLeerArchivo(input){
     const wb = XLSX.read(await file.arrayBuffer(), {type:'array', cellDates:true});
     const {hoja, lineas} = ceLeerLibro(wb);
     const {g, erp, sin} = ceAgrupar(lineas);
+    const ramasNuevas = ceDetectarYSepararLotes(g, erp);
     CE.archivo = file.name;
     CE.plan = Object.keys(g).map(num=>({num, oc:erp[num], r:ceResumir(num, g[num])}))
       .sort((a,b)=>(a.r.fase??99)-(b.r.fase??99) || a.num.localeCompare(b.num, undefined, {numeric:true}));
     CE.sinOc = Object.entries(sin);
+    CE.ramasNuevas = ramasNuevas.length;
     CE.sel = {}; CE.plan.forEach(p=>{ CE.sel[p.num] = p.r.fase!=null; });
     CE.hoja = hoja; CE.nLineas = lineas.length;
     cePintarPrev();
@@ -11343,12 +11547,13 @@ function cePintarPrev(){
       ${[3,5,6,7,9].map(f=>`<div style="${ceTile}"><div class="arte-mu" style="font-size:10.5px;">${CE_FASE_TXT[f]}</div><b style="font-size:18px;">${cuenta(f)}</b></div>`).join('')}
     </div>
     ${CE.sinOc.length?`<details style="font-size:11px;margin-bottom:8px;"><summary style="cursor:pointer;color:var(--mu);">${CE.sinOc.length} pedido(s) del archivo no existen como OC en el ERP (se ignoran)</summary><div style="padding:6px 0;">${CE.sinOc.map(([o,c])=>`${reabastEsc(o)} (${c})`).join(' · ')}</div></details>`:''}
+    ${CE.ramasNuevas?`<div style="background:var(--s1);border:1px solid var(--bl);border-radius:10px;padding:8px 12px;margin-bottom:10px;font-size:11.5px;">🆕 Se detectaron <b>${CE.ramasNuevas}</b> lote(s) de despacho sin dividir (el proveedor mandó parte de la OC antes) — se crearán como rama(s) nueva(s) al ejecutar, marcadas abajo.</div>`:''}
     <div class="tw" style="max-height:48vh;overflow:auto;"><table>
       <thead><tr><th><input type="checkbox" ${n===CE.plan.length?'checked':''} onchange="CE.plan.forEach(p=>{ if(p.r.fase!=null) CE.sel[p.num]=this.checked; });cePintarPrev()"></th><th>OC</th><th>Proveedor</th><th>Estado Com. Ext.</th><th>ETD</th><th>ETA</th><th>Llegada planta est.</th><th>Ingreso inventario</th><th>BL</th><th>Hoy en el ERP</th><th>Queda en</th></tr></thead>
       <tbody>${CE.plan.map(p=>{ const r = p.r;
         return `<tr style="${CE.sel[p.num]?'':'opacity:.55;'}">
           <td><input type="checkbox" ${CE.sel[p.num]?'checked':''} ${r.fase==null?'disabled':''} onchange="CE.sel['${p.num}']=this.checked;cePintarPrev()"></td>
-          <td style="font-family:monospace;font-weight:700;">${reabastEsc(p.num)}${r.envios>1?` <span class="bdg bpu" style="font-size:9px;">${r.envios} envíos</span>`:''}</td>
+          <td style="font-family:monospace;font-weight:700;">${reabastEsc(p.num)}${r.envios>1?` <span class="bdg bpu" style="font-size:9px;">${r.envios} envíos</span>`:''}${p.oc&&p.oc._nueva?` <span class="bdg bp" style="font-size:9px;" title="Se creará como rama nueva de ${reabastEsc(p.num.split('-')[0])}, lote ${reabastEsc(p.oc._impo||'—')}">🆕 rama nueva</span>`:''}${p.oc&&p.oc._refsAmbiguos&&p.oc._refsAmbiguos.length?` <span class="bdg bp" style="font-size:9px;" title="Referencias repartidas entre lotes, se quedan aquí marcadas para revisión: ${reabastEsc(p.oc._refsAmbiguos.join(', '))}">⚠️ ${p.oc._refsAmbiguos.length} ref. ambigua(s)</span>`:''}</td>
           <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${reabastEsc(p.oc.proveedor||'—')}</td>
           <td>${reabastEsc(r.estados.join(' / ')||'—')}${r.revisar?` <span class="bdg bp" style="font-size:9px;" title="${reabastEsc(r.revisar)}">revisar</span>`:''}</td>
           <td>${fd(r.fase===5?r.etdPend:r.etd)}</td><td>${fd(r.fase<=6?r.etaPend:r.eta)}</td><td>${fd(r.fase<9?r.plantaPend:r.planta)}</td><td>${fd(r.ingreso)}</td>
@@ -11370,7 +11575,11 @@ async function ceEjecutar(){
   catch(e){ err.push('No se guardó el resumen: '+e.message); }
   // 2) etapas de cada OC
   const pintar = ()=>{ prog.innerHTML = `⏳ ${hechas}/${sel.length}…`; };
-  const trabajador = async()=>{ while(idx<sel.length){ const p = sel[idx++]; try{ const r = await ceAplicarOC(p.oc, p.r); cambios += r.cambios; }catch(e){ err.push(p.num+': '+e.message); } hechas++; pintar(); } };
+  const trabajador = async()=>{ while(idx<sel.length){ const p = sel[idx++]; try{
+    if(p.oc._nueva){ p.oc = await ceCrearRama(p.oc); }
+    else if(p.oc._refsAmbiguos && p.oc._refsAmbiguos.length){ await ceMarcarAmbiguos(p.oc, p.oc._refsAmbiguos); }
+    const r = await ceAplicarOC(p.oc, p.r); cambios += r.cambios;
+  }catch(e){ err.push(p.num+': '+e.message); } hechas++; pintar(); } };
   await Promise.all(Array.from({length:Math.min(6, sel.length)}, trabajador));
   await cargarOC(); REABAST._cargadoEn = Date.now();
   prog.innerHTML = `<span style="color:var(--gr);font-weight:700;">✅ ${sel.length} OC revisadas · ${cambios} cambios en ${Math.round((Date.now()-t0)/1000)} s.</span>${err.length?`<div style="color:var(--rd);margin-top:4px;">Con error (${err.length}): ${reabastEsc(err.slice(0,8).join(' · '))}</div>`:''}`;
