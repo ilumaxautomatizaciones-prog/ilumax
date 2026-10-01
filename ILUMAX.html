@@ -11563,6 +11563,35 @@ async function prodfGuardarFecha(ocId){
 }
 
 // ── Administrador: poner a mano las fechas de inicio y fin de una etapa ─────────────────────────
+// ETD (etapa Embarque) / ETA (etapa Tránsito) desde el lápiz del tablero: se guardan en el BL del ERP de esa OC
+function cblFechaOC(oc, campo){
+  const num = ceNum(oc.numero_oc), bls = CBL.bls.filter(b=>(b.items||[]).some(it=>ceNum(it.oc)===num) && (campo==='etd' ? cblFaseBL(b)===5 : (cblFaseBL(b)===5 || cblFaseBL(b)===6)));
+  if(bls.length) return {v: bls.map(b=>b[campo]).filter(Boolean).sort().pop()||'', bls, erp:true};
+  const r = ceDe(oc.numero_oc), D = x => x ? String(x).slice(0,10) : '';
+  return {v: r ? D(campo==='etd' ? (r.etdPend||r.etd) : (r.etaPend||r.eta)) : '', bls:[], erp:false, excel: !!(CE._blsBase||[]).some(x=>x.bl && ceNum(x.oc)===num && x.f!==-1 && x.f!==9)};
+}
+function cblHtmlFechaEtf(oc, etapaId){
+  const campo = etapaId==='embarque' ? 'etd' : 'eta', F = cblFechaOC(oc, campo), nom = campo==='etd' ? 'ETD (fecha estimada de salida)' : 'ETA (fecha estimada de llegada a Buenaventura)';
+  const puede = F.erp || F.excel;
+  return `<div style="border-top:1px solid var(--b1);padding-top:10px;margin-bottom:12px;">
+    <label style="font-size:11px;font-weight:700;">📅 ${nom}</label>
+    <input type="date" id="etf-bl" data-campo="${campo}" data-orig="${F.v}" class="inp" value="${F.v}" ${puede?'':'disabled'} style="width:100%;margin:3px 0 4px;">
+    <div class="arte-mu" style="font-size:10.5px;">${F.erp ? 'Se actualiza en el BL '+reabastEsc(F.bls.map(b=>b.bl).join(', '))+' y mueve el tablero.' : F.excel ? 'Esta OC viene del Excel: al guardar, su BL pasa al ERP con la fecha nueva.' : 'Esta OC aún no tiene BL. Créalo en la pestaña 🚢 Embarque (BL) y desde ahí se edita.'}</div></div>`;
+}
+async function cblGuardarFechaEtf(oc){
+  const inp = document.getElementById('etf-bl'); if(!inp || inp.disabled) return true;
+  const nv = inp.value, campo = inp.dataset.campo; if(!nv || nv===inp.dataset.orig) return true;
+  if(!cblPuede()){ if(typeof toast==='function') toast('No tienes permiso para editar el BL','wa'); return false; }
+  let F = cblFechaOC(oc, campo);
+  if(!F.erp && F.excel){ const nombres = [...new Set((CE._blsBase||[]).filter(x=>x.bl && ceNum(x.oc)===ceNum(oc.numero_oc) && x.f!==-1 && x.f!==9).map(x=>String(x.bl)))]; for(const n of nombres){ await cblMigrarExcel(n); } F = cblFechaOC(oc, campo); }
+  if(!F.erp){ if(typeof toast==='function') toast('No se encontró un BL para esta OC','er'); return false; }
+  for(const b of F.bls){
+    if(campo==='eta' && b.etd && nv < b.etd){ if(typeof toast==='function') toast('El ETA no puede ser anterior al ETD ('+b.etd+')','er'); return false; }
+    if(campo==='etd' && b.eta && nv > b.eta){ if(typeof toast==='function') toast('El ETD no puede ser posterior al ETA ('+b.eta+')','er'); return false; } }
+  for(const b of F.bls){ await cblMutar(b.id, bb=>{ const ant = bb[campo]; bb[campo] = nv; cblLog(bb, campo.toUpperCase()+' '+(ant||'—')+' → '+nv+' · desde el tablero ('+oc.numero_oc+')'); }); }
+  if(typeof toast==='function') toast(campo.toUpperCase()+' actualizado · el tablero ya usa la nueva fecha','ok');
+  return 2;
+}
 function etfAbrir(ocId, etapaId){
   if(!reabastEsAdmin()){ if(typeof toast==='function') toast('Solo un administrador','wa'); return; }
   const oc = (REABAST.ordenesCompra||[]).find(o=>o.id===ocId), e = (REABAST.ocEtapas[ocId]||[]).find(x=>x.id===etapaId); if(!oc || !e) return;
@@ -11583,6 +11612,7 @@ function etfAbrir(ocId, etapaId){
     <label style="font-size:11px;font-weight:700;">Cuándo terminó</label>
     <input type="datetime-local" id="etf-fin" class="inp" value="${loc(e.fecha_fin)}" style="width:100%;margin:3px 0 4px;">
     <div class="arte-mu" style="font-size:10.5px;margin-bottom:10px;">Si la marcas Terminada y dejas la fecha de fin vacía, se usa hoy. Si la pasas a Pendiente se borran las fechas.</div>
+    ${(e.etapa_id==='embarque' || e.etapa_id==='transito_maritimo') ? cblHtmlFechaEtf(oc, e.etapa_id) : ''}
     ${e.etapa_id==='inspeccion_calidad' ? `<label style="display:flex;gap:8px;align-items:flex-start;border:1px solid var(--b1);border-radius:8px;padding:8px 10px;margin-bottom:12px;cursor:pointer;font-size:11.5px;"><input type="checkbox" id="etf-na" ${insppSinInspeccion(oc)?'checked':''} style="margin-top:2px;"><span><b>Esta OC NO pasa por inspección</b><br><span class="arte-mu">Queda en gris como "NA" en el tablero (mapeada, sin contar como pendiente ni atrasada). Desmárcalo para reactivarla.</span></span></label>` : ''}
     ${e.etapa_id==='produccion' ? `<div style="border-top:1px solid var(--b1);padding-top:10px;margin-bottom:12px;">
       <label style="font-size:11px;font-weight:700;">📅 Fecha estimada de entrega de producción</label>
@@ -11593,6 +11623,7 @@ function etfAbrir(ocId, etapaId){
 }
 async function etfGuardar(ocId, etapaId){
   const e = (REABAST.ocEtapas[ocId]||[]).find(x=>x.id===etapaId); if(!e) return;
+  { const oc0 = (REABAST.ordenesCompra||[]).find(o=>o.id===ocId); if(oc0 && document.getElementById('etf-bl')){ const ok = await cblGuardarFechaEtf(oc0); if(!ok) return; if(ok===2){ const mm0 = document.getElementById('etf-modal'); if(mm0) mm0.remove(); reabastPintar(); return; } } }
   const naBox = document.getElementById('etf-na');
   if(naBox){ const on = naBox.checked; if(on !== insppSinInspeccion({id:ocId})) await insppSetNA(ocId, on);
     if(on){ const mm = document.getElementById('etf-modal'); if(mm) mm.remove(); reabastPintar(); return; } }
