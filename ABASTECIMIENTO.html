@@ -18977,7 +18977,7 @@ function ocpLeerPI(buf){
     const ws = wb.Sheets[nombre]; if(!ws || !ws['!ref']) return;
     const filas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
     const rng = XLSX.utils.decode_range(ws['!ref']);
-    const hdr = filas.findIndex(r=> r && r.some(c=>/^\s*(code|item\s*no\.?|model|ref(erence)?)\s*$/i.test(String(c||''))) && r.some(c=>/quantity|qty/i.test(String(c||''))));
+    const hdr = filas.findIndex(r=> r && r.some(c=>/^\s*(code|item\s*no\.?|model|ref(erence)?)\s*$/i.test(String(c||''))) && r.some(c=>/quantity|qty|q['’`]?ty/i.test(String(c||''))));
     if(hdr<0) return;
     if(!mejor || filas.length>mejor.filas.length) mejor = {nombre, idx, ws, filas, hdr, off:{r:rng.s.r, c:rng.s.c}};
   });
@@ -18985,13 +18985,13 @@ function ocpLeerPI(buf){
   const {filas, hdr} = mejor; const H = filas[hdr].map(c=>String(c||'').replace(/\s+/g,' ').trim());
   const col = (...rx)=>{ for(const r of rx){ const i = H.findIndex(h=>r.test(h)); if(i>=0) return i; } return -1; };
   const cCode = col(/^code$/i, /^item\s*no/i, /^model$/i, /^ref/i);
-  const cQty  = col(/^quantity$/i, /^qty$/i, /quantity/i);
-  const cFob  = col(/^fob/i, /unit\s*price/i, /price/i);
+  const cQty  = col(/^quantity$/i, /^qty$/i, /^q['’`]?ty\.?$/i, /quantity/i, /q['’`]?ty/i);
+  const cFob  = col(/^fob/i, /unit\s*price/i, /^usd\s*\/\s*(pcs?|unit|set)/i, /price/i);
   const cAmt  = col(/^amount/i, /total\s*(usd|amount)/i);
   const cDesc = col(/customer.*item|cusomer.*item/i, /descrip/i);
   const cCtn  = col(/qty\s*\/\s*ctn|pcs\s*\/\s*ctn|qty\s*inner|inner\s*\/\s*outer|packing\s*qty|qty\s*per\s*(ctn|carton)|pcs\s*\/\s*carton/i);
   const cPack = H.findIndex((h,i)=> i!==cCtn && /packag|^package|^packing$/i.test(h));
-  const cCbm  = col(/cbm\s*outer|cbm\s*\/\s*ctn|^cbm$/i, /^(?!.*total).*cbm/i);
+  const cCbm  = col(/cbm\s*outer|cbm\s*\/\s*ctn|m3\s*\/\s*ctn|^cbm$/i, /^(?!.*total).*cbm/i);
   const cEan  = col(/ean|barcode/i);
   const cDescs = H.map((h,i)=>/descrip/i.test(h)?i:-1).filter(i=>i>=0);
   const items = []; let vacias = 0, ultimaFila = hdr;
@@ -19254,9 +19254,9 @@ async function ocpPdfLib(){ await ocpCargarScript('https://cdnjs.cloudflare.com/
 
 // Reglas para reconocer las columnas de la tabla de ítems, en el orden de preferencia.
 const OCP_COLS = {
-  ref:   [/ilumax.*ref/i, /customer.*(item|ref|code)/i, /cusomer.*item/i, /^ref(erence)?\.?$/i, /^code$/i, /reference/i, /item\s*code/i, /^item\s*no/i, /model/i],
-  qty:   [/^(qty|q'?ty|quantity|cantidad)\.?$/i, /^quantity/i, /^qty(?!\s*\/)/i, /\bqty\b(?!\s*\/)/i],
-  price: [/unit\s*price/i, /^fob/i, /^price/i, /precio/i],
+  ref:   [/ilumax.*ref/i, /customer.*(item|ref|code)/i, /cusomer.*item/i, /^ref(erence)?\.?$/i, /^code$/i, /^(yours?|your\s*(code|ref|item|no))\.?$/i, /reference/i, /item\s*code/i, /^item\s*no/i, /model/i],
+  qty:   [/^(qty|q['’`]?ty|quantity|cantidad)\.?$/i, /^quantity/i, /^qty(?!\s*\/)/i, /\bqty\b(?!\s*\/)/i],
+  price: [/unit\s*price/i, /^fob/i, /^usd\s*\/\s*(pcs?|unit|set)/i, /^price/i, /precio/i],
   amount:[/^amount/i, /total\s*(usd|amount)/i, /^total$/i, /importe|valor/i]
 };
 function ocpElegirCol(headers, reglas, usadas){
@@ -19277,24 +19277,32 @@ async function ocpLeerPIpdf(buf){
     its.sort((a,b)=> b.y-a.y || a.x-b.x);
     const lineas = [];
     its.forEach(it=>{ let l = lineas.find(L=>Math.abs(L.y-it.y)<2.5); if(!l){ l = {y:it.y, items:[]}; lineas.push(l); } l.items.push(it); });
-    lineas.forEach(L=>{
+    lineas.forEach((L,li)=>{
       L.items.sort((a,b)=>a.x-b.x); let cur = null;
       L.items.forEach(it=>{
         if(cur && it.x - (cur.x+cur.w) < Math.max(4, it.h*0.6)){ cur.s += (it.x-(cur.x+cur.w) > 1 ? ' ' : '') + it.s; cur.w = it.x+it.w-cur.x; }
-        else{ cur = {s:it.s, x:it.x, y:L.y, w:it.w, h:it.h, p}; frases.push(cur); }
+        else{ cur = {s:it.s, x:it.x, y:L.y, w:it.w, h:it.h, p, ln:p+'|'+li}; frases.push(cur); }
       });
     });
   }
   frases.forEach(f=>{ f.s = f.s.replace(/\s+/g,' ').trim(); f.cx = f.x + f.w/2; });
   // encabezado de la tabla: una línea que tenga columna de cantidad y de precio o valor
   let hdr = null;
-  const porLinea = {}; frases.forEach(f=>{ const k = f.p+'|'+Math.round(f.y); (porLinea[k]=porLinea[k]||[]).push(f); });
-  for(const k of Object.keys(porLinea)){
-    const L = porLinea[k]; const us = new Set();
+  const porLinea = {}; frases.forEach(f=>{ (porLinea[f.ln]=porLinea[f.ln]||[]).push(f); });
+  const probar = L => { const us = new Set();
     const q = ocpElegirCol(L, OCP_COLS.qty, us), pr = ocpElegirCol(L, OCP_COLS.price, us), am = ocpElegirCol(L, OCP_COLS.amount, us), rf = ocpElegirCol(L, OCP_COLS.ref, us);
-    if(q && rf && (pr||am)){ hdr = {L, q, pr, am, rf, p:L[0].p, y:L[0].y}; break; }
+    return (q && rf && (pr||am)) ? {L, q, pr, am, rf, p:L[0].p, y:L[0].y} : null; };
+  for(const k of Object.keys(porLinea)){ hdr = probar(porLinea[k]); if(hdr) break; }
+  // encabezado partido en varias líneas (p. ej. "Item no / FOB NINGBO" arriba y "Yours / USD/PC / Q'ty" abajo): se prueba juntando líneas cercanas
+  if(!hdr){
+    const ks = Object.keys(porLinea);
+    for(const k of ks){ const base = porLinea[k]; const cerca = frases.filter(f=>f.p===base[0].p && f.ln!==k && Math.abs(f.y-base[0].y)<=16 && f.y>=base[0].y-1);
+      if(!cerca.length) continue; hdr = probar([...base, ...cerca].sort((a,b)=>a.x-b.x)); if(hdr){ hdr.y = base[0].y; break; } }
   }
-  if(!hdr) throw new Error('No encontré la tabla de ítems en el PDF (encabezados de referencia y cantidad). Si es un PDF escaneado, no se puede leer: sube la PI en Excel o Word, o compárala a ojo.');
+  if(!hdr){
+    const pista = frases.filter(f=>/q['’`]?ty|quantity|descrip|amount/i.test(f.s)).slice(0,8).map(f=>f.s).join(' | ');
+    throw new Error('No encontré la tabla de ítems en el PDF (encabezados de referencia y cantidad)'+(pista?' · vi: '+pista:' · no vi texto en la tabla (¿PDF escaneado?)')+'. Si es un PDF escaneado, no se puede leer: sube la PI en Excel o Word, o compárala a ojo.');
+  }
   const cols = hdr.L.map(h=>({h, cx:h.cx}));
   const colDe = f => cols.reduce((best,c)=> Math.abs(c.cx-f.cx) < Math.abs(best.cx-f.cx) ? c : best, cols[0]).h;
   const debajo = f => f.p > hdr.p || (f.p===hdr.p && f.y < hdr.y - 2);
@@ -19316,10 +19324,11 @@ async function ocpLeerPIpdf(buf){
     const qty = ocpNumTxt(q.s), fob = pr ? ocpNumTxt(pr.s) : NaN, amount = am ? ocpNumTxt(am.s) : (isFinite(fob) ? fob*qty : NaN);
     const enBanda = banda(rf); const deCol = h => h ? enBanda.filter(f=>colDe(f)===h).sort((a,b)=>b.y-a.y).map(f=>f.s).join(' ') : '';
     const ctnTxt = deCol(hCtn), mIO = ctnTxt.match(/(\d+)\s*\/\s*(\d+)/);
-    const descFull = deCol(hDescF);
+    const pegado = hCtn && /ctn\s*m3\s*\/\s*ctn/i.test(hCtn.s) ? (ctnTxt.match(/\d+(?:[.,]\d+)?/g)||[]) : null;   // encabezado "PCS/CTN" y "M3/CTN" pegados: 1.º número = pzas por caja, 2.º = m³ por caja
+    const descFull = hDescF ? enBanda.filter(f=>f.x >= hDescF.x-70 && f.x < (hdr.pr ? hdr.pr.x-5 : 1e9)).sort((a,b)=>b.y-a.y || a.x-b.x).map(f=>f.s).join(' ') : '';
     items.push({code: ocpNormRef(rf.s), qty, fob: isFinite(fob)?fob:null, amount: isFinite(amount)?amount:null, desc: descFull.slice(0,80), desc_full: descFull,
-      ctn: mIO ? Number(mIO[2]) : (isFinite(ocpPrimerNum(ctnTxt)) ? ocpPrimerNum(ctnTxt) : null), inner: mIO ? Number(mIO[1]) : null,
-      pack: deCol(hPack), cbm: hCbm && isFinite(ocpPrimerNum(deCol(hCbm))) ? ocpPrimerNum(deCol(hCbm)) : null, ean: hEan ? deCol(hEan).replace(/\D/g,'') : ''});
+      ctn: pegado && pegado.length ? Number(pegado[0].replace(',','.')) : mIO ? Number(mIO[2]) : (isFinite(ocpPrimerNum(ctnTxt)) ? ocpPrimerNum(ctnTxt) : null), inner: pegado ? null : mIO ? Number(mIO[1]) : null,
+      pack: deCol(hPack), cbm: pegado && pegado.length>1 ? Number(pegado[1].replace(',','.')) : hCbm && isFinite(ocpPrimerNum(deCol(hCbm))) ? ocpPrimerNum(deCol(hCbm)) : null, ean: hEan ? deCol(hEan).replace(/\D/g,'') : ''});
   });
   // descripción: primer texto de la columna de descripción en la misma fila (si existe)
   const hDesc = hdr.L.find(h=>/descrip/i.test(h.s));
