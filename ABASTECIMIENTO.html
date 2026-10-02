@@ -18977,7 +18977,7 @@ function ocpLeerPI(buf){
     const ws = wb.Sheets[nombre]; if(!ws || !ws['!ref']) return;
     const filas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
     const rng = XLSX.utils.decode_range(ws['!ref']);
-    const hdr = filas.findIndex(r=> r && r.some(c=>/^\s*(code|item\s*no\.?|model|ref(erence)?)\s*$/i.test(String(c||''))) && r.some(c=>/quantity|qty|q['’`]?ty/i.test(String(c||''))));
+    const hdr = filas.findIndex(r=> r && r.some(c=>/^\s*(code|item\s*no\.?|model|ref(erence)?|yours?)\s*$/i.test(String(c||''))) && r.some(c=>/quantity|qty|q['’`]?ty/i.test(String(c||''))));
     if(hdr<0) return;
     if(!mejor || filas.length>mejor.filas.length) mejor = {nombre, idx, ws, filas, hdr, off:{r:rng.s.r, c:rng.s.c}};
   });
@@ -18991,9 +18991,18 @@ function ocpLeerPI(buf){
     });
     if(!mejor) throw new Error('No encontré la tabla de ítems en el Excel: ninguna fila tiene una referencia de esta OC con su cantidad y precio. Revisa que sea la PI de esta OC.');
   }
-  const {filas, hdr} = mejor; const H = hdr>=0 ? filas[hdr].map(c=>String(c||'').replace(/\s+/g,' ').trim()) : [];
+  const {filas} = mejor; let hdr = mejor.hdr;
+  // La columna de la referencia se decide por las COINCIDENCIAS con las referencias de la OC (no por cómo se llame: "Yours", "Code", "Ref"…)
+  const porC = ocpItemsPorContenido(filas); const frec = {};
+  porC.forEach(x=>{ if(x._col!=null) frec[x._col] = (frec[x._col]||0)+1; });
+  const refCol = Object.keys(frec).length ? Number(Object.keys(frec).sort((a,b)=>frec[b]-frec[a])[0]) : -1;
+  if(refCol>=0){   // el encabezado es la fila de textos justo encima de los ítems
+    const primera = Math.min(...porC.filter(x=>x._col===refCol).map(x=>x._fila));
+    if(hdr<0 || hdr>=primera){ hdr = -1; for(let r=primera-1; r>=Math.max(0,primera-6); r--){ const row = filas[r]||[]; if(row.filter(c=>typeof c==='string' && c.trim()).length>=4){ hdr = r; break; } } }
+  }
+  const H = hdr>=0 ? filas[hdr].map(c=>String(c||'').replace(/\s+/g,' ').trim()) : [];
   const col = (...rx)=>{ for(const r of rx){ const i = H.findIndex(h=>r.test(h)); if(i>=0) return i; } return -1; };
-  const cCode = col(/^code$/i, /^item\s*no/i, /^model$/i, /^ref/i);
+  const cCode = refCol>=0 ? refCol : col(/^code$/i, /^yours?$/i, /^item\s*no/i, /^model$/i, /^ref/i);
   const cQty  = col(/^quantity$/i, /^qty$/i, /^q['’`]?ty\.?$/i, /quantity/i, /q['’`]?ty/i);
   const cFob  = col(/^fob/i, /unit\s*price/i, /^usd\s*\/\s*(pcs?|unit|set)/i, /price/i);
   const cAmt  = col(/^amount/i, /total\s*(usd|amount)/i);
@@ -19094,7 +19103,7 @@ function ocpItemsPorContenido(rows, ys){
     // posición del código dentro de la fila (para reconocer el mismo lugar en filas de ítems que no están en la OC)
     const excl = new Set(T.mejor ? T.mejor.idx : []); const cods = codigos(fila, excl); const rank = cods.findIndex(x=>ocpNormRef(x.w)===f.ref);
     rangos.push({rank: rank<0?0:rank, n: cods.length});
-    out.push({code: f.ref, qty, fob, amount: amount!=null ? amount : (fob!=null ? fob*qty : null), desc:'', desc_full:'', ctn:null, inner:null, pack:'', cbm:null, ean:'', _fila:i});
+    out.push({code: f.ref, qty, fob, amount: amount!=null ? amount : (fob!=null ? fob*qty : null), desc:'', desc_full:'', ctn:null, inner:null, pack:'', cbm:null, ean:'', _fila:i, _col:f.i});
   });
   // 2) otras filas con cantidad × precio = importe y un código en el mismo lugar que las anteriores → ítems que NO están en la OC
   if(out.length){
@@ -19400,6 +19409,10 @@ async function ocpLeerPIpdf(buf){
   const cols = hdr.L.map(h=>({h, cx:h.cx}));
   const colDe = f => cols.reduce((best,c)=> Math.abs(c.cx-f.cx) < Math.abs(best.cx-f.cx) ? c : best, cols[0]).h;
   const debajo = f => f.p > hdr.p || (f.p===hdr.p && f.y < hdr.y - 2);
+  // La columna de la referencia se decide por las coincidencias con las referencias de la OC (no por el nombre del encabezado)
+  { const refsOC = new Set((OCP.items||[]).map(it=>ocpNormRef(it.referencia)).filter(Boolean)); const frec = new Map();
+    frases.filter(f=>debajo(f)).forEach(f=>{ const ok = refsOC.has(ocpNormRef(f.s)) || f.s.split(/[\s,;|:]+/).some(t=>refsOC.has(ocpNormRef(t))); if(!ok) return; const h = colDe(f); frec.set(h,(frec.get(h)||0)+1); });
+    const mejorH = [...frec.entries()].sort((a,b)=>b[1]-a[1])[0]; if(mejorH) hdr.rf = mejorH[0]; }
   const totalF = frases.find(f=>debajo(f) && /^total\b/i.test(f.s));
   const antesTotal = f => !totalF || f.p < totalF.p || (f.p===totalF.p && f.y > totalF.y + 2);
   const cuerpo = frases.filter(f=>debajo(f) && antesTotal(f));
