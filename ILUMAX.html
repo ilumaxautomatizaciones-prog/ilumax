@@ -8836,6 +8836,13 @@ async function reabastRefConFoto(c){
 async function reabastVerDetalleReferenciaPorCodigo(c){ const r = await reabastRefConFoto(c); if(r) reabastVerDetalleReferencia(r); }
 async function reabastEditarReferenciaPorCodigo(c){ const r = await reabastRefConFoto(c); if(r) abrirModalReferencia(r); }
 
+// Asigna el número de orden a ítems nuevos para que la OC conserve siempre el orden de sus productos.
+function ocConOrden(filas, desde){
+  if(!REABAST.itemsOrdenCol) return filas;
+  return filas.map((f,i)=> f.orden!=null ? f : {...f, orden:(desde||0)+i+1});
+}
+function ocSiguienteOrden(ocId){ return Math.max(0, ...(REABAST.ocItems[ocId]||[]).map(i=>Number(i.orden)||0)) + 1; }
+
 async function cargarOC(){
   const [ordenes, etapasRows, itemsRows, proveedores, fichasRows, refsRows, panelFilas] = await Promise.all([
     sbReabastTodo('ordenes_compra', 'select=*&order=creado_en.desc').catch(e=>{ console.warn('Error cargando OC:', e.message); return []; }),
@@ -8852,6 +8859,9 @@ async function cargarOC(){
   REABAST.ordenesCompra = ordenes||[];
   REABAST.ocEtapas = {}; (etapasRows||[]).filter(e=>e.etapa_id!=='arribo_puerto').forEach(e => { (REABAST.ocEtapas[e.oc_id]=REABAST.ocEtapas[e.oc_id]||[]).push(e); });
   REABAST.ocItems = {}; (itemsRows||[]).forEach(it => { (REABAST.ocItems[it.oc_id]=REABAST.ocItems[it.oc_id]||[]).push(it); });
+  // Orden de los productos: se conserva el de la OC (columna oc_items.orden; ver oc_items_orden.sql). Sin la columna, queda el orden de la base.
+  REABAST.itemsOrdenCol = (itemsRows||[]).some(r=>r && Object.prototype.hasOwnProperty.call(r,'orden'));
+  if(REABAST.itemsOrdenCol){ for(const k in REABAST.ocItems){ REABAST.ocItems[k] = REABAST.ocItems[k].map((it,i)=>({it,i})).sort((a,b)=>{ const x = a.it.orden==null?1e9:Number(a.it.orden), y = b.it.orden==null?1e9:Number(b.it.orden); return x-y || a.i-b.i; }).map(z=>z.it); } }
   REABAST.proveedores = proveedores||[];
   REABAST.fichasTecnicas = {}; (fichasRows||[]).forEach(f => { REABAST.fichasTecnicas[f.referencia] = f.datos||{}; });
   REABAST.referenciasMaestro = {}; (refsRows||[]).forEach(r => { REABAST.referenciasMaestro[r.referencia] = r; });
@@ -8859,6 +8869,7 @@ async function cargarOC(){
   REABAST.panelCompras = panelFilas||[];
   await ocMigrarEtapasEmbarque();
   await ocRepararEtapasHuerfanas();
+  try{ await ocRepararRamas(); }catch(e){ console.warn('Ramas:', e.message); }
   await ocCorregirInicioEtapas();
   try{ await ceCargarResumen(true); }catch(e){}
   try{ await prodfCargar(); }catch(e){}
@@ -9410,7 +9421,7 @@ function cblHtmlTablaOC(){
   const claves = [...g.keys()].sort((a,b)=> a===''?1 : b===''?-1 : a.localeCompare(b));
   return `<div class="tw"><table class="cbl-t">${cab}<tbody>${claves.map(k=>{ const L = g.get(k).sort((a,b)=>ocComparar(a.o.numero_oc,b.o.numero_oc)), b0 = k ? CBL.bls.find(b=>String(b.bl).toUpperCase()===k) : null;
     const cbm = L.reduce((a,x)=>a+x.cbm,0);
-    return `<tr style="background:var(--s1);${b0?'cursor:pointer;':''}" ${b0?`onclick="cblAbrir('${b0.id}')" title="Clic para editar este BL"`:''}><td colspan="10" style="font-weight:800;padding:7px 8px;">${b0?`<button class="btn btn-bl btn-xs" style="float:right;" onclick="event.stopPropagation();cblAbrir('${b0.id}')">✏️ Editar BL</button>`:''}${k?'🚢 BL <span style="font-family:monospace;">'+reabastEsc(k)+'</span>':'📭 Sin BL aún'} <span class="arte-mu" style="font-weight:600;font-size:11px;">· ${L.length} OC${b0?` · ${reabastEsc(b0.agente||'sin agente')} · ${reabastEsc((b0.po||'—')+' → '+(b0.pd||'—'))} · ETD ${cblFd(b0.etd)} · ETA ${cblFd(b0.eta)}`:''}${k?'':` · ${cblN(cbm,0)} m³ por embarcar`}</span></td></tr>${L.map(fila).join('')}`; }).join('')}</tbody></table></div>`;
+    return `<tr style="background:var(--s1);${b0?'cursor:pointer;':''}" ${b0?`onclick="cblAbrir('${b0.id}')" title="Clic para editar este BL"`:''}><td colspan="10" style="font-weight:800;padding:7px 8px;">${b0?`<button class="btn btn-bl btn-xs" style="float:right;" onclick="event.stopPropagation();cblAbrir('${b0.id}')">✏️ Editar BL</button>`:''}${k?'🚢 BL <span style="font-family:monospace;">'+reabastEsc(k)+'</span>'+(b0&&cblPuede()?` <span style="cursor:pointer;" title="Cambiar el número de BL" onclick="event.stopPropagation();cblRenombrar('${b0.id}')">✏️</span>`:''):'📭 Sin BL aún'} <span class="arte-mu" style="font-weight:600;font-size:11px;">· ${L.length} OC${b0?` · ${reabastEsc(b0.agente||'sin agente')} · ${reabastEsc((b0.po||'—')+' → '+(b0.pd||'—'))} · ETD ${cblFd(b0.etd)} · ETA ${cblFd(b0.eta)}`:''}${k?'':` · ${cblN(cbm,0)} m³ por embarcar`}</span></td></tr>${L.map(fila).join('')}`; }).join('')}</tbody></table></div>`;
 }
 function cblHtmlTabla(){
   const lista = cblBLsFiltrados(), hoy = Date.now();
@@ -9469,9 +9480,9 @@ function cblPintarDetalle(){
   const opts = est => { const todos = CBL_ESTADOS.includes(est) || !est ? CBL_ESTADOS : [est, ...CBL_ESTADOS]; return todos.map(e=>`<option ${ (est||'Embarque')===e?'selected':''}>${reabastEsc(e)}</option>`).join(''); };
   const cbm = (b.items||[]).reduce((a,it)=>a+(it.cbm>0?it.cant*it.cbm:0),0), cajas = (b.items||[]).reduce((a,it)=>a+(Number(it.cajas)||0),0), R = b.registro || {};
   m.innerHTML = `<div style="background:var(--w,#fff);color:var(--tx);border-radius:12px;max-width:1100px;width:100%;padding:16px 18px;box-shadow:0 20px 50px rgba(0,0,0,.35);">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;"><div style="font-weight:800;font-size:16px;">🌐 BL <span style="font-family:monospace;">${reabastEsc(b.bl)}</span></div><span class="cbl-pill">${reabastEsc(cblEstadoBL(b))}</span><span class="arte-mu" style="font-size:11px;">${(b.items||[]).length} ítem(s) · ${cblN(cbm,2)} m³ · ${cblN(cajas)} cajas</span><span style="margin-left:auto;display:flex;gap:8px;align-items:center;">${cblBotonAvanzar(b)}<button class="btn btn-g btn-sm" onclick="cblCerrarDetalle()">✕ Cerrar</button></span></div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;"><div style="font-weight:800;font-size:16px;">🌐 BL <span style="font-family:monospace;">${reabastEsc(b.bl)}</span>${puede?` <span style="cursor:pointer;font-size:13px;" title="Cambiar el número de BL" onclick="cblRenombrar('${b.id}')">✏️</span>`:''}</div><span class="cbl-pill">${reabastEsc(cblEstadoBL(b))}</span><span class="arte-mu" style="font-size:11px;">${(b.items||[]).length} ítem(s) · ${cblN(cbm,2)} m³ · ${cblN(cajas)} cajas</span><span style="margin-left:auto;display:flex;gap:8px;align-items:center;">${cblBotonAvanzar(b)}<button class="btn btn-g btn-sm" onclick="cblCerrarDetalle()">✕ Cerrar</button></span></div>
     <div style="font-weight:700;font-size:12px;margin-bottom:4px;">Fechas y logística <span class="arte-mu" style="font-weight:500;">· el ETD y el ETA que guardes mueven el tablero de Abastecimiento</span></div>
-    <div class="cbl-in">${inp('agente','Agente de carga')}${inp('po','Puerto de origen')}${inp('pd','Puerto de destino')}${inp('cont','Contenedor(es)')}${inp('etd','ETD (salida)','date')}${inp('eta','ETA (llegada)','date')}${inp('planta','Llegada a planta (est.)','date')}</div>
+    <div class="cbl-in">${inp('bl','Número de BL')}${inp('agente','Agente de carga')}${inp('po','Puerto de origen')}${inp('pd','Puerto de destino')}${inp('cont','Contenedor(es)')}${inp('etd','ETD (salida)','date')}${inp('eta','ETA (llegada)','date')}${inp('planta','Llegada a planta (est.)','date')}</div>
     <div style="margin:8px 0 14px;"><button class="btn btn-bl btn-sm" ${dis} onclick="cblGuardarCab('${b.id}')">💾 Guardar fechas y logística</button></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;"><b style="font-size:12px;">Ítems del BL y su estado</b><span class="arte-mu" style="font-size:11px;">Poner todos en:</span><select id="cbld-todos" class="inp" style="width:auto;" ${dis}>${CBL_ESTADOS.map(e=>`<option>${e}</option>`).join('')}</select><button class="btn btn-g btn-xs" ${dis} onclick="cblTodosEstado('${b.id}')">Aplicar a todos</button></div>
     <div class="tw" style="max-height:340px;"><table class="cbl-t"><thead><tr><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Cajas</th><th>Estado</th><th>Llegada a planta</th><th>Ingreso a bodega</th><th></th></tr></thead><tbody>
@@ -9501,10 +9512,20 @@ async function cblMutar(id, fn, msg){
   try{ await cblPersistir(b, antes); if(msg && typeof toast==='function') toast(msg,'ok'); }catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); }
   if(CBL.det===id && document.getElementById('cbl-det')) cblPintarDetalle(); else if(REABAST.tab==='comext'){ const c=document.getElementById('cbl-tabla'); if(c) c.innerHTML=cblHtmlTabla(); }
 }
+function cblRenombrar(id){
+  const b = CBL.bls.find(x=>x.id===id); if(!b) return;
+  if(!cblPuede()){ if(typeof toast==='function') toast('Solo Compras, Comercio Exterior, Administración o un administrador','wa'); return; }
+  const n = (prompt('Número de BL', b.bl||'')||'').trim(); if(!n || n===b.bl) return;
+  if(CBL.bls.some(x=>x.id!==id && String(x.bl).trim().toLowerCase()===n.toLowerCase())){ if(typeof toast==='function') toast('Ya existe otro BL con el número '+n,'er'); return; }
+  cblMutar(id, bb=>{ cblLog(bb,'Número de BL '+(bb.bl||'—')+' → '+n); bb.bl = n; }, 'Número de BL actualizado');
+}
 function cblGuardarCab(id){
   const v = k => (document.getElementById('cbld-'+k)||{}).value || '';
   if(v('etd') && v('eta') && v('eta') < v('etd')){ if(typeof toast==='function') toast('El ETA no puede ser anterior al ETD','er'); return; }
-  cblMutar(id, b=>{ const ant = `ETD ${b.etd||'—'}→${v('etd')||'—'} · ETA ${b.eta||'—'}→${v('eta')||'—'}`; ['agente','po','pd','cont','etd','eta','planta'].forEach(k=>{ b[k] = v(k); }); cblLog(b,'Fechas/logística: '+ant); }, 'Guardado · el tablero se actualizó con el nuevo ETD/ETA');
+  const nbl = v('bl').trim();
+  if(!nbl){ if(typeof toast==='function') toast('El número de BL no puede quedar vacío','er'); return; }
+  if(CBL.bls.some(x=>x.id!==id && String(x.bl).trim().toLowerCase()===nbl.toLowerCase())){ if(typeof toast==='function') toast('Ya existe otro BL con el número '+nbl,'er'); return; }
+  cblMutar(id, b=>{ const ant = `ETD ${b.etd||'—'}→${v('etd')||'—'} · ETA ${b.eta||'—'}→${v('eta')||'—'}`; if(b.bl!==nbl){ cblLog(b,'Número de BL '+(b.bl||'—')+' → '+nbl); b.bl = nbl; } ['agente','po','pd','cont','etd','eta','planta'].forEach(k=>{ b[k] = v(k); }); cblLog(b,'Fechas/logística: '+ant); }, 'Guardado · el tablero se actualizó con el nuevo ETD/ETA');
 }
 function cblItemEstado(id, ix, est){
   cblMutar(id, b=>{ const it = b.items[ix]; if(!it) return false; it.estado = est; if(ceFaseLinea(est,'').fase===9 && !it.ingreso) it.ingreso = _prodfIso(new Date()); cblLog(b, 'Ítem '+it.ref+' ('+it.oc+') → '+est); }, 'Estado actualizado');
@@ -10421,10 +10442,82 @@ function reabastHtmlPorLotes(){
     }).join('')}
     </div>`;
 }
+
+// ── Ramas / parciales (OCI137-1, -2, -3…) ───────────────────────────────────────────────────────
+function ocEsRama(o){ return !!(o && /-\d+$/.test(String(o.numero_oc||''))); }
+function ocRamaBase(o){ const n = String(o.numero_oc||'').replace(/-\d+$/,''); return (REABAST.ordenesCompra||[]).find(x=>x.numero_oc===n) || null; }
+function ocRamaBotonMover(o){
+  if(!ocEsRama(o) || !ocRamaBase(o) || !(reabastEsAdmin() || (typeof reabastPuedeAprobar==='function' && reabastPuedeAprobar()))) return '';
+  return ` <button class="btn btn-bl btn-xs" style="margin-left:8px;" onclick="event.stopPropagation();ocRamaMoverAbrir('${o.id}')">📦 Pasar ítems de ${reabastEsc(ocRamaBase(o).numero_oc)} a esta rama</button>`;
+}
+// Una rama creada sin etapa de Producción (quedaba así si el lote estaba aún en producción) no podía proyectar fechas:
+// se le crea la producción, copiando inicio y plazo de la OC original, y desde ahí corren las etapas siguientes.
+async function ocRepararRamas(){
+  if(!reabastEsAdmin()) return;
+  const tpl = OC_ETAPAS_POR_ID.produccion; if(!tpl) return;
+  const tareas = [];
+  (REABAST.ordenesCompra||[]).forEach(o=>{
+    if(!ocEsRama(o) || o.estado_general==='cancelada') return;
+    const es = REABAST.ocEtapas[o.id]||[]; if(!es.length || es.some(e=>e.etapa_id==='produccion')) return;
+    const base = ocRamaBase(o), bp = base && (REABAST.ocEtapas[base.id]||[]).find(e=>e.etapa_id==='produccion');
+    const post = es.filter(e=>CE_ETAPAS.includes(e.etapa_id) && e.estado!=='pendiente');
+    const fila = {oc_id:o.id, etapa_id:'produccion', nombre:tpl.nombre, orden:OC_ETAPAS_TEMPLATE.indexOf(tpl)+1, dias_esperado:(bp && Number(bp.dias_esperado)) || tpl.dias,
+      estado: post.length ? 'completada' : 'en_curso', fecha_inicio: (bp && bp.fecha_inicio) || null,
+      fecha_fin: post.length ? (post.map(e=>e.fecha_inicio).filter(Boolean).sort()[0] || null) : null};
+    tareas.push(async()=>{ try{ const r = await sbReabast.post('oc_etapas',[fila]); es.push((r && r[0]) || fila); es.sort((a,b)=>(a.orden||0)-(b.orden||0)); }catch(e){ console.warn('Rama sin producción:', o.numero_oc, e.message); } });
+  });
+  for(const t of tareas) await t();
+}
+function ocRamaMoverAbrir(ramaId){
+  const rama = (REABAST.ordenesCompra||[]).find(o=>o.id===ramaId), base = rama && ocRamaBase(rama);
+  if(!rama || !base){ if(typeof toast==='function') toast('No encontré la OC original de esta rama','er'); return; }
+  const items = REABAST.ocItems[base.id]||[];
+  if(!items.length){ if(typeof toast==='function') toast(base.numero_oc+' no tiene ítems para pasar','wa'); return; }
+  let ov = document.getElementById('rama-mover'); if(ov) ov.remove();
+  ov = document.createElement('div'); ov.id = 'rama-mover';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9500;display:flex;align-items:flex-start;justify-content:center;padding:4vh 16px;overflow:auto;';
+  const ya = (REABAST.ocItems[rama.id]||[]).length;
+  ov.innerHTML = `<div style="background:var(--w);border-radius:14px;max-width:760px;width:100%;padding:16px 18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><b style="font-size:14px;">📦 Pasar ítems de ${reabastEsc(base.numero_oc)} → ${reabastEsc(rama.numero_oc)}</b><button class="btn btn-g btn-sm" onclick="document.getElementById('rama-mover').remove()">✕</button></div>
+    <div class="arte-mu" style="font-size:11.5px;margin-bottom:8px;">Marca los ítems que van en este parcial y la cantidad. Si pasas menos de lo ordenado, el resto queda en ${reabastEsc(base.numero_oc)}. ${ya?`Esta rama ya tiene ${ya} ítem(s).`:''}</div>
+    <div class="tw" style="max-height:52vh;overflow:auto;"><table style="font-size:11.5px;"><thead><tr><th></th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">En ${reabastEsc(base.numero_oc)}</th><th style="text-align:right;">Pasar</th></tr></thead><tbody>
+    ${items.map((it,i)=>`<tr><td><input type="checkbox" id="rm-c-${i}" onchange="document.getElementById('rm-q-${i}').disabled=!this.checked"></td><td style="font-family:monospace;">${reabastEsc(it.referencia||'')}</td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${reabastEsc(it.descripcion||'')}</td><td style="text-align:right;">${Number(it.cantidad)||0}</td><td style="text-align:right;"><input class="inp" type="number" min="1" max="${Number(it.cantidad)||0}" id="rm-q-${i}" value="${Number(it.cantidad)||0}" disabled style="width:90px;margin:0;"></td></tr>`).join('')}
+    </tbody></table></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;"><span id="rm-st" class="arte-mu" style="align-self:center;"></span><button class="btn btn-g" onclick="document.getElementById('rama-mover').remove()">Cancelar</button><button class="btn btn-p" id="rm-ok" onclick="ocRamaMoverOk('${rama.id}')">Pasar a ${reabastEsc(rama.numero_oc)}</button></div></div>`;
+  document.body.appendChild(ov);
+}
+async function ocRamaMoverOk(ramaId){
+  const rama = (REABAST.ordenesCompra||[]).find(o=>o.id===ramaId), base = rama && ocRamaBase(rama); if(!rama || !base) return;
+  const items = REABAST.ocItems[base.id]||[]; const sel = [];
+  items.forEach((it,i)=>{ const c = document.getElementById('rm-c-'+i); if(c && c.checked){ const q = Math.floor(Number(document.getElementById('rm-q-'+i).value)); const tot = Number(it.cantidad)||0;
+    if(q>0 && q<=tot) sel.push({it, q, tot}); } });
+  if(!sel.length){ if(typeof toast==='function') toast('Marca al menos un ítem con cantidad válida','wa'); return; }
+  const st = document.getElementById('rm-st'), btn = document.getElementById('rm-ok'); if(btn) btn.disabled = true; if(st) st.textContent = '⏳ Pasando…';
+  const nota = 'Pasado de '+base.numero_oc+' a '+rama.numero_oc+' (parcial) desde el ERP';
+  try{
+    let n = (REABAST.ocItems[rama.id]||[]).length;
+    for(const {it,q,tot} of sel){
+      const obs = it.observacion ? it.observacion+' · '+nota : nota;
+      if(q===tot){ await sbReabast.patch('oc_items','id=eq.'+it.id, {oc_id:rama.id, observacion:obs}); }
+      else{
+        const {id, oc_id, ...resto} = it; const clon = {...resto, oc_id:rama.id, cantidad:q, observacion:obs};
+        if(REABAST.itemsOrdenCol) clon.orden = ocSiguienteOrden(rama.id) + n;
+        await sbReabast.post('oc_items', clon);
+        await sbReabast.patch('oc_items','id=eq.'+it.id, {cantidad: tot-q});
+      }
+      n++;
+    }
+    ocnAgregar(base.id, [{tipo:'referencia', campo:'Ítems pasados a '+rama.numero_oc, antes:'—', despues:sel.length+' ítem(s)', motivo:'Parcial / envío por lotes', origen:'Pasar ítems a rama'}]).catch(()=>{});
+    await cargarOC();
+    const ov = document.getElementById('rama-mover'); if(ov) ov.remove();
+    if(typeof toast==='function') toast('✅ '+sel.length+' ítem(s) pasados a '+rama.numero_oc,'ok');
+    reabastPintar();
+  }catch(e){ if(st) st.textContent = ''; if(btn) btn.disabled = false; if(typeof toast==='function') toast('No se pudo pasar: '+e.message,'er'); }
+}
 function lotesHtmlItemsFila(o){
   const items = REABAST.ocItems[o.id]||[];
   const colspan = 8;
-  if(!items.length) return `<tr class="seg-exp-row"><td colspan="${colspan}" style="background:var(--s1);font-size:11px;padding:8px 14px 8px 30px;" class="arte-mu">Esta OC no tiene ítems cargados todavía.</td></tr>`;
+  if(!items.length) return `<tr class="seg-exp-row"><td colspan="${colspan}" style="background:var(--s1);font-size:11px;padding:8px 14px 8px 30px;" class="arte-mu">Esta OC no tiene ítems cargados todavía.${ocRamaBotonMover(o)}</td></tr>`;
   const r = ceDe(o.numero_oc);
   const estadoCE = (r && r.estados && r.estados.length) ? r.estados.join(' / ') : '—';
   const llegadaTxt = lotesLlegadaTxt(o);
@@ -10598,20 +10691,41 @@ function segCeldaArte(o, col, es){
   return {st:'pend', obj, ref, es, desde:A.desde};
 }
 // Fecha en que cada etapa pendiente DEBERÍA cumplirse: encadena desde donde va la OC (fin de la anterior o vencimiento de la que está en curso) + los días objetivo de cada etapa.
+// ETD / ETA ya ingresados para la OC (BL del ERP o Comercio Exterior): desde esas fechas corren las etapas siguientes.
+function segEtdEta(o){
+  const out = {etd:null, eta:null};
+  try{
+    const f = c => { const v = cblFechaOC(o, c).v; if(!v) return null; const d = new Date(String(v).slice(0,10)+'T12:00:00'); return isNaN(d) ? null : d; };
+    out.etd = f('etd'); out.eta = f('eta');
+    // un ETA imposible (menos de ~27 d de tránsito después del ETD) no se toma: se proyecta ETD + tránsito
+    if(out.etd && out.eta && out.eta < new Date(out.etd.getTime() + (CE_TRANSITO_MIN-3)*86400000)) out.eta = null;
+  }catch(e){}
+  return out;
+}
+// Fecha en que cada etapa pendiente DEBERÍA cumplirse: encadena desde donde va la OC (fin de la anterior o vencimiento de la que está en curso) + los días objetivo de cada etapa.
+// - Si ya hay ETD (o ETA) ingresado, ese dato manda y las etapas siguientes corren desde allí.
+// - Si una etapa va retrasada (su fecha ya pasó y no se ha actualizado), la siguiente corre desde el día hábil siguiente a hoy.
 function segPlanFechas(o, celdas){
-  const plan = {}; let cur = null; const hoy = new Date(); hoy.setHours(12,0,0,0);
+  const plan = {}; let cur = null, atras = false; const hoy = new Date(); hoy.setHours(12,0,0,0);
   const mas = (d,n,hab) => hab ? ocSumarHabiles(d, n) : new Date(new Date(d).getTime()+n*86400000);
+  const sigHabil = d => { const x = new Date(d); do{ x.setDate(x.getDate()+1); }while(!ocEsHabil(x)); return x; };
+  const A = segEtdEta(o);
   for(const col of SEG_COLS){
     const d = celdas[col.id]; if(!d || d.st==='na' || d.st==='sinant' || d.st==='sininsp') continue;
     const hab = !!(d.es && d.es.length===1 && (OC_ETAPAS_POR_ID[d.es[0].etapa_id]||{}).habiles);
-    if(d.st==='ok' || d.st==='tarde'){ if(d.fin) cur = new Date(d.fin); continue; }
+    if(d.st==='ok' || d.st==='tarde'){ if(d.fin){ cur = new Date(d.fin); atras = false; } continue; }
+    // ETD ingresado → la salida (fin de Embarque) es esa fecha; ETA ingresado → fin de Tránsito es esa fecha
+    if((d.st==='curso' || d.st==='pend') && col.id==='embarque' && A.etd){ cur = new Date(A.etd); atras = false; plan.embarque = cur; continue; }
+    if((d.st==='curso' || d.st==='pend') && col.id==='transito' && A.eta){ cur = new Date(A.eta); atras = false; plan.transito = cur; continue; }
     if(d.st==='curso'){
       let fin = d.vence ? new Date(d.vence) : (d.ini && d.obj!=null ? mas(d.ini, d.obj, hab) : null);
       if(col.id==='produccion'){ try{ const v = ceFinProduccion(o); if(v && v.fecha) fin = new Date(v.fecha); }catch(e){} }
-      if(fin) cur = fin; continue; }
+      if(fin){ if(fin < hoy){ fin = new Date(hoy); atras = true; } else atras = false; cur = fin; } continue; }
     if(d.st==='pend'){
       if(!cur) continue;   // sin etapa previa con fecha no hay desde dónde proyectar
-      const base = new Date(cur); base.setDate(base.getDate()+1);   // cada etapa arranca el día siguiente a que termina la anterior
+      if(cur < hoy){ cur = new Date(hoy); atras = true; }   // la etapa anterior ya debió terminar y no se ha actualizado: no se proyecta en el pasado
+      const base = atras ? sigHabil(cur) : new Date(cur.getTime()+86400000);   // cada etapa arranca el día siguiente (día hábil siguiente si hay retraso)
+      atras = false;
       cur = mas(base, Number(d.obj)||0, hab); plan[col.id] = cur; }
   }
   return plan;
@@ -11295,7 +11409,7 @@ function embPanelPintar(){
 function segHtmlItemsFila(o){
   const items = REABAST.ocItems[o.id]||[];
   const colspan = SEG_COLS.length+3;
-  if(!items.length) return `<tr class="seg-exp-row"><td colspan="${colspan}" style="background:var(--s1);font-size:11px;padding:8px 14px 8px 30px;" class="arte-mu">Esta OC no tiene ítems cargados todavía.</td></tr>`;
+  if(!items.length) return `<tr class="seg-exp-row"><td colspan="${colspan}" style="background:var(--s1);font-size:11px;padding:8px 14px 8px 30px;" class="arte-mu">Esta OC no tiene ítems cargados todavía.${ocRamaBotonMover(o)}</td></tr>`;
   const r = ceDe(o.numero_oc);
   const estadoCE = (r && r.estados && r.estados.length) ? r.estados.join(' / ') : '—';
   const llegadaTxt = lotesLlegadaTxt(o);
@@ -12767,7 +12881,7 @@ async function pciProcesarUna(p){
     if(!p.importada) return;   // OC hecha en el ERP: de Base compras solo toma la fecha inicial
   }
   // Ítems: se crean si la OC no tiene (también repara OC que quedaron a medias en una carga anterior).
-  if(!tieneItems && p.items.length) await sbReabast.post('oc_items', pciUniformar(p.items.map(it=>({oc_id:ocId, ...it}))));
+  if(!tieneItems && p.items.length) await sbReabast.post('oc_items', pciUniformar(ocConOrden(p.items.map(it=>({oc_id:ocId, ...it})), 0)));
   // Etapas faltantes en un solo envío; las existentes solo avanzan (nunca retroceden).
   // Si Comercio Exterior ya tiene esta OC, Base compras solo manda hasta producción (en curso).
   const conCE = !!ceDe(p.oc.numero_oc);
@@ -13175,7 +13289,11 @@ async function ceAplicarOC(oc, r){
   for(const id of CE_ETAPAS){
     const t = T[id]; const cur = porId[id]; const tpl = OC_ETAPAS_POR_ID[id];
     const prevAntes = prevFin;
-    if(!t){ if(cur && cur.fecha_fin) prevFin = new Date(cur.fecha_fin); continue; }   // producción en curso: la deja Base compras
+    if(!t){
+      if(id==='produccion' && !cur && /-\d+$/.test(oc.numero_oc||'')){   // rama (parcial) todavía en producción: necesita su etapa para proyectar las fechas
+        const base = (REABAST.ordenesCompra||[]).find(x=>x.numero_oc===String(oc.numero_oc).replace(/-\d+$/,'')), bp = base && (REABAST.ocEtapas[base.id]||[]).find(e=>e.etapa_id==='produccion');
+        await sbReabast.post('oc_etapas', [{oc_id:oc.id, etapa_id:'produccion', nombre:tpl.nombre, orden:OC_ETAPAS_TEMPLATE.indexOf(tpl)+1, dias_esperado:(bp && Number(bp.dias_esperado)) || tpl.dias, estado:'en_curso', fecha_inicio:(bp && bp.fecha_inicio) || null}]); cambios++; }
+      if(cur && cur.fecha_fin) prevFin = new Date(cur.fecha_fin); continue; }   // producción en curso: la deja Base compras
     if(cur && cur.estado==='completada' && !automatico(cur)){ prevFin = cur.fecha_fin ? new Date(cur.fecha_fin) : prevFin; continue; }
     if(t.soloSiIniciada && (!cur || cur.estado==='pendiente')){ prevFin = null; continue; }
     let fi = null, ff = null;
@@ -13260,7 +13378,7 @@ async function ceCrearItemsRama(oc, nuevos, lote){
     return {oc_id:oc.id, referencia:n.ref, descripcion: t.descripcion || r.descripcion_en || n.desc || null, cantidad:n.qty, precio_fob_usd: t.precio_fob_usd!=null?t.precio_fob_usd:null,
       costo_unitario_cop: t.costo_unitario_cop!=null?t.costo_unitario_cop:null, precio_venta_cop: t.precio_venta_cop!=null?t.precio_venta_cop:null, margen_pct: t.margen_pct!=null?t.margen_pct:null,
       lote: lote||null, observacion: nota + (t.precio_fob_usd==null ? ' · SIN precio FOB: completar' : ''), sku_nuevo:false}; });
-  const creados = await sbReabast.post('oc_items', pciUniformar(filas));
+  const creados = await sbReabast.post('oc_items', pciUniformar(ocConOrden(filas, ocSiguienteOrden(oc.id)-1)));
   REABAST.ocItems[oc.id] = (REABAST.ocItems[oc.id]||[]).concat(creados||[]);
 }
 // Ajusta una rama que ya existe: cantidades al enviado del archivo y ítems que faltan.
@@ -16516,6 +16634,7 @@ async function ocdAgregarItem(ocId){
   const r = (REABAST.referenciasMaestro && REABAST.referenciasMaestro[referencia]) || {};
   const payload = { oc_id:ocId, referencia, descripcion: r.descripcion_en||null, cantidad, precio_fob_usd:fob,
     costo_unitario_cop:costoUnitCop, precio_venta_cop:precioVenta, margen_pct:margen, lote, observacion, sku_nuevo:false };
+  if(REABAST.itemsOrdenCol) payload.orden = ocSiguienteOrden(ocId);
   try{
     const nuevo = await sbReabast.post('oc_items', payload);
     REABAST.ocItems[ocId] = (REABAST.ocItems[ocId]||[]).concat(nuevo||[payload]);
@@ -18965,8 +19084,15 @@ function ocpHtmlPI(){
     ${p.terminos?`<div class="arte-mu" style="margin-top:6px;">💳 ${ocpEsc(p.terminos)}</div>`:''}
   </div>
   ${ocpHtmlComparacion()}
+  ${(()=>{ const pe = ((REABAST.ocEtapas[OCP.oc.id]||[]).find(e=>e.etapa_id==='produccion')||{}).dias_esperado; const lt = p.lead_time!=null && p.lead_time!=='' ? p.lead_time : '';
+    return `<div class="arte-sec">
+    <div class="arte-sec-h">③ Lead time confirmado por el proveedor <span style="color:var(--rd);">*</span></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <input class="inp" type="number" min="1" step="1" id="ocp-leadtime" ${ed?'':'disabled'} value="${ocpEsc(lt)}" placeholder="Ej. 60" style="width:120px;margin:0;" oninput="ocpSetLeadTime(this.value)"> <span>días de producción</span>
+      <span class="arte-mu" style="font-size:11px;">Hoy la OC tiene ${pe?ocpEsc(pe)+' d':'—'} de producción. Al confirmar la PI se actualiza con este valor y se recalculan las fechas.</span>
+    </div></div>`; })()}
   <div class="arte-sec">
-    <div class="arte-sec-h">③ Sello ILUMAX TRADING CORP.</div>
+    <div class="arte-sec-h">④ Sello ILUMAX TRADING CORP.</div>
     ${ocpHtmlSelloSeccion()}
     ${p.sellado_url ? `<div class="arte-adj" style="margin-top:8px;"><span class="arte-adj-t">✅ PI sellada</span><a href="${ocpEsc(p.sellado_url)}" target="_blank" rel="noopener">${ocpEsc(ocpNombreSellado())}</a><span class="arte-mu">${arteFmtFecha(p.sellado_en)}</span></div>`:''}
     ${ed ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
@@ -19094,9 +19220,11 @@ async function ocpCorreoPI(){
     if(typeof toast==='function') toast('✅ PI sellada enviada con el archivo adjunto','ok'); ocpRefrescarPI();
   }catch(err){ if(typeof toast==='function') toast('No se envió: '+err.message,'er'); }
 }
+function ocpSetLeadTime(v){ const p = OCP.d.pi; const n = Number(v); p.lead_time = n>0 ? Math.round(n) : null; ocpCambio(); try{ ocpProgreso(); }catch(e){} }
 function ocpFaltanPI(){
   const p = OCP.d.pi, f = [];
   if(!p.original_nombre) return ['Cargar el Excel de la PI'];
+  if(!(Number(p.lead_time)>0)) f.push('Escribir el lead time confirmado por el proveedor (días)');
   if(ocpHayDiferencias() && !p.acepto_diferencias) f.push('Revisar y aceptar las diferencias');
   if(!p.sellado_url) f.push('Poner el sello');
   return f;
@@ -19939,7 +20067,12 @@ async function ocpConfirmar(){
   } else {
     const p = OCP.d.pi; const dif = ocpNovedadesDePI().length;
     extra.adjunto_url = p.sellado_url;
-    extra.comentario_extra = `PI ${p.pi_no||p.original_nombre} confirmada y sellada · Total US$ ${ocpNum(p.total)}${dif?' · '+dif+' cambio(s) del proveedor registrados en el histórico':' · coincide con la OC'}.`;
+    extra.comentario_extra = `PI ${p.pi_no||p.original_nombre} confirmada y sellada · Total US$ ${ocpNum(p.total)}${dif?' · '+dif+' cambio(s) del proveedor registrados en el histórico':' · coincide con la OC'} · Lead time confirmado por el proveedor: ${p.lead_time} d.`;
+    // el lead time confirmado manda sobre los 45 d estándar: se guarda en la etapa de producción
+    try{ const prod = (REABAST.ocEtapas[ocId]||[]).find(e=>e.etapa_id==='produccion'); const lt = Number(p.lead_time);
+      if(prod && lt>0 && Number(prod.dias_esperado)!==lt){ const ant = Number(prod.dias_esperado)||null; await sbReabast.patch('oc_etapas','id=eq.'+prod.id,{dias_esperado:lt}); prod.dias_esperado = lt;
+        ocnAgregar(ocId, [{tipo:'demora', campo:'Lead time de producción', antes: ant?ant+' d':'', despues: lt+' d', motivo:'Lead time confirmado por el proveedor en la PI', origen:'Confirmar PI'}]).catch(()=>{}); } }
+    catch(e){ if(typeof toast==='function') toast('No se pudo guardar el lead time: '+e.message,'er'); return; }
     try{ await ocnAgregar(ocId, ocpNovedadesDePI()); }catch(e){ if(typeof toast==='function') toast('No se pudo guardar el histórico de cambios: '+e.message,'er'); return; }
   }
   ocpLog('completada', extra.comentario_extra);
@@ -20768,7 +20901,7 @@ async function crearOC(){
     const ahora = new Date().toISOString();
     const ocCreada = await sbReabast.post('ordenes_compra', {numero_oc:numero, proveedor: proveedor||null, creado_por: CU.nombre, trm, factor_landeo: factor, ...datosDoc});
     const oc = ocCreada[0];
-    await sbReabast.post('oc_items', items.map(it=>({oc_id:oc.id, ...it})));
+    await sbReabast.post('oc_items', ocConOrden(items.map(it=>({oc_id:oc.id, ...it})), 0));
     // Si al menos un ítem es SKU nuevo, la OC toma el camino largo de arte (Calidad → Diseño →
     // proveedor); si no, el corto (reimpresión directo al proveedor). Nunca los dos a la vez.
     const requiereArteNuevo = items.some(it=>it.sku_nuevo);
