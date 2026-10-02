@@ -19365,15 +19365,28 @@ function ocpElegirCol(headers, reglas, usadas){
   return null;
 }
 // Lee una PI en PDF (texto, no escaneado): agrupa el texto por líneas y ubica la tabla por sus encabezados.
+const OCP_PDF_BUILD = 'pdf-2610b';
 async function ocpLeerPIpdf(buf){
+  // 1.º en el espacio de la pantalla (lee bien las páginas giradas); si no sale nada, 2.º con las coordenadas crudas del PDF
+  let e1 = null;
+  try{ return await ocpLeerPIpdfModo(buf, 'disp'); }catch(e){ e1 = e; }
+  try{ return await ocpLeerPIpdfModo(buf, 'raw'); }catch(e){ /* se muestra el primer error */ }
+  throw e1;
+}
+async function ocpLeerPIpdfModo(buf, modo){
   const lib = await ocpPdfjs();
   const pdf = await lib.getDocument({data: new Uint8Array(buf.slice(0))}).promise;
   const frases = []; const paginas = [];
   for(let p=1; p<=pdf.numPages; p++){
     const page = await pdf.getPage(p); const vp = page.getViewport({scale:1});
-    paginas.push({w:vp.width, h:vp.height, view: page.view});
+    const rot = modo==='raw' ? 0 : (((page.rotate||0)%360)+360)%360;
+    paginas.push({w:vp.width, h:vp.height, view: page.view, rot, ox:page.view[0], oy:page.view[1], uw:page.view[2]-page.view[0], uh:page.view[3]-page.view[1]});
     const tc = await page.getTextContent();
-    const its = tc.items.filter(i=>i.str && i.str.trim()).map(i=>({s:i.str, x:i.transform[4], y:i.transform[5], w:i.width||0, h:Math.abs(i.transform[3])||8}));
+    // Las posiciones del texto vienen en el espacio de la página SIN girar: se pasan al espacio de la pantalla (y hacia arriba)
+    // para que las páginas giradas (p. ej. PDF exportado de Excel en horizontal) se lean igual que las normales.
+    const its = tc.items.filter(i=>i.str && i.str.trim()).map(i=>{ if(modo==='raw') return {s:i.str, x:i.transform[4], y:i.transform[5], w:i.width||0, h:Math.hypot(i.transform[2], i.transform[3])||8};
+      const t = lib.Util.transform(vp.transform, i.transform);
+      return {s:i.str, x:t[4], y:vp.height - t[5], w:i.width||0, h:Math.hypot(i.transform[2], i.transform[3])||8}; });
     // líneas (misma altura) → frases (textos pegados)
     its.sort((a,b)=> b.y-a.y || a.x-b.x);
     const lineas = [];
@@ -19443,7 +19456,7 @@ async function ocpLeerPIpdf(buf){
   items = ocpCompletarPorContenido(items, filasTxt, filasY);
   if(!items.length){
     const pista = frases.filter(f=>/q['’`]?ty|quantity|cantidad|descrip|amount|total/i.test(f.s)).slice(0,8).map(f=>f.s).join(' | ');
-    throw new Error('No encontré en el PDF ninguna referencia de esta OC con su cantidad y precio'+(pista?' · vi: '+pista:' · no vi texto en la tabla (¿PDF escaneado?)')+'. Si es un PDF escaneado, no se puede leer: sube la PI en Excel o Word, o compárala a ojo.');
+    throw new Error('No encontré en el PDF ninguna referencia de esta OC con su cantidad y precio'+(pista?' · vi: '+pista:' · no vi texto en la tabla (¿PDF escaneado?)')+' ['+OCP_PDF_BUILD+', '+modo+']. Si es un PDF escaneado, no se puede leer: sube la PI en Excel o Word, o compárala a ojo.');
   }
   // encabezado de la PI
   const valorDe = rx => { for(const f of frases){ const m = f.s.match(rx); if(m){ const v = (m[m.length-1]||'').replace(/^[:#\s]+/,'').trim(); if(v) return v; const sig = frases.filter(g=>g.p===f.p && Math.abs(g.y-f.y)<2.5 && g.x>f.x).sort((a,b)=>a.x-b.x)[0]; if(sig) return sig.s; } } return ''; };
@@ -19457,9 +19470,11 @@ async function ocpLeerPIpdf(buf){
   const buyer = [...frases].reverse().find(f=>mitadInf(f) && /(the\s*buyer|buyer'?s?\s*(signature|sign|stamp|confirm))/i.test(f.s));
   const firma = [...frases].reverse().find(f=>mitadInf(f) && /accepted|confirmed\s*by|authori[sz]ed|the\s*seller|signature/i.test(f.s));
   let pos;
-  if(buyer) pos = {page:buyer.p, x:Math.max(20, buyer.x-10), y:buyer.y+buyer.h+6};
-  else if(firma){ const pg = paginas[firma.p-1]; pos = {page:firma.p, x:pg.view[0]+pg.w-W-40, y:Math.max(pg.view[1]+30, firma.y-18)}; }
-  else { const pg = paginas[paginas.length-1]; pos = {page:paginas.length, x:pg.view[0]+pg.w-W-40, y:pg.view[1]+60}; }
+  // (xd, yd) en pantalla → en páginas sin giro se guarda en el espacio del PDF (como siempre); en páginas giradas se guarda en pantalla (disp:true) y se convierte al sellar
+  const aPos = (pg, n, xd, yd) => pg.rot===0 ? {page:n, x:xd+pg.ox, y:yd+pg.oy} : {page:n, x:xd, y:yd, disp:true};
+  if(buyer) pos = aPos(paginas[buyer.p-1], buyer.p, Math.max(20, buyer.x-10), buyer.y+buyer.h+6);
+  else if(firma){ const pg = paginas[firma.p-1]; pos = aPos(pg, firma.p, pg.w-W-40, Math.max(30, firma.y-18)); }
+  else { const pg = paginas[paginas.length-1]; pos = aPos(pg, paginas.length, pg.w-W-40, 60); }
   pos.w = W; pos.h = H;
   const texto = [...frases].sort((a,b)=> a.p-b.p || b.y-a.y || a.x-b.x).map(f=>f.s).join('\n');
   return {tipo:'pdf', texto, pi_no, po_no, fecha, terminos, items, paginas, posDefecto:pos, ancla: buyer ? 'encima de "'+buyer.s+'"' : firma ? 'al lado de la firma del proveedor' : 'abajo a la derecha'};
@@ -19518,7 +19533,14 @@ async function ocpSellarPdf(buf, pos){
   const doc = await PDFLib.PDFDocument.load(buf.slice(0));
   const png = await doc.embedPng(Uint8Array.from(atob(OCP_SELLO_DATAURI.split(',')[1]), c=>c.charCodeAt(0)));
   const page = doc.getPage(Math.max(0, Math.min(doc.getPageCount()-1, (pos.page||1)-1)));
-  page.drawImage(png, {x:pos.x, y:pos.y, width:pos.w, height:pos.h});
+  const rot = (((page.getRotation().angle||0)%360)+360)%360;
+  if(pos.disp && rot){
+    // (x,y) en pantalla, origen abajo a la izquierda → espacio del PDF sin girar, con la imagen girada para que se vea derecha
+    const Wu = page.getWidth(), Hu = page.getHeight(), xd = pos.x, yd = pos.y;
+    if(rot===90) page.drawImage(png, {x:Wu-yd, y:xd, width:pos.w, height:pos.h, rotate:PDFLib.degrees(90)});
+    else if(rot===270) page.drawImage(png, {x:yd, y:Hu-xd, width:pos.w, height:pos.h, rotate:PDFLib.degrees(-90)});
+    else page.drawImage(png, {x:Wu-xd, y:Hu-yd, width:pos.w, height:pos.h, rotate:PDFLib.degrees(180)});
+  } else page.drawImage(png, {x:pos.x, y:pos.y, width:pos.w, height:pos.h});
   const bytes = await doc.save();
   return new Blob([bytes], {type:'application/pdf'});
 }
@@ -19570,13 +19592,14 @@ async function ocpPdfPreview(){
     cont.appendChild(canvas);
     const img = document.createElement('img'); img.src = OCP_SELLO_DATAURI; img.className = 'ocp-sello-drag'; img.draggable = false;
     cont.appendChild(img);
-    const colocar = ()=>{ const [l,t] = vp.convertToViewportPoint(pos.x, pos.y+pos.h); img.style.left = l+'px'; img.style.top = t+'px'; img.style.width = (pos.w*vp.scale)+'px'; };
+    const colocar = ()=>{ const [l,t] = pos.disp ? [pos.x*vp.scale, (base.height-pos.y-pos.h)*vp.scale] : vp.convertToViewportPoint(pos.x, pos.y+pos.h); img.style.left = l+'px'; img.style.top = t+'px'; img.style.width = (pos.w*vp.scale)+'px'; };
     colocar();
     if(!OCP.editable) return;
     let arr = null;
     img.onpointerdown = ev=>{ ev.preventDefault(); img.setPointerCapture(ev.pointerId); arr = {x:ev.clientX, y:ev.clientY, l:parseFloat(img.style.left), t:parseFloat(img.style.top)}; img.classList.add('mov'); };
     img.onpointermove = ev=>{ if(!arr) return; const l = Math.max(0, Math.min(vp.width - img.offsetWidth, arr.l + ev.clientX - arr.x)); const t = Math.max(0, Math.min(vp.height - img.offsetHeight, arr.t + ev.clientY - arr.y)); img.style.left = l+'px'; img.style.top = t+'px'; };
     img.onpointerup = ()=>{ if(!arr) return; arr = null; img.classList.remove('mov');
+      if(pos.disp){ pos.x = Math.round(parseFloat(img.style.left)/vp.scale*10)/10; pos.y = Math.round((base.height - parseFloat(img.style.top)/vp.scale - pos.h)*10)/10; ocpCambio(); return; }
       const [x, yTop] = vp.convertToPdfPoint(parseFloat(img.style.left), parseFloat(img.style.top));
       pos.x = Math.round(x*10)/10; pos.y = Math.round((yTop - pos.h)*10)/10; ocpCambio(); };
     OCP.__colocarSello = colocar;
