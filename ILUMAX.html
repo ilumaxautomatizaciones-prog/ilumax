@@ -19130,7 +19130,7 @@ function ocpCompletarPorContenido(items, rows, ys){
 // Compara la PI contra la OC (cantidades y FOB por referencia).
 function ocpCompararPI(pi){
   const oc = {}; OCP.items.forEach(it=>{ const k = ocpNormRef(it.referencia); (oc[k]=oc[k]||{qty:0, fob:Number(it.precio_fob_usd)||0}); oc[k].qty += Number(it.cantidad)||0; });
-  const piMap = {}; pi.items.forEach(x=>{ if(!piMap[x.code]) piMap[x.code] = {...x, qty:0, amount:0}; piMap[x.code].qty += x.qty; piMap[x.code].amount += x.amount||0; });
+  const piMap = {}; pi.items.forEach(x=>{ if(!piMap[x.code]) piMap[x.code] = {...x, qty:0, amount:0, cbmSum:0}; piMap[x.code].qty += x.qty; piMap[x.code].amount += x.amount||0; if(isFinite(x.cbm)) piMap[x.code].cbmSum += x.cbm; });
   const refs = [...new Set([...Object.keys(oc), ...Object.keys(piMap)])];
   return refs.map(r=>{
     const a = oc[r], b = piMap[r];
@@ -19204,7 +19204,7 @@ function ocpHtmlPI(){
   </div>`;
 }
 function ocpNombreSellado(){ const n = OCP.d.pi.original_nombre||'PI.xlsx'; const ext = (n.match(/\.(xlsx|xlsm|pdf|docx)$/i)||[,'xlsx'])[1].toLowerCase(); return n.replace(/\.(xlsx|xlsm|pdf|docx)$/i,'')+'_SELLADA.'+ext; }
-function ocpRefrescarPI(){ const z = document.getElementById('ocp-pi-zona'); if(z) z.innerHTML = ocpHtmlPI(); ocpProgreso(); ocpActualizarChipsDif(); if(OCP.d.pi.tipo==='pdf') ocpPdfPreview(); }
+function ocpRefrescarPI(){ const z = document.getElementById('ocp-pi-zona'); if(z) z.innerHTML = ocpHtmlPI(); ocpProgreso(); ocpActualizarChipsDif(); if(OCP.d.pi.tipo==='pdf') ocpPdfPreview(); else if((OCP.d.pi.tipo||'xlsx')==='xlsx') ocpXlsPreview(); }
 
 // Inserta el sello como imagen en el .xlsx original, tocando solo el dibujo de la hoja (así no se
 // pierden las fotos, fórmulas, formatos ni figuras que trae el archivo del proveedor).
@@ -19259,9 +19259,9 @@ async function ocpSellarXlsx(buf, hojaIdx, celda){
   const nid = (ids.length ? Math.max(...ids) : 1) + 1;
   const A = 'http://schemas.openxmlformats.org/drawingml/2006/main', R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
   const anc = `<${pre}oneCellAnchor><${pre}from><${pre}col>${celda.c}</${pre}col><${pre}colOff>${celda.colOff||0}</${pre}colOff><${pre}row>${celda.r}</${pre}row><${pre}rowOff>${celda.rowOff||0}</${pre}rowOff></${pre}from>`+
-    `<${pre}ext cx="${OCP_SELLO_EMU.cx}" cy="${OCP_SELLO_EMU.cy}"/><${pre}pic><${pre}nvPicPr><${pre}cNvPr id="${nid}" name="Sello ILUMAX TRADING"/><${pre}cNvPicPr><a:picLocks xmlns:a="${A}" noChangeAspect="1"/></${pre}cNvPicPr></${pre}nvPicPr>`+
+    `<${pre}ext cx="${celda.cx||OCP_SELLO_EMU.cx}" cy="${celda.cy||OCP_SELLO_EMU.cy}"/><${pre}pic><${pre}nvPicPr><${pre}cNvPr id="${nid}" name="Sello ILUMAX TRADING"/><${pre}cNvPicPr><a:picLocks xmlns:a="${A}" noChangeAspect="1"/></${pre}cNvPicPr></${pre}nvPicPr>`+
     `<${pre}blipFill><a:blip xmlns:a="${A}" xmlns:r="${R}" r:embed="${imgRid}"/><a:stretch xmlns:a="${A}"><a:fillRect/></a:stretch></${pre}blipFill>`+
-    `<${pre}spPr><a:xfrm xmlns:a="${A}"><a:off x="0" y="0"/><a:ext cx="${OCP_SELLO_EMU.cx}" cy="${OCP_SELLO_EMU.cy}"/></a:xfrm><a:prstGeom xmlns:a="${A}" prst="rect"><a:avLst/></a:prstGeom></${pre}spPr></${pre}pic><${pre}clientData/></${pre}oneCellAnchor>`;
+    `<${pre}spPr><a:xfrm xmlns:a="${A}"><a:off x="0" y="0"/><a:ext cx="${celda.cx||OCP_SELLO_EMU.cx}" cy="${celda.cy||OCP_SELLO_EMU.cy}"/></a:xfrm><a:prstGeom xmlns:a="${A}" prst="rect"><a:avLst/></a:prstGeom></${pre}spPr></${pre}pic><${pre}clientData/></${pre}oneCellAnchor>`;
   dXml = dXml.replace(new RegExp('</'+pre+'wsDr>'), anc+'</'+pre+'wsDr>');
   zip.file(drawPath, dXml, {createFolders:false});
   return await zip.generateAsync({type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', compression:'DEFLATE'});
@@ -19291,7 +19291,9 @@ async function ocpSellarPI(){
     ocpRefrescarPI(); return;
   }
   let celda;
-  if(p.celda_manual){ const ix = ocpCeldaAIndice(p.celda_manual); if(!ix){ if(typeof toast==='function') toast('Celda no válida (ej: G43)','wa'); return; } celda = {c:ix.c, r:ix.r, colOff:0, rowOff:0}; }
+  const arr = p.pos_xlsx ? ocpXlsPosACelda(p.pos_xlsx) : null;
+  if(arr) celda = arr;
+  else if(p.celda_manual){ const ix = ocpCeldaAIndice(p.celda_manual); if(!ix){ if(typeof toast==='function') toast('Celda no válida (ej: G43)','wa'); return; } celda = {c:ix.c, r:ix.r, colOff:0, rowOff:0}; }
   else if(info.buyer) celda = {c:info.buyer.c, r:Math.max(0, info.buyer.r-7), colOff:400000, rowOff:180000};
   else celda = {c:6, r:(info.ultimaFila||20)+12, colOff:0, rowOff:0};
   try{
@@ -19605,6 +19607,83 @@ async function ocpPdfPreview(){
     OCP.__colocarSello = colocar;
   }catch(err){ cont.innerHTML = `<div class="arte-mu" style="padding:12px;">No se pudo mostrar la vista previa (${ocpEsc(err.message)}). El sello se pondrá ${ocpEsc(OCP.pi.info.ancla||'abajo a la derecha')}.</div>`; }
 }
+
+// ── Vista previa de la hoja de Excel con el sello que se puede arrastrar (igual que en el PDF) ──
+function ocpXlsLayout(ws){
+  const rng = XLSX.utils.decode_range(ws['!ref'] || 'A1:L20');
+  const nC = Math.min(60, Math.max(rng.e.c+1, 12)), nR = Math.min(400, rng.e.r+26);
+  const cols = ws['!cols']||[], rows = ws['!rows']||[];
+  const cw = i => { const c = cols[i]; if(c && c.hidden) return 0; if(c && c.wpx) return c.wpx; if(c && c.wch) return Math.round(c.wch*7+5); if(c && c.width) return Math.round(c.width*7+5); return 64; };
+  const rh = i => { const r = rows[i]; if(r && r.hidden) return 0; if(r && r.hpx) return r.hpx; if(r && r.hpt) return Math.round(r.hpt*4/3); return 20; };
+  const colX = [0], rowY = [0];
+  for(let i=0;i<nC;i++) colX.push(colX[i]+cw(i));
+  for(let i=0;i<nR;i++) rowY.push(rowY[i]+rh(i));
+  return {nC, nR, colX, rowY, W:colX[nC], H:rowY[nR]};
+}
+function ocpXlsHoja(){
+  const info = (OCP.pi && OCP.pi.info) || {}; const wb = XLSX.read(OCP.pi.buf, {type:'array', cellDates:true});
+  return wb.Sheets[wb.SheetNames[info.hojaIdx||0]] || wb.Sheets[wb.SheetNames[0]];
+}
+const OCP_PX_EMU = 9525;
+// posición por defecto (la misma lógica de siempre: encima de "THE BUYER" o debajo de la tabla) en píxeles de la hoja
+function ocpXlsPosDefecto(L){
+  const p = OCP.d.pi, info = (OCP.pi && OCP.pi.info) || {};
+  let c, r, co = 0, ro = 0;
+  const man = p.celda_manual ? ocpCeldaAIndice(p.celda_manual) : null;
+  if(man){ c = man.c; r = man.r; }
+  else if(info.buyer){ c = info.buyer.c; r = Math.max(0, info.buyer.r-7); co = 400000; ro = 180000; }
+  else { c = 6; r = (info.ultimaFila||20)+12; }
+  c = Math.min(c, L.nC-1); r = Math.min(r, L.nR-1);
+  return {x: L.colX[c] + co/OCP_PX_EMU, y: L.rowY[r] + ro/OCP_PX_EMU, pct:100};
+}
+function ocpXlsPosACelda(pos){
+  let L = OCP.__xlsLay;
+  if(!L){ if(!OCP.pi || !OCP.pi.buf || typeof XLSX==='undefined') return null; try{ L = OCP.__xlsLay = ocpXlsLayout(ocpXlsHoja()); }catch(e){ return null; } }
+  const busca = (arr, v) => { let i = 0; while(i < arr.length-2 && arr[i+1] <= v) i++; return i; };
+  const c = busca(L.colX, pos.x), r = busca(L.rowY, pos.y); const k = (pos.pct||100)/100;
+  return {c, r, colOff:Math.round((pos.x-L.colX[c])*OCP_PX_EMU), rowOff:Math.round((pos.y-L.rowY[r])*OCP_PX_EMU), cx:Math.round(OCP_SELLO_EMU.cx*k), cy:Math.round(OCP_SELLO_EMU.cy*k)};
+}
+async function ocpXlsPreview(){
+  const cont = document.getElementById('ocp-xls-prev'); if(!cont || !OCP.pi || !OCP.pi.buf) return;
+  const p = OCP.d.pi;
+  try{
+    if(typeof XLSX==='undefined') throw new Error('no cargó la librería de Excel');
+    const ws = ocpXlsHoja(); const L = OCP.__xlsLay = ocpXlsLayout(ws);
+    const ancho = Math.max(320, Math.min((cont.parentElement && cont.parentElement.clientWidth || 700) - 20, 900));
+    const esc = Math.min(1, ancho/L.W);
+    const merges = ws['!merges']||[]; const cubierta = new Set(), inicio = {};
+    merges.forEach(m=>{ inicio[m.s.r+'_'+m.s.c] = m; for(let r=m.s.r;r<=m.e.r;r++) for(let c=m.s.c;c<=m.e.c;c++) if(r!==m.s.r||c!==m.s.c) cubierta.add(r+'_'+c); });
+    let html = '';
+    Object.keys(ws).forEach(k=>{
+      if(k[0]==='!') return; const a = XLSX.utils.decode_cell(k); if(a.r>=L.nR || a.c>=L.nC || cubierta.has(a.r+'_'+a.c)) return;
+      const cel = ws[k]; const txt = cel.w!=null ? cel.w : (cel.v!=null ? String(cel.v) : ''); if(!String(txt).trim()) return;
+      const m = inicio[a.r+'_'+a.c]; const c2 = m ? Math.min(m.e.c+1, L.nC) : a.c+1, r2 = m ? Math.min(m.e.r+1, L.nR) : a.r+1;
+      const w = L.colX[c2]-L.colX[a.c], h = L.rowY[r2]-L.rowY[a.r]; if(w<=0||h<=0) return;
+      html += `<div class="ocp-xc" style="left:${L.colX[a.c]}px;top:${L.rowY[a.r]}px;width:${w}px;height:${h}px;">${ocpEsc(String(txt))}</div>`;
+    });
+    cont.innerHTML = ''; const wrap = document.createElement('div'); wrap.style.cssText = `position:relative;width:${L.W*esc}px;height:${L.H*esc}px;`;
+    const hoja = document.createElement('div'); hoja.className = 'ocp-xhoja'; hoja.style.cssText = `width:${L.W}px;height:${L.H}px;transform:scale(${esc});transform-origin:0 0;`;
+    hoja.innerHTML = html; wrap.appendChild(hoja); cont.appendChild(wrap);
+    const pos = p.pos_xlsx || ocpXlsPosDefecto(L);
+    const img = document.createElement('img'); img.src = OCP_SELLO_DATAURI; img.className = 'ocp-sello-drag'; img.draggable = false; wrap.appendChild(img);
+    const wPx = ()=> OCP_SELLO_EMU.cx/OCP_PX_EMU*(pos.pct||100)/100, hPx = ()=> OCP_SELLO_EMU.cy/OCP_PX_EMU*(pos.pct||100)/100;
+    const colocar = ()=>{ img.style.left = (pos.x*esc)+'px'; img.style.top = (pos.y*esc)+'px'; img.style.width = (wPx()*esc)+'px'; };
+    colocar(); OCP.__xlsColocar = ()=>{ colocar(); };
+    OCP.__xlsPos = pos;
+    if(!OCP.editable) return;
+    let arr = null;
+    img.onpointerdown = ev=>{ ev.preventDefault(); img.setPointerCapture(ev.pointerId); arr = {x:ev.clientX, y:ev.clientY, px:pos.x, py:pos.y}; img.classList.add('mov'); };
+    img.onpointermove = ev=>{ if(!arr) return; pos.x = Math.max(0, Math.min(L.W-wPx(), arr.px + (ev.clientX-arr.x)/esc)); pos.y = Math.max(0, Math.min(L.H-hPx(), arr.py + (ev.clientY-arr.y)/esc)); colocar(); };
+    img.onpointerup = ()=>{ if(!arr) return; arr = null; img.classList.remove('mov'); p.pos_xlsx = {x:Math.round(pos.x*10)/10, y:Math.round(pos.y*10)/10, pct:pos.pct||100}; p.celda_manual = ''; const ci = document.getElementById('ocp-celda-man'); if(ci) ci.value = ''; ocpCambio(); };
+  }catch(err){ console.warn(err); cont.innerHTML = `<div class="arte-mu" style="padding:12px;">No se pudo mostrar la vista previa (${ocpEsc(err.message)}). El sello se pondrá en la posición sugerida.</div>`; }
+}
+function ocpTamSelloXls(pct){
+  const p = OCP.d.pi, pos = OCP.__xlsPos; if(!pos) return; pos.pct = Number(pct);
+  p.pos_xlsx = {x:Math.round(pos.x*10)/10, y:Math.round(pos.y*10)/10, pct:pos.pct}; p.celda_manual = '';
+  if(OCP.__xlsColocar) OCP.__xlsColocar(); ocpCambio();
+}
+function ocpRestablecerSelloXls(){ const p = OCP.d.pi; p.pos_xlsx = null; p.celda_manual = ''; ocpCambio(); ocpRefrescarPI(); }
+function ocpCeldaManualXls(v){ const p = OCP.d.pi; p.celda_manual = String(v||'').toUpperCase(); p.pos_xlsx = null; ocpCambio(); if(ocpCeldaAIndice(p.celda_manual)) ocpXlsPreview(); }
 function ocpTamSello(pct){
   const p = OCP.d.pi; if(!p.pos) return; const W0 = 150, H0 = Math.round(150*OCP_SELLO_EMU.cy/OCP_SELLO_EMU.cx);
   const cx = p.pos.x + p.pos.w/2, cy = p.pos.y + p.pos.h/2;
@@ -19631,14 +19710,15 @@ function ocpHtmlSelloSeccion(){
     return `<div class="ocp-sello-fila"><img src="${OCP_SELLO_DATAURI}" alt="Sello" class="ocp-sello-img">
       <div style="flex:1;min-width:200px;font-size:12px;">Se agrega ${ocpEsc(p.ancla||'al final del documento')}, alineado a la derecha. El resto del Word queda igual.</div></div>`;
   }
-  return `<div class="ocp-sello-fila">
-      <img src="${OCP_SELLO_DATAURI}" alt="Sello" class="ocp-sello-img">
-      <div style="flex:1;min-width:200px;">
-        <div style="font-size:12px;">Se pone ${p.buyer?`encima de <strong>"${ocpEsc(p.buyer.txt)}"</strong> (celda ${ocpEsc(p.buyer.celda)})`:'<strong>debajo de la tabla</strong> (no encontré "THE BUYER")'}, en la hoja ${ocpEsc(p.hoja||'')}. Todo lo demás del archivo del proveedor queda igual.</div>
-        <div class="fg" style="margin:6px 0 0;max-width:260px;"><label class="fl">¿Prefieres otra ubicación? Celda (opcional)</label>
-          <input class="inp" ${ed?'':'disabled'} value="${ocpEsc(p.celda_manual||'')}" placeholder="Ej: G43" oninput="this.value=this.value.toUpperCase();ocpSet('pi.celda_manual',this.value)"></div>
-      </div>
-    </div>`;
+  const pctX = p.pos_xlsx ? (p.pos_xlsx.pct||100) : 100;
+  return `<div class="arte-mu" style="margin-bottom:6px;">${ed?'<strong>Arrastra el sello</strong> hasta donde quieras que quede en la hoja. ':''}Por defecto va ${p.buyer?`encima de <strong>"${ocpEsc(p.buyer.txt)}"</strong> (celda ${ocpEsc(p.buyer.celda)})`:'<strong>debajo de la tabla</strong> (no encontré "THE BUYER")'}, en la hoja ${ocpEsc(p.hoja||'')}. Todo lo demás del archivo del proveedor queda igual.</div>
+      ${ed?`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+        <label class="arte-mu">Tamaño <input type="range" min="40" max="160" step="5" value="${pctX}" oninput="ocpTamSelloXls(this.value);this.nextElementSibling.textContent=this.value+'%'"> <span>${pctX}%</span></label>
+        <label class="arte-mu">o escribe la celda <input id="ocp-celda-man" class="inp" style="width:80px;display:inline-block;padding:4px 8px;" value="${ocpEsc(p.celda_manual||'')}" placeholder="G43" onchange="ocpCeldaManualXls(this.value)"></label>
+        <span class="arte-link" onclick="ocpRestablecerSelloXls()">↺ posición sugerida</span>
+      </div>`:''}
+      ${OCP.pi && OCP.pi.buf ? `<div class="ocp-pdf-wrap"><div id="ocp-xls-prev" class="ocp-pdf-prev" style="box-shadow:none;background:transparent;"><div class="arte-mu" style="padding:20px;">⏳ Cargando vista previa…</div></div></div>`
+        : `<div class="arte-mu">Vuelve a cargar el Excel para ver y mover el sello.</div>`}`;
 }
 
 
@@ -19930,7 +20010,19 @@ function ocpAtributosRef(ref, a, b){
     const faltan = kOc.filter(k=>!kPi.includes(k) && k!=='film');
     add('pack','Tipo de empaque', r.tipo_empaque||'—', b.pack||'no aparece', r.tipo_empaque && b.pack ? (faltan.length ? 'revisar' : 'ok') : 'info');
   }
-  if(r.cbm || b.cbm!=null){ const cOc = Number(r.cbm); add('cbm','CBM caja master', cOc?nf(cOc,4):'—', b.cbm!=null?nf(b.cbm,4):'no aparece', cOc && b.cbm!=null ? (Math.abs(cOc-b.cbm)/cOc <= 0.05 ? 'ok' : 'revisar') : 'info'); }
+  if(r.cbm || b.cbm!=null){
+    // La columna CBM de la PI casi siempre es el TOTAL de la línea (m³ de todas las unidades); el catálogo guarda el CBM de UNA unidad.
+    const cOc = Number(r.cbm); const raw = Number(b.cbm); const tot = b.cbmSum>0 ? b.cbmSum : raw;
+    let uni = null;
+    if(isFinite(raw) && raw>0){
+      const uTot = b.qty>0 ? tot/b.qty : null;
+      if(cOc>0 && uTot!=null) uni = Math.abs(uTot-cOc) < Math.abs(raw-cOc) ? uTot : raw;
+      else uni = (raw>0.3 && uTot!=null) ? uTot : raw;
+    }
+    const uniR = uni!=null ? Math.round(uni*10000)/10000 : null;
+    add('cbm','CBM unitario (m³/und)', cOc?nf(cOc,4):'—', uniR!=null ? nf(uniR,4)+(uniR!==raw && isFinite(raw) ? ' ('+nf(tot,4)+' m³ ÷ '+nf(b.qty,0)+')' : '') : 'no aparece', cOc && uni!=null ? (Math.abs(cOc-uni)/cOc <= 0.02 ? 'ok' : 'revisar') : 'info');
+    out[out.length-1].piNum = uniR; out[out.length-1].ocNum = cOc||null;
+  }
   if(r.ean13 || b.ean) add('ean','EAN 13', r.ean13||'—', b.ean||'no aparece', r.ean13 && b.ean ? (String(r.ean13).replace(/\D/g,'')===String(b.ean).replace(/\D/g,'')?'ok':'dif') : 'info');
   // especificaciones (de la descripción del catálogo vs la descripción de la PI)
   const txtOc = [r.descripcion_en, r.nombre_comercial, r.descripcion, r.temperatura_color, r.horas?r.horas+' h':'', r.tipo_tapa].filter(Boolean).join(' ');
@@ -20057,11 +20149,12 @@ function ocpHtmlComparacion(){
     ${otras.length?`<details style="margin-top:8px;font-size:11.5px;"><summary style="cursor:pointer;color:var(--or);font-weight:700;">⚠ Otras diferencias detectadas (${otras.length}) — especificaciones y condiciones</summary>
       <table class="ocp-attr" style="margin-top:4px;"><tr class="arte-mu"><td>Ref.</td><td>Atributo</td><td>OC</td><td>PI</td></tr>
       ${otras.map(x=>`<tr class="${x.estado}"><td style="font-family:monospace;">${ocpEsc(x.ref||'Orden')}</td><td>${ocpEsc(x.l)}</td><td>${ocpEsc(x.oc)}</td><td style="font-weight:700;color:var(--or);">${ocpEsc(x.pi)}</td></tr>`).join('')}</table></details>`:''}
-    ${hayDif ? `<label class="arte-chk ${p.acepto_diferencias?'ok':''}" style="margin-top:10px;"><input type="checkbox" ${ed?'':'disabled'} ${p.acepto_diferencias?'checked':''} onchange="ocpSet('pi.acepto_diferencias',this.checked);this.closest('.arte-chk').classList.toggle('ok',this.checked)"> Revisé las diferencias y las acepto (o ya quedaron acordadas con el proveedor)</label>
+    ${hayDif ? `<label class="arte-chk ${p.acepto_diferencias?'ok':''}" style="margin-top:10px;"><input type="checkbox" ${ed?'':'disabled'} ${p.acepto_diferencias?'checked':''} onchange="ocpSet('pi.acepto_diferencias',this.checked);this.closest('.arte-chk').classList.toggle('ok',this.checked);if(this.checked)ocpAceptarYAplicar()"> Revisé las diferencias y las acepto (o ya quedaron acordadas con el proveedor)</label>
+      ${ocpHtmlPlan()}
       <div class="fg"><label class="fl">Nota sobre las diferencias (queda en el histórico de la OC)</label><input class="inp" ${ed?'':'disabled'} value="${ocpEsc(p.nota||'')}" placeholder="Ej: 2554 sube a 1008 und para completar caja; 2559 MOQ 3000 aceptado" oninput="ocpSet('pi.nota',this.value)"></div>`
-      : `<div class="arte-mu" style="margin-top:8px;color:var(--gr);">✓ La PI coincide con la OC en referencias, cantidades, precios y empaque.</div>`}
-    ${ed && (p.respaldo_oc || filas.some(f=>f.estado==='dif' && (f.attrs||[]).some(x=>(x.k==='qty'||x.k==='fob') && x.estado==='dif'))) ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-      ${filas.some(f=>f.estado==='dif' && (f.attrs||[]).some(x=>(x.k==='qty'||x.k==='fob') && x.estado==='dif')) ? `<button class="btn btn-bl btn-sm" onclick="ocpAplicarPIaOC()">${p.oc_actualizada?'✓ OC actualizada · volver a aplicar':'🔄 Actualizar la OC con las cantidades y precios de la PI'}</button>`:''}
+      : `<div class="arte-mu" style="margin-top:8px;color:var(--gr);">✓ La PI coincide con la OC en referencias, cantidades, precios y empaque.</div>${ocpHtmlPlan()}`}
+    ${ed && (p.respaldo_oc || ocpPlanAceptar().hay) ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+      ${ocpPlanAceptar().hay ? `<button class="btn btn-bl btn-sm" onclick="ocpAplicarPIaOC()">${p.oc_actualizada?'✓ OC actualizada · volver a aplicar':'🔄 Actualizar la OC (cantidades, precios y CBM) con la PI'}</button>`:''}
       ${p.respaldo_oc ? `<button class="btn btn-or btn-sm" onclick="ocpDeshacerAplicarPI()">↩ Volver a la OC anterior</button><span class="arte-mu">respaldo del ${arteFmtFecha(p.respaldo_oc.t)}</span>`:''}
     </div>`:''}
   </div>`;
@@ -20080,17 +20173,53 @@ function ocpRecomparar(){
   if(antes!==despues && p.acepto_diferencias && despues){ p.acepto_diferencias = false; } // cambiaron las diferencias: hay que revisarlas de nuevo
   return antes!==despues;
 }
+// Plan de lo que pasa al aceptar las diferencias: cantidades, precios y CBM unitario del catálogo
+function ocpPlanAceptar(){
+  const plan = {qty:[], fob:[], cbm:[]}; const M = REABAST.referenciasMaestro||{};
+  (OCP.d.pi.filas||[]).forEach(f=>{
+    if(f.estado==='falta'||f.estado==='extra') return;
+    const q = ocpAttr(f,'qty'), pr = ocpAttr(f,'fob'), c = ocpAttr(f,'cbm');
+    if(q && q.estado==='dif') plan.qty.push({ref:f.ref, de:f.oc_qty, a:f.pi_qty});
+    if(pr && pr.estado==='dif') plan.fob.push({ref:f.ref, de:f.oc_fob, a:f.pi_fob});
+    if(c && c.estado==='revisar' && c.piNum>0){ const m = M[f.ref] || M[Object.keys(M).find(k=>ocpNormRef(k)===f.ref)]; if(m && m.id) plan.cbm.push({ref:f.ref, id:m.id, de:Number(m.cbm)||null, a:c.piNum}); }
+  });
+  plan.hay = plan.qty.length+plan.fob.length+plan.cbm.length>0;
+  return plan;
+}
+function ocpPlanTexto(plan){
+  const n = (v,d)=> v==null||!isFinite(v) ? '—' : ocpNum(v,d); const L = [];
+  plan.qty.forEach(x=>L.push('• '+x.ref+': cantidad '+n(x.de,0)+' → '+n(x.a,0)+' und'));
+  plan.fob.forEach(x=>L.push('• '+x.ref+': precio FOB US$ '+n(x.de,4)+' → '+n(x.a,4)));
+  plan.cbm.forEach(x=>L.push('• '+x.ref+': CBM unitario del catálogo '+n(x.de,4)+' → '+n(x.a,4)+' m³'));
+  return L;
+}
+function ocpHtmlPlan(){
+  const plan = ocpPlanAceptar(); if(!plan.hay && !(OCP.d.pi.oc_actualizada && OCP.d.pi.plan_aplicado)) return '';
+  const L = plan.hay ? ocpPlanTexto(plan) : OCP.d.pi.plan_aplicado; const hecho = OCP.d.pi.oc_actualizada;
+  return `<div style="margin-top:8px;padding:8px 10px;border:1px dashed var(--bl);border-radius:8px;background:rgba(37,99,235,.06);font-size:11.5px;">
+    <b>${hecho?'✓ Ya se aplicó a la OC y al catálogo':'Al aceptar las diferencias se hará esto'}:</b>
+    <div style="margin-top:4px;line-height:1.55;">${L.map(x=>ocpEsc(x)).join('<br>')}</div>
+    ${hecho?'':'<div class="arte-mu" style="margin-top:4px;">Se guarda un respaldo para poder volver a la OC anterior.</div>'}</div>`;
+}
 // Pasa a los ítems de la OC la cantidad y el precio que quedaron en la PI (recalcula costo COP y margen).
+async function ocpAceptarYAplicar(){
+  if(!OCP.editable) return; const plan = ocpPlanAceptar();
+  if(!plan.hay || OCP.d.pi.oc_actualizada) return;
+  await ocpAplicarPIaOC();
+}
 async function ocpAplicarPIaOC(){
-  const dif = (OCP.d.pi.filas||[]).filter(f=>f.estado==='dif' && (f.attrs||[]).some(x=>(x.k==='qty'||x.k==='fob') && x.estado==='dif'));
-  if(!confirm('Se actualizarán en la OC '+dif.length+' referencia(s) con la cantidad y el precio de la PI. ¿Continuar?')) return;
-  const o = OCP.oc; let n = 0, saltadas = [];
-  // Respaldo de la OC tal como estaba ANTES de aplicar la PI (solo la primera vez, para poder volver al original)
+  const plan = ocpPlanAceptar(); if(!plan.hay){ if(typeof toast==='function') toast('No hay nada que aplicar','wa'); return; }
+  const aceptoAntes = !!OCP.d.pi.acepto_diferencias;
+  if(!confirm('Esto es lo que se va a hacer:\n\n'+ocpPlanTexto(plan).join('\n')+'\n\n¿Continuar? (queda un respaldo para volver atrás)')) return;
+  const o = OCP.oc; let n = 0, nc = 0, saltadas = [];
+  // Respaldo de la OC y del CBM del catálogo tal como estaban ANTES (solo la primera vez, para poder volver al original)
   if(!OCP.d.pi.respaldo_oc){
-    OCP.d.pi.respaldo_oc = {t:new Date().toISOString(), quien:arteQuien(), items:(REABAST.ocItems[o.id]||[]).map(it=>({id:it.id, referencia:it.referencia, cantidad:it.cantidad, precio_fob_usd:it.precio_fob_usd, costo_unitario_cop:it.costo_unitario_cop, margen_pct:it.margen_pct}))};
-    try{ await ocpGuardar(true); }catch(e){ if(typeof toast==='function') toast('No pude guardar el respaldo de la OC, no se aplicó nada','er'); return; }
-  }
-  for(const f of dif){
+    OCP.d.pi.respaldo_oc = {t:new Date().toISOString(), quien:arteQuien(), items:(REABAST.ocItems[o.id]||[]).map(it=>({id:it.id, referencia:it.referencia, cantidad:it.cantidad, precio_fob_usd:it.precio_fob_usd, costo_unitario_cop:it.costo_unitario_cop, margen_pct:it.margen_pct})),
+      cbm: plan.cbm.map(c=>({id:c.id, ref:c.ref, cbm:c.de}))};
+    try{ await ocpGuardar(true); }catch(e){ OCP.d.pi.respaldo_oc = null; if(typeof toast==='function') toast('No pude guardar el respaldo de la OC, no se aplicó nada','er'); return; }
+  } else if(!OCP.d.pi.respaldo_oc.cbm) OCP.d.pi.respaldo_oc.cbm = plan.cbm.map(c=>({id:c.id, ref:c.ref, cbm:c.de}));
+  const refsQF = new Set([...plan.qty, ...plan.fob].map(x=>x.ref));
+  for(const f of (OCP.d.pi.filas||[]).filter(f=>refsQF.has(f.ref))){
     const its = (REABAST.ocItems[o.id]||[]).filter(it=>ocpNormRef(it.referencia)===f.ref);
     if(its.length!==1){ saltadas.push(f.ref); continue; }
     const it = its[0]; const fob = f.pi_fob!=null ? f.pi_fob : it.precio_fob_usd;
@@ -20099,15 +20228,20 @@ async function ocpAplicarPIaOC(){
     const payload = {cantidad:f.pi_qty, precio_fob_usd:fob, costo_unitario_cop:costo, margen_pct:margen};
     try{ await sbReabast.patch('oc_items','id=eq.'+it.id, payload); Object.assign(it, payload); n++; }catch(e){ saltadas.push(f.ref); }
   }
-  OCP.d.pi.oc_actualizada = true; ocpLog('oc_actualizada', n+' ítem(s) actualizados con la PI'); ocpRecomparar(); ocpCambio();
-  if(typeof toast==='function') toast(`OC actualizada: ${n} ítem(s)`+(saltadas.length?` · revisar a mano: ${saltadas.join(', ')}`:''), saltadas.length?'wa':'ok');
+  const M = REABAST.referenciasMaestro||{};
+  for(const c of plan.cbm){
+    try{ await sbReabast.patch('referencias_maestro','id=eq.'+c.id,{cbm:c.a, actualizado:new Date().toISOString()}); const m = M[c.ref] || M[Object.keys(M).find(k=>ocpNormRef(k)===c.ref)]; if(m) m.cbm = c.a; nc++; }catch(e){ saltadas.push(c.ref+' (CBM)'); }
+  }
+  OCP.d.pi.oc_actualizada = true; OCP.d.pi.plan_aplicado = ocpPlanTexto(plan);
+  ocpLog('oc_actualizada', n+' ítem(s) de la OC y '+nc+' CBM unitario(s) actualizados con la PI: '+ocpPlanTexto(plan).join(' ; ')); ocpRecomparar(); if(aceptoAntes) OCP.d.pi.acepto_diferencias = true; ocpCambio();
+  if(typeof toast==='function') toast(`Listo: ${n} ítem(s) de la OC y ${nc} CBM unitario(s) actualizados`+(saltadas.length?` · revisar a mano: ${saltadas.join(', ')}`:''), saltadas.length?'wa':'ok');
   ocpRefrescarPI();
 }
 // Devuelve los ítems de la OC a como estaban antes de "Actualizar la OC con la PI".
 async function ocpDeshacerAplicarPI(){
   const r = OCP.d.pi.respaldo_oc; if(!r) return;
   const cambios = r.items.map(b=>{ const it = (REABAST.ocItems[OCP.ocId]||[]).find(x=>x.id===b.id); return it && (Number(it.cantidad)!==Number(b.cantidad) || Number(it.precio_fob_usd)!==Number(b.precio_fob_usd)) ? `${b.referencia}: ${reabastFmtN(it.cantidad)} @ ${it.precio_fob_usd} → ${reabastFmtN(b.cantidad)} @ ${b.precio_fob_usd}` : null; }).filter(Boolean);
-  if(!confirm('¿Volver la OC a como estaba antes de aplicar la PI ('+arteFmtFecha(r.t)+')?\n\n'+(cambios.length?cambios.join('\n'):'(no hay diferencias con el respaldo)'))) return;
+  if(!confirm('¿Volver la OC a como estaba antes de aplicar la PI ('+arteFmtFecha(r.t)+')?\n\n'+(cambios.concat((r.cbm||[]).map(c=>c.ref+': CBM unitario vuelve a '+c.cbm)).join('\n')||'(no hay diferencias con el respaldo)'))) return;
   let n = 0, fallas = [];
   for(const b of r.items){
     const it = (REABAST.ocItems[OCP.ocId]||[]).find(x=>x.id===b.id);
@@ -20115,6 +20249,9 @@ async function ocpDeshacerAplicarPI(){
     const payload = {cantidad:b.cantidad, precio_fob_usd:b.precio_fob_usd, costo_unitario_cop:b.costo_unitario_cop, margen_pct:b.margen_pct};
     if(Number(it.cantidad)===Number(b.cantidad) && Number(it.precio_fob_usd)===Number(b.precio_fob_usd)) continue;
     try{ await sbReabast.patch('oc_items','id=eq.'+b.id, payload); Object.assign(it, payload); n++; }catch(e){ fallas.push(b.referencia); }
+  }
+  for(const c of (r.cbm||[])){
+    try{ if(c.cbm!=null){ await sbReabast.patch('referencias_maestro','id=eq.'+c.id,{cbm:c.cbm, actualizado:new Date().toISOString()}); const M = REABAST.referenciasMaestro||{}; const m = M[c.ref] || M[Object.keys(M).find(k=>ocpNormRef(k)===c.ref)]; if(m) m.cbm = c.cbm; n++; } }catch(e){ fallas.push(c.ref+' (CBM)'); }
   }
   if(!fallas.length){ delete OCP.d.pi.respaldo_oc; OCP.d.pi.oc_actualizada = false; }
   ocpLog('oc_restaurada', n+' ítem(s) devueltos a la OC anterior'); ocpRecomparar(); ocpCambio();
@@ -20170,7 +20307,7 @@ function ocpPintar(){
     ${tpl.id==='oc_creada' ? ocpHtmlEnvio() : `<div id="ocp-pi-zona">${ocpHtmlPI()}</div>`}
   </div>`;
   ocpProgreso();
-  if(tpl.id==='pi_confirmada'){ ocpActualizarChipsDif(); if(OCP.d.pi.tipo==='pdf') ocpPdfPreview(); }
+  if(tpl.id==='pi_confirmada'){ ocpActualizarChipsDif(); if(OCP.d.pi.tipo==='pdf') ocpPdfPreview(); else if((OCP.d.pi.tipo||'xlsx')==='xlsx') ocpXlsPreview(); }
 }
 async function ocpAbrir(oc, e, tpl, items){
   Object.assign(OCP, {ocId:oc.id, oc, etapa:e, tpl, items, pi:null, d:null,
@@ -20240,6 +20377,8 @@ function ocpInjectCss(){
   .ocp-pdf-wrap{overflow:auto;max-height:560px;border:1px solid var(--b1);border-radius:8px;background:#e5e7eb;padding:8px;}
   .ocp-pdf-prev{position:relative;margin:0 auto;box-shadow:0 2px 10px rgba(0,0,0,.15);background:#fff;}
   .ocp-pdf-prev canvas{display:block;}
+  .ocp-xhoja{position:absolute;left:0;top:0;background:#fff;background-image:linear-gradient(#e5e7eb 1px,transparent 1px);background-size:100% 20px;}
+  .ocp-xc{position:absolute;box-sizing:border-box;font-size:11px;line-height:18px;padding:0 3px;overflow:hidden;white-space:nowrap;color:#111;border-right:1px solid #f1f5f9;}
   .ocp-sello-drag{position:absolute;cursor:grab;outline:2px dashed rgba(37,99,235,.7);outline-offset:2px;touch-action:none;user-select:none;}
   .ocp-sello-drag.mov{cursor:grabbing;outline-color:var(--acc);}
   `;
