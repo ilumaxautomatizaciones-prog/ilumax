@@ -18981,8 +18981,17 @@ function ocpLeerPI(buf){
     if(hdr<0) return;
     if(!mejor || filas.length>mejor.filas.length) mejor = {nombre, idx, ws, filas, hdr, off:{r:rng.s.r, c:rng.s.c}};
   });
-  if(!mejor) throw new Error('No encontré la tabla de ítems (una fila con "Code" y "Quantity") en el Excel');
-  const {filas, hdr} = mejor; const H = filas[hdr].map(c=>String(c||'').replace(/\s+/g,' ').trim());
+  // sin encabezados reconocibles (otro idioma, otro formato): se toma la hoja donde más referencias de la OC aparezcan
+  if(!mejor){
+    let top = 0;
+    wb.SheetNames.forEach((nombre, idx)=>{
+      const ws = wb.Sheets[nombre]; if(!ws || !ws['!ref']) return;
+      const filas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null}); const rng = XLSX.utils.decode_range(ws['!ref']);
+      const n = ocpItemsPorContenido(filas).length; if(n>top){ top = n; mejor = {nombre, idx, ws, filas, hdr:-1, off:{r:rng.s.r, c:rng.s.c}}; }
+    });
+    if(!mejor) throw new Error('No encontré la tabla de ítems en el Excel: ninguna fila tiene una referencia de esta OC con su cantidad y precio. Revisa que sea la PI de esta OC.');
+  }
+  const {filas, hdr} = mejor; const H = hdr>=0 ? filas[hdr].map(c=>String(c||'').replace(/\s+/g,' ').trim()) : [];
   const col = (...rx)=>{ for(const r of rx){ const i = H.findIndex(h=>r.test(h)); if(i>=0) return i; } return -1; };
   const cCode = col(/^code$/i, /^item\s*no/i, /^model$/i, /^ref/i);
   const cQty  = col(/^quantity$/i, /^qty$/i, /^q['’`]?ty\.?$/i, /quantity/i, /q['’`]?ty/i);
@@ -18994,8 +19003,8 @@ function ocpLeerPI(buf){
   const cCbm  = col(/cbm\s*outer|cbm\s*\/\s*ctn|m3\s*\/\s*ctn|^cbm$/i, /^(?!.*total).*cbm/i);
   const cEan  = col(/ean|barcode/i);
   const cDescs = H.map((h,i)=>/descrip/i.test(h)?i:-1).filter(i=>i>=0);
-  const items = []; let vacias = 0, ultimaFila = hdr;
-  for(let r=hdr+1; r<filas.length; r++){
+  let items = []; let vacias = 0, ultimaFila = Math.max(hdr,0);
+  for(let r=hdr+1; hdr>=0 && r<filas.length; r++){
     const row = filas[r]||[]; const code = row[cCode];
     const txt0 = row.filter(c=>c!=null).map(String).join(' ');
     if(/^\s*\d\)|TERMS OF PAYMENT|BANK INFORMATION/i.test(txt0)) break;
@@ -19011,6 +19020,8 @@ function ocpLeerPI(buf){
       pack: cPack>=0 ? String(row[cPack]||'').replace(/\s+/g,' ').trim() : '', cbm: cCbm>=0 && isFinite(Number(row[cCbm])) && row[cCbm]!==null && row[cCbm]!=='' ? Number(row[cCbm]) : null,
       ean: cEan>=0 && row[cEan] ? String(row[cEan]).replace(/\D/g,'') : ''});
   }
+  items = ocpCompletarPorContenido(items, filas);
+  if(!items.length) throw new Error('No encontré en el Excel ninguna referencia de esta OC con su cantidad. Revisa que sea la PI de esta OC.');
   // Encabezado: P/I No., PO No., fecha, términos de pago, celda del comprador
   const buscar = (rx)=>{ for(let r=0;r<filas.length;r++){ const row = filas[r]||[]; for(let c=0;c<row.length;c++){ if(row[c]!=null && rx.test(String(row[c]))){ for(let k=c+1;k<row.length;k++){ if(row[k]!=null && String(row[k]).trim()) return row[k]; } } } } return ''; };
   let fecha = buscar(/^\s*date\s*:?\s*$/i); if(fecha instanceof Date) fecha = fecha.toISOString().slice(0,10); else if(/^\d{4}-\d{2}-\d{2}T/.test(String(fecha))) fecha = String(fecha).slice(0,10);
@@ -19025,6 +19036,87 @@ function ocpLeerPI(buf){
 }
 function ocpColLetra(c){ let s=''; c++; while(c>0){ const m=(c-1)%26; s=String.fromCharCode(65+m)+s; c=Math.floor((c-1)/26); } return s; }
 function ocpCeldaAIndice(ref){ const m = String(ref||'').trim().toUpperCase().match(/^([A-Z]{1,3})(\d{1,6})$/); if(!m) return null; let c=0; for(const ch of m[1]) c = c*26 + (ch.charCodeAt(0)-64); return {c:c-1, r:Number(m[2])-1}; }
+
+
+// ═══ Lectura de la PI por CONTENIDO (sirve en cualquier idioma o formato) ═══
+// No depende de cómo se llamen las columnas: busca en cada fila una referencia que exista en la OC y,
+// entre los números de esa fila, la combinación cantidad × precio ≈ importe (y si coincide con lo de la OC, mejor).
+function ocpNumFlex(v){
+  if(typeof v==='number') return isFinite(v) ? v : NaN;
+  if(typeof v!=='string') return NaN;
+  let t = v.trim().replace(/^(US\$|USD|RMB|CNY|EUR|[$€¥￥])\s*/i,'').replace(/\s*(USD|PCS|PC|UNDS?|UDS?|SETS?)$/i,'');
+  if(!/^-?\d[\d.,\s]*$/.test(t)) return NaN;
+  t = t.replace(/\s/g,'');
+  if(/^\d{1,3}(\.\d{3})+,\d+$/.test(t)) t = t.replace(/\./g,'').replace(',','.');          // 4.650,00
+  else if(/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) t = t.replace(/,/g,'');                    // 4,650.00
+  else if(/^\d+,\d{1,2}$/.test(t)) t = t.replace(',','.');                                  // 3,10
+  else t = t.replace(/,/g,'');
+  const n = Number(t); return isFinite(n) ? n : NaN;
+}
+function ocpItemsPorContenido(rows, ys){
+  const oc = new Map();
+  (OCP.items||[]).forEach(it=>{ const k = ocpNormRef(it.referencia); if(!k) return; const x = oc.get(k) || {qty:0, fob:Number(it.precio_fob_usd)||0}; x.qty += Number(it.cantidad)||0; oc.set(k, x); });
+  if(!oc.size) return [];
+  rows = (rows||[]).map(r=>r||[]);
+  // mejor combinación cantidad × precio ≈ importe dentro de una fila
+  const triple = (row, ri, base)=>{
+    const nums = row.map((c,i)=>({v:ocpNumFlex(c), i})).filter(x=>isFinite(x.v) && x.v>0 && x.i!==ri);
+    let mejor = null;
+    for(const a of nums) for(const b of nums) for(const c of nums){
+      if(a.i===b.i || a.i===c.i || b.i===c.i) continue;
+      if(!(a.v>=1) || c.v < b.v || a.v>=1e7) continue;
+      if(Math.abs(a.v*b.v - c.v) > Math.max(0.05, c.v*0.004)) continue;
+      let sc = 0; if(base && a.v===base.qty) sc += 10; if(base && base.fob && Math.abs(b.v-base.fob)<0.005) sc += 5; if(Number.isInteger(a.v)) sc += 2; if(a.i<b.i && b.i<c.i) sc += 1;
+      if(!mejor || sc>mejor.sc) mejor = {sc, q:a.v, p:b.v, m:c.v, idx:[a.i,b.i,c.i]};
+    }
+    return {mejor, nums};
+  };
+  // celdas que parecen un código (corto, con al menos un dígito, no un EAN ni una frase)
+  const codigos = (row, excl)=>{ const out = [];
+    row.forEach((c,i)=>{ if(c==null || c==='' || excl.has(i)) return; const t = String(c).trim(); if(t.length>22) return;
+      t.split(/[\s,;|:]+/).forEach(w=>{ if(/^[A-Za-z0-9][A-Za-z0-9\-\/._]{1,19}$/.test(w) && /\d/.test(w) && !/^\d{11,}$/.test(w)) out.push({w, i}); }); });
+    return out; };
+  const buscarRef = row => { for(let i=0;i<row.length;i++){ const c = row[i]; if(c==null || c==='') continue; const s = ocpNormRef(c); if(oc.has(s)) return {ref:s, i};
+      for(const t of String(c).split(/[\s,;|:]+/)){ const k = ocpNormRef(t); if(k && oc.has(k)) return {ref:k, i}; } } return null; };
+  const unir = (i)=>{ // fila + vecinas cercanas (la referencia y los números a veces quedan en líneas contiguas)
+    const out = [rows[i]]; if(ys){ for(const j of [i-1,i+1]){ if(rows[j] && ys[j]!=null && Math.abs(ys[j]-ys[i])<=16) out.push(rows[j]); } } return out; };
+  const out = []; const usadas = new Set(); const rangos = [];
+  // 1) filas con una referencia de la OC
+  rows.forEach((row,i)=>{
+    const f = buscarRef(row); if(!f) return;
+    const base = oc.get(f.ref); let T = triple(row, f.i, base), fila = row, src = [i];
+    if(!T.mejor && !T.nums.some(x=>x.v===base.qty)){ for(const j of [i-1,i+1]){ if(!ys || !rows[j] || ys[j]==null || Math.abs(ys[j]-ys[i])>16) continue; const m = row.concat(rows[j]); const T2 = triple(m, f.i, base); if(T2.mejor){ T = T2; fila = m; src = [i,j]; break; } } }
+    let qty = null, fob = null, amount = null;
+    if(T.mejor){ qty = T.mejor.q; fob = T.mejor.p; amount = T.mejor.m; }
+    else { const q = T.nums.find(x=>x.v===base.qty); if(q) qty = q.v; }
+    if(!(qty>0)) return;
+    src.forEach(k=>usadas.add(k));
+    // posición del código dentro de la fila (para reconocer el mismo lugar en filas de ítems que no están en la OC)
+    const excl = new Set(T.mejor ? T.mejor.idx : []); const cods = codigos(fila, excl); const rank = cods.findIndex(x=>ocpNormRef(x.w)===f.ref);
+    rangos.push({rank: rank<0?0:rank, n: cods.length});
+    out.push({code: f.ref, qty, fob, amount: amount!=null ? amount : (fob!=null ? fob*qty : null), desc:'', desc_full:'', ctn:null, inner:null, pack:'', cbm:null, ean:'', _fila:i});
+  });
+  // 2) otras filas con cantidad × precio = importe y un código en el mismo lugar que las anteriores → ítems que NO están en la OC
+  if(out.length){
+    const rk = rangos.reduce((a,r)=>a+r.rank,0)/rangos.length;
+    rows.forEach((row,i)=>{
+      if(usadas.has(i) || buscarRef(row)) return;
+      const T = triple(row, -1, null); if(!T.mejor) return;
+      const cods = codigos(row, new Set(T.mejor.idx)); if(!cods.length) return;
+      const c = cods[Math.min(cods.length-1, Math.round(rk))];
+      if(!c || oc.has(ocpNormRef(c.w))) return;
+      out.push({code: ocpNormRef(c.w), qty:T.mejor.q, fob:T.mejor.p, amount:T.mejor.m, desc:'', desc_full:'', ctn:null, inner:null, pack:'', cbm:null, ean:'', _fila:i});
+    });
+  }
+  return out;
+}
+// Si el método por encabezados no trajo todas las referencias de la OC, completa con las que se encuentren por contenido.
+function ocpCompletarPorContenido(items, rows, ys){
+  let fb = []; try{ fb = ocpItemsPorContenido(rows, ys); }catch(e){ console.warn('PI por contenido:', e.message); }
+  if(!fb.length) return items;
+  const ya = new Set(items.map(x=>x.code));
+  return items.concat(fb.filter(x=>!ya.has(x.code)));
+}
 
 // Compara la PI contra la OC (cantidades y FOB por referencia).
 function ocpCompararPI(pi){
@@ -19254,10 +19346,10 @@ async function ocpPdfLib(){ await ocpCargarScript('https://cdnjs.cloudflare.com/
 
 // Reglas para reconocer las columnas de la tabla de ítems, en el orden de preferencia.
 const OCP_COLS = {
-  ref:   [/ilumax.*ref/i, /customer.*(item|ref|code)/i, /cusomer.*item/i, /^ref(erence)?\.?$/i, /^code$/i, /^(yours?|your\s*(code|ref|item|no))\.?$/i, /reference/i, /item\s*code/i, /^item\s*no/i, /model/i],
-  qty:   [/^(qty|q['’`]?ty|quantity|cantidad)\.?$/i, /^quantity/i, /^qty(?!\s*\/)/i, /\bqty\b(?!\s*\/)/i],
-  price: [/unit\s*price/i, /^fob/i, /^usd\s*\/\s*(pcs?|unit|set)/i, /^price/i, /precio/i],
-  amount:[/^amount/i, /total\s*(usd|amount)/i, /^total$/i, /importe|valor/i]
+  ref:   [/ilumax.*ref/i, /customer.*(item|ref|code)/i, /cusomer.*item/i, /^ref(erence)?\.?$/i, /^code$/i, /^(yours?|your\s*(code|ref|item|no))\.?$/i, /^(referencia|c[oó]digo|sku|art[ií]culo|r[eé]f[eé]rence)\.?$/i, /货号|型号|编号|客户/, /reference/i, /item\s*code/i, /^item\s*no/i, /model/i],
+  qty:   [/^(qty|q['’`]?ty|quantity|cantidad|cant\.?|unidades|uds?\.?|quantit[eé]|quantidade)\.?$/i, /数量/, /^quantity/i, /^qty(?!\s*\/)/i, /\bqty\b(?!\s*\/)/i],
+  price: [/unit\s*price/i, /^fob/i, /precio|valor\s*unit|prix|pre[cç]o/i, /单价/, /^usd\s*\/\s*(pcs?|unit|set)/i, /^price/i, /precio/i],
+  amount:[/^amount/i, /total\s*(usd|amount)/i, /^total$/i, /importe|valor|monto|montant/i, /金额|总价/]
 };
 function ocpElegirCol(headers, reglas, usadas){
   for(const rx of reglas){ const h = headers.find(x=>!usadas.has(x) && rx.test(x.s)); if(h){ usadas.add(h); return h; } }
@@ -19299,17 +19391,18 @@ async function ocpLeerPIpdf(buf){
     for(const k of ks){ const base = porLinea[k]; const cerca = frases.filter(f=>f.p===base[0].p && f.ln!==k && Math.abs(f.y-base[0].y)<=16 && f.y>=base[0].y-1);
       if(!cerca.length) continue; hdr = probar([...base, ...cerca].sort((a,b)=>a.x-b.x)); if(hdr){ hdr.y = base[0].y; break; } }
   }
-  if(!hdr){
-    const pista = frases.filter(f=>/q['’`]?ty|quantity|descrip|amount/i.test(f.s)).slice(0,8).map(f=>f.s).join(' | ');
-    throw new Error('No encontré la tabla de ítems en el PDF (encabezados de referencia y cantidad)'+(pista?' · vi: '+pista:' · no vi texto en la tabla (¿PDF escaneado?)')+'. Si es un PDF escaneado, no se puede leer: sube la PI en Excel o Word, o compárala a ojo.');
-  }
+  // filas de texto (por línea y de izquierda a derecha) para la lectura por contenido
+  const lineasOrd = Object.keys(porLinea).map(k=>porLinea[k]).sort((a,b)=> a[0].p-b[0].p || b[0].y-a[0].y);
+  const filasTxt = lineasOrd.map(L=>L.slice().sort((x,y)=>x.x-y.x).map(f=>f.s));
+  const filasY = lineasOrd.map(L=>L[0].y - (L[0].p-1)*100000);
+  let items = [];
+  if(hdr){
   const cols = hdr.L.map(h=>({h, cx:h.cx}));
   const colDe = f => cols.reduce((best,c)=> Math.abs(c.cx-f.cx) < Math.abs(best.cx-f.cx) ? c : best, cols[0]).h;
   const debajo = f => f.p > hdr.p || (f.p===hdr.p && f.y < hdr.y - 2);
   const totalF = frases.find(f=>debajo(f) && /^total\b/i.test(f.s));
   const antesTotal = f => !totalF || f.p < totalF.p || (f.p===totalF.p && f.y > totalF.y + 2);
   const cuerpo = frases.filter(f=>debajo(f) && antesTotal(f));
-  const items = [];
   const hX = rx => hdr.L.find(h=> h!==hdr.q && h!==hdr.pr && h!==hdr.am && h!==hdr.rf && rx.test(h.s));
   const hCtn = hX(/qty\s*\/\s*ctn|pcs\s*\/\s*ctn|inner\s*\/\s*outer|packing\s*qty|qty\s*per/i), hPack = hX(/packag|^package/i), hCbm = hX(/cbm/i), hEan = hX(/ean|barcode/i), hDescF = hX(/descrip/i);
   const refsF = cuerpo.filter(f=>colDe(f)===hdr.rf && /^[A-Za-z0-9][A-Za-z0-9\-\/.]{1,24}$/.test(f.s) && !/^total/i.test(f.s)).sort((a,b)=> a.p-b.p || b.y-a.y);
@@ -19333,6 +19426,12 @@ async function ocpLeerPIpdf(buf){
   // descripción: primer texto de la columna de descripción en la misma fila (si existe)
   const hDesc = hdr.L.find(h=>/descrip/i.test(h.s));
   if(hDesc) items.forEach(it=>{ if(it.desc) return; const rf = cuerpo.find(f=>ocpNormRef(f.s)===it.code && colDe(f)===hdr.rf); const d = rf && cuerpo.filter(f=>f.p===rf.p && colDe(f)===hDesc && Math.abs(f.y-rf.y)<40).sort((a,b)=>b.y-a.y)[0]; if(d) it.desc = d.s.slice(0,80); });
+  }
+  items = ocpCompletarPorContenido(items, filasTxt, filasY);
+  if(!items.length){
+    const pista = frases.filter(f=>/q['’`]?ty|quantity|cantidad|descrip|amount|total/i.test(f.s)).slice(0,8).map(f=>f.s).join(' | ');
+    throw new Error('No encontré en el PDF ninguna referencia de esta OC con su cantidad y precio'+(pista?' · vi: '+pista:' · no vi texto en la tabla (¿PDF escaneado?)')+'. Si es un PDF escaneado, no se puede leer: sube la PI en Excel o Word, o compárala a ojo.');
+  }
   // encabezado de la PI
   const valorDe = rx => { for(const f of frases){ const m = f.s.match(rx); if(m){ const v = (m[m.length-1]||'').replace(/^[:#\s]+/,'').trim(); if(v) return v; const sig = frases.filter(g=>g.p===f.p && Math.abs(g.y-f.y)<2.5 && g.x>f.x).sort((a,b)=>a.x-b.x)[0]; if(sig) return sig.s; } } return ''; };
   const pi_no = valorDe(/^(?:p\s*\/?\s*i|proforma(?:\s*invoice)?|invoice)\s*(?:no\.?|number|#)\s*:?\s*(.*)$/i);
@@ -19341,7 +19440,7 @@ async function ocpLeerPIpdf(buf){
   const terminos = (frases.filter(f=>/deposit|T\/T|payment|balance/i.test(f.s)).sort((a,b)=>b.s.length-a.s.length)[0]||{}).s || '';
   // dónde poner el sello (coordenadas PDF: origen abajo a la izquierda)
   const W = 150, H = Math.round(150*OCP_SELLO_EMU.cy/OCP_SELLO_EMU.cx);
-  const mitadInf = f => f.y < paginas[f.p-1].h*0.55 || f.p>hdr.p;
+  const mitadInf = f => f.y < paginas[f.p-1].h*0.55 || f.p>(hdr?hdr.p:1);
   const buyer = [...frases].reverse().find(f=>mitadInf(f) && /(the\s*buyer|buyer'?s?\s*(signature|sign|stamp|confirm))/i.test(f.s));
   const firma = [...frases].reverse().find(f=>mitadInf(f) && /accepted|confirmed\s*by|authori[sz]ed|the\s*seller|signature/i.test(f.s));
   let pos;
@@ -19361,9 +19460,10 @@ async function ocpLeerPIdocx(buf){
   const doc = new DOMParser().parseFromString(xml, 'application/xml');
   const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
   const txt = el => [...el.getElementsByTagNameNS(W,'t')].map(t=>t.textContent).join('').replace(/\s+/g,' ').trim();
-  let items = [];
+  let items = []; const todasFilas = [];
   for(const tbl of [...doc.getElementsByTagNameNS(W,'tbl')]){
     const filas = [...tbl.getElementsByTagNameNS(W,'tr')].filter(tr=>tr.parentNode===tbl).map(tr=>[...tr.childNodes].filter(n=>n.localName==='tc').map(txt));
+    todasFilas.push(...filas);
     const hi = filas.findIndex(f=>{ const hs = f.map((s,i)=>({s,i})); const us = new Set(); return ocpElegirCol(hs, OCP_COLS.ref, us) && ocpElegirCol(hs, OCP_COLS.qty, us); });
     if(hi<0) continue;
     const hs = filas[hi].map((s,i)=>({s,i})); const us = new Set();
@@ -19382,7 +19482,8 @@ async function ocpLeerPIdocx(buf){
     }
     if(items.length) break;
   }
-  if(!items.length) throw new Error('No encontré en el Word una tabla con referencia y cantidad');
+  items = ocpCompletarPorContenido(items, todasFilas);
+  if(!items.length) throw new Error('No encontré en el Word ninguna referencia de esta OC con su cantidad y precio');
   const parrafos = [...doc.getElementsByTagNameNS(W,'p')].map(txt).filter(Boolean);
   const valorDe = rx => { for(const s of parrafos){ const m = s.match(rx); if(m && m[1] && m[1].trim()) return m[1].trim(); } return ''; };
   const buyerP = [...parrafos].reverse().find(s=>/the\s*buyer|buyer'?s?\s*(signature|sign|stamp)/i.test(s));
