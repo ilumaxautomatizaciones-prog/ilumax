@@ -23296,6 +23296,7 @@ async function pvCargarCanalesPermitidos() {
   try {
     const rows = await sb.get('permisos_ventas_canal', `email_usuario=eq.${encodeURIComponent(CU?.email||'')}`);
     PV_CANALES_PERMITIDOS = (rows||[]).map(r=>r.canal);
+    if(PV_CANALES_PERMITIDOS.includes('Ara') && !PV_CANALES_PERMITIDOS.includes('Hard Discount')) PV_CANALES_PERMITIDOS.push('Hard Discount'); // Ara es un cliente de Hard Discount
   } catch(e) { console.warn('Error cargando permisos de canal:', e); PV_CANALES_PERMITIDOS = []; }
   return PV_CANALES_PERMITIDOS;
 }
@@ -23653,6 +23654,9 @@ async function renderPresupuestoVentas() {
     if(cfg && cfg[0]) canales = cfg[0].valor.split(',').map(s=>s.trim());
   } catch(e){}
 
+  // Ara no es un canal: es un cliente del canal Hard Discount (se asigna como cliente en el presupuesto por cliente).
+  canales = canales.filter(c => String(c).trim().toLowerCase() !== 'ara');
+
   // Filtrar por permisos: admin y contabilidad/gerencia ven todos los canales
   // (estos últimos en solo lectura); el resto solo ve los canales que el
   // administrador le asignó en Admin Center → 🎯 Permisos Ventas — a menos que hayan
@@ -23681,7 +23685,9 @@ async function renderPresupuestoVentas() {
   PV.canal = PV.canal || canales[0];
   pvActualizarSoloLectura();
 
+  PV._canalesTodos = todosLosCanales;
   renderPVShell(el, canales, todosLosCanales);
+  pvAdmEtiquetarCanales();
   await cargarPresupuestoActivo();
 }
 // Prende/apaga "ver los presupuestos de los demás" — solo existe para usuarios restringidos
@@ -23780,6 +23786,13 @@ function renderPVShell(el, canales, todosLosCanales) {
       <select class="inp" id="pv-cat-filtro" style="width:auto;font-size:12px;" onchange="pvFiltrar()">
         <option value="">Todas las categorías</option>
       </select>
+      <select class="inp" id="pv-modo" style="width:auto;font-size:12px;font-weight:700;" onchange="pvSetModo(this.value)" title="Elige cómo vas a armar tu presupuesto">
+        <option value="canal" ${pvModo()==='canal'?'selected':''}>📊 Presupuesto por canal</option>
+        <option value="cliente" ${pvModo()==='cliente'?'selected':''}>👤 Presupuesto por cliente</option>
+      </select>
+      <select class="inp" id="pv-cli-filtro" style="width:auto;font-size:12px;display:${pvModo()==='cliente'?'':'none'};" onchange="pvFiltrar()" title="Filtra por cliente">
+        <option value="">👤 Todos los clientes</option>
+      </select>
       <div style="display:flex;gap:6px;margin-left:auto;">
         ${PV_SOLO_LECTURA ? '' : `
         <button class="btn btn-gr btn-sm" style="position:relative;" onclick="pvGuardar()">💾 Guardar
@@ -23787,11 +23800,15 @@ function renderPVShell(el, canales, todosLosCanales) {
         </button>
         <button class="btn btn-bl btn-sm" onclick="pvAgregarSKU()">➕ SKU</button>
         <button class="btn btn-bl btn-sm" onclick="pvAgregarLineaLibre()" title="Para cuando no hay una referencia real que presupuestar (ej. Proyectos) — presupuesta un monto en $ directamente, mes a mes">💰 Línea sin SKU</button>
-        <button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>
-        <button class="btn btn-pu btn-sm" onclick="pvAbrirSugerirHistorico()" title="Prellena las cantidades de cada mes con la venta real histórica de este canal (con el % de crecimiento que definas)">🧠 Sugerir desde histórico</button>`}
+        ${CU?.rol==='admin' ? `<button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>` : ''}
+        `}
+        <button id="pv-btn-xcli" class="btn btn-pu btn-sm" style="display:${pvModo()==='cliente'?'':'none'};" onclick="pvExportarPorCliente()" title="Descarga SOLO tu presupuesto (el de este canal) con una hoja por cada cliente, más un resumen">📥 Descargar por cliente</button>
+        ${PV_SOLO_LECTURA ? '' : `<button class="btn btn-g btn-sm" onclick="pvHistAbrir()" title="Mira las copias de este presupuesto de los últimos 5 días y recupera lo que se borró o se cambió por error">🕘 Historial</button>`}
         <button class="btn btn-g btn-sm" onclick="pvExportar()" title="Excel a color solo del canal que tienes abierto ahora (Cant, Precio, Venta, Resumen) — para todos los canales juntos usa 'Excel combinado (todos)'">📊 Excel</button>
-        <button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>
-        <button class="btn btn-g btn-sm" onclick="pvExportarCombinadoTodo()" title="Excel a color con las mismas hojas que el botón Excel (Cant, Precio, Venta, Resumen) más una hoja de todas las filas juntas — con fórmulas en vivo (Venta = Cant × Precio) y una hoja de Instrucciones">📋 Excel combinado (todos)</button>
+        ${(CU?.rol==='admin' || pvEsAprobador()) ? `<button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>` : ''}
+        ${(CU?.rol==='admin' || pvEsAprobador()) ? `<button class="btn btn-g btn-sm" onclick="pvExportarCombinadoTodo()" title="Excel a color con las mismas hojas que el botón Excel (Cant, Precio, Venta, Resumen) más una hoja de todas las filas juntas — con fórmulas en vivo (Venta = Cant × Precio) y una hoja de Instrucciones">📋 Excel combinado (todos)</button>` : ''}
+        ${(CU?.rol==='admin' || !PV_SOLO_LECTURA) ? `<button class="btn btn-bl btn-sm" onclick="pvAdmSubirAbrir()" title="Sube el presupuesto desde un Excel sencillo (SKU | cantidad mes a mes | lista de precio | canal)">📤 Subir presupuesto (Excel)</button>` : ''}
+        ${CU?.rol==='admin' ? `<button class="btn btn-g btn-sm" onclick="pvListaCliEditar()" title="Qué cliente corresponde a cada lista de precios (7, 13, 57, 29…)">⚙ Clientes por lista</button>` : ''}
         ${CU?.rol==='admin' ? `<button class="btn btn-or btn-sm" onclick="pvMigrarAnio()" title="Mueve lo que ya está cargado al año correcto (sin tocar ningún dato, solo le cambia el año)">📅 Mover a 2027</button>` : ''}
       </div>
     </div>
@@ -23986,14 +24003,41 @@ function renderPVShell(el, canales, todosLosCanales) {
   </div>`;
 }
 
+// Los canales se comparten, pero cada persona tiene SU presupuesto en el canal (año + canal + persona).
+// Vendedor: el suyo. Admin: el de la persona elegida arriba. Aprobador / admin sin persona: el más reciente del canal.
+function pvDuenoEmail() {
+  if(CU?.rol==='admin') return PV._persona ? (PV._persona.email||'') : '';
+  if(pvEsAprobador() || PV_SOLO_LECTURA) return '';   // consulta (ver todos): el más reciente del canal
+  return CU?.email || '';
+}
+// Detalle de un canal: de una persona (soloEmail) o de todas sumadas (para combinar).
+async function pvDetalleCanal(anio, canal, soloEmail) {
+  let q = `anio=eq.${anio}&canal=eq.${encodeURIComponent(canal)}&order=creado_en.desc`;
+  if(soloEmail) q += `&email_jefe=eq.${encodeURIComponent(soloEmail)}`;
+  const hdrs = await sb.get('presupuesto_ventas', q);
+  if(!hdrs || !hdrs.length) return {hdrs:[], detalle:[]};
+  const map = {};
+  for(const h of hdrs) {
+    const det = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${h.id}&order=categoria.asc,referencia.asc`);
+    (det||[]).forEach(r=>{
+      const k = r.referencia;
+      if(!map[k]) { map[k] = Object.assign({}, r); return; }
+      for(let m=1;m<=12;m++){ const u='u'+String(m).padStart(2,'0'), rr='r'+String(m).padStart(2,'0');
+        map[k][u] = (parseFloat(map[k][u])||0) + (parseFloat(r[u])||0);
+        map[k][rr] = Math.max(parseFloat(map[k][rr])||0, parseFloat(r[rr])||0); }
+    });
+  }
+  return {hdrs, detalle:Object.values(map)};
+}
 // ── Cargar o crear presupuesto activo ──────────────────────────────────
 async function cargarPresupuestoActivo() {
   pvEstado('⏳ Cargando presupuesto...');
   PV.meta = null; // la meta histórica es por canal — se recalcula si se usa "Sugerir desde histórico" de nuevo
   try {
     // Buscar presupuesto existente para este año+canal
+    const _de = pvDuenoEmail();
     const rows = await sb.get('presupuesto_ventas',
-      `anio=eq.${PV.anio}&canal=eq.${encodeURIComponent(PV.canal)}&order=creado_en.desc&limit=1`);
+      `anio=eq.${PV.anio}&canal=eq.${encodeURIComponent(PV.canal)}${_de?'&email_jefe=eq.'+encodeURIComponent(_de):''}&order=creado_en.desc&limit=1`);
 
     if(rows && rows.length > 0) {
       PV.presId   = rows[0].id;
@@ -24003,6 +24047,9 @@ async function cargarPresupuestoActivo() {
       if(selLista) selLista.value = PV.listaId;
     } else {
       PV.presId = null;
+      // Canal sin presupuesto todavía: arranca con la lista de precios que le corresponde al canal
+      const _la = CANAL_LISTA_MAP[PV.canal];
+      if(_la) { PV.listaId = _la; const _sl = document.getElementById('pv-lista'); if(_sl) _sl.value = _la; }
     }
 
     // Cargar detalle
@@ -24013,6 +24060,7 @@ async function cargarPresupuestoActivo() {
 
     pvRenderTabla();
     pvEstado('');
+    try{ pvAdmPintarBarra(); }catch(e){}
 
     // Stock real de inventario (independiente, no bloquea el primer render)
     pvActualizarStock().then(pvRenderTabla);
@@ -24036,6 +24084,9 @@ async function cargarDetallePV() {
         cats.map(c=>`<option value="${c}">${c}</option>`).join('');
     }
   } catch(e) { console.warn('Error detalle:', e); }
+  await pvCliCargar();
+  await pvListaCliCargar();
+  await pvCliInferir();
   pvActualizarBadgeGuardar();
 }
 
@@ -24068,8 +24119,12 @@ function pvRenderTabla() {
   let filas  = PV.detalle.filter(r => {
     const ok1 = !q || (r.referencia+' '+(r.descripcion||'')).toLowerCase().includes(q);
     const ok2 = !catF || r.categoria === catF;
-    return ok1 && ok2;
+    const cliF = (document.getElementById('pv-cli-filtro')||{value:''}).value;
+    const cliR = pvCliDe(r.referencia);
+    const ok3 = pvModo()!=='cliente' || !cliF || (cliF==='__sin' ? !cliR : cliR===cliF);
+    return ok1 && ok2 && ok3;
   });
+  pvCliPoblarFiltro();
 
   // THEAD
   const mesHeaders = MESES.map((m,i) => {
@@ -24096,21 +24151,28 @@ function pvRenderTabla() {
 
   // Agrupar por categoría
   const grupos = {};
+  // En "Presupuesto por cliente" la tabla se divide por cliente (todo Olímpica junto, luego el siguiente...);
+  // en modo canal se agrupa por categoría como siempre.
+  const porCli = pvModo()==='cliente';
   filas.forEach(r => {
-    const cat = r.categoria || 'Sin categoría';
+    const cat = porCli ? (pvCliDe(r.referencia) || 'Sin cliente') : (r.categoria || 'Sin categoría');
     if(!grupos[cat]) grupos[cat] = [];
     grupos[cat].push(r);
   });
+  if(porCli) Object.values(grupos).forEach(a=>a.sort((x,y)=>String(x.categoria||'').localeCompare(String(y.categoria||'')) || String(x.referencia).localeCompare(String(y.referencia))));
 
   // Totales generales
   let totalUndGlobal = 0, totalCOPGlobal = 0;
 
   let htmlRows = '';
-  Object.entries(grupos).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([cat, items]) => {
-    // Fila de categoría
-    htmlRows += `<tr style="background:#f1f5f9;">
-      <td colspan="100%" style="padding:6px 10px;font-size:10px;font-weight:800;color:#1e3a5f;letter-spacing:.5px;text-transform:uppercase;">
-        📁 ${cat} <span style="font-weight:400;color:var(--mu);">(${items.length} SKUs)</span>
+  Object.entries(grupos).sort((a,b)=> porCli ? ((a[0]==='Sin cliente')-(b[0]==='Sin cliente') || a[0].localeCompare(b[0])) : a[0].localeCompare(b[0])).forEach(([cat, items]) => {
+    // Fila de categoría (o de cliente)
+    let _gUnd = 0, _gCOP = 0;
+    if(porCli) items.forEach(r=>{ let t=0; for(let m=1;m<=12;m++) t += parseFloat(r['u'+String(m).padStart(2,'0')])||0; _gUnd += t; _gCOP += t*(parseFloat(r.precio_lista)||0); });
+    htmlRows += `<tr style="background:${porCli?(cat==='Sin cliente'?'#fef3c7':'#ede9fe'):'#f1f5f9'};">
+      <td colspan="100%" style="padding:${porCli?'8px':'6px'} 10px;font-size:${porCli?'11':'10'}px;font-weight:800;color:${porCli?'#5b21b6':'#1e3a5f'};letter-spacing:.5px;text-transform:uppercase;">
+        ${porCli?'👤':'📁'} ${cat} <span style="font-weight:400;color:var(--mu);">(${items.length} SKUs)</span>
+        ${porCli?`<span style="float:right;font-weight:700;text-transform:none;color:#5b21b6;">${_gUnd.toLocaleString('es-CO')} und. · $${Math.round(_gCOP).toLocaleString('es-CO')}</span>`:''}
       </td>
     </tr>`;
 
@@ -24177,7 +24239,7 @@ function pvRenderTabla() {
       htmlRows += `<tr style="border-bottom:1px solid var(--b1);"
         onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
         <td style="padding:6px 8px;font-family:monospace;font-size:10px;color:var(--mu);white-space:nowrap;position:sticky;left:0;background:inherit;z-index:5;">${esLibre?'💰 sin SKU':r.referencia}</td>
-        <td style="padding:6px 8px;font-size:11px;font-weight:600;max-width:130px;position:sticky;left:62px;background:inherit;z-index:5;" title="${r.descripcion||''}">${(r.descripcion||'').substring(0,35)}</td>
+        <td style="padding:6px 8px;font-size:11px;font-weight:600;max-width:130px;position:sticky;left:62px;background:inherit;z-index:5;" title="${r.descripcion||''}">${(r.descripcion||'').substring(0,35)}${pvModo()==='cliente'?(pvCliDe(r.referencia)?`<div style="font-size:9px;font-weight:700;color:#7c3aed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="Cliente">👤 ${pvCliDe(r.referencia)}</div>`:`<div style="font-size:9px;color:#d97706;">⚠ sin cliente</div>`):''}</td>
         <td style="padding:4px 6px;text-align:right;white-space:nowrap;" title="${esLibre?'Precio por unidad de esta línea. Déjalo en 1 para escribir el monto en $ directo cada mes, o pon un precio real y cada mes escribe la cantidad (se multiplica cantidad × precio).':(precio ? '' : 'Sin precio registrado para este SKU en la lista actual (puede existir en otras listas)')}">
           ${esLibre
             ? `<input type="number" min="0" step="1" value="${precio||1}" data-ref="${r.referencia}"
@@ -24193,7 +24255,7 @@ function pvRenderTabla() {
         ${comp ? `<td style="padding:7px 8px;text-align:right;font-size:10px;color:#60a5fa;">${histTot ? histTot.toLocaleString('es-CO') : '—'}</td>
         <td style="padding:7px 8px;text-align:right;font-size:10px;font-weight:700;color:${pctCompC};">${pctComp!==null ? pctComp+'%' : '—'}</td>` : ''}
         <td style="padding:4px;text-align:center;">
-          ${PV_SOLO_LECTURA ? '' : `<button onclick="pvEliminarSKU('${r.referencia}')" style="border:none;background:transparent;cursor:pointer;font-size:13px;color:var(--mu);" title="Eliminar">🗑</button>`}
+          ${PV_SOLO_LECTURA ? '' : `${pvModo()==='cliente'?`<button onclick="pvCliAsignar('${refEsc}')" style="border:none;background:transparent;cursor:pointer;font-size:13px;color:${pvCliDe(r.referencia)?'#7c3aed':'var(--mu)'};" title="Asignar cliente">👤</button>`:''}<button onclick="pvEliminarSKU('${r.referencia}')" style="border:none;background:transparent;cursor:pointer;font-size:13px;color:var(--mu);" title="Eliminar">🗑</button>`}
         </td>
       </tr>`;
     });
@@ -24372,10 +24434,13 @@ async function pvGuardar() {
   try {
     // Crear o actualizar cabecera
     if(!PV.presId) {
+      const esAdm = CU?.rol==='admin';
+      if(esAdm && !PV._persona) { toast('⚠ Elige primero (arriba, "Presupuesto de:") a quién se le carga este presupuesto','wa'); PV.guardando=false; pvEstado(''); return; }
+      const dueno = esAdm ? PV._persona : {nombre: CU.nombre||CU.email, email: CU.email};
       const nuevo = await sb.post('presupuesto_ventas', {
         anio: PV.anio, lista_id: PV.listaId,
-        canal: PV.canal, jefe_zona: CU.nombre||CU.email,
-        email_jefe: CU.email, estado: 'borrador'
+        canal: PV.canal, jefe_zona: dueno.nombre,
+        email_jefe: dueno.email||CU.email, estado: 'borrador'
       });
       PV.presId = nuevo[0].id;
     } else {
@@ -24385,6 +24450,11 @@ async function pvGuardar() {
 
     // Guardar solo filas dirty
     const dirty = PV.detalle.filter(r=>r._dirty);
+    if(dirty.length) await pvHistSnap(PV.presId, PV.canal, 'guardar', PV.anio, PV.listaId);
+    // Cada línea queda con el cliente de la lista con la que se presupuestó
+    let _cambioCli = false;
+    dirty.forEach(r=>{ const k = String(r.referencia); if(!PV_CLI.map[k] && !pvEsLineaLibre(r)) { const c = PV_CLI_INF[k] || pvClienteDeLista(PV.listaId); if(c){ PV_CLI.map[k] = c; _cambioCli = true; } } });
+    if(_cambioCli) await pvCliGuardar();
     for(const r of dirty) {
       const payload = {
         presupuesto_id: PV.presId,
@@ -24464,6 +24534,523 @@ async function pvCambiarLista(v) {
   pvActualizarBadgeGuardar();
 }
 function pvFiltrar() { pvRenderTabla(); }
+
+// ── Administrador: ver/editar el presupuesto de cualquier persona y subir uno por Excel ──
+// El selector de canal muestra quién es el responsable de cada presupuesto del año (jefe_zona).
+async function pvAdmEtiquetarCanales() {
+  if(CU?.rol!=='admin') return;
+  try {
+    const [rows, perms, us] = await Promise.all([
+      sb.get('presupuesto_ventas', `anio=eq.${PV.anio}&select=canal,jefe_zona,email_jefe`),
+      sb.get('permisos_ventas_canal', 'select=canal,email_usuario').catch(()=>[]),
+      (USERS && USERS.length ? Promise.resolve(USERS) : sb.get('usuarios','activo=eq.true&select=email,nombre').catch(()=>[]))
+    ]);
+    const nomDe = {}; try{ getDefaultUsers().forEach(u=>{ if(u.email) nomDe[String(u.email).toLowerCase()] = u.nombre; }); }catch(e){}
+    (us||[]).forEach(u=>{ if(u.email && u.nombre) nomDe[String(u.email).toLowerCase()] = u.nombre; });
+    const per = {}; // email|nombre -> {nombre,email,canales:Set}
+    const get = (email, nombre) => { const k = (email||nombre||'').toLowerCase(); if(!k) return null;
+      return per[k] = per[k] || {nombre: nombre || nomDe[(email||'').toLowerCase()] || email, email: email||'', canales:new Set(), propios:new Set()}; };
+    // Solo cuentan los permisos de usuarios ACTIVOS (hay correos viejos como johana@ que ya no existen y tenían todos los canales)
+    const activos = new Set((us||[]).map(u=>String(u.email||'').toLowerCase()));
+    (perms||[]).forEach(r=>{
+      const em = String(r.email_usuario||'').toLowerCase();
+      if(activos.size && !activos.has(em)) return;
+      const x = get(r.email_usuario, nomDe[em]); if(!x) return;
+      x.canales.add(r.canal === 'Ara' ? 'Hard Discount' : r.canal);   // Ara es un cliente de Hard Discount
+    });
+    const dueno = {};
+    (rows||[]).forEach(r=>{ if(!r.jefe_zona) return; dueno[r.canal] = r.jefe_zona; const x = get(r.email_jefe, r.jefe_zona); if(x){ x.canales.add(r.canal); x.propios.add(r.canal); if(!x.nombre) x.nombre=r.jefe_zona; } });
+    PV._personasAll = Object.values(per).filter(x=>x.nombre).map(x=>({nombre:x.nombre,email:x.email,canales:[...x.canales],propios:[...x.propios]})).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+    pvAdmPintarBarra();
+    const sel = document.getElementById('pv-canal'); if(!sel) return;
+    PV._canalesConDueno = Object.keys(dueno); PV._duenoNombre = dueno;
+    const _dn = {}; (rows||[]).forEach(r=>{ if(r.jefe_zona) (_dn[r.canal]=_dn[r.canal]||[]).push(r.jefe_zona); }); PV._duenosCanal = _dn;
+    PV._canalOptsAll = [...sel.options].map(o=>({value:o.value, text:o.value + (dueno[o.value] ? ' — ' + dueno[o.value] : ' — (sin presupuesto)')}));
+    pvAdmAplicarFiltroCanales();
+    const lbl = sel.parentElement && sel.parentElement.firstElementChild;
+    if(lbl) lbl.textContent = 'Canal';
+  } catch(e) { console.warn('pvAdmEtiquetarCanales', e); }
+}
+// Barra: una persona por botón. La persona elegida es la DUEÑA del presupuesto que se cree/cargue (obligatorio para el admin).
+function pvAdmPintarBarra() {
+  const cont = document.getElementById('pv-content'); if(!cont || CU?.rol!=='admin') return;
+  let bar = document.getElementById('pv-adm-bar');
+  if(!bar){ bar = document.createElement('div'); bar.id='pv-adm-bar'; bar.style.cssText='display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px;'; cont.insertBefore(bar, cont.firstChild); }
+  const personas = PV._personasAll || [];
+  const sel = PV._persona ? (PV._persona.email||PV._persona.nombre) : '';
+  bar.innerHTML = '<span style="font-size:11px;font-weight:800;color:var(--mu);margin-right:4px;">👥 Presupuesto de:</span>' +
+    (personas.length ? `<button class="btn btn-sm" onclick="pvAdmIrPersona(-1)" style="${!sel?'background:#0f172a;color:#f5c518;font-weight:800;border-color:#0f172a;':''}">Todos</button>` +
+      personas.map((x,i)=>{ const act = sel && (x.email||x.nombre)===sel;
+      return `<button class="btn btn-sm" onclick="pvAdmIrPersona(${i})" title="Ver los presupuestos de ${x.nombre}" style="${act?'background:#0f172a;color:#f5c518;font-weight:800;border-color:#0f172a;':''}">${x.nombre}</button>`; }).join('')
+      : '<span style="font-size:11px;color:var(--mu);">No hay personas con canales asignados todavía</span>') +
+    (PV.presId && personas.length ? `<span style="margin-left:auto;font-size:11px;color:var(--mu);">Dueño de este presupuesto:
+      <select class="inp" style="width:auto;font-size:11px;display:inline-block;" onchange="pvAdmCambiarResp(this.value)">
+        <option value="">— sin responsable —</option>
+        ${personas.map((x,i)=>`<option value="${i}" ${(PV._duenoNombre||{})[PV.canal]===x.nombre?'selected':''}>${x.nombre}</option>`).join('')}
+      </select></span>` : '');
+}
+function pvAdmPasarCanal() {
+  const per = PV._persona; if(!per) return;
+  document.getElementById('mo-pv-pasar')?.remove();
+  const ops = (PV._canalOptsAll||[]).filter(o=>(PV._canalesConDueno||[]).includes(o.value) && (PV._duenoNombre||{})[o.value]!==per.nombre);
+  const mo = document.createElement('div'); mo.id='mo-pv-pasar';
+  mo.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:420px;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--b1);font-size:14px;font-weight:800;">➕ Pasar un canal a ${per.nombre}</div>
+    <div style="padding:16px 20px;font-size:12px;display:flex;flex-direction:column;gap:8px;">
+      <div style="color:var(--mu);">El presupuesto de ese canal queda a nombre de ${per.nombre} (sus cantidades no cambian).</div>
+      <select id="pv-pasar-sel" class="inp">${ops.map(o=>`<option value="${o.value}">${o.text}</option>`).join('')}</select></div>
+    <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-sm" onclick="document.getElementById('mo-pv-pasar').remove()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="pvAdmPasarOk()">Pasar</button></div></div>`;
+  document.body.appendChild(mo);
+}
+async function pvAdmPasarOk() {
+  const per = PV._persona, canal = document.getElementById('pv-pasar-sel')?.value; if(!per || !canal) return;
+  try {
+    await sb.patch('presupuesto_ventas', `anio=eq.${PV.anio}&canal=eq.${encodeURIComponent(canal)}`, {jefe_zona:per.nombre, email_jefe:per.email||null, actualizado:new Date().toISOString()});
+    document.getElementById('mo-pv-pasar')?.remove();
+    toast(`✅ ${canal} ahora es de ${per.nombre}`,'ok');
+    await pvAdmEtiquetarCanales();
+    const sel = document.getElementById('pv-canal'); if(sel) sel.value = canal;
+    await pvCambiarCanal(canal); pvAdmPintarBarra();
+  } catch(e) { toast('❌ '+e.message,'er'); }
+}
+async function pvAdmCambiarResp(i) {
+  const x = (PV._personasAll||[])[parseInt(i)]; if(!x || !PV.presId) return;
+  try {
+    await sb.patch('presupuesto_ventas', `id=eq.${PV.presId}`, {jefe_zona:x.nombre, email_jefe:x.email||null, actualizado:new Date().toISOString()});
+    toast(`✅ ${PV.canal} ahora es de ${x.nombre}`,'ok');
+    await pvAdmEtiquetarCanales();
+  } catch(e) { toast('❌ '+e.message,'er'); }
+}
+function pvAdmAplicarFiltroCanales() {
+  const sel = document.getElementById('pv-canal'); if(!sel || !PV._canalOptsAll) return;
+  const px = PV._persona && (PV._personasAll||[]).find(x=>(x.email||x.nombre)===(PV._persona.email||PV._persona.nombre));
+  // Los canales se pueden compartir: de la persona se muestran todos los que tiene asignados en Permisos Ventas (más donde ya tenga presupuesto).
+  const ver = PV._canalOptsAll.filter(o=>!px || px.canales.includes(o.value));
+  const actual = PV.canal;
+  const txt = o => px ? o.value + (px.propios.includes(o.value) ? ' — '+px.nombre : ' — (sin presupuesto)') : o.value + ((PV._duenosCanal||{})[o.value] ? ' — '+PV._duenosCanal[o.value].join(', ') : ' — (sin presupuesto)');
+  sel.innerHTML = ver.map(o=>`<option value="${o.value}">${txt(o)}</option>`).join('');
+  if(ver.some(o=>o.value===actual)) sel.value = actual;
+}
+async function pvAdmIrPersona(i) {
+  const x = (i===-1) ? null : (PV._personasAll||[])[i];
+  if(!pvConfirmarDescartarCambios('Vas a cambiar de persona')) return;
+  PV._persona = x ? {nombre:x.nombre, email:x.email} : null;
+  pvAdmAplicarFiltroCanales();
+  const sel = document.getElementById('pv-canal');
+  // Si el canal abierto no es de esa persona, salta a uno suyo.
+  if(x && x.canales.length && !x.canales.includes(PV.canal)) {
+    const primero = (PV._canalOptsAll||[]).find(o=>x.canales.includes(o.value));
+    if(primero) { if(sel) sel.value = primero.value; await pvCambiarCanal(primero.value); }
+  } else {
+    PV.presId = null; PV.detalle = [];
+    await cargarPresupuestoActivo();   // mismo canal, pero el presupuesto de la persona elegida
+  }
+  pvAdmPintarBarra();
+}
+// ═══ Historial del presupuesto (5 días) — tabla presupuesto_historial en Supabase ═══
+// Antes de guardar, eliminar un SKU, subir un Excel o restaurar, se guarda una copia del estado anterior.
+var PV_HIST_ULT = {};
+async function pvHistSnap(pid, canal, accion, anio, listaId, forzar) {
+  if(!pid) return;
+  try {
+    const t = Date.now();
+    if(!forzar && PV_HIST_ULT[pid] && t-PV_HIST_ULT[pid] < 5*60*1000) return; // máx. 1 copia cada 5 min al guardar
+    const rows = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${pid}`);
+    if(!rows || !rows.length) return;
+    let clientes = {};
+    if(pid===PV.presId) clientes = Object.assign({}, PV_CLI.map);
+    else { try { const c = await sb.get('configuracion','clave=eq.pv_cli_'+pid); if(c&&c[0]&&c[0].valor) clientes = JSON.parse(c[0].valor)||{}; } catch(e){} }
+    await sb.post('presupuesto_historial', { presupuesto_id: pid, anio, canal, lista_id: listaId==null?null:String(listaId),
+      accion, usuario: (CU&&(CU.nombre||CU.email))||'', n_lineas: rows.length, snapshot: {detalle: rows, clientes} });
+    PV_HIST_ULT[pid] = t;
+    // limpieza: lo que tenga más de 5 días se borra
+    sb.delete('presupuesto_historial', 'creado_en=lt.'+encodeURIComponent(new Date(t-5*86400000).toISOString())).catch(()=>{});
+  } catch(e) { console.warn('pvHistSnap (¿falta crear la tabla presupuesto_historial?):', e.message); }
+}
+async function pvHistAbrir() {
+  if(!PV.presId) { toast('Este canal aún no tiene presupuesto guardado','wa'); return; }
+  document.getElementById('mo-pv-hist')?.remove();
+  const mo = document.createElement('div'); mo.id='mo-pv-hist';
+  mo.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:720px;max-height:88vh;display:flex;flex-direction:column;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;">
+      <div style="font-size:14px;font-weight:800;">🕘 Historial — ${PV.canal} ${PV.anio} <span style="font-weight:500;color:var(--mu);font-size:11px;">(últimos 5 días)</span></div>
+      <button onclick="document.getElementById('mo-pv-hist').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button>
+    </div>
+    <div id="pv-hist-body" style="padding:14px 20px;overflow:auto;font-size:12px;">⏳ Cargando...</div></div>`;
+  document.body.appendChild(mo);
+  const body = document.getElementById('pv-hist-body');
+  try {
+    const desde = encodeURIComponent(new Date(Date.now()-5*86400000).toISOString());
+    const rows = await sb.get('presupuesto_historial', `presupuesto_id=eq.${PV.presId}&creado_en=gte.${desde}&select=id,creado_en,accion,usuario,n_lineas,lista_id&order=creado_en.desc&limit=100`);
+    if(!rows.length) { body.innerHTML = 'Todavía no hay copias de este presupuesto. Se crean solas antes de cada guardado, borrado o carga de Excel.'; return; }
+    body.innerHTML = `<div style="color:var(--mu);margin-bottom:8px;">Cada fila es una copia de cómo estaba el presupuesto <b>antes</b> de esa acción.</div>` +
+      rows.map(r=>{ const f = new Date(r.creado_en).toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+        return `<div style="display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--b1);flex-wrap:wrap;">
+          <div style="min-width:120px;font-weight:700;">${f}</div>
+          <div style="flex:1;min-width:150px;">${r.accion||''} <span style="color:var(--mu);">· ${r.usuario||''} · ${r.n_lineas} líneas</span></div>
+          <button class="btn btn-sm" onclick="pvHistRestaurar(${r.id},'faltantes')" title="Vuelve a agregar solo las líneas que hoy ya no están (no toca lo demás)">↩ Recuperar líneas borradas</button>
+          <button class="btn btn-or btn-sm" onclick="pvHistRestaurar(${r.id},'todo')" title="Deja el presupuesto exactamente como estaba en esa copia">⏪ Restaurar todo</button></div>`; }).join('');
+  } catch(e) { body.innerHTML = `<span style="color:var(--rd);">❌ No pude leer el historial: ${e.message}.<br>Si es la primera vez, falta crear la tabla <b>presupuesto_historial</b> en Supabase (archivo presupuesto_historial.sql).</span>`; }
+}
+async function pvHistRestaurar(id, modo) {
+  if(PV_SOLO_LECTURA) return;
+  if(!confirm(modo==='todo' ? '¿Restaurar TODO el presupuesto a como estaba en esa copia? Lo de hoy se reemplaza (antes se guarda una copia por si te arrepientes).' : '¿Recuperar las líneas que hoy ya no están en el presupuesto?')) return;
+  try {
+    const h = (await sb.get('presupuesto_historial', `id=eq.${id}`))[0];
+    if(!h) throw new Error('copia no encontrada');
+    const snap = h.snapshot||{}, det = snap.detalle||[];
+    await pvHistSnap(PV.presId, PV.canal, 'antes de restaurar', PV.anio, PV.listaId, true);
+    const limpia = r => { const o = Object.assign({}, r); delete o.id; o.presupuesto_id = PV.presId; return o; };
+    let n = 0;
+    if(modo==='todo') {
+      await sb.delete('presupuesto_detalle', `presupuesto_id=eq.${PV.presId}`);
+      const ins = det.map(limpia); n = ins.length;
+      for(let i=0;i<ins.length;i+=100) await sb.post('presupuesto_detalle', ins.slice(i,i+100));
+      if(h.lista_id) { await sb.patch('presupuesto_ventas', `id=eq.${PV.presId}`, {lista_id:h.lista_id, actualizado:new Date().toISOString()}); PV.listaId = h.lista_id; const sl=document.getElementById('pv-lista'); if(sl) sl.value=h.lista_id; }
+      PV_CLI.map = Object.assign({}, snap.clientes||{});
+    } else {
+      const hoy = new Set(PV.detalle.map(r=>r.referencia));
+      const ins = det.filter(r=>!hoy.has(r.referencia)).map(limpia); n = ins.length;
+      for(let i=0;i<ins.length;i+=100) await sb.post('presupuesto_detalle', ins.slice(i,i+100));
+      Object.entries(snap.clientes||{}).forEach(([k,v])=>{ if(!hoy.has(k) && !PV_CLI.map[k]) PV_CLI.map[k]=v; });
+    }
+    await pvCliGuardar();
+    document.getElementById('mo-pv-hist')?.remove();
+    await cargarDetallePV(); pvRenderTabla();
+    toast(`✅ Recuperado: ${n} línea(s)`,'ok');
+  } catch(e) { toast('❌ No se pudo restaurar: '+e.message,'er'); }
+}
+var PV_ADM_FILAS = [];
+function pvAdmPlantilla() {
+  const hdr = ['SKU','ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC','LISTA DE PRECIO','CANAL'];
+  const lista = (PV.catalogo.find(c=>c.activa)||{}).nombre || '';
+  const ws = XLSX.utils.aoa_to_sheet([hdr, ['REF-EJEMPLO',10,10,10,10,10,10,10,10,10,10,10,10,lista,(PV._canalesTodos||CANALES_DEFAULT)[0]]]);
+  ws['!cols'] = hdr.map((_,i)=>({wch: i===0?18:(i>=13?20:7)}));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Presupuesto');
+  const cat = XLSX.utils.aoa_to_sheet([['LISTAS DE PRECIO (escribe el código, el mismo que ves en el selector)',''],['Código','Descripción'],...PV.catalogo.map(c=>[c.nombre,c.descripcion||'']),[],['CANALES',''],...(PV._canalesTodos||CANALES_DEFAULT).map(c=>[c])]);
+  XLSX.utils.book_append_sheet(wb, cat, 'Listas y canales');
+  XLSX.writeFile(wb, 'Plantilla_Presupuesto_ILUMAX.xlsx');
+}
+function pvAdmSubirAbrir() {
+  if(CU?.rol!=='admin' && PV_SOLO_LECTURA) { toast('No tienes permiso para subir presupuestos','wa'); return; }
+  document.getElementById('mo-pv-adm')?.remove();
+  const mo = document.createElement('div'); mo.id='mo-pv-adm';
+  mo.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:560px;max-height:90vh;overflow:auto;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;">
+      <div style="font-size:14px;font-weight:800;">📤 Subir presupuesto ${PV.anio}</div>
+      <button onclick="document.getElementById('mo-pv-adm').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button>
+    </div>
+    <div style="padding:16px 20px;display:flex;flex-direction:column;gap:10px;font-size:12px;">
+      <div>Formato: <b>SKU | ENE … DIC | LISTA DE PRECIO | CANAL</b> (una fila por SKU; el canal puede variar por fila). Las referencias que ya existan en ese canal se <b>actualizan</b> y las nuevas se <b>agregan</b>; no se borra nada.</div>
+      <div><button class="btn btn-g btn-sm" onclick="pvAdmPlantilla()">⬇️ Descargar plantilla</button></div>
+      ${CU?.rol==='admin' ? `<label style="font-weight:700;">¿A quién se le carga este presupuesto? <span style="color:var(--rd);">(obligatorio)</span><br>
+        <select id="pv-adm-dueno" class="inp" onchange="pvAdmValidarOk()"><option value="">— elige la persona —</option>
+        ${(PV._personasAll||[]).map((x,i)=>`<option value="${i}" ${PV._persona&&(x.email||x.nombre)===(PV._persona.email||PV._persona.nombre)?'selected':''}>${x.nombre}</option>`).join('')}</select></label>` : `<div>Se carga a tu nombre (${CU.nombre||CU.email}) y solo en tus canales.</div>`}
+      <input type="file" id="pv-adm-file" accept=".xlsx,.xls,.csv" onchange="pvAdmLeer(this.files[0])">
+      <div id="pv-adm-prev" style="font-size:11.5px;"></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-sm" onclick="document.getElementById('mo-pv-adm').remove()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" id="pv-adm-ok" disabled onclick="pvAdmImportar()">Importar</button>
+    </div></div>`;
+  document.body.appendChild(mo);
+}
+function pvAdmDuenoSel() {
+  if(CU?.rol!=='admin') return {nombre:CU.nombre||CU.email, email:CU.email};
+  const v = document.getElementById('pv-adm-dueno')?.value; if(v==='' || v==null) return null;
+  const x = (PV._personasAll||[])[parseInt(v)]; return x ? {nombre:x.nombre, email:x.email||''} : null;
+}
+function pvAdmValidarOk() { const b = document.getElementById('pv-adm-ok'); if(b) b.disabled = !(PV_ADM_FILAS.length && pvAdmDuenoSel()); }
+function pvAdmNorm(t){ return String(t==null?'':t).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+async function pvAdmLeer(file) {
+  if(!file) return;
+  const prev = document.getElementById('pv-adm-prev'); prev.innerHTML = '⏳ Leyendo...';
+  PV_ADM_FILAS = [];
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), {type:'array'});
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+    const hi = aoa.findIndex(r=>r.some(c=>pvAdmNorm(c)==='sku'));
+    if(hi<0) {
+      const ha = aoa.findIndex(r=>r.some(c=>/^ref/.test(pvAdmNorm(c))));
+      if(ha>=0) return pvAdmLeerFormatoRef(aoa, ha, prev);
+      throw new Error('No encontré la columna SKU en el encabezado');
+    }
+    const H = aoa[hi].map(pvAdmNorm);
+    const col = n => H.findIndex(h=>h===n);
+    const MESES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+    const cm = MESES.map(col);
+    const cSku = col('sku'), cLista = H.findIndex(h=>h.startsWith('lista')), cCanal = col('canal');
+    if(cm.some(i=>i<0) || cLista<0 || cCanal<0) throw new Error('Faltan columnas: se requieren SKU, ENE…DIC, LISTA DE PRECIO y CANAL');
+    const canales = PV._canalesTodos || CANALES_DEFAULT;
+    const errores = []; const listasCache = {};
+    for(let i=hi+1;i<aoa.length;i++){
+      const r = aoa[i]; const sku = String(r[cSku]||'').trim(); if(!sku) continue;
+      const canal = canales.find(c=>pvAdmNorm(c)===pvAdmNorm(r[cCanal]));
+      if(!canal){ errores.push(`Fila ${i+1}: canal "${r[cCanal]}" no existe`); continue; }
+      if(!pvPuedeEditarCanal(canal)){ errores.push(`Fila ${i+1}: no tienes permiso en el canal ${canal}`); continue; }
+      const lv = pvAdmNorm(r[cLista]);
+      const lista = (PV.catalogo.find(c=>pvAdmNorm(c.nombre)===lv) || PV.catalogo.find(c=>pvAdmNorm(c.lista_id)===lv) || PV.catalogo.find(c=>pvAdmNorm(c.descripcion)===lv));
+      if(!lista){ errores.push(`Fila ${i+1}: lista de precio "${r[cLista]}" no existe`); continue; }
+      const u = cm.map(ci=>Math.max(0, parseFloat(String(r[ci]).replace(/,/g,'.'))||0));
+      PV_ADM_FILAS.push({sku, canal, lista:String(lista.lista_id), u});
+    }
+    const porCanal = {}; PV_ADM_FILAS.forEach(f=>{ porCanal[f.canal]=(porCanal[f.canal]||0)+1; });
+    prev.innerHTML = `<b>${PV_ADM_FILAS.length}</b> filas válidas — ` + Object.entries(porCanal).map(([c,n])=>`${c}: ${n}`).join(' · ') +
+      (errores.length ? `<div style="color:var(--rd);margin-top:6px;max-height:110px;overflow:auto;">⚠ ${errores.length} filas omitidas:<br>${errores.slice(0,30).join('<br>')}</div>` : '');
+    pvAdmValidarOk();
+  } catch(e) { prev.innerHTML = `<span style="color:var(--rd);">❌ ${e.message}</span>`; }
+}
+// Formato alterno (ej. Presupuesto SODIMAC): Ref. Proveedor | Descripción | <código-lista> | 12 meses | Total.
+// No trae canal ni lista como columnas, así que se eligen aquí; la lista se sugiere por el encabezado de la columna de precio.
+var PV_ADM_ALT = null;
+function pvAdmLeerFormatoRef(aoa, ha, prev) {
+  const hdr = aoa[ha]; const cRef = hdr.findIndex(c=>/^ref/.test(pvAdmNorm(c)));
+  const cPrecio = cRef+2, cMes0 = cRef+3;
+  const filas = [];
+  for(let i=ha+1;i<aoa.length;i++){
+    const r = aoa[i]; const sku = String(r[cRef]==null?'':r[cRef]).trim(); if(!sku) continue;
+    const u = []; for(let m=0;m<12;m++) u.push(Math.max(0, parseFloat(String(r[cMes0+m]).replace(/,/g,'.'))||0));
+    filas.push({sku, desc:String(r[cRef+1]||''), precio:parseFloat(r[cPrecio])||0, u});
+  }
+  const tit = String(hdr[cPrecio]||'').trim();
+  const m = tit.match(/^(\S+?)\s*-\s*(.+)$/);
+  const cod = m?m[1]:tit, nom = m?m[2]:tit;
+  const lv = c => pvAdmNorm(c);
+  const sug = PV.catalogo.find(c=>lv(c.nombre)===lv(cod)) || PV.catalogo.find(c=>lv(c.nombre).includes(lv(nom).replace(/[^a-z0-9]/g,'')) || lv(nom).includes(lv(c.nombre))) || null;
+  const canales = PV._canalesTodos || CANALES_DEFAULT;
+  const canSug = canales.find(c=>lv(c)===lv(PV.canal)) || canales[0];
+  PV_ADM_ALT = {filas, sug};
+  prev.innerHTML = `<div><b>${filas.length}</b> SKUs detectados (formato "Ref. Proveedor"). Columna de precio: <b>${tit||'—'}</b>.</div>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+      <label>Canal / persona<br><select id="pv-adm-alt-canal" class="inp" onchange="pvAdmAltAplicar()">${canales.map(c=>`<option ${c===canSug?'selected':''}>${c}</option>`).join('')}</select></label>
+      <label>Lista de precios<br><select id="pv-adm-alt-lista" class="inp" onchange="pvAdmAltAplicar()">${PV.catalogo.map(c=>`<option value="${c.lista_id}" ${sug&&c.lista_id===sug.lista_id?'selected':''}>${c.lista_id} — ${c.nombre}</option>`).join('')}</select></label>
+    </div>
+    <div style="margin-top:6px;color:var(--mu);">${sug?`Lista sugerida por el encabezado: ${sug.lista_id} — ${sug.nombre}.`:'⚠ No pude relacionar el encabezado con una lista; escógela tú.'} Revisa canal y lista antes de importar.</div>`;
+  pvAdmAltAplicar();
+}
+function pvAdmAltAplicar() {
+  if(!PV_ADM_ALT) return;
+  const canal = document.getElementById('pv-adm-alt-canal').value, lista = String(document.getElementById('pv-adm-alt-lista').value);
+  PV_ADM_FILAS = PV_ADM_ALT.filas.map(f=>({sku:f.sku, canal, lista, u:f.u, precioArchivo:f.precio, descArchivo:f.desc}));
+  pvAdmValidarOk();
+}
+async function pvAdmImportar() {
+  if(!PV_ADM_FILAS.length) return;
+  const bad = PV_ADM_FILAS.find(f=>!pvPuedeEditarCanal(f.canal));
+  if(bad) { toast('No tienes permiso en el canal '+bad.canal,'wa'); return; }
+  const dueno = pvAdmDuenoSel();
+  if(!dueno) { toast('Elige a quién se le carga el presupuesto','wa'); return; }
+  const btn = document.getElementById('pv-adm-ok'); btn.disabled = true; btn.textContent = '⏳ Importando...';
+  const rep = [];
+  try {
+    const canales = [...new Set(PV_ADM_FILAS.map(f=>f.canal))];
+    for(const canal of canales){
+      const filas = PV_ADM_FILAS.filter(f=>f.canal===canal);
+      // lista del presupuesto = la más usada en el archivo para ese canal
+      const cnt = {}; filas.forEach(f=>cnt[f.lista]=(cnt[f.lista]||0)+1);
+      const lista = Object.entries(cnt).sort((a,b)=>b[1]-a[1])[0][0];
+      const mixtas = Object.keys(cnt).length>1;
+      let hdr = await sb.get('presupuesto_ventas', `anio=eq.${PV.anio}&canal=eq.${encodeURIComponent(canal)}&email_jefe=eq.${encodeURIComponent(dueno.email||CU.email)}&order=creado_en.desc&limit=1`);
+      let pid;
+      if(hdr && hdr[0]) { pid = hdr[0].id; await sb.patch('presupuesto_ventas', `id=eq.${pid}`, {lista_id:lista, actualizado:new Date().toISOString()}); }
+      else { const n = await sb.post('presupuesto_ventas', {anio:PV.anio, lista_id:lista, canal, jefe_zona:dueno.nombre, email_jefe:dueno.email||CU.email, estado:'borrador'}); pid = n[0].id; }
+      await pvHistSnap(pid, canal, 'subir Excel (admin)', PV.anio, lista, true);
+      const exist = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${pid}&select=id,referencia`);
+      const idPorRef = {}; (exist||[]).forEach(e=>idPorRef[e.referencia]=e.id);
+      // precios/descripcion/categoría desde la lista de precios
+      const refs = [...new Set(filas.map(f=>f.sku))];
+      const info = {};
+      for(let i=0;i<refs.length;i+=80){
+        const lote = refs.slice(i,i+80).map(r=>'"'+r.replace(/"/g,'')+'"').join(',');
+        const rows = await sb.get('precios_lista', `lista=eq.${lista}&referencia=in.(${encodeURIComponent(lote)})&select=referencia,descripcion,precio,categoria`);
+        (rows||[]).forEach(r=>info[r.referencia]=r);
+      }
+      let nuevos=0, act=0, sinPrecio=0; const ins=[];
+      for(const f of filas){
+        const inf = info[f.sku]; if(!inf && !f.precioArchivo) sinPrecio++;
+        const payload = { presupuesto_id:pid, referencia:f.sku, categoria:inf?.categoria||'Sin categoría', descripcion:inf?.descripcion||f.descArchivo||f.sku, precio_lista:parseFloat(inf?.precio)||f.precioArchivo||0, actualizado:new Date().toISOString() };
+        f.u.forEach((v,i)=>payload['u'+String(i+1).padStart(2,'0')]=v);
+        if(idPorRef[f.sku]) { await sb.patch('presupuesto_detalle', `id=eq.${idPorRef[f.sku]}`, payload); act++; }
+        else { ins.push(payload); idPorRef[f.sku] = -1; nuevos++; }
+      }
+      for(let i=0;i<ins.length;i+=100) await sb.post('presupuesto_detalle', ins.slice(i,i+100));
+      rep.push(`${canal}: ${nuevos} nuevos, ${act} actualizados${sinPrecio?`, ${sinPrecio} sin precio en la lista`:''}${mixtas?' (⚠ había listas mixtas, se usó la más frecuente)':''}`);
+    }
+    try{ registrarAuditoria('presupuesto_ventas','varios','subir_excel_admin',{anio:PV.anio,resumen:rep}); }catch(e){}
+    document.getElementById('mo-pv-adm')?.remove();
+    toast('✅ Importado — '+rep.join(' | '),'ok');
+    PV.presId=null; PV.detalle=[]; await cargarPresupuestoActivo(); pvAdmEtiquetarCanales();
+  } catch(e) { toast('❌ Error al importar: '+e.message,'er'); btn.disabled=false; btn.textContent='Importar'; }
+}
+
+// ── Cliente específico (opcional) por línea del presupuesto ─────────────
+// Se guarda en configuracion (clave pv_cli_<presupuesto>) como {referencia: cliente}; no toca la
+// estructura por lista de precios. Los clientes salen del módulo Margen x Cliente.
+var PV_CLI = { presId: null, map: {} };
+function pvModo() { return dbGet('pv_modo_'+(CU&&CU.email||'')) === 'cliente' ? 'cliente' : 'canal'; }
+function pvSetModo(v) {
+  dbSet('pv_modo_'+(CU&&CU.email||''), v==='cliente'?'cliente':'canal');
+  const cf = document.getElementById('pv-cli-filtro'); if(cf){ cf.style.display = v==='cliente'?'':'none'; if(v!=='cliente') cf.value=''; }
+  const bx = document.getElementById('pv-btn-xcli'); if(bx) bx.style.display = v==='cliente'?'':'none';
+  pvRenderTabla();
+  toast(v==='cliente' ? '👤 Presupuesto por cliente: usa el botón 👤 de cada línea para asignarle su cliente' : '📊 Presupuesto por canal','ok');
+}
+// Cliente de una línea: 1) el que se le asignó con 👤; 2) el de la lista de precios con la que se presupuestó
+// (se deduce por el precio de la línea en las listas 7/13/57/29…); 3) el de la lista del presupuesto.
+var PV_LISTA_CLI = {'7':'Home Center','13':'Éxito','57':'Olímpica','29':'Makro','65':'Ara'};
+var PV_CLI_INF = {};
+// OJO: PV.listaId es el id interno (11, 14, 19, 17, 21…); el código que ve la gente (7, 13, 57, 29, 65) es listas_catalogo.nombre.
+// PV_LISTA_CLI está por CÓDIGO (7 = Home Center, 13 = Éxito, 57 = Olímpica, 29 = Makro, 65 = Ara).
+function pvCodDeLista(id) { const c=(PV.catalogo||[]).find(x=>String(x.lista_id)===String(id)); return c?String(c.nombre):''; }
+function pvClienteDeLista(id) { return PV_LISTA_CLI[pvCodDeLista(id)] || ''; }
+function pvCliDe(ref) { return PV_CLI.map[ref] || PV_CLI_INF[ref] || pvClienteDeLista(PV.listaId) || ''; }
+async function pvListaCliCargar() {
+  try { const r = await sb.get('configuracion','clave=eq.pv_lista_cliente'); if(r&&r[0]&&r[0].valor) PV_LISTA_CLI = JSON.parse(r[0].valor)||PV_LISTA_CLI; } catch(e){}
+}
+async function pvCliInferir() {
+  PV_CLI_INF = {};
+  const listas = (PV.catalogo||[]).filter(c=>PV_LISTA_CLI[String(c.nombre)]).map(c=>String(c.lista_id));
+  const reales = (PV.detalle||[]).filter(r=>!pvEsLineaLibre(r));
+  if(!listas.length || !reales.length) return;
+  const refs = [...new Set(reales.map(r=>String(r.referencia)))];
+  const precios = {};
+  try {
+    for(let i=0;i<refs.length;i+=60){
+      const lote = refs.slice(i,i+60).map(x=>'"'+x.replace(/"/g,'')+'"').join(',');
+      const rows = await sb.get('precios_lista', `lista=in.(${listas.join(',')})&referencia=in.(${encodeURIComponent(lote)})&select=referencia,lista,precio`);
+      (rows||[]).forEach(x=>{ (precios[x.referencia] = precios[x.referencia]||{})[String(x.lista)] = parseFloat(x.precio)||0; });
+    }
+  } catch(e) { console.warn('pvCliInferir', e.message); return; }
+  reales.forEach(r=>{
+    const pr = precios[String(r.referencia)]; if(!pr) return;
+    const p = parseFloat(r.precio_lista)||0;
+    const cands = listas.filter(l=>pr[l]>0 && Math.abs(pr[l]-p)<1);
+    if(!cands.length) return;
+    const l = cands.includes(String(PV.listaId)) ? String(PV.listaId) : cands[0];
+    PV_CLI_INF[String(r.referencia)] = pvClienteDeLista(l);
+  });
+}
+async function pvListaCliEditar() {
+  document.getElementById('mo-pv-lc')?.remove();
+  const mo = document.createElement('div'); mo.id='mo-pv-lc';
+  mo.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:460px;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--b1);font-size:14px;font-weight:800;">⚙ Cliente de cada lista de precios</div>
+    <div style="padding:16px 20px;font-size:12px;display:flex;flex-direction:column;gap:8px;">
+      <div style="color:var(--mu);">Una línea por lista: <b>código = cliente</b>. En el presupuesto por cliente, lo presupuestado con esa lista se muestra bajo ese cliente.</div>
+      <textarea id="pv-lc-txt" class="inp" rows="8" style="font-family:monospace;">${Object.entries(PV_LISTA_CLI).map(([k,v])=>k+' = '+v).join('\n')}</textarea>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-sm" onclick="document.getElementById('mo-pv-lc').remove()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="pvListaCliGuardar()">Guardar</button></div></div>`;
+  document.body.appendChild(mo);
+}
+async function pvListaCliGuardar() {
+  const m = {};
+  (document.getElementById('pv-lc-txt').value||'').split('\n').forEach(l=>{ const i=l.indexOf('='); if(i>0){ const k=l.slice(0,i).trim(), v=l.slice(i+1).trim(); if(k&&v) m[k]=v; } });
+  try { await sb.upsert('configuracion', {clave:'pv_lista_cliente', valor:JSON.stringify(m), tipo:'json'}, 'clave'); } catch(e){ toast('❌ '+e.message,'er'); return; }
+  PV_LISTA_CLI = m; document.getElementById('mo-pv-lc')?.remove();
+  await pvCliInferir(); pvRenderTabla(); toast('✅ Clientes por lista guardados','ok');
+}
+async function pvCliCargar() {
+  PV_CLI = { presId: PV.presId, map: {} };
+  if(!PV.presId) return;
+  try {
+    const r = await sb.get('configuracion', 'clave=eq.pv_cli_'+PV.presId);
+    if(r && r[0] && r[0].valor) PV_CLI.map = JSON.parse(r[0].valor) || {};
+  } catch(e) { console.warn('pvCliCargar', e); }
+}
+async function pvCliGuardar() {
+  if(!PV.presId) return;
+  try { await sb.upsert('configuracion', {clave:'pv_cli_'+PV.presId, valor:JSON.stringify(PV_CLI.map), tipo:'json'}, 'clave'); }
+  catch(e) { toast('❌ No se pudo guardar el cliente: '+e.message,'er'); }
+}
+function pvCliPoblarFiltro() {
+  const sel = document.getElementById('pv-cli-filtro'); if(!sel) return;
+  const nombres = [...new Set((PV.detalle||[]).map(r=>pvCliDe(r.referencia)).filter(Boolean))].sort();
+  const key = nombres.join('|');
+  if(sel.dataset.k === key) return;
+  const act = sel.value; sel.dataset.k = key;
+  sel.innerHTML = '<option value="">👤 Todos los clientes</option><option value="__sin">Sin cliente (general)</option>' +
+    nombres.map(n=>`<option value="${n.replace(/"/g,'&quot;')}">${n}</option>`).join('');
+  sel.value = (act==='__sin' || nombres.includes(act)) ? act : '';
+}
+async function pvCliAsignar(ref) {
+  if(PV_SOLO_LECTURA) { toast('🔒 Estás en modo consulta — no puedes editar este canal','wa'); return; }
+  if(!PV.presId) { toast('Guarda el presupuesto primero 💾 y luego asigna el cliente','wa'); return; }
+  if(!MC.cargado) { try { await mcCargarUltimoSnapshot(); } catch(e){} }
+  let clientes = [];
+  try { clientes = mcAgregarPorCliente(MC.datos).map(c=>c.nombre).filter(Boolean); } catch(e){}
+  clientes = [...new Set(clientes)].sort((a,b)=>a.localeCompare(b));
+  PV_CLI_TODOS = clientes;
+  await pvCliListaCargar();
+  const actual = pvCliDe(ref);
+  document.getElementById('mo-pv-cli')?.remove();
+  const mo = document.createElement('div');
+  mo.id = 'mo-pv-cli';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:420px;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;">
+      <div style="font-size:14px;font-weight:800;">👤 Cliente específico — ${ref}</div>
+      <button onclick="document.getElementById('mo-pv-cli').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button>
+    </div>
+    <div style="padding:16px 20px;display:flex;flex-direction:column;gap:10px;">
+      <div style="font-size:11.5px;color:var(--mu);">Opcional. Úsalo si esta línea del presupuesto es para un cliente en particular; si la dejas vacía es presupuesto general de la lista de precios.</div>
+      <input class="inp" id="pv-cli-inp" list="pv-cli-dl" value="${actual.replace(/"/g,'&quot;')}" placeholder="Escribe para buscar el cliente..." autocomplete="off">
+      <datalist id="pv-cli-dl"></datalist>
+      <label style="font-size:11px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="pv-cli-todos" onchange="pvCliRefrescarLista()"> Incluir clientes que aún no tienen lista asignada</label>
+      <div id="pv-cli-info" style="font-size:10.5px;color:var(--mu);"></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
+      ${actual?`<button class="btn btn-sm" onclick="pvCliSet('${ref.replace(/'/g,"\\'")}','')">Quitar cliente</button>`:''}
+      <button class="btn btn-sm" onclick="document.getElementById('mo-pv-cli').remove()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="pvCliSet('${ref.replace(/'/g,"\\'")}',document.getElementById('pv-cli-inp').value)">Guardar</button>
+    </div></div>`;
+  document.body.appendChild(mo);
+  pvCliRefrescarLista();
+  document.getElementById('pv-cli-inp')?.focus();
+}
+// Cada cliente pertenece a UNA lista de precios (se guarda en configuracion: pv_cliente_lista).
+// El selector solo ofrece los clientes de la lista que está escogida en el presupuesto.
+var PV_CLI_TODOS = [], PV_CLI_LISTA = {};
+async function pvCliListaCargar() {
+  try { const r = await sb.get('configuracion','clave=eq.pv_cliente_lista'); PV_CLI_LISTA = (r&&r[0]&&r[0].valor) ? (JSON.parse(r[0].valor)||{}) : {}; }
+  catch(e){ PV_CLI_LISTA = {}; }
+}
+function pvCliRefrescarLista() {
+  const dl = document.getElementById('pv-cli-dl'); if(!dl) return;
+  const incl = document.getElementById('pv-cli-todos')?.checked;
+  const lista = String(PV.listaId);
+  const propios = PV_CLI_TODOS.filter(n=>String(PV_CLI_LISTA[n])===lista);
+  const sin = PV_CLI_TODOS.filter(n=>!PV_CLI_LISTA[n]);
+  const ver = incl ? [...propios, ...sin] : propios;
+  dl.innerHTML = ver.map(n=>`<option value="${n.replace(/"/g,'&quot;')}">`).join('');
+  const info = document.getElementById('pv-cli-info');
+  if(info) info.textContent = `Lista escogida: ${pvNombreLista(PV.listaId)} · ${propios.length} cliente(s) en esta lista` +
+    (incl ? ` + ${sin.length} sin lista (al elegirlos quedan asignados a esta lista)` : '') +
+    (!propios.length && !incl ? ' — marca la casilla para asignarle clientes a esta lista' : '');
+}
+async function pvCliSet(ref, nombre) {
+  nombre = (nombre||'').trim();
+  if(nombre) {
+    const l = PV_CLI_LISTA[nombre];
+    if(l && String(l)!==String(PV.listaId)) { toast(`🔒 ${nombre} pertenece a otra lista de precios (${pvNombreLista(l)}). Cambia la lista del presupuesto o pídele al administrador que lo reasigne.`,'wa'); return; }
+    if(!l) {
+      PV_CLI_LISTA[nombre] = String(PV.listaId);
+      try { await sb.upsert('configuracion', {clave:'pv_cliente_lista', valor:JSON.stringify(PV_CLI_LISTA), tipo:'json'}, 'clave'); } catch(e){ console.warn(e); }
+    }
+  }
+  if(nombre) PV_CLI.map[ref] = nombre; else delete PV_CLI.map[ref];
+  document.getElementById('mo-pv-cli')?.remove();
+  await pvCliGuardar();
+  pvRenderTabla();
+  toast(nombre ? '👤 Línea asignada a '+nombre : 'Cliente quitado de la línea','ok');
+}
 
 async function pvActualizarPrecios() {
   if(!PV.detalle.length) return;
@@ -25397,10 +25984,12 @@ function pvEliminarSKU(ref) {
   if(PV_SOLO_LECTURA) { toast('🔒 Estás en modo consulta — no puedes editar este canal','wa'); return; }
   if(!confirm(`¿Eliminar ${ref} del presupuesto?`)) return;
   const r = PV.detalle.find(x=>x.referencia===ref);
+  if(r && r.id) { pvHistSnap(PV.presId, PV.canal, 'eliminar '+ref, PV.anio, PV.listaId, true); }
   if(r && r.id) {
     sb.delete('presupuesto_detalle', `id=eq.${r.id}`).catch(e=>console.warn(e));
   }
   PV.detalle = PV.detalle.filter(x=>x.referencia!==ref);
+  if(PV_CLI.map[ref]) { delete PV_CLI.map[ref]; pvCliGuardar(); }
   pvRenderTabla();
 }
 
@@ -25817,7 +26406,7 @@ async function pvExcelDescargar(wb, nombreArchivo){
 }
 
 // Trae canales + datos de presupuesto guardados para el año (compartido por los 3 exportadores).
-async function pvExcelCargarDatos(anio, canalesFiltro){
+async function pvExcelCargarDatos(anio, canalesFiltro, soloEmail){
   let canales = [...CANALES_DEFAULT];
   try {
     const cfg = await sb.get('configuracion','clave=eq.canales_comerciales');
@@ -25827,11 +26416,10 @@ async function pvExcelCargarDatos(anio, canalesFiltro){
   const dataPorCanal = {}, hdrPorCanal = {};
   for(const canal of canales){
     try {
-      const pvRows = await sb.get('presupuesto_ventas', `anio=eq.${anio}&canal=eq.${encodeURIComponent(canal)}&order=creado_en.desc&limit=1`);
-      if(!pvRows?.length){ dataPorCanal[canal]=[]; continue; }
-      hdrPorCanal[canal] = pvRows[0];
-      const detalle = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${pvRows[0].id}&order=categoria.asc,referencia.asc`);
-      dataPorCanal[canal] = detalle || [];
+      const dc = await pvDetalleCanal(anio, canal, soloEmail);
+      if(!dc.hdrs.length){ dataPorCanal[canal]=[]; continue; }
+      hdrPorCanal[canal] = dc.hdrs[0];
+      dataPorCanal[canal] = dc.detalle;
     } catch(e){ dataPorCanal[canal]=[]; console.warn('Excel Presupuesto — '+canal+':', e.message); }
   }
   const allSkus = {};
@@ -25863,7 +26451,7 @@ async function pvExportar() {
   toast(`⏳ Generando Excel a color de ${PV.canal}...`,'inf');
   const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const anio = PV.anio;
-  const {canales, skuList, getVal, getPrice} = await pvExcelCargarDatos(anio, [PV.canal]);
+  const {canales, skuList, getVal, getPrice} = await pvExcelCargarDatos(anio, [PV.canal], pvDuenoEmail());
   if(!skuList.length){ toast('No hay presupuesto guardado para '+PV.canal+' en '+anio,'err'); return; }
 
   const EST = pvExcelEstilos();
@@ -25910,6 +26498,60 @@ function pvNombreHojaExcel(txt, usados){
   usados.add(nombre.toLowerCase());
   return nombre;
 }
+// Descarga SOLO el presupuesto de quien lo está haciendo (el canal abierto), una hoja por cliente.
+async function pvExportarPorCliente() {
+  if(!PV.presId || !PV.detalle.length){ toast('No hay presupuesto guardado en este canal para descargar','wa'); return; }
+  if(PV.detalle.some(r=>r._dirty)){ toast('Tienes cambios sin guardar — dale 💾 Guardar antes de descargar','wa'); return; }
+  await reabastCargarExcelJS().catch(()=>{});
+  if(typeof ExcelJS === 'undefined'){ toast('No pude cargar el generador de Excel — revisa tu conexión','er'); return; }
+  const MES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const grupos = {};
+  PV.detalle.forEach(r=>{ const c = pvCliDe(r.referencia) || 'Sin cliente (general)'; (grupos[c] = grupos[c]||[]).push(r); });
+  const wb = new ExcelJS.Workbook(); wb.creator='ILUMAX'; wb.created=new Date();
+  const hdrFill = {type:'pattern',pattern:'solid',fgColor:{argb:'FF0F172A'}};
+  const usados = new Set(['resumen por cliente']);
+  const wr = wb.addWorksheet('Resumen por cliente');
+  const resumen = [];
+  const nombres = Object.keys(grupos).sort((a,b)=>a.localeCompare(b));
+  nombres.forEach(cli=>{
+    const ws = wb.addWorksheet(pvNombreHojaExcel(cli, usados));
+    ws.addRow([`PRESUPUESTO ${PV.anio} — ${PV.canal} — ${cli}`]).font = {bold:true,size:13};
+    ws.addRow([`Elaborado por: ${CU.nombre||CU.email}`]);
+    ws.addRow([]);
+    const h = ws.addRow(['SKU','Descripción','Categoría','Precio lista',...MES,'Total und.','Total COP']);
+    h.eachCell(c=>{ c.fill=hdrFill; c.font={bold:true,color:{argb:'FFFFFFFF'}}; c.alignment={horizontal:'center'}; });
+    let tu=0, tc=0;
+    grupos[cli].sort((a,b)=>String(a.categoria).localeCompare(String(b.categoria))||String(a.referencia).localeCompare(String(b.referencia))).forEach(r=>{
+      const u = MES.map((_,i)=>parseFloat(r['u'+String(i+1).padStart(2,'0')])||0);
+      const precio = parseFloat(r.precio_lista)||0;
+      const t = u.reduce((a,v)=>a+v,0);
+      const row = ws.addRow([pvEsLineaLibre(r)?'(sin SKU)':r.referencia, r.descripcion||'', r.categoria||'', precio, ...u, t, null]);
+      const n = row.number;
+      row.getCell(4+12+2).value = {formula:`SUM(E${n}:P${n})*D${n}`, result:t*precio};
+      row.getCell(4).numFmt='$#,##0'; row.getCell(18).numFmt='$#,##0';
+      tu+=t; tc+=t*precio;
+    });
+    const f = ws.lastRow.number, ini = 5;
+    const tot = ws.addRow(['TOTAL','','','',...MES.map((_,i)=>{ const col=String.fromCharCode(69+i); return {formula:`SUM(${col}${ini}:${col}${f})`}; }),
+      {formula:`SUM(Q${ini}:Q${f})`,result:tu},{formula:`SUM(R${ini}:R${f})`,result:tc}]);
+    tot.font={bold:true}; tot.getCell(18).numFmt='$#,##0';
+    ws.getColumn(1).width=16; ws.getColumn(2).width=38; ws.getColumn(3).width=18; ws.getColumn(4).width=13;
+    for(let i=5;i<=17;i++) ws.getColumn(i).width=8; ws.getColumn(18).width=16;
+    ws.views=[{state:'frozen',xSplit:2,ySplit:4}];
+    resumen.push([cli, grupos[cli].length, tu, tc]);
+  });
+  wr.addRow([`RESUMEN ${PV.anio} — ${PV.canal} — ${CU.nombre||CU.email}`]).font={bold:true,size:13};
+  wr.addRow([]);
+  const hr = wr.addRow(['Cliente','# líneas','Total und.','Total COP']);
+  hr.eachCell(c=>{ c.fill=hdrFill; c.font={bold:true,color:{argb:'FFFFFFFF'}}; });
+  resumen.sort((a,b)=>b[3]-a[3]).forEach(r=>{ const x=wr.addRow(r); x.getCell(4).numFmt='$#,##0'; });
+  const ft = wr.lastRow.number;
+  const tr = wr.addRow(['TOTAL',{formula:`SUM(B4:B${ft})`},{formula:`SUM(C4:C${ft})`},{formula:`SUM(D4:D${ft})`}]);
+  tr.font={bold:true}; tr.getCell(4).numFmt='$#,##0';
+  wr.getColumn(1).width=42; wr.getColumn(2).width=10; wr.getColumn(3).width=12; wr.getColumn(4).width=18;
+  await pvExcelDescargar(wb, `Presupuesto_por_cliente_${PV.canal.replace(/[^\w-]+/g,'_')}_${PV.anio}.xlsx`);
+  toast(`✅ Descargado: ${nombres.length} hoja(s) por cliente de ${PV.canal}`,'ok');
+}
 async function pvExportarPorPersona() {
   await reabastCargarExcelJS().catch(()=>{});
   if(typeof ExcelJS === 'undefined'){ toast('No pude cargar el generador de Excel — revisa tu conexión','er'); return; }
@@ -25927,12 +26569,13 @@ async function pvExportarPorPersona() {
   const porCanal = [];
   for(const canal of canales){
     try{
-      const hdr = await sb.get('presupuesto_ventas', `anio=eq.${anio}&canal=eq.${encodeURIComponent(canal)}&order=creado_en.desc&limit=1`);
-      if(!hdr?.length){ continue; }
-      const detalle = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${hdr[0].id}&order=categoria.asc,referencia.asc`);
-      if(!detalle?.length) continue;
-      const listaNombre = (PV.catalogo.find(c=>c.lista_id===hdr[0].lista_id)||{}).nombre || hdr[0].lista_id || '—';
-      porCanal.push({ canal, jefeZona: hdr[0].jefe_zona || '', listaNombre, detalle });
+      const hdrs = await sb.get('presupuesto_ventas', `anio=eq.${anio}&canal=eq.${encodeURIComponent(canal)}&order=creado_en.desc`);
+      for(const h of (hdrs||[])){
+        const detalle = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${h.id}&order=categoria.asc,referencia.asc`);
+        if(!detalle?.length) continue;
+        const listaNombre = (PV.catalogo.find(c=>c.lista_id===h.lista_id)||{}).nombre || h.lista_id || '—';
+        porCanal.push({ canal, jefeZona: h.jefe_zona || '', listaNombre, detalle });
+      }
     }catch(e){ console.warn('Consolidado por persona — '+canal+':', e.message); }
   }
   if(!porCanal.length){ toast('No hay presupuestos guardados para '+anio+' en ningún canal','err'); return; }
@@ -26202,12 +26845,8 @@ async function pvRenderResumenDash() {
   const dataPorCanal = {};
   for(const canal of canales) {
     try {
-      const pvRows = await sb.get('presupuesto_ventas',
-        `anio=eq.${anio}&canal=eq.${encodeURIComponent(canal)}&order=creado_en.desc&limit=1`);
-      if(!pvRows?.length) { dataPorCanal[canal]=[]; continue; }
-      const detalle = await sb.get('presupuesto_detalle',
-        `presupuesto_id=eq.${pvRows[0].id}&order=categoria.asc,referencia.asc`);
-      dataPorCanal[canal] = detalle || [];
+      const dc = await pvDetalleCanal(anio, canal, '');   // combinado: suma lo de todas las personas del canal
+      dataPorCanal[canal] = dc.detalle;
     } catch(e) { dataPorCanal[canal]=[]; }
   }
 
@@ -26494,7 +27133,8 @@ const CANAL_LISTA_MAP = {
   'Home Center':    '11',
   'Distribuidores': '26',
   'Institucional':  '27',
-  'Ara':            '21'
+  'Ara':            '21',
+  'Hard Discount':  '21'   // lista 65 — JERÓNIMO MARTINS
 };
 
 // Al cambiar canal → asignar lista automáticamente
