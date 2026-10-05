@@ -14418,6 +14418,8 @@ function ppConstruir(){
     if(compras>0 && salUsd + (sinAnt ? 0 : antUsd) > compras*1.05) salUsd = Math.max(0, compras - (sinAnt ? 0 : antUsd));
     // OC original con embarques parciales (ramas): el Excel de Base compras trae el saldo de TODA la OC y las ramas ya tienen su propio saldo → aquí solo queda lo que sigue en la OC original
     if(ramasDe && !(A.saldo && A.saldo.usd!=null)) salUsd = Math.max(0, Math.round((calc.fob - (sinAnt ? 0 : calc.usd))*100)/100);
+    // Si el anticipo se editó a mano, el saldo se recalcula solo: total de la compra − anticipo (salvo que el saldo también se haya ajustado a mano)
+    if(!sinAnt && A.anticipo && A.anticipo.usd!=null && !(A.saldo && A.saldo.usd!=null)) salUsd = Math.max(0, Math.round(((ramasDe ? calc.fob : (compras||calc.fob)) - antUsd)*100)/100);
     if(A.saldo && A.saldo.usd!=null) salUsd = Number(A.saldo.usd);
     const r = typeof ceDe==='function' ? ceDe(o.numero_oc) : null;
     const emb = r && r.fase!=null ? (r.fase>=6 ? {cls:'ok', txt:'🚢 Zarpó'+(r.bl&&r.bl.length?' · BL '+r.bl[0]:'')} : r.fase===5 ? {cls:'med', txt:'⏳ En embarque'} : {cls:'no', txt:'🏭 Sin zarpar'}) : {cls:'no', txt:'— sin dato Com. Ext.'};
@@ -24998,7 +25000,7 @@ function renderPVShell(el, canales, todosLosCanales) {
         <button class="btn btn-bl btn-sm" onclick="pvAgregarLineaLibre()" title="Para cuando no hay una referencia real que presupuestar (ej. Proyectos) — presupuesta un monto en $ directamente, mes a mes">💰 Línea sin SKU</button>
         ${CU?.rol==='admin' ? `<button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>` : ''}
         `}
-        <button id="pv-btn-xcli" class="btn btn-pu btn-sm" style="display:${pvModo()==='cliente'?'':'none'};" onclick="pvExportarPorCliente()" title="Descarga SOLO tu presupuesto (el de este canal) con una hoja por cada cliente, más un resumen">📥 Descargar por cliente</button>
+        <button id="pv-btn-xcli" class="btn btn-pu btn-sm" style="display:${pvModo()==='cliente'?'':'none'};" onclick="pvExportarPorCliente()" title="Excel a color con el mismo formato del botón Excel (Cant, Precio, Venta, Resumen con fórmulas), con un bloque de meses por cada cliente">📥 Excel por cliente</button>
         ${PV_SOLO_LECTURA ? '' : `<button class="btn btn-g btn-sm" onclick="pvHistAbrir()" title="Mira las copias de este presupuesto de los últimos 5 días y recupera lo que se borró o se cambió por error">🕘 Historial</button>`}
         <button class="btn btn-g btn-sm" onclick="pvExportar()" title="Excel a color solo del canal que tienes abierto ahora (Cant, Precio, Venta, Resumen) — para todos los canales juntos usa 'Excel combinado (todos)'">📊 Excel</button>
         ${(CU?.rol==='admin' || pvEsAprobador()) ? `<button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>` : ''}
@@ -27694,8 +27696,53 @@ function pvNombreHojaExcel(txt, usados){
   usados.add(nombre.toLowerCase());
   return nombre;
 }
-// Descarga SOLO el presupuesto de quien lo está haciendo (el canal abierto), una hoja por cliente.
+// Excel por cliente con el MISMO formato avanzado del botón Excel: hoja de instrucciones, Cant, Precio y Venta
+// (a color, con fórmulas vivas y un bloque de meses por cada cliente) y Resumen con totales y % por categoría.
 async function pvExportarPorCliente() {
+  if(!PV.presId || !PV.detalle.length){ toast('No hay presupuesto guardado en este canal para descargar','wa'); return; }
+  if(PV.detalle.some(r=>r._dirty)){ toast('Tienes cambios sin guardar — dale 💾 Guardar antes de descargar','wa'); return; }
+  await reabastCargarExcelJS().catch(()=>{});
+  if(typeof ExcelJS === 'undefined'){ toast('No pude cargar el generador de Excel — revisa tu conexión','er'); return; }
+  toast(`⏳ Generando Excel por cliente de ${PV.canal}...`,'inf');
+  const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const anio = PV.anio;
+  const porCli = {};
+  PV.detalle.forEach(r=>{ const c = pvCliDe(r.referencia) || 'Sin cliente (general)'; (porCli[c] = porCli[c]||[]).push(r); });
+  const canales = Object.keys(porCli).sort((a,b)=> (a.startsWith('Sin cliente')-b.startsWith('Sin cliente')) || a.localeCompare(b));   // cada cliente hace de "bloque" de meses
+  const todos = {};
+  PV.detalle.forEach(r=>{ const k = String(r.referencia); if(!todos[k]) todos[k] = {sku:k, desc:r.descripcion||'', cat:r.categoria||'Sin categoría'}; });
+  const skuList = Object.values(todos).sort((a,b)=>a.cat.localeCompare(b.cat)||a.sku.localeCompare(b.sku));
+  const filas = (cli, sku) => (porCli[cli]||[]).filter(r=>String(r.referencia)===String(sku));
+  const getVal = (cli, sku, base) => { const fs = filas(cli, sku); return Array.from({length:12},(_,i)=>fs.reduce((a,r)=>a+(parseFloat(r[base+String(i+1).padStart(2,'0')])||0),0)); };
+  const getPrice = (cli, sku) => { const f = filas(cli, sku)[0]; return parseFloat(f && f.precio_lista)||0; };
+
+  const EST = pvExcelEstilos();
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX'; wb.created = new Date();
+  pvExcelHojaInstrucciones(wb, EST, {
+    titulo: `👤 PRESUPUESTO DE VENTAS ${anio} POR CLIENTE — ${PV.canal.toUpperCase()}`,
+    resumenTxt: `Generado el ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})} · Canal: ${PV.canal} · Elaborado por: ${CU.nombre||CU.email} · Clientes: ${canales.join(', ')}.`,
+    secciones: [
+      {sub:'¿Qué hoja abro según lo que necesito?', items: [
+        '• "Cant" → unidades presupuestadas mes a mes, por SKU, con un bloque de 12 meses por cada cliente.',
+        '• "Precio" → el precio de lista usado. El de Enero es el dato editable; Feb a Dic solo lo copian con una fórmula.',
+        '• "Venta" → el resultado en pesos (Cantidad × Precio), calculado automáticamente — no la edites a mano.',
+        '• "Resumen" → total del año y por categoría, con el % de cada una (fórmulas sobre "Venta").',
+      ]},
+      {sub:'Fórmulas vivas', items: [
+        'Las columnas "Total" y la fila "TOTAL GENERAL" son SUMAS de Excel. Edita siempre "Cant" y "Precio"; "Venta" y "Resumen" se recalculan solas.',
+      ]},
+    ],
+    leyenda: PV_LEYENDA_COLORES(EST),
+  });
+  pvExcelHojaMatriz(wb, {nombre:'Cant', tipo:'Cant', canales, skuList, getVal, getPrice, MESES_CORTOS, anio, EST});
+  pvExcelHojaMatriz(wb, {nombre:'Precio', tipo:'Precio', canales, skuList, getVal, getPrice, MESES_CORTOS, anio, EST});
+  const {colMes, colTotalCanal, colGranTotal, filaTot:ventaTotalRow} = pvExcelHojaMatriz(wb, {nombre:'Venta', tipo:'Venta', canales, skuList, getVal, getPrice, MESES_CORTOS, anio, EST});
+  pvExcelHojaResumen(wb, {canales, skuList, MESES_CORTOS, anio, EST, ventaTotalRow, colMes, colTotalCanal, colGranTotal});
+  await pvExcelDescargar(wb, `Presupuesto_por_cliente_${PV.canal.replace(/[^\w-]+/g,'_')}_ILUMAX_${anio}.xlsx`);
+  toast(`✅ Excel por cliente generado — ${canales.length} cliente(s), ${skuList.length} SKUs`,'ok');
+}
+// (versión anterior: una hoja simple por cliente, sin formato)
+async function pvExportarPorClienteHojas() {
   if(!PV.presId || !PV.detalle.length){ toast('No hay presupuesto guardado en este canal para descargar','wa'); return; }
   if(PV.detalle.some(r=>r._dirty)){ toast('Tienes cambios sin guardar — dale 💾 Guardar antes de descargar','wa'); return; }
   await reabastCargarExcelJS().catch(()=>{});
