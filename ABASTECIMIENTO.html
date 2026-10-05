@@ -14359,6 +14359,37 @@ function ppTrm(){ return Number(PP.trm) || (typeof OC_TRM_APROX!=='undefined' ? 
 function ppIso(d){ return d ? new Date(d).toISOString().slice(0,10) : null; }
 
 // Construye todos los pagos (pendientes y pagados) de las OC.
+// ── Saldo por BL: cuando la OC ya tiene BL, cada BL se programa por separado (con las fechas de ESE BL y el valor de los ítems que lleva);
+// lo que todavía no está en ningún BL queda como "resto de la OC" con la regla de siempre.
+function ppSaldoPorBL(o, num, salUsd, base, hoy, emb, rev){
+  const items = REABAST.ocItems[o.id]||[];
+  const fobDe = {}; let totFob = 0;
+  items.forEach(it=>{ const k = ceRefKey(it.referencia||it.sku||it.codigo), f = Number(it.precio_fob_usd)||0; if(f>0) fobDe[k] = f; totFob += (Number(it.cantidad)||0)*f; });
+  if(!(totFob>0)) return [];
+  const lin = [];
+  CBL.bls.forEach(b=>(b.items||[]).forEach(it=>{ const fs = ceFaseLinea(it.estado||'Embarque','').fase; if(ceNum(it.oc)===num && fs!==-1) lin.push({bl:b.bl, ref:ceRefKey(it.ref), c:Number(it.cant)||0, d1:b.etd||null, d2:b.eta||null, f:fs}); }));
+  if(!lin.length) (CE.bls||[]).forEach(x=>{ if(ceNum(x.oc)===num && x.bl && x.f!==-1) lin.push({bl:x.bl, ref:ceRefKey(x.r), c:Number(x.c)||0, d1:x.d1, d2:x.d2, f:x.f}); });
+  if(!lin.length) return [];
+  const porBL = {};
+  lin.forEach(l=>{ const g = porBL[l.bl] = porBL[l.bl] || {bl:l.bl, v:0, n:0, d1:null, d2:null, f:null}; g.v += l.c*(fobDe[l.ref]||0); g.n++; if(l.d1 && !g.d1) g.d1 = l.d1; if(l.d2 && !g.d2) g.d2 = l.d2; if(l.f!=null && (g.f==null || l.f<g.f)) g.f = l.f; });
+  let grupos = Object.values(porBL).filter(g=>g.v>0);
+  const sumV = grupos.reduce((a,g)=>a+g.v,0); if(!(sumV>0)) return [];
+  const esc = sumV>totFob ? totFob/sumV : 1;
+  const regla = ppReglaSaldo(o), D = x => x ? new Date(x+'T12:00:00') : null;
+  return grupos.map(g=>{
+    const usd = Math.round(salUsd*(g.v*esc/totFob)*100)/100;
+    const zarpo = g.f!=null && g.f>=6;
+    let blBase = D(g.d1), etaBase = D(g.d2) || (blBase ? new Date(blBase.getTime()+35*86400000) : null), corrido = false;
+    if(!zarpo && blBase && blBase < hoy){ const d = hoy - blBase; blBase = new Date(hoy.getTime()+12*3600e3); if(etaBase) etaBase = new Date(etaBase.getTime()+d); corrido = true; }
+    const baseRegla = regla ? (regla.base==='eta' ? etaBase : blBase) : null;
+    let fecha = null, origen = '';
+    const fb = blBase ? (zarpo ? 'zarpó ' : 'ETD ')+segDM(blBase) : 'sin fecha de ETD';
+    if(regla && baseRegla){ fecha = new Date(baseRegla.getTime() + regla.dias*86400000); origen = `BL ${g.bl}: ${regla.txt} · ${regla.base==='eta' ? 'ETA '+segDM(baseRegla) : fb}${corrido?' (aún no zarpa y la fecha ya pasó → hoy)':''}`; }
+    else if(blBase){ fecha = blBase; origen = `BL ${g.bl}: ${fb}`; }
+    else origen = `BL ${g.bl}: sin fecha (falta ETD/ETA del BL)`;
+    return {...base, tipo:'saldo', usd, fecha, etd:blBase||null, reglaModo: regla ? regla.modo||null : null, certero:zarpo, estado:'pendiente', origen, bl:g.bl, lote:(base.lote?base.lote+' · ':'')+'BL '+g.bl+' ('+g.n+' ref.)', emb, rev};
+  }).filter(p=>p.usd>0.004);
+}
 function ppConstruir(){
   const grupos = {}; Object.entries(typeof pciGrupos==='function' ? pciGrupos() : {}).forEach(([k,v])=>{ grupos[ceNum(k)] = v; });
   const aj = PP.ajustes || {}; const hoy = new Date(); hoy.setHours(0,0,0,0);
@@ -14438,6 +14469,11 @@ function ppConstruir(){
           if(pagadoPanel>0.004) pagos.push({...base, tipo:'saldo', usd: Math.min(pagadoPanel, salUsd), fecha: fp, estado:'pagado', origen:'Pagado según Base compras (col. AT)', emb});
           pendUsd = lPend.length ? Math.max(0, Math.round((salUsd - Math.min(pagadoPanel, salUsd))*100)/100) : 0;
         }
+        let _hayBL = false;
+        if(!lPag.length && !(A.saldo && A.saldo.fecha)){
+          const blp = ppSaldoPorBL(o, num, salUsd, base, hoy, emb, rev);
+          if(blp.length){ _hayBL = true; blp.forEach(x=>pagos.push(x)); pendUsd = Math.max(0, Math.round((pendUsd - blp.reduce((a,x)=>a+x.usd,0))*100)/100); if(pendUsd <= Math.max(0.5, salUsd*0.005)) pendUsd = 0; }
+        }
         if(pendUsd>0.004){
           let fecha = null, origen = '';
           const mf = (k) => { let b = null; lPend.forEach(f=>{ const d = pciFecha(f[k]); if(d && (!b || d>b)) b = d; }); return b; };
@@ -14481,7 +14517,7 @@ function ppConstruir(){
             // sin forma de pago clara ni proyección: se programa en la fecha base (BL o, si no hay, fecha de entrega autorizada)
             fecha = blBase; origen = `${blFuente}${nota}`;
           }
-          pagos.push({...base, tipo:'saldo', usd:pendUsd, fecha, etd: blBase||null, reglaModo: regla ? regla.modo||null : null, fAT:fPago, certero: zarpo && !(A.saldo && A.saldo.fecha), estado:'pendiente', origen: origen || 'Sin fecha (falta BL / ETD)', nota: A.saldo && A.saldo.nota, emb, rev});
+          pagos.push({...base, tipo:'saldo', usd:pendUsd, fecha, etd: blBase||null, reglaModo: regla ? regla.modo||null : null, fAT:fPago, certero: zarpo && !(A.saldo && A.saldo.fecha), estado:'pendiente', origen: (origen || 'Sin fecha (falta BL / ETD)') + (_hayBL ? ' · resto de la OC (aún sin BL)' : ''), nota: A.saldo && A.saldo.nota, emb, rev});
         }
       }
     }
@@ -25329,6 +25365,13 @@ function pvRenderTabla() {
     return ok1 && ok2 && ok3;
   });
   pvCliPoblarFiltro();
+  // En "por cliente" las líneas repartidas entre varios clientes se muestran separadas: una fila por cliente con SU parte y SU precio
+  if(pvModo()==='cliente') {
+    const cliF2 = (document.getElementById('pv-cli-filtro')||{value:''}).value;
+    filas = filas.flatMap(r=>pvCliLineas(r)
+      .filter(x=>!cliF2 || (cliF2==='__sin' ? x.cli==='Sin cliente (general)' : x.cli===cliF2))
+      .map(x=>Object.assign(x.row, {_cli:x.cli, _real:r})));
+  }
 
   // THEAD
   const mesHeaders = MESES.map((m,i) => {
@@ -25359,7 +25402,7 @@ function pvRenderTabla() {
   // en modo canal se agrupa por categoría como siempre.
   const porCli = pvModo()==='cliente';
   filas.forEach(r => {
-    const cat = porCli ? (pvCliDe(r.referencia) || 'Sin cliente') : (r.categoria || 'Sin categoría');
+    const cat = porCli ? ((r._cli && r._cli!=='Sin cliente (general)' ? r._cli : pvCliDe(r.referencia)) || 'Sin cliente') : (r.categoria || 'Sin categoría');
     if(!grupos[cat]) grupos[cat] = [];
     grupos[cat].push(r);
   });
@@ -25399,7 +25442,7 @@ function pvRenderTabla() {
           <input type="number" min="0" step="1"
             value="${und||''}"
             data-ref="${r.referencia}" data-mes="${mes}"
-            onchange="pvCeldaCambio('${r.referencia}',${mes},this.value)"
+            onchange="pvCeldaCambio('${r.referencia}',${mes},this.value,${r._cli?JSON.stringify(r._cli).replace(/"/g,'&quot;'):'null'})"
             style="width:100%;border:none;background:${esMesAct?'rgba(245,197,24,.08)':'transparent'};padding:6px 5px;text-align:right;font-size:11px;font-family:inherit;color:${PV_SOLO_LECTURA?'var(--mu)':'var(--tx)'};outline:none;"
             onfocus="this.select()" ${PV_SOLO_LECTURA?'disabled':''}>
           ${pct!==null ? `<div style="font-size:8px;text-align:right;padding:0 5px 2px;color:${pctColor};">${pct}%✓</div>` : ''}
@@ -25443,7 +25486,7 @@ function pvRenderTabla() {
       htmlRows += `<tr style="border-bottom:1px solid var(--b1);"
         onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
         <td style="padding:6px 8px;font-family:monospace;font-size:10px;color:var(--mu);white-space:nowrap;position:sticky;left:0;background:inherit;z-index:5;">${esLibre?'💰 sin SKU':r.referencia}</td>
-        <td style="padding:6px 8px;font-size:11px;font-weight:600;max-width:130px;position:sticky;left:62px;background:inherit;z-index:5;" title="${r.descripcion||''}">${(r.descripcion||'').substring(0,35)}${pvModo()==='cliente'?(pvCliDe(r.referencia)?`<div style="font-size:9px;font-weight:700;color:#7c3aed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="Cliente">👤 ${pvCliTxt(r.referencia)}</div>`:`<div style="font-size:9px;color:#d97706;">⚠ sin cliente</div>`):''}</td>
+        <td style="padding:6px 8px;font-size:11px;font-weight:600;max-width:130px;position:sticky;left:62px;background:inherit;z-index:5;" title="${r.descripcion||''}">${(r.descripcion||'').substring(0,35)}${pvModo()==='cliente'?(pvCliDe(r.referencia)?`<div style="font-size:9px;font-weight:700;color:#7c3aed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="Cliente">👤 ${r._cli || pvCliTxt(r.referencia)}</div>`:`<div style="font-size:9px;color:#d97706;">⚠ sin cliente</div>`):''}</td>
         <td style="padding:4px 6px;text-align:right;white-space:nowrap;" title="${esLibre?'Precio por unidad de esta línea. Déjalo en 1 para escribir el monto en $ directo cada mes, o pon un precio real y cada mes escribe la cantidad (se multiplica cantidad × precio).':(precio ? '' : 'Sin precio registrado para este SKU en la lista actual (puede existir en otras listas)')}">
           ${esLibre
             ? `<input type="number" min="0" step="1" value="${precio||1}" data-ref="${r.referencia}"
@@ -25459,7 +25502,7 @@ function pvRenderTabla() {
         ${comp ? `<td style="padding:7px 8px;text-align:right;font-size:10px;color:#60a5fa;">${histTot ? histTot.toLocaleString('es-CO') : '—'}</td>
         <td style="padding:7px 8px;text-align:right;font-size:10px;font-weight:700;color:${pctCompC};">${pctComp!==null ? pctComp+'%' : '—'}</td>` : ''}
         <td style="padding:4px;text-align:center;">
-          ${PV_SOLO_LECTURA ? '' : `${pvModo()==='cliente'?`<button onclick="pvCliAsignar('${refEsc}')" style="border:none;background:transparent;cursor:pointer;font-size:13px;color:${pvCliDe(r.referencia)?'#7c3aed':'var(--mu)'};" title="Asignar cliente">👤</button>`:''}<button onclick="pvEliminarSKU('${r.referencia}')" style="border:none;background:transparent;cursor:pointer;font-size:13px;color:var(--mu);" title="Eliminar">🗑</button>`}
+          ${PV_SOLO_LECTURA ? '' : `${pvModo()==='cliente'?`<button onclick="pvCliAsignar('${refEsc}')" style="border:none;background:transparent;cursor:pointer;font-size:13px;color:${pvCliDe(r.referencia)?'#7c3aed':'var(--mu)'};" title="Asignar cliente">👤</button>`:''}<button onclick="${(r._cli && pvCliPrincipal(r.referencia)!==r._cli) ? `pvCliQuitarReparto('${refEsc}',${JSON.stringify(r._cli).replace(/"/g,'&quot;')})` : `pvEliminarSKU('${r.referencia}')`}" style="border:none;background:transparent;cursor:pointer;font-size:13px;color:var(--mu);" title="Eliminar">🗑</button>`}
         </td>
       </tr>`;
     });
@@ -25552,10 +25595,27 @@ function pvRenderKPIs(und, cop) {
 }
 
 // ── Edición de celda ───────────────────────────────────────────────────
-function pvCeldaCambio(ref, mes, valor) {
+function pvCeldaCambio(ref, mes, valor, cli) {
   if(PV_SOLO_LECTURA) { toast('🔒 Estás en modo consulta — no puedes editar este canal','wa'); return; }
   const key = 'u' + String(mes).padStart(2,'0');
   const row = PV.detalle.find(r=>r.referencia===ref);
+  const sp = (PV_CLI.split||{})[ref];
+  if(row && cli && sp) {
+    // Línea repartida entre clientes: se edita la parte de ESE cliente y el total de la línea se rearma
+    const idx = mes-1, v = parseFloat(valor)||0, pr = pvCliPrincipal(ref), U = s => Array.isArray(s) ? s : (s&&s.u)||[];
+    const oldSum = Object.values(sp).reduce((a,s)=>a+(parseFloat(U(s)[idx])||0),0);
+    const pPart = Math.max(0, (parseFloat(row[key])||0) - oldSum);
+    if(cli===pr) row[key] = v + oldSum;
+    else if(sp[cli]) {
+      if(Array.isArray(sp[cli])) sp[cli] = {u:sp[cli], p:null};
+      sp[cli].u = Array.from({length:12},(_,i)=>parseFloat((sp[cli].u||[])[i])||0);
+      const oldCli = sp[cli].u[idx]; sp[cli].u[idx] = v;
+      row[key] = pPart + oldSum - oldCli + v;
+    }
+    row._dirty = true; PV_CLI._dirty = true;
+    pvRenderTabla(); pvActualizarBadgeGuardar();
+    return;
+  }
   if(row) {
     row[key] = parseFloat(valor)||0;
     row._dirty = true;
@@ -25659,6 +25719,7 @@ async function pvGuardar() {
     let _cambioCli = false;
     dirty.forEach(r=>{ const k = String(r.referencia); if(!PV_CLI.map[k] && !pvEsLineaLibre(r)) { const c = PV_CLI_INF[k] || pvClienteDeLista(PV.listaId); if(c){ PV_CLI.map[k] = c; _cambioCli = true; } } });
     if(_cambioCli) await pvCliGuardar();
+    if(PV_CLI._dirty) { await pvCliGuardar(); PV_CLI._dirty = false; }
     for(const r of dirty) {
       const payload = {
         presupuesto_id: PV.presId,
@@ -25788,6 +25849,7 @@ async function pvVistaCliente(listaId) {
 }
 async function pvCambiarLista(v) {
   try { if(await pvVistaCliente(v)) { const sl = document.getElementById('pv-lista'); if(sl) sl.value = PV.listaId; return; } } catch(e) { console.warn('pvVistaCliente', e); }
+  if(PV.detalle.length && !confirm('Vas a cambiar la lista de precios de TODAS las líneas de este canal y sus precios se actualizan a esa lista. ¿Continuar?')) { const sl = document.getElementById('pv-lista'); if(sl) sl.value = PV.listaId; return; }
   await pvAplicarLista(v);
 }
 async function pvAplicarLista(v) {
@@ -26435,6 +26497,19 @@ async function pvRepGuardar(ref) {
   document.getElementById('mo-pv-rep')?.remove();
   await pvCliGuardar(); pvRenderTabla();
   toast(Object.keys(nuevo).length ? '👥 Reparto guardado: '+Object.keys(nuevo).join(', ') : 'Reparto quitado','ok');
+}
+
+async function pvCliQuitarReparto(ref, cli) {
+  if(PV_SOLO_LECTURA) { toast('🔒 Estás en modo consulta — no puedes editar este canal','wa'); return; }
+  const sp = (PV_CLI.split||{})[ref]; const row = PV.detalle.find(x=>x.referencia===ref);
+  if(!sp || !sp[cli] || !row) return;
+  if(!confirm(`¿Quitar a ${cli} de ${ref}? Sus unidades también salen del total de la línea.`)) return;
+  const U = Array.isArray(sp[cli]) ? sp[cli] : (sp[cli].u||[]);
+  for(let m=1;m<=12;m++){ const k = 'u'+String(m).padStart(2,'0'); row[k] = Math.max(0, (parseFloat(row[k])||0) - (parseFloat(U[m-1])||0)); }
+  delete sp[cli]; if(!Object.keys(sp).length) delete PV_CLI.split[ref];
+  row._dirty = true; PV_CLI._dirty = true;
+  pvRenderTabla(); pvActualizarBadgeGuardar();
+  toast('Quitado '+cli+' de '+ref+' — recuerda guardar 💾','ok');
 }
 
 async function pvActualizarPrecios() {
