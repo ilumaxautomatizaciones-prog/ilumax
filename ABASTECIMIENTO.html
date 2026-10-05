@@ -25724,7 +25724,67 @@ async function pvCambiarAnioComp(v) {
   if(PV.anioComp) await cargarHistorico(PV.anioComp);
   pvRenderTabla();
 }
+
+// ── Vista por cliente (al escoger una lista de precios que es de un cliente): todo lo que se le proyectó, sin importar el canal ──
+async function pvVistaCliente(listaId) {
+  const code = pvCodDeLista(listaId);
+  await pvCliListaCargar();
+  const nombres = new Set(); if(PV_LISTA_CLI[code]) nombres.add(PV_LISTA_CLI[code]);
+  Object.keys(PV_CLI_LISTA||{}).forEach(n=>{ if(String(PV_CLI_LISTA[n])===String(listaId)) nombres.add(n); });
+  if(!nombres.size) return false;
+  toast('⏳ Buscando lo proyectado a '+[...nombres].join(', ')+' en todos los canales...','inf');
+  const hdrs = ((await sb.get('presupuesto_ventas', `anio=eq.${PV.anio}&select=id,canal,lista_id`))||[])
+    .filter(h=>PV_CANALES_PERMITIDOS===null || PV_CANALES_PERMITIDOS.includes(h.canal));
+  const ids = hdrs.map(h=>h.id);
+  const det = [], maps = {}, splits = {};
+  for(let i=0;i<ids.length;i+=20){
+    const lote = ids.slice(i,i+20);
+    det.push(...((await sb.get('presupuesto_detalle', `presupuesto_id=in.(${lote.join(',')})&select=presupuesto_id,referencia,descripcion,categoria,precio_lista,u01,u02,u03,u04,u05,u06,u07,u08,u09,u10,u11,u12`))||[]));
+    const cfg = (await sb.get('configuracion', `clave=in.(${lote.map(x=>'pv_cli_'+x).concat(lote.map(x=>'pv_clisplit_'+x)).join(',')})&select=clave,valor`))||[];
+    cfg.forEach(c=>{ try{ const v = JSON.parse(c.valor)||{}; if(c.clave.startsWith('pv_clisplit_')) splits[c.clave.slice(12)] = v; else maps[c.clave.slice(7)] = v; }catch(e){} });
+  }
+  const hd = {}; hdrs.forEach(h=>hd[h.id]=h);
+  const filas = [];
+  det.forEach(r=>{
+    const h = hd[r.presupuesto_id]; if(!h) return;
+    const pr = (maps[h.id]||{})[r.referencia] || pvClienteDeLista(h.lista_id) || 'Sin cliente (general)';
+    pvCliRepartoDe(r, (splits[h.id]||{})[r.referencia], pr).forEach(x=>{
+      if(nombres.has(x.cli) && x.u.some(v=>v>0)) filas.push({canal:h.canal, cli:x.cli, ref:r.referencia, desc:r.descripcion||'', precio:x.p||parseFloat(r.precio_lista)||0, u:x.u});
+    });
+  });
+  filas.sort((a,b)=>a.canal.localeCompare(b.canal)||a.cli.localeCompare(b.cli)||String(a.ref).localeCompare(String(b.ref)));
+  const M = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const fmt = n => Math.round(n).toLocaleString('es-CO');
+  const totM = Array(12).fill(0); let totCop = 0; const porCanal = {};
+  filas.forEach(f=>{ const und = f.u.reduce((a,b)=>a+b,0); f.und = und; f.cop = und*f.precio; f.u.forEach((v,i)=>totM[i]+=v); totCop += f.cop; porCanal[f.canal] = (porCanal[f.canal]||0) + f.cop; });
+  const nombre = [...nombres].join(' / ');
+  document.getElementById('mo-pv-vc')?.remove();
+  const mo = document.createElement('div'); mo.id = 'mo-pv-vc';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:1200px;max-height:92vh;display:flex;flex-direction:column;">
+    <div style="padding:14px 20px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <div><div style="font-size:15px;font-weight:800;">👤 ${nombre} — proyección ${PV.anio} (todos los canales)</div>
+      <div style="font-size:11px;color:var(--mu);">${filas.length} línea(s) · ${fmt(totCop)} COP · ${Object.entries(porCanal).map(([c,v])=>c+': $'+fmt(v)).join(' · ')||'sin proyección'}</div></div>
+      <button onclick="document.getElementById('mo-pv-vc').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button></div>
+    <div style="overflow:auto;padding:0 12px 12px;">
+      ${filas.length ? `<table style="border-collapse:collapse;font-size:11px;width:100%;"><thead><tr style="position:sticky;top:0;background:#0f172a;color:#94a3b8;">
+        <th style="padding:6px;text-align:left;">Canal</th><th style="padding:6px;text-align:left;">Referencia</th><th style="padding:6px;text-align:left;">Descripción</th><th style="padding:6px;text-align:right;">Precio</th>${M.map(m=>`<th style="padding:6px;text-align:right;">${m}</th>`).join('')}<th style="padding:6px;text-align:right;">Und.</th><th style="padding:6px;text-align:right;">Total COP</th></tr></thead><tbody>
+        ${filas.map(f=>`<tr style="border-bottom:1px solid var(--b1);"><td style="padding:4px 6px;white-space:nowrap;">${f.canal}</td><td style="padding:4px 6px;font-weight:700;white-space:nowrap;">${f.ref}</td><td style="padding:4px 6px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${String(f.desc).replace(/"/g,'&quot;')}">${f.desc}</td><td style="padding:4px 6px;text-align:right;white-space:nowrap;">$${fmt(f.precio)}</td>${f.u.map(v=>`<td style="padding:4px 6px;text-align:right;">${v?fmt(v):'·'}</td>`).join('')}<td style="padding:4px 6px;text-align:right;font-weight:700;">${fmt(f.und)}</td><td style="padding:4px 6px;text-align:right;font-weight:700;white-space:nowrap;">$${fmt(f.cop)}</td></tr>`).join('')}
+        <tr style="background:#f1f5f9;font-weight:800;"><td colspan="4" style="padding:6px;">TOTAL</td>${totM.map(v=>`<td style="padding:6px;text-align:right;">${fmt(v)}</td>`).join('')}<td style="padding:6px;text-align:right;">${fmt(totM.reduce((a,b)=>a+b,0))}</td><td style="padding:6px;text-align:right;white-space:nowrap;">$${fmt(totCop)}</td></tr></tbody></table>`
+      : '<div style="padding:30px;text-align:center;color:var(--mu);">Nadie le ha proyectado nada a este cliente en ' + PV.anio + '.</div>'}
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-sm" onclick="document.getElementById('mo-pv-vc').remove();pvAplicarLista('${String(listaId).replace(/'/g,"")}')" title="Cambia la lista de precios del canal que estás editando y le actualiza los precios">Aplicar esta lista al canal actual</button>
+      <button class="btn btn-bl btn-sm" onclick="document.getElementById('mo-pv-vc').remove()">Cerrar</button></div></div>`;
+  document.body.appendChild(mo);
+  toast('👤 Mostrando lo proyectado a '+nombre,'ok');
+  return true;
+}
 async function pvCambiarLista(v) {
+  try { if(await pvVistaCliente(v)) { const sl = document.getElementById('pv-lista'); if(sl) sl.value = PV.listaId; return; } } catch(e) { console.warn('pvVistaCliente', e); }
+  await pvAplicarLista(v);
+}
+async function pvAplicarLista(v) {
   PV.listaId = v;
   // Actualizar precios en detalle desde precios_lista
   await pvActualizarPrecios();
@@ -26267,19 +26327,20 @@ function pvCliClientes(ref) {
 }
 function pvCliTxt(ref) { const l = pvCliClientes(ref); return l.length>1 ? l.join(' · ') : (l[0]||''); }
 // Devuelve [{cli, u:[12]}] ya repartido (el resto va al cliente principal)
-function pvCliReparto(r) {
-  const ref = r.referencia, sp = (PV_CLI.split||{})[ref], pr = pvCliPrincipal(ref);
+function pvCliReparto(r) { return pvCliRepartoDe(r, (PV_CLI.split||{})[r.referencia], pvCliPrincipal(r.referencia)); }
+function pvCliRepartoDe(r, sp, pr) {
+  const ref = r.referencia;
   const tot = Array.from({length:12},(_,i)=>parseFloat(r['u'+String(i+1).padStart(2,'0')])||0);
-  if(!sp) return [{cli:pr, u:tot}];
-  const mapa = {}; const suma = Array(12).fill(0);
-  Object.keys(sp).forEach(c=>{ const a = Array.from({length:12},(_,i)=>parseFloat((sp[c]||[])[i])||0); mapa[c] = a; a.forEach((v,i)=>suma[i]+=v); });
+  if(!sp) return [{cli:pr, u:tot, p:null}];
+  const mapa = {}, precios = {}; const suma = Array(12).fill(0);
+  Object.keys(sp).forEach(c=>{ const sv = Array.isArray(sp[c]) ? {u:sp[c]} : (sp[c]||{}); const a = Array.from({length:12},(_,i)=>parseFloat((sv.u||[])[i])||0); mapa[c] = a; precios[c] = parseFloat(sv.p)||null; a.forEach((v,i)=>suma[i]+=v); });
   const resto = tot.map((v,i)=>Math.max(0, Math.round((v-suma[i])*1000)/1000));
   mapa[pr] = (mapa[pr]||Array(12).fill(0)).map((v,i)=>v+resto[i]);
-  return Object.keys(mapa).filter(c=>mapa[c].some(v=>v>0)).map(c=>({cli:c, u:mapa[c]}));
+  return Object.keys(mapa).filter(c=>mapa[c].some(v=>v>0)).map(c=>({cli:c, u:mapa[c], p:precios[c]||null}));
 }
 // Filas "virtuales" por cliente (copia de la línea con las unidades de ese cliente) — para exportar
 function pvCliLineas(r) {
-  return pvCliReparto(r).map(x=>{ const o = Object.assign({}, r); x.u.forEach((v,i)=>{ o['u'+String(i+1).padStart(2,'0')] = v; }); return {cli:x.cli, row:o}; });
+  return pvCliReparto(r).map(x=>{ const o = Object.assign({}, r); x.u.forEach((v,i)=>{ o['u'+String(i+1).padStart(2,'0')] = v; }); if(x.p) o.precio_lista = x.p; return {cli:x.cli, row:o}; });
 }
 async function pvCliRepartir(ref) {
   document.getElementById('mo-pv-cli')?.remove();
@@ -26289,13 +26350,14 @@ async function pvCliRepartir(ref) {
   PV_CLI_TODOS = [...new Set(clientes)].sort((a,b)=>a.localeCompare(b));
   await pvCliListaCargar();
   const lista = String(PV.listaId);
-  const ver = PV_CLI_TODOS.filter(n=>!PV_CLI_LISTA[n] || String(PV_CLI_LISTA[n])===lista);
+  const ver = [...new Set([...PV_CLI_TODOS, ...Object.values(PV_LISTA_CLI||{})])].sort((a,b)=>a.localeCompare(b));
+  window._pvRepRef = ref;
   const pr = pvCliPrincipal(ref);
   const sp = (PV_CLI.split||{})[ref] || {};
-  const filas = Object.keys(sp).length ? Object.keys(sp).map(c=>({c, u:sp[c]})) : [{c:'', u:[]}];
+  const filas = Object.keys(sp).length ? Object.keys(sp).map(c=>({c, u:(Array.isArray(sp[c])?sp[c]:sp[c].u), p:(Array.isArray(sp[c])?null:sp[c].p)})) : [{c:'', u:[]}];
   const M = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const tot = Array.from({length:12},(_,i)=>parseFloat(row['u'+String(i+1).padStart(2,'0')])||0);
-  const filaHtml = f => `<tr class="pv-rep-f"><td style="padding:3px;"><input class="inp pv-rep-c" list="pv-rep-dl" value="${String(f.c).replace(/"/g,'&quot;')}" placeholder="Cliente..." style="width:150px;font-size:11px;"></td>`
+  const filaHtml = f => `<tr class="pv-rep-f"><td style="padding:3px;"><input class="inp pv-rep-c" list="pv-rep-dl" value="${String(f.c).replace(/"/g,'&quot;')}" placeholder="Cliente..." onchange="pvRepPrecio(this)" style="width:150px;font-size:11px;"></td><td style="padding:3px;"><input type="number" min="0" class="inp pv-rep-p" value="${f.p||''}" placeholder="${parseFloat(row.precio_lista)||''}" title="Precio unitario de este cliente (vacío = precio de la línea)" style="width:84px;font-size:11px;text-align:right;padding:4px;"></td>`
     + Array.from({length:12},(_,i)=>`<td style="padding:3px;"><input type="number" min="0" class="inp pv-rep-u" value="${parseFloat((f.u||[])[i])||''}" oninput="pvRepRecalc()" style="width:56px;font-size:11px;text-align:right;padding:4px;"></td>`).join('')
     + `<td><button onclick="this.closest('tr').remove();pvRepRecalc()" style="border:none;background:none;cursor:pointer;">🗑</button></td></tr>`;
   window._pvRepTot = tot; window._pvRepFila = filaHtml;
@@ -26309,8 +26371,8 @@ async function pvCliRepartir(ref) {
     <div style="padding:12px 20px;overflow:auto;">
       <div style="font-size:11.5px;color:var(--mu);margin-bottom:8px;">Escribe las unidades de cada cliente por mes. Lo que no repartas queda con <b>${pr}</b> (cliente principal). La suma de los clientes no puede pasar del total del mes.</div>
       <datalist id="pv-rep-dl">${ver.map(n=>`<option value="${n.replace(/"/g,'&quot;')}">`).join('')}</datalist>
-      <table style="border-collapse:collapse;font-size:11px;"><thead><tr><th style="text-align:left;padding:3px;">Cliente</th>${M.map(m=>`<th style="padding:3px;text-align:right;">${m}</th>`).join('')}<th></th></tr>
-        <tr style="background:#f1f5f9;font-weight:700;"><td style="padding:3px;">Total del SKU</td>${tot.map(v=>`<td style="padding:3px;text-align:right;">${v.toLocaleString('es-CO')}</td>`).join('')}<td></td></tr></thead>
+      <table style="border-collapse:collapse;font-size:11px;"><thead><tr><th style="text-align:left;padding:3px;">Cliente</th><th style="padding:3px;text-align:right;">Precio</th>${M.map(m=>`<th style="padding:3px;text-align:right;">${m}</th>`).join('')}<th></th></tr>
+        <tr style="background:#f1f5f9;font-weight:700;"><td style="padding:3px;">Total del SKU</td><td style="padding:3px;text-align:right;">${(parseFloat(row.precio_lista)||0).toLocaleString('es-CO')}</td>${tot.map(v=>`<td style="padding:3px;text-align:right;">${v.toLocaleString('es-CO')}</td>`).join('')}<td></td></tr></thead>
         <tbody id="pv-rep-body">${filas.map(filaHtml).join('')}</tbody>
         <tfoot><tr id="pv-rep-resto" style="font-weight:700;"></tr></tfoot></table>
       <button class="btn btn-sm" style="margin-top:8px;" onclick="document.getElementById('pv-rep-body').insertAdjacentHTML('beforeend', window._pvRepFila({c:'',u:[]}))">+ Agregar cliente</button>
@@ -26322,14 +26384,25 @@ async function pvCliRepartir(ref) {
   pvRepRecalc();
 }
 function pvRepLeer() {
-  return [...document.querySelectorAll('#pv-rep-body .pv-rep-f')].map(tr=>({c:tr.querySelector('.pv-rep-c').value.trim(), u:[...tr.querySelectorAll('.pv-rep-u')].map(i=>parseFloat(i.value)||0)}));
+  return [...document.querySelectorAll('#pv-rep-body .pv-rep-f')].map(tr=>({c:tr.querySelector('.pv-rep-c').value.trim(), p:parseFloat(tr.querySelector('.pv-rep-p').value)||0, u:[...tr.querySelectorAll('.pv-rep-u')].map(i=>parseFloat(i.value)||0)}));
 }
 function pvRepRecalc() {
   const tot = window._pvRepTot||[]; const suma = Array(12).fill(0);
   pvRepLeer().forEach(f=>f.u.forEach((v,i)=>suma[i]+=v));
   const el = document.getElementById('pv-rep-resto'); if(!el) return;
-  el.innerHTML = '<td style="padding:3px;">Resto → cliente principal</td>' + tot.map((t,i)=>{ const d = Math.round((t-suma[i])*1000)/1000; return `<td style="padding:3px;text-align:right;color:${d<0?'#dc2626':'#475569'};">${d.toLocaleString('es-CO')}</td>`; }).join('') + '<td></td>';
+  el.innerHTML = '<td style="padding:3px;">Resto → cliente principal</td><td></td>' + tot.map((t,i)=>{ const d = Math.round((t-suma[i])*1000)/1000; return `<td style="padding:3px;text-align:right;color:${d<0?'#dc2626':'#475569'};">${d.toLocaleString('es-CO')}</td>`; }).join('') + '<td></td>';
   el.dataset.mal = tot.some((t,i)=>suma[i]>t+0.0005) ? '1' : '';
+}
+async function pvRepPrecio(inp) {
+  const n = inp.value.trim(), pi = inp.closest('tr').querySelector('.pv-rep-p'); if(!n || !pi) return;
+  let l = PV_CLI_LISTA[n];
+  if(!l) { const cod = Object.keys(PV_LISTA_CLI||{}).find(k=>PV_LISTA_CLI[k]===n); if(cod) { const c = (PV.catalogo||[]).find(x=>String(x.nombre)===cod); if(c) l = c.lista_id; } }
+  if(!l) return;
+  try {
+    const r = await sb.get('precios_lista', `lista=eq.${l}&referencia=eq.${encodeURIComponent(window._pvRepRef||'')}&select=precio`);
+    const p = r && r[0] ? parseFloat(r[0].precio) : 0;
+    if(p) { pi.value = p; pi.title = 'Precio en la lista de '+n; } else { pi.placeholder = 'sin precio'; }
+  } catch(e) { console.warn('pvRepPrecio', e); }
 }
 async function pvRepGuardar(ref) {
   if(PV_SOLO_LECTURA) { toast('🔒 Estás en modo consulta — no puedes editar este canal','wa'); return; }
@@ -26337,10 +26410,7 @@ async function pvRepGuardar(ref) {
   const nuevo = {}; const lista = String(PV.listaId); let cambioLista = false;
   for(const f of pvRepLeer()) {
     if(!f.c || !f.u.some(v=>v>0)) continue;
-    const l = PV_CLI_LISTA[f.c];
-    if(l && String(l)!==lista) { toast(`🔒 ${f.c} pertenece a otra lista de precios (${pvNombreLista(l)}).`,'wa'); return; }
-    if(!l) { PV_CLI_LISTA[f.c] = lista; cambioLista = true; }
-    const a = nuevo[f.c] || Array(12).fill(0); f.u.forEach((v,i)=>a[i]+=v); nuevo[f.c] = a;
+    const prev = nuevo[f.c]; const a = prev ? prev.u : Array(12).fill(0); f.u.forEach((v,i)=>a[i]+=v); nuevo[f.c] = {u:a, p:f.p||(prev&&prev.p)||null};
   }
   if(cambioLista) { try { await sb.upsert('configuracion', {clave:'pv_cliente_lista', valor:JSON.stringify(PV_CLI_LISTA), tipo:'json'}, 'clave'); } catch(e){ console.warn(e); } }
   PV_CLI.split = PV_CLI.split || {};
