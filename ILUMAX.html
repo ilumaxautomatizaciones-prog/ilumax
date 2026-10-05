@@ -25042,9 +25042,9 @@ function renderPVShell(el, canales, todosLosCanales) {
         <button class="btn btn-bl btn-sm" onclick="pvAgregarLineaLibre()" title="Para cuando no hay una referencia real que presupuestar (ej. Proyectos) — presupuesta un monto en $ directamente, mes a mes">💰 Línea sin SKU</button>
         ${CU?.rol==='admin' ? `<button class="btn btn-or btn-sm" onclick="pvSubirHistorico()">📤 Subir histórico</button>` : ''}
         `}
-        <button id="pv-btn-xcli" class="btn btn-pu btn-sm" style="display:${pvModo()==='cliente'?'':'none'};" onclick="pvExportarPorCliente()" title="Excel a color con el mismo formato del botón Excel (Cant, Precio, Venta, Resumen con fórmulas), con un bloque de meses por cada cliente">📥 Excel por cliente</button>
+        <button id="pv-btn-xcli" class="btn btn-pu btn-sm" style="display:${pvModo()==='cliente'?'':'none'};" onclick="pvExportarPorCliente()" title="Excel a color de TODOS los canales de esta persona, con un bloque de meses por cada cliente (Cant, Precio, Venta, Resumen con fórmulas)">📥 Excel por cliente</button>
         ${PV_SOLO_LECTURA ? '' : `<button class="btn btn-g btn-sm" onclick="pvHistAbrir()" title="Mira las copias de este presupuesto de los últimos 5 días y recupera lo que se borró o se cambió por error">🕘 Historial</button>`}
-        <button class="btn btn-g btn-sm" onclick="pvExportar()" title="Excel a color solo del canal que tienes abierto ahora (Cant, Precio, Venta, Resumen) — para todos los canales juntos usa 'Excel combinado (todos)'">📊 Excel</button>
+        <button class="btn btn-g btn-sm" onclick="pvExportar()" title="Excel a color de TODOS los canales de esta persona, un bloque por canal (Cant, Precio, Venta, Resumen) — para juntar a todas las personas usa 'Excel combinado (todos)'">📊 Excel</button>
         ${(CU?.rol==='admin' || pvEsAprobador()) ? `<button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>` : ''}
         ${(CU?.rol==='admin' || pvEsAprobador()) ? `<button class="btn btn-g btn-sm" onclick="pvExportarCombinadoTodo()" title="Excel a color con las mismas hojas que el botón Excel (Cant, Precio, Venta, Resumen) más una hoja de todas las filas juntas — con fórmulas en vivo (Venta = Cant × Precio) y una hoja de Instrucciones">📋 Excel combinado (todos)</button>` : ''}
         ${(CU?.rol==='admin' || !PV_SOLO_LECTURA) ? `<button class="btn btn-bl btn-sm" onclick="pvAdmSubirAbrir()" title="Sube el presupuesto desde un Excel sencillo (SKU | cantidad mes a mes | lista de precio | canal)">📤 Subir presupuesto (Excel)</button>` : ''}
@@ -27901,6 +27901,49 @@ async function pvExcelCargarDatos(anio, canalesFiltro, soloEmail){
   return {canales, dataPorCanal, hdrPorCanal, skuList, getVal, getPrice};
 }
 
+// Presupuestos (el último de cada canal) de la persona dueña del presupuesto abierto, TODOS sus canales.
+// conCli=true: reparte cada línea entre sus clientes (map + split de cada presupuesto) y arma un bloque por cliente.
+async function pvExcelDatosJefe(anio, conCli){
+  let email = pvDuenoEmail();
+  if(!email && PV.presId){ try{ const h = await sb.get('presupuesto_ventas','id=eq.'+PV.presId); email = (h&&h[0]&&h[0].email_jefe)||''; }catch(e){} }
+  let q = `anio=eq.${anio}&order=creado_en.desc`;
+  q += email ? `&email_jefe=eq.${encodeURIComponent(email)}` : `&canal=eq.${encodeURIComponent(PV.canal)}`;
+  const todos = (await sb.get('presupuesto_ventas', q)) || [];
+  const hdrs = [], vistos = new Set();
+  todos.forEach(h=>{ if(!vistos.has(h.canal)){ vistos.add(h.canal); hdrs.push(h); } });
+  const bloques = {}, todosSku = {};
+  for(const h of hdrs){
+    const det = (await sb.get('presupuesto_detalle', `presupuesto_id=eq.${h.id}&order=categoria.asc,referencia.asc`)) || [];
+    if(!det.length) continue;
+    let map = {}, split = {};
+    if(conCli){
+      try{
+        const a = await sb.get('configuracion','clave=eq.pv_cli_'+h.id); if(a&&a[0]&&a[0].valor) map = JSON.parse(a[0].valor)||{};
+        const b = await sb.get('configuracion','clave=eq.pv_clisplit_'+h.id); if(b&&b[0]&&b[0].valor) split = JSON.parse(b[0].valor)||{};
+      }catch(e){}
+    }
+    const delLista = pvClienteDeLista(h.lista_id);
+    det.forEach(r=>{
+      const k = String(r.referencia);
+      if(!todosSku[k]) todosSku[k] = {sku:k, desc:r.descripcion||'', cat:r.categoria||'Sin categoría'};
+      if(!conCli){ (bloques[h.canal] = bloques[h.canal]||[]).push(r); return; }
+      const pr = map[k] || (h.id===PV.presId && PV_CLI_INF[k]) || delLista || 'Sin cliente (general)';
+      pvCliRepartoDe(r, split[k], pr).forEach(x=>{
+        const o = Object.assign({}, r); x.u.forEach((v,i)=>{ o['u'+String(i+1).padStart(2,'0')] = v; });
+        if(x.p) o.precio_lista = x.p;
+        (bloques[x.cli] = bloques[x.cli]||[]).push(o);
+      });
+    });
+  }
+  const canales = Object.keys(bloques);
+  if(conCli) canales.sort((a,b)=> (a.startsWith('Sin cliente')-b.startsWith('Sin cliente')) || a.localeCompare(b));
+  const skuList = Object.values(todosSku).sort((a,b)=>a.cat.localeCompare(b.cat)||a.sku.localeCompare(b.sku));
+  const filas = (c, sku) => (bloques[c]||[]).filter(r=>String(r.referencia)===String(sku));
+  const getVal = (c, sku, base) => { const fs = filas(c, sku); return Array.from({length:12},(_,i)=>fs.reduce((a,r)=>a+(parseFloat(r[base+String(i+1).padStart(2,'0')])||0),0)); };
+  const getPrice = (c, sku) => { const f = filas(c, sku)[0]; return parseFloat(f && f.precio_lista)||0; };
+  const dueno = (hdrs[0] && (hdrs[0].jefe_zona || hdrs[0].email_jefe)) || (CU&&(CU.nombre||CU.email)) || '';
+  return {canales, skuList, getVal, getPrice, dueno, nCanales: hdrs.length};
+}
 // ── Exportar Excel (a color, con fórmulas vivas: Cant, Precio, Venta y Resumen) ─────────────
 // Este botón exporta SOLO el canal que está abierto en la sesión (el que ve/edita la persona
 // que inició sesión) — para el Excel con TODOS los canales juntos está "📋 Excel combinado (todos)".
@@ -27908,19 +27951,19 @@ async function pvExportar() {
   if(!PV.canal){ toast('Selecciona un canal primero','wa'); return; }
   await reabastCargarExcelJS().catch(()=>{});
   if(typeof ExcelJS === 'undefined'){ toast('No pude cargar el generador de Excel — revisa tu conexión','er'); return; }
-  toast(`⏳ Generando Excel a color de ${PV.canal}...`,'inf');
+  toast('⏳ Generando Excel a color de todos los canales de esta persona...','inf');
   const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const anio = PV.anio;
-  const {canales, skuList, getVal, getPrice} = await pvExcelCargarDatos(anio, [PV.canal], pvDuenoEmail());
-  if(!skuList.length){ toast('No hay presupuesto guardado para '+PV.canal+' en '+anio,'err'); return; }
+  const {canales, skuList, getVal, getPrice, dueno} = await pvExcelDatosJefe(anio, false);
+  if(!skuList.length){ toast('No hay presupuesto guardado para esta persona en '+anio,'err'); return; }
 
   const EST = pvExcelEstilos();
   const wb = new ExcelJS.Workbook();
   wb.creator = 'ILUMAX'; wb.created = new Date();
 
   pvExcelHojaInstrucciones(wb, EST, {
-    titulo: `📊 PRESUPUESTO DE VENTAS ${anio} — ${PV.canal.toUpperCase()}`,
-    resumenTxt: `Generado el ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})} · Canal: ${PV.canal}.`,
+    titulo: `📊 PRESUPUESTO DE VENTAS ${anio} — ${String(dueno).toUpperCase()} (TODOS SUS CANALES)`,
+    resumenTxt: `Generado el ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})} · Canales: ${canales.join(', ')}.`,
     secciones: [
       {sub:'¿Qué hoja abro según lo que necesito?', items: [
         '• "Cant" → cuántas unidades se presupuestaron, mes a mes, por SKU.',
@@ -27941,9 +27984,9 @@ async function pvExportar() {
   const {colMes, colTotalCanal, colGranTotal, filaTot:ventaTotalRow} = pvExcelHojaMatriz(wb, {nombre:'Venta', tipo:'Venta', canales, skuList, getVal, getPrice, MESES_CORTOS, anio, EST});
   pvExcelHojaResumen(wb, {canales, skuList, MESES_CORTOS, anio, EST, ventaTotalRow, colMes, colTotalCanal, colGranTotal});
 
-  const nombreArchivo = `Presupuesto_Ventas_${PV.canal.replace(/[^\w-]+/g,'_')}_ILUMAX_${anio}.xlsx`;
+  const nombreArchivo = `Presupuesto_Ventas_${String(dueno).replace(/[^\w-]+/g,'_')}_ILUMAX_${anio}.xlsx`;
   await pvExcelDescargar(wb, nombreArchivo);
-  toast(`✅ Excel generado — ${skuList.length} SKUs de ${PV.canal}`,'ok');
+  toast(`✅ Excel generado — ${canales.length} canal(es), ${skuList.length} SKUs`,'ok');
 }
 
 // Cada persona manda su presupuesto por su canal (Ferroeléctrico = Cindy, Mixto = Johanna, etc. —
@@ -27965,24 +28008,17 @@ async function pvExportarPorCliente() {
   if(PV.detalle.some(r=>r._dirty)){ toast('Tienes cambios sin guardar — dale 💾 Guardar antes de descargar','wa'); return; }
   await reabastCargarExcelJS().catch(()=>{});
   if(typeof ExcelJS === 'undefined'){ toast('No pude cargar el generador de Excel — revisa tu conexión','er'); return; }
-  toast(`⏳ Generando Excel por cliente de ${PV.canal}...`,'inf');
+  toast('⏳ Generando Excel por cliente de todos los canales de esta persona...','inf');
   const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const anio = PV.anio;
-  const porCli = {};
-  PV.detalle.forEach(r=>{ pvCliLineas(r).forEach(x=>{ (porCli[x.cli] = porCli[x.cli]||[]).push(x.row); }); });
-  const canales = Object.keys(porCli).sort((a,b)=> (a.startsWith('Sin cliente')-b.startsWith('Sin cliente')) || a.localeCompare(b));   // cada cliente hace de "bloque" de meses
-  const todos = {};
-  PV.detalle.forEach(r=>{ const k = String(r.referencia); if(!todos[k]) todos[k] = {sku:k, desc:r.descripcion||'', cat:r.categoria||'Sin categoría'}; });
-  const skuList = Object.values(todos).sort((a,b)=>a.cat.localeCompare(b.cat)||a.sku.localeCompare(b.sku));
-  const filas = (cli, sku) => (porCli[cli]||[]).filter(r=>String(r.referencia)===String(sku));
-  const getVal = (cli, sku, base) => { const fs = filas(cli, sku); return Array.from({length:12},(_,i)=>fs.reduce((a,r)=>a+(parseFloat(r[base+String(i+1).padStart(2,'0')])||0),0)); };
-  const getPrice = (cli, sku) => { const f = filas(cli, sku)[0]; return parseFloat(f && f.precio_lista)||0; };
+  const {canales, skuList, getVal, getPrice, dueno} = await pvExcelDatosJefe(anio, true);
+  if(!skuList.length){ toast('No hay presupuesto guardado para esta persona en '+anio,'err'); return; }
 
   const EST = pvExcelEstilos();
   const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX'; wb.created = new Date();
   pvExcelHojaInstrucciones(wb, EST, {
-    titulo: `👤 PRESUPUESTO DE VENTAS ${anio} POR CLIENTE — ${PV.canal.toUpperCase()}`,
-    resumenTxt: `Generado el ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})} · Canal: ${PV.canal} · Elaborado por: ${CU.nombre||CU.email} · Clientes: ${canales.join(', ')}.`,
+    titulo: `👤 PRESUPUESTO DE VENTAS ${anio} POR CLIENTE — ${String(dueno).toUpperCase()} (TODOS SUS CANALES)`,
+    resumenTxt: `Generado el ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})} · Todos los canales de ${dueno} · Elaborado por: ${CU.nombre||CU.email} · Clientes: ${canales.join(', ')}.`,
     secciones: [
       {sub:'¿Qué hoja abro según lo que necesito?', items: [
         '• "Cant" → unidades presupuestadas mes a mes, por SKU, con un bloque de 12 meses por cada cliente.',
@@ -28000,7 +28036,7 @@ async function pvExportarPorCliente() {
   pvExcelHojaMatriz(wb, {nombre:'Precio', tipo:'Precio', canales, skuList, getVal, getPrice, MESES_CORTOS, anio, EST});
   const {colMes, colTotalCanal, colGranTotal, filaTot:ventaTotalRow} = pvExcelHojaMatriz(wb, {nombre:'Venta', tipo:'Venta', canales, skuList, getVal, getPrice, MESES_CORTOS, anio, EST});
   pvExcelHojaResumen(wb, {canales, skuList, MESES_CORTOS, anio, EST, ventaTotalRow, colMes, colTotalCanal, colGranTotal});
-  await pvExcelDescargar(wb, `Presupuesto_por_cliente_${PV.canal.replace(/[^\w-]+/g,'_')}_ILUMAX_${anio}.xlsx`);
+  await pvExcelDescargar(wb, `Presupuesto_por_cliente_${String(dueno).replace(/[^\w-]+/g,'_')}_ILUMAX_${anio}.xlsx`);
   toast(`✅ Excel por cliente generado — ${canales.length} cliente(s), ${skuList.length} SKUs`,'ok');
 }
 // (versión anterior: una hoja simple por cliente, sin formato)
