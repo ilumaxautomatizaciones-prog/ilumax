@@ -25319,7 +25319,7 @@ function pvRenderTabla() {
     const ok2 = !catF || r.categoria === catF;
     const cliF = (document.getElementById('pv-cli-filtro')||{value:''}).value;
     const cliR = pvCliDe(r.referencia);
-    const ok3 = pvModo()!=='cliente' || !cliF || (cliF==='__sin' ? !cliR : cliR===cliF);
+    const ok3 = pvModo()!=='cliente' || !cliF || (cliF==='__sin' ? !cliR : pvCliClientes(r.referencia).includes(cliF));
     return ok1 && ok2 && ok3;
   });
   pvCliPoblarFiltro();
@@ -25437,7 +25437,7 @@ function pvRenderTabla() {
       htmlRows += `<tr style="border-bottom:1px solid var(--b1);"
         onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
         <td style="padding:6px 8px;font-family:monospace;font-size:10px;color:var(--mu);white-space:nowrap;position:sticky;left:0;background:inherit;z-index:5;">${esLibre?'💰 sin SKU':r.referencia}</td>
-        <td style="padding:6px 8px;font-size:11px;font-weight:600;max-width:130px;position:sticky;left:62px;background:inherit;z-index:5;" title="${r.descripcion||''}">${(r.descripcion||'').substring(0,35)}${pvModo()==='cliente'?(pvCliDe(r.referencia)?`<div style="font-size:9px;font-weight:700;color:#7c3aed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="Cliente">👤 ${pvCliDe(r.referencia)}</div>`:`<div style="font-size:9px;color:#d97706;">⚠ sin cliente</div>`):''}</td>
+        <td style="padding:6px 8px;font-size:11px;font-weight:600;max-width:130px;position:sticky;left:62px;background:inherit;z-index:5;" title="${r.descripcion||''}">${(r.descripcion||'').substring(0,35)}${pvModo()==='cliente'?(pvCliDe(r.referencia)?`<div style="font-size:9px;font-weight:700;color:#7c3aed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="Cliente">👤 ${pvCliTxt(r.referencia)}</div>`:`<div style="font-size:9px;color:#d97706;">⚠ sin cliente</div>`):''}</td>
         <td style="padding:4px 6px;text-align:right;white-space:nowrap;" title="${esLibre?'Precio por unidad de esta línea. Déjalo en 1 para escribir el monto en $ directo cada mes, o pon un precio real y cada mes escribe la cantidad (se multiplica cantidad × precio).':(precio ? '' : 'Sin precio registrado para este SKU en la lista actual (puede existir en otras listas)')}">
           ${esLibre
             ? `<input type="number" min="0" step="1" value="${precio||1}" data-ref="${r.referencia}"
@@ -26089,7 +26089,7 @@ async function pvAdmImportar() {
 // ── Cliente específico (opcional) por línea del presupuesto ─────────────
 // Se guarda en configuracion (clave pv_cli_<presupuesto>) como {referencia: cliente}; no toca la
 // estructura por lista de precios. Los clientes salen del módulo Margen x Cliente.
-var PV_CLI = { presId: null, map: {} };
+var PV_CLI = { presId: null, map: {}, split: {} };
 function pvModo() { return dbGet('pv_modo_'+(CU&&CU.email||'')) === 'cliente' ? 'cliente' : 'canal'; }
 function pvSetModo(v) {
   dbSet('pv_modo_'+(CU&&CU.email||''), v==='cliente'?'cliente':'canal');
@@ -26156,21 +26156,24 @@ async function pvListaCliGuardar() {
   await pvCliInferir(); pvRenderTabla(); toast('✅ Clientes por lista guardados','ok');
 }
 async function pvCliCargar() {
-  PV_CLI = { presId: PV.presId, map: {} };
+  PV_CLI = { presId: PV.presId, map: {}, split: {} };
   if(!PV.presId) return;
   try {
     const r = await sb.get('configuracion', 'clave=eq.pv_cli_'+PV.presId);
     if(r && r[0] && r[0].valor) PV_CLI.map = JSON.parse(r[0].valor) || {};
+    const s = await sb.get('configuracion', 'clave=eq.pv_clisplit_'+PV.presId);
+    if(s && s[0] && s[0].valor) PV_CLI.split = JSON.parse(s[0].valor) || {};
   } catch(e) { console.warn('pvCliCargar', e); }
 }
 async function pvCliGuardar() {
   if(!PV.presId) return;
-  try { await sb.upsert('configuracion', {clave:'pv_cli_'+PV.presId, valor:JSON.stringify(PV_CLI.map), tipo:'json'}, 'clave'); }
+  try { await sb.upsert('configuracion', {clave:'pv_cli_'+PV.presId, valor:JSON.stringify(PV_CLI.map), tipo:'json'}, 'clave');
+    if(Object.keys(PV_CLI.split||{}).length || PV_CLI._splitHay) { PV_CLI._splitHay = true; await sb.upsert('configuracion', {clave:'pv_clisplit_'+PV.presId, valor:JSON.stringify(PV_CLI.split||{}), tipo:'json'}, 'clave'); } }
   catch(e) { toast('❌ No se pudo guardar el cliente: '+e.message,'er'); }
 }
 function pvCliPoblarFiltro() {
   const sel = document.getElementById('pv-cli-filtro'); if(!sel) return;
-  const nombres = [...new Set((PV.detalle||[]).map(r=>pvCliDe(r.referencia)).filter(Boolean))].sort();
+  const nombres = [...new Set((PV.detalle||[]).flatMap(r=>pvCliClientes(r.referencia)).filter(Boolean))].sort();
   const key = nombres.join('|');
   if(sel.dataset.k === key) return;
   const act = sel.value; sel.dataset.k = key;
@@ -26206,6 +26209,7 @@ async function pvCliAsignar(ref) {
     </div>
     <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
       ${actual?`<button class="btn btn-sm" onclick="pvCliSet('${ref.replace(/'/g,"\\'")}','')">Quitar cliente</button>`:''}
+      <button class="btn btn-sm" onclick="pvCliRepartir('${ref.replace(/'/g,"\\'")}')">👥 Repartir entre clientes</button>
       <button class="btn btn-sm" onclick="document.getElementById('mo-pv-cli').remove()">Cancelar</button>
       <button class="btn btn-bl btn-sm" onclick="pvCliSet('${ref.replace(/'/g,"\\'")}',document.getElementById('pv-cli-inp').value)">Guardar</button>
     </div></div>`;
@@ -26248,6 +26252,102 @@ async function pvCliSet(ref, nombre) {
   await pvCliGuardar();
   pvRenderTabla();
   toast(nombre ? '👤 Línea asignada a '+nombre : 'Cliente quitado de la línea','ok');
+}
+
+// ── Reparto de una línea entre varios clientes ──────────────────────────
+// La línea del SKU sigue teniendo el TOTAL por mes; aquí se reparte entre clientes. Lo que no se reparte
+// queda con el cliente principal de la línea (el de 👤). Se guarda en configuracion: pv_clisplit_<presupuesto>.
+function pvCliPrincipal(ref) { return pvCliDe(ref) || 'Sin cliente (general)'; }
+function pvCliClientes(ref) {
+  const sp = (PV_CLI.split||{})[ref]; const pr = pvCliDe(ref);
+  if(!sp) return pr ? [pr] : [];
+  const out = []; const tot = pvCliReparto({referencia:ref, ...Object.fromEntries(Array.from({length:12},(_,i)=>['u'+String(i+1).padStart(2,'0'), (PV.detalle.find(x=>x.referencia===ref)||{})['u'+String(i+1).padStart(2,'0')]||0]))});
+  tot.forEach(t=>{ if(t.cli!=='Sin cliente (general)') out.push(t.cli); });
+  return [...new Set(out)];
+}
+function pvCliTxt(ref) { const l = pvCliClientes(ref); return l.length>1 ? l.join(' · ') : (l[0]||''); }
+// Devuelve [{cli, u:[12]}] ya repartido (el resto va al cliente principal)
+function pvCliReparto(r) {
+  const ref = r.referencia, sp = (PV_CLI.split||{})[ref], pr = pvCliPrincipal(ref);
+  const tot = Array.from({length:12},(_,i)=>parseFloat(r['u'+String(i+1).padStart(2,'0')])||0);
+  if(!sp) return [{cli:pr, u:tot}];
+  const mapa = {}; const suma = Array(12).fill(0);
+  Object.keys(sp).forEach(c=>{ const a = Array.from({length:12},(_,i)=>parseFloat((sp[c]||[])[i])||0); mapa[c] = a; a.forEach((v,i)=>suma[i]+=v); });
+  const resto = tot.map((v,i)=>Math.max(0, Math.round((v-suma[i])*1000)/1000));
+  mapa[pr] = (mapa[pr]||Array(12).fill(0)).map((v,i)=>v+resto[i]);
+  return Object.keys(mapa).filter(c=>mapa[c].some(v=>v>0)).map(c=>({cli:c, u:mapa[c]}));
+}
+// Filas "virtuales" por cliente (copia de la línea con las unidades de ese cliente) — para exportar
+function pvCliLineas(r) {
+  return pvCliReparto(r).map(x=>{ const o = Object.assign({}, r); x.u.forEach((v,i)=>{ o['u'+String(i+1).padStart(2,'0')] = v; }); return {cli:x.cli, row:o}; });
+}
+async function pvCliRepartir(ref) {
+  document.getElementById('mo-pv-cli')?.remove();
+  const row = PV.detalle.find(x=>x.referencia===ref); if(!row) return;
+  if(!MC.cargado) { try { await mcCargarUltimoSnapshot(); } catch(e){} }
+  let clientes = []; try { clientes = mcAgregarPorCliente(MC.datos).map(c=>c.nombre).filter(Boolean); } catch(e){}
+  PV_CLI_TODOS = [...new Set(clientes)].sort((a,b)=>a.localeCompare(b));
+  await pvCliListaCargar();
+  const lista = String(PV.listaId);
+  const ver = PV_CLI_TODOS.filter(n=>!PV_CLI_LISTA[n] || String(PV_CLI_LISTA[n])===lista);
+  const pr = pvCliPrincipal(ref);
+  const sp = (PV_CLI.split||{})[ref] || {};
+  const filas = Object.keys(sp).length ? Object.keys(sp).map(c=>({c, u:sp[c]})) : [{c:'', u:[]}];
+  const M = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const tot = Array.from({length:12},(_,i)=>parseFloat(row['u'+String(i+1).padStart(2,'0')])||0);
+  const filaHtml = f => `<tr class="pv-rep-f"><td style="padding:3px;"><input class="inp pv-rep-c" list="pv-rep-dl" value="${String(f.c).replace(/"/g,'&quot;')}" placeholder="Cliente..." style="width:150px;font-size:11px;"></td>`
+    + Array.from({length:12},(_,i)=>`<td style="padding:3px;"><input type="number" min="0" class="inp pv-rep-u" value="${parseFloat((f.u||[])[i])||''}" oninput="pvRepRecalc()" style="width:56px;font-size:11px;text-align:right;padding:4px;"></td>`).join('')
+    + `<td><button onclick="this.closest('tr').remove();pvRepRecalc()" style="border:none;background:none;cursor:pointer;">🗑</button></td></tr>`;
+  window._pvRepTot = tot; window._pvRepFila = filaHtml;
+  document.getElementById('mo-pv-rep')?.remove();
+  const mo = document.createElement('div'); mo.id='mo-pv-rep';
+  mo.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:1000px;max-height:90vh;display:flex;flex-direction:column;">
+    <div style="padding:14px 20px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;">
+      <div style="font-size:14px;font-weight:800;">👥 Repartir entre clientes — ${ref}</div>
+      <button onclick="document.getElementById('mo-pv-rep').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button></div>
+    <div style="padding:12px 20px;overflow:auto;">
+      <div style="font-size:11.5px;color:var(--mu);margin-bottom:8px;">Escribe las unidades de cada cliente por mes. Lo que no repartas queda con <b>${pr}</b> (cliente principal). La suma de los clientes no puede pasar del total del mes.</div>
+      <datalist id="pv-rep-dl">${ver.map(n=>`<option value="${n.replace(/"/g,'&quot;')}">`).join('')}</datalist>
+      <table style="border-collapse:collapse;font-size:11px;"><thead><tr><th style="text-align:left;padding:3px;">Cliente</th>${M.map(m=>`<th style="padding:3px;text-align:right;">${m}</th>`).join('')}<th></th></tr>
+        <tr style="background:#f1f5f9;font-weight:700;"><td style="padding:3px;">Total del SKU</td>${tot.map(v=>`<td style="padding:3px;text-align:right;">${v.toLocaleString('es-CO')}</td>`).join('')}<td></td></tr></thead>
+        <tbody id="pv-rep-body">${filas.map(filaHtml).join('')}</tbody>
+        <tfoot><tr id="pv-rep-resto" style="font-weight:700;"></tr></tfoot></table>
+      <button class="btn btn-sm" style="margin-top:8px;" onclick="document.getElementById('pv-rep-body').insertAdjacentHTML('beforeend', window._pvRepFila({c:'',u:[]}))">+ Agregar cliente</button>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-sm" onclick="document.getElementById('mo-pv-rep').remove()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="pvRepGuardar('${ref.replace(/'/g,"\\'")}')">Guardar reparto</button></div></div>`;
+  document.body.appendChild(mo);
+  pvRepRecalc();
+}
+function pvRepLeer() {
+  return [...document.querySelectorAll('#pv-rep-body .pv-rep-f')].map(tr=>({c:tr.querySelector('.pv-rep-c').value.trim(), u:[...tr.querySelectorAll('.pv-rep-u')].map(i=>parseFloat(i.value)||0)}));
+}
+function pvRepRecalc() {
+  const tot = window._pvRepTot||[]; const suma = Array(12).fill(0);
+  pvRepLeer().forEach(f=>f.u.forEach((v,i)=>suma[i]+=v));
+  const el = document.getElementById('pv-rep-resto'); if(!el) return;
+  el.innerHTML = '<td style="padding:3px;">Resto → cliente principal</td>' + tot.map((t,i)=>{ const d = Math.round((t-suma[i])*1000)/1000; return `<td style="padding:3px;text-align:right;color:${d<0?'#dc2626':'#475569'};">${d.toLocaleString('es-CO')}</td>`; }).join('') + '<td></td>';
+  el.dataset.mal = tot.some((t,i)=>suma[i]>t+0.0005) ? '1' : '';
+}
+async function pvRepGuardar(ref) {
+  if(PV_SOLO_LECTURA) { toast('🔒 Estás en modo consulta — no puedes editar este canal','wa'); return; }
+  if(document.getElementById('pv-rep-resto')?.dataset.mal) { toast('⚠ La suma de los clientes pasa del total de algún mes (en rojo)','wa'); return; }
+  const nuevo = {}; const lista = String(PV.listaId); let cambioLista = false;
+  for(const f of pvRepLeer()) {
+    if(!f.c || !f.u.some(v=>v>0)) continue;
+    const l = PV_CLI_LISTA[f.c];
+    if(l && String(l)!==lista) { toast(`🔒 ${f.c} pertenece a otra lista de precios (${pvNombreLista(l)}).`,'wa'); return; }
+    if(!l) { PV_CLI_LISTA[f.c] = lista; cambioLista = true; }
+    const a = nuevo[f.c] || Array(12).fill(0); f.u.forEach((v,i)=>a[i]+=v); nuevo[f.c] = a;
+  }
+  if(cambioLista) { try { await sb.upsert('configuracion', {clave:'pv_cliente_lista', valor:JSON.stringify(PV_CLI_LISTA), tipo:'json'}, 'clave'); } catch(e){ console.warn(e); } }
+  PV_CLI.split = PV_CLI.split || {};
+  if(Object.keys(nuevo).length) PV_CLI.split[ref] = nuevo; else delete PV_CLI.split[ref];
+  document.getElementById('mo-pv-rep')?.remove();
+  await pvCliGuardar(); pvRenderTabla();
+  toast(Object.keys(nuevo).length ? '👥 Reparto guardado: '+Object.keys(nuevo).join(', ') : 'Reparto quitado','ok');
 }
 
 async function pvActualizarPrecios() {
@@ -27187,7 +27287,7 @@ function pvEliminarSKU(ref) {
     sb.delete('presupuesto_detalle', `id=eq.${r.id}`).catch(e=>console.warn(e));
   }
   PV.detalle = PV.detalle.filter(x=>x.referencia!==ref);
-  if(PV_CLI.map[ref]) { delete PV_CLI.map[ref]; pvCliGuardar(); }
+  if(PV_CLI.map[ref] || (PV_CLI.split||{})[ref]) { delete PV_CLI.map[ref]; if(PV_CLI.split) delete PV_CLI.split[ref]; pvCliGuardar(); }
   pvRenderTabla();
 }
 
@@ -27707,7 +27807,7 @@ async function pvExportarPorCliente() {
   const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const anio = PV.anio;
   const porCli = {};
-  PV.detalle.forEach(r=>{ const c = pvCliDe(r.referencia) || 'Sin cliente (general)'; (porCli[c] = porCli[c]||[]).push(r); });
+  PV.detalle.forEach(r=>{ pvCliLineas(r).forEach(x=>{ (porCli[x.cli] = porCli[x.cli]||[]).push(x.row); }); });
   const canales = Object.keys(porCli).sort((a,b)=> (a.startsWith('Sin cliente')-b.startsWith('Sin cliente')) || a.localeCompare(b));   // cada cliente hace de "bloque" de meses
   const todos = {};
   PV.detalle.forEach(r=>{ const k = String(r.referencia); if(!todos[k]) todos[k] = {sku:k, desc:r.descripcion||'', cat:r.categoria||'Sin categoría'}; });
