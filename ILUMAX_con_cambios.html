@@ -33941,34 +33941,34 @@ function rvNormNombre(s) {
 // sube junto con el resto del reporte, así que sin esto puede quedar rezagada mientras las
 // facturas (RV.datos) sí se refrescan a diario, mostrando totales muy distintos entre sí.
 function rvSincronizarVentaConsolidado() {
-  const mapaCanal = {'ESPECIALIZADO':'ESP','CANAL MIXTO':'MIX','PROYECTOS':'PRO','ONLINE':'ONL'};
+  const mapaCanal = {'ESPECIALIZADO':'ESP','CANAL MIXTO':'MIX','PROYECTOS':'PRO','ONLINE':'ONL','CANAL HOMECENTER':'HOM'};
   const vpe = {};
   RV.datos.forEach(r => {
     const nom = rvNormNombre(r['Nombre vendedor']);
     if(!nom) return;
     const val = parseFloat(r['Valor subtotal local'])||0;
     const canalKey = mapaCanal[(r['Desc. tipo de cliente']||'').trim().toUpperCase()];
-    if(!vpe[nom]) vpe[nom] = {ESP:0,MIX:0,PRO:0,ONL:0,total:0};
+    if(!vpe[nom]) vpe[nom] = {ESP:0,MIX:0,PRO:0,ONL:0,HOM:0,total:0};
     vpe[nom].total += val;
     if(canalKey) vpe[nom][canalKey] += val;
   });
   Object.entries(RV.consolidado).forEach(([nom,c]) => {
-    const v = vpe[rvNormNombre(nom)] || {ESP:0,MIX:0,PRO:0,ONL:0,total:0};
-    c.ventaEsp = v.ESP; c.ventaMix = v.MIX; c.ventaPro = v.PRO; c.ventaOnl = v.ONL; c.ventaTotal = v.total;
+    const v = vpe[rvNormNombre(nom)] || {ESP:0,MIX:0,PRO:0,ONL:0,HOM:0,total:0};
+    c.ventaEsp = v.ESP; c.ventaMix = v.MIX; c.ventaPro = v.PRO; c.ventaOnl = v.ONL; c.ventaHom = v.HOM||0; c.ventaTotal = v.total;
   });
   try{ rvAplicarPptoEje(); }catch(e){}
 }
 // Suma real de ventas del rango filtrado, por ejecutivo y por canal (ESP/MIX/PRO/ONL),
 // leyendo directo de las facturas — esto sí tiene fecha por transacción.
 function rvVentasPorEjecutivoYCanalFiltrado() {
-  const mapaCanal = {'ESPECIALIZADO':'ESP','CANAL MIXTO':'MIX','PROYECTOS':'PRO','ONLINE':'ONL','DISTRIBUIDOR':'DIS'};
+  const mapaCanal = {'ESPECIALIZADO':'ESP','CANAL MIXTO':'MIX','PROYECTOS':'PRO','ONLINE':'ONL','CANAL HOMECENTER':'HOM','DISTRIBUIDOR':'DIS'};
   const out = {};
   rvDatosFiltrados().forEach(r => {
     const nom = rvNormNombre(r['Nombre vendedor']);
     if(!nom) return;
     const val = parseFloat(r['Valor subtotal local'])||0;
     const canalKey = mapaCanal[(r['Desc. tipo de cliente']||'').trim().toUpperCase()];
-    if(!out[nom]) out[nom] = {ESP:0,MIX:0,PRO:0,ONL:0,DIS:0,total:0};
+    if(!out[nom]) out[nom] = {ESP:0,MIX:0,PRO:0,ONL:0,HOM:0,DIS:0,total:0};
     out[nom].total += val;
     if(canalKey) out[nom][canalKey] += val;
   });
@@ -34001,12 +34001,12 @@ function rvConsolidadoFiltrado() {
   const vpe    = rvVentasPorEjecutivoYCanalFiltrado();
   const out = {};
   Object.entries(RV.consolidado).forEach(([nom,c]) => {
-    const v = vpe[rvNormNombre(nom)] || {ESP:0,MIX:0,PRO:0,ONL:0,total:0};
+    const v = vpe[rvNormNombre(nom)] || {ESP:0,MIX:0,PRO:0,ONL:0,HOM:0,total:0};
     out[nom] = {
       pptoEsp:(c.pptoEsp||0)*factor, ventaEsp:v.ESP,
       pptoMix:(c.pptoMix||0)*factor, ventaMix:v.MIX,
       pptoPro:(c.pptoPro||0)*factor, ventaPro:v.PRO,
-      pptoOnl:(c.pptoOnl||0)*factor, ventaOnl:v.ONL,
+      pptoOnl:(c.pptoOnl||0)*factor, ventaOnl:v.ONL, pptoHom:(c.pptoHom||0)*factor, ventaHom:v.HOM||0,
       pptoTotal:(c.pptoTotal||0)*factor, ventaTotal:v.total
     };
   });
@@ -34029,12 +34029,12 @@ function rvRosterCompleto() {
   const vpe    = rvVentasPorEjecutivoYCanalFiltrado();
   const out = {};
   Object.entries(RV.consolidado).forEach(([nom,c]) => {
-    const v = vpe[rvNormNombre(nom)] || {ESP:0,MIX:0,PRO:0,ONL:0,total:0};
+    const v = vpe[rvNormNombre(nom)] || {ESP:0,MIX:0,PRO:0,ONL:0,HOM:0,total:0};
     out[nom] = {
       pptoEsp:(c.pptoEsp||0)*factor, ventaEsp:v.ESP,
       pptoMix:(c.pptoMix||0)*factor, ventaMix:v.MIX,
       pptoPro:(c.pptoPro||0)*factor, ventaPro:v.PRO,
-      pptoOnl:(c.pptoOnl||0)*factor, ventaOnl:v.ONL, ventaDis:v.DIS||0,
+      pptoOnl:(c.pptoOnl||0)*factor, ventaOnl:v.ONL, pptoHom:(c.pptoHom||0)*factor, ventaHom:v.HOM||0, ventaDis:v.DIS||0,
       pptoTotal:(c.pptoTotal||0)*factor, ventaTotal:v.total,
       sinPpto:false
     };
@@ -34046,10 +34046,10 @@ function rvRosterCompleto() {
     const norm = rvNormNombre(nomOriginal);
     if(yaEsta.has(norm)) return;
     yaEsta.add(norm);
-    const v = vpe[norm] || {ESP:0,MIX:0,PRO:0,ONL:0,total:0};
+    const v = vpe[norm] || {ESP:0,MIX:0,PRO:0,ONL:0,HOM:0,total:0};
     out[nomOriginal] = {
       pptoEsp:0, ventaEsp:v.ESP, pptoMix:0, ventaMix:v.MIX, pptoPro:0, ventaPro:v.PRO,
-      pptoOnl:0, ventaOnl:v.ONL, ventaDis:v.DIS||0, pptoTotal:0, ventaTotal:v.total, sinPpto:true
+      pptoOnl:0, ventaOnl:v.ONL, pptoHom:0, ventaHom:v.HOM||0, ventaDis:v.DIS||0, pptoTotal:0, ventaTotal:v.total, sinPpto:true
     };
   });
   return out;
@@ -34060,7 +34060,7 @@ function rvRosterCompleto() {
 // ver como un incumplimiento grave a alguien que en realidad solo no tiene meta todavía (el
 // caso de CUBILLOS HENAO: más ventas que nadie y, con la lógica vieja, "0% de cumplimiento").
 // Celda/chip por canal de un ejecutivo: ppto, lleva y % (vendedores ven sus presupuestos por canal)
-const RV_CANALES_EJE=[['Esp','ESP','#1e40af'],['Mix','MIX','#15803d'],['Pro','PRY','#b45309'],['Onl','ONL','#7c3aed']];
+const RV_CANALES_EJE=[['Esp','ESP','#1e40af'],['Mix','MIX','#15803d'],['Pro','PRY','#b45309'],['Onl','ONL','#7c3aed'],['Hom','HC','#be185d']];
 function rvChipsCanalEje(c){
   return RV_CANALES_EJE.map(([k,lb,col])=>{
     const p=c['ppto'+k]||0, v=c['venta'+k]||0;
@@ -34404,6 +34404,7 @@ function rvRenderCumplimiento(el) {
     'CANAL MIXTO':   ejeF.reduce((a,[,c])=>a+c.pptoMix,0),
     'PROYECTOS':     ejeF.reduce((a,[,c])=>a+c.pptoPro,0),
     'ONLINE':        ejeF.reduce((a,[,c])=>a+c.pptoOnl,0),
+    'CANAL HOMECENTER': ejeF.reduce((a,[,c])=>a+(c.pptoHom||0),0),
   };
   // Si hay presupuesto POR CANAL para el mes del reporte (RV_PPTO_CANAL_DEF / config), ese
   // reemplaza al derivado de CONSOLIDADO — prorrateado igual por el filtro de rango.
@@ -34717,7 +34718,7 @@ function rvRenderResumen(el) {
 // ═══ Asignación de presupuesto por ejecutivo × canal ═══════════════════════
 // Se guarda en configuracion.clave='rv_ppto_ejecutivo' = {meses:{'YYYY-MM':{NOMBRE:{ESP,MIX,PRO,ONL}}}, log:[...]}
 // y sobrescribe los ppto de RV.consolidado (que alimentan tabla, semáforo, correo y descargable).
-const RV_ASIG_CANALES=[['ESP','Especializado','ESPECIALIZADO','#2f6fd0'],['MIX','Mixto','CANAL MIXTO','#6b8e23'],['PRO','Proyectos','PROYECTOS','#e36c0a'],['ONL','Online','ONLINE','#8e7cc3']];
+const RV_ASIG_CANALES=[['ESP','Especializado','ESPECIALIZADO','#2f6fd0'],['MIX','Mixto','CANAL MIXTO','#6b8e23'],['PRO','Proyectos','PROYECTOS','#e36c0a'],['ONL','Online','ONLINE','#8e7cc3'],['HOM','Home Center','CANAL HOMECENTER','#be185d']];
 function rvMesKey(){ if(!RV.fechas||!RV.fechas.length) return null; const d=rvFecha(RV.fechas[RV.fechas.length-1]); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
 function rvPuedeAsignar(){
   if(typeof CU==='undefined'||!CU) return false;
@@ -34729,11 +34730,11 @@ function rvPuedeAsignar(){
 function rvAplicarPptoEje(){
   const k=rvMesKey(); const m=RV.pptoEje&&RV.pptoEje.meses&&RV.pptoEje.meses[k];
   if(!m||!RV.consolidado) return;
-  const mapK={ESP:'Esp',MIX:'Mix',PRO:'Pro',ONL:'Onl'};
+  const mapK={ESP:'Esp',MIX:'Mix',PRO:'Pro',ONL:'Onl',HOM:'Hom'};
   const idx={}; Object.keys(RV.consolidado).forEach(n=>idx[rvNormNombre(n)]=n);
   Object.entries(m).forEach(([nom,v])=>{
     let key=idx[rvNormNombre(nom)];
-    if(!key){ key=nom; RV.consolidado[key]={pptoEsp:0,ventaEsp:0,pptoMix:0,ventaMix:0,pptoPro:0,ventaPro:0,pptoOnl:0,ventaOnl:0,pptoTotal:0,ventaTotal:0}; }
+    if(!key){ key=nom; RV.consolidado[key]={pptoEsp:0,ventaEsp:0,pptoMix:0,ventaMix:0,pptoPro:0,ventaPro:0,pptoOnl:0,ventaOnl:0,pptoHom:0,ventaHom:0,pptoTotal:0,ventaTotal:0}; }
     const c=RV.consolidado[key]; let t=0;
     Object.entries(mapK).forEach(([a,b])=>{ c['ppto'+b]=+v[a]||0; t+=+v[a]||0; });
     c.pptoTotal=t;
@@ -34746,10 +34747,10 @@ function rvAsigAbrir(){
   const vals={};
   Object.entries(rvRosterCompleto()).forEach(([nom,c])=>{
     const b=base&&base[nom];
-    vals[nom]=b?Object.assign({ESP:0,MIX:0,PRO:0,ONL:0},b):{ESP:c.pptoEsp||0,MIX:c.pptoMix||0,PRO:c.pptoPro||0,ONL:c.pptoOnl||0};
+    vals[nom]=b?Object.assign({ESP:0,MIX:0,PRO:0,ONL:0,HOM:0},b):{ESP:c.pptoEsp||0,MIX:c.pptoMix||0,PRO:c.pptoPro||0,ONL:c.pptoOnl||0,HOM:c.pptoHom||0};
   });
   // ejecutivos ya asignados que hoy no aparecen en el roster
-  if(base) Object.keys(base).forEach(n=>{ if(!vals[n]) vals[n]=Object.assign({ESP:0,MIX:0,PRO:0,ONL:0},base[n]); });
+  if(base) Object.keys(base).forEach(n=>{ if(!vals[n]) vals[n]=Object.assign({ESP:0,MIX:0,PRO:0,ONL:0,HOM:0},base[n]); });
   RV.asig={k,modo:'$',vals,bolsa:rvAsigBolsa()};
   rvAsigPintar();
 }
@@ -34757,7 +34758,7 @@ function rvAsigBolsa(){
   const pc=rvPptoCanalMes()||{}; const b={};
   RV_ASIG_CANALES.forEach(([k,,n])=>{ b[k]=pc[n]||0; });
   if(!Object.values(b).some(x=>x>0)){ // sin ppto por canal: suma del consolidado
-    Object.values(RV.consolidado).forEach(c=>{ b.ESP+=c.pptoEsp||0; b.MIX+=c.pptoMix||0; b.PRO+=c.pptoPro||0; b.ONL+=c.pptoOnl||0; });
+    Object.values(RV.consolidado).forEach(c=>{ b.ESP+=c.pptoEsp||0; b.MIX+=c.pptoMix||0; b.PRO+=c.pptoPro||0; b.ONL+=c.pptoOnl||0; b.HOM+=c.pptoHom||0; });
   }
   return b;
 }
@@ -34807,7 +34808,7 @@ function rvAsigAtajo(tipo){
   const A=RV.asig, noms=Object.keys(A.vals); if(!noms.length) return;
   if(tipo==='iguales'){ RV_ASIG_CANALES.forEach(([k])=>{ const b=A.bolsa[k]||0; noms.forEach(n=>A.vals[n][k]=Math.round(b/noms.length)); }); }
   else if(tipo==='venta'){
-    const r=rvRosterCompleto(); const mk={ESP:'ventaEsp',MIX:'ventaMix',PRO:'ventaPro',ONL:'ventaOnl'};
+    const r=rvRosterCompleto(); const mk={ESP:'ventaEsp',MIX:'ventaMix',PRO:'ventaPro',ONL:'ventaOnl',HOM:'ventaHom'};
     RV_ASIG_CANALES.forEach(([k])=>{ const tv=noms.reduce((a,n)=>a+((r[n]&&r[n][mk[k]])||0),0); const b=A.bolsa[k]||0;
       noms.forEach(n=>{ A.vals[n][k]=tv>0?Math.round(b*((r[n]&&r[n][mk[k]])||0)/tv):Math.round(b/noms.length); }); });
   } else if(tipo==='anterior'){
@@ -34830,12 +34831,12 @@ async function rvAsigGuardar(){
 }
 function rvRenderEjecutivos(el) {
   const rows = Object.entries(rvRosterCompleto()).sort((a,b)=>b[1].ventaTotal-a[1].ventaTotal);
-  const GR=[['Esp','Especializado','#2f6fd0','#dbe6f7'],['Mix','Mixto','#6b8e23','#e3ecd0'],['Pro','Proyectos','#e36c0a','#fde3cf'],['Onl','Online','#8e7cc3','#e6e0f0']];
+  const GR=[['Esp','Especializado','#2f6fd0','#dbe6f7'],['Mix','Mixto','#6b8e23','#e3ecd0'],['Pro','Proyectos','#e36c0a','#fde3cf'],['Onl','Online','#8e7cc3','#e6e0f0'],['Hom','Home Center','#be185d','#fbd5e5']];
   const $=n=>n?'$ '+Math.round(n).toLocaleString('es-CO'):'$ -';
   const pc=(v,p)=>p>0?Math.round(v/p*100)+'%':'0%';
   const th=(t,bg,ex)=>`<th style="background:${bg};color:#fff;padding:5px 8px;text-align:center;font-size:10px;white-space:nowrap;${ex||''}">${t}</th>`;
-  const tot={};['Esp','Mix','Pro','Onl'].forEach(k=>tot[k]={p:0,v:0});let totDis=0,totP=0,totV=0;
-  rows.forEach(([,c])=>{['Esp','Mix','Pro','Onl'].forEach(k=>{tot[k].p+=c['ppto'+k]||0;tot[k].v+=c['venta'+k]||0;});totDis+=c.ventaDis||0;totP+=c.pptoTotal;totV+=c.ventaTotal;});
+  const tot={};['Esp','Mix','Pro','Onl','Hom'].forEach(k=>tot[k]={p:0,v:0});let totDis=0,totP=0,totV=0;
+  rows.forEach(([,c])=>{['Esp','Mix','Pro','Onl','Hom'].forEach(k=>{tot[k].p+=c['ppto'+k]||0;tot[k].v+=c['venta'+k]||0;});totDis+=c.ventaDis||0;totP+=c.pptoTotal;totV+=c.ventaTotal;});
   const celdas=(p,v,bg)=>`<td style="background:${bg};padding:4px 8px;text-align:right;white-space:nowrap;">${p?$(p):'$ -'}</td><td style="background:${bg};padding:4px 8px;text-align:right;white-space:nowrap;font-weight:700;">${v?$(v):'$ -'}</td><td style="background:${bg};padding:4px 8px;text-align:right;font-weight:700;color:${p>0&&v/p>=1?'#16a34a':'inherit'};">${pc(v,p)}</td>`;
   el.innerHTML = rvNotaFiltroProrrateado() + (rvPuedeAsignar()?`<div style="margin-bottom:8px;text-align:right;"><button class="btn btn-bl btn-sm" onclick="rvAsigAbrir()">⚙️ Asignar presupuesto a ejecutivos</button></div>`:'') + `
     <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
@@ -35520,12 +35521,12 @@ function rvGenerarHTMLCompleto(modoEmail=false) {
 // ── Versión estática (compatible con clientes de correo, sin JS) ───────
 function rvMatrizEjecutivosEmail(){
   const rows=Object.entries(rvRosterCompleto()).sort((a,b)=>b[1].ventaTotal-a[1].ventaTotal);
-  const G=[['Esp','Especializado','#2f6fd0','#dbe6f7'],['Mix','Mixto','#6b8e23','#e3ecd0'],['Pro','Proyectos','#e36c0a','#fde3cf'],['Onl','Online','#8e7cc3','#e6e0f0']];
+  const G=[['Esp','Especializado','#2f6fd0','#dbe6f7'],['Mix','Mixto','#6b8e23','#e3ecd0'],['Pro','Proyectos','#e36c0a','#fde3cf'],['Onl','Online','#8e7cc3','#e6e0f0'],['Hom','Home Center','#be185d','#fbd5e5']];
   const $=n=>n?'$ '+Math.round(n).toLocaleString('es-CO'):'$ -', pc=(v,p)=>p>0?Math.round(v/p*100)+'%':'0%';
   const th=(t,bg,cs)=>`<th ${cs?'colspan="'+cs+'"':''} style="background:${bg};color:#fff;padding:5px 6px;font-size:10px;text-align:center;white-space:nowrap;">${t}</th>`;
   const td=(t,bg,b)=>`<td style="background:${bg};padding:4px 6px;font-size:10px;text-align:right;white-space:nowrap;${b?'font-weight:700;':''}">${t}</td>`;
   const cel=(p,v,bg)=>td($(p),bg)+td($(v),bg,1)+td(pc(v,p),bg,1);
-  const T={Esp:[0,0],Mix:[0,0],Pro:[0,0],Onl:[0,0]};let tD=0,tP=0,tV=0;
+  const T={Esp:[0,0],Mix:[0,0],Pro:[0,0],Onl:[0,0],Hom:[0,0]};let tD=0,tP=0,tV=0;
   rows.forEach(([,c])=>{Object.keys(T).forEach(k=>{T[k][0]+=c['ppto'+k]||0;T[k][1]+=c['venta'+k]||0;});tD+=c.ventaDis||0;tP+=c.pptoTotal;tV+=c.ventaTotal;});
   return `<table style="border-collapse:collapse;width:100%;">
   <tr>${th('','#000')}${G.map(g=>th(g[1],g[2],3)).join('')}${th('Distribuidor','#2a8a9a')}${th('TOTAL','#000',3)}</tr>
@@ -35910,10 +35911,10 @@ function rvGenerarHTMLInteractivo() {
       <table>
         <thead id="eje-thead">
           <tr><th style="background:#000;"></th>
-            <th colspan="3" style="background:#2f6fd0;">Especializado</th><th colspan="3" style="background:#6b8e23;">Mixto</th><th colspan="3" style="background:#e36c0a;">Proyectos</th><th colspan="3" style="background:#8e7cc3;">Online</th><th style="background:#2a8a9a;">Distribuidor</th><th colspan="3" style="background:#000;">TOTAL</th></tr>
+            <th colspan="3" style="background:#2f6fd0;">Especializado</th><th colspan="3" style="background:#6b8e23;">Mixto</th><th colspan="3" style="background:#e36c0a;">Proyectos</th><th colspan="3" style="background:#8e7cc3;">Online</th><th colspan="3" style="background:#be185d;">Home Center</th><th style="background:#2a8a9a;">Distribuidor</th><th colspan="3" style="background:#000;">TOTAL</th></tr>
           <tr>
           <th class="sortable" style="text-align:left;background:#000;" data-key="nombre" onclick="ejeOrdenar('nombre')">Nombre vendedor <span class="rv-sort-ind"></span></th>
-          ${[['Esp','#2f6fd0'],['Mix','#6b8e23'],['Pro','#e36c0a'],['Onl','#8e7cc3']].map(g=>`<th style="background:${g[1]};">PPTO</th><th class="sortable" style="background:${g[1]};" data-key="venta${g[0]}" onclick="ejeOrdenar('venta${g[0]}')">Venta Acum <span class="rv-sort-ind"></span></th><th style="background:${g[1]};">%Cump</th>`).join('')}
+          ${[['Esp','#2f6fd0'],['Mix','#6b8e23'],['Pro','#e36c0a'],['Onl','#8e7cc3'],['Hom','#be185d']].map(g=>`<th style="background:${g[1]};">PPTO</th><th class="sortable" style="background:${g[1]};" data-key="venta${g[0]}" onclick="ejeOrdenar('venta${g[0]}')">Venta Acum <span class="rv-sort-ind"></span></th><th style="background:${g[1]};">%Cump</th>`).join('')}
           <th class="sortable" style="background:#2a8a9a;" data-key="ventaDis" onclick="ejeOrdenar('ventaDis')">Venta Acum <span class="rv-sort-ind"></span></th>
           <th class="sortable" style="background:#000;" data-key="pptoTotal" onclick="ejeOrdenar('pptoTotal')">PPTO <span class="rv-sort-ind"></span></th>
           <th class="sortable" style="background:#000;color:#f5c518;" data-key="ventaTotal" onclick="ejeOrdenar('ventaTotal')">Venta Acum <span class="rv-sort-ind">▼</span></th>
@@ -36174,13 +36175,13 @@ function datosFiltrados(){
 function filtroActivo(){ return FILTRO.desde!=null || FILTRO.hasta!=null; }
 function normNombre(s){ return String(s||'').trim().toUpperCase().replace(/\s+/g,' '); }
 function ventasPorEjecutivoYCanalFiltrado(){
-  var mapaCanal = {'ESPECIALIZADO':'ESP','CANAL MIXTO':'MIX','PROYECTOS':'PRO','ONLINE':'ONL','DISTRIBUIDOR':'DIS'};
+  var mapaCanal = {'ESPECIALIZADO':'ESP','CANAL MIXTO':'MIX','PROYECTOS':'PRO','ONLINE':'ONL','CANAL HOMECENTER':'HOM','DISTRIBUIDOR':'DIS'};
   var out = {};
   datosFiltrados().forEach(function(r){
     var nom = normNombre(r.vendedor);
     if(!nom) return;
     var canalKey = mapaCanal[(r.canal||'').toUpperCase()];
-    if(!out[nom]) out[nom] = {ESP:0,MIX:0,PRO:0,ONL:0,DIS:0,total:0};
+    if(!out[nom]) out[nom] = {ESP:0,MIX:0,PRO:0,ONL:0,HOM:0,DIS:0,total:0};
     out[nom].total += r.valor;
     if(canalKey) out[nom][canalKey] += r.valor;
   });
@@ -36201,12 +36202,12 @@ function consolidadoFiltrado(){
   var out = {};
   Object.keys(DATA.consolidado).forEach(function(nom){
     var c = DATA.consolidado[nom];
-    var v = vpe[normNombre(nom)] || {ESP:0,MIX:0,PRO:0,ONL:0,total:0};
+    var v = vpe[normNombre(nom)] || {ESP:0,MIX:0,PRO:0,ONL:0,HOM:0,total:0};
     out[nom] = {
       pptoEsp:(c.pptoEsp||0)*factor, ventaEsp:v.ESP,
       pptoMix:(c.pptoMix||0)*factor, ventaMix:v.MIX,
       pptoPro:(c.pptoPro||0)*factor, ventaPro:v.PRO,
-      pptoOnl:(c.pptoOnl||0)*factor, ventaOnl:v.ONL, ventaDis:v.DIS||0,
+      pptoOnl:(c.pptoOnl||0)*factor, ventaOnl:v.ONL, pptoHom:(c.pptoHom||0)*factor, ventaHom:v.HOM||0, ventaDis:v.DIS||0,
       pptoTotal:(c.pptoTotal||0)*factor, ventaTotal:v.total
     };
   });
@@ -36221,12 +36222,12 @@ function rosterCompleto(){
   var out = {};
   Object.keys(DATA.consolidado).forEach(function(nom){
     var c = DATA.consolidado[nom];
-    var v = vpe[normNombre(nom)] || {ESP:0,MIX:0,PRO:0,ONL:0,total:0};
+    var v = vpe[normNombre(nom)] || {ESP:0,MIX:0,PRO:0,ONL:0,HOM:0,total:0};
     out[nom] = {
       pptoEsp:(c.pptoEsp||0)*factor, ventaEsp:v.ESP,
       pptoMix:(c.pptoMix||0)*factor, ventaMix:v.MIX,
       pptoPro:(c.pptoPro||0)*factor, ventaPro:v.PRO,
-      pptoOnl:(c.pptoOnl||0)*factor, ventaOnl:v.ONL, ventaDis:v.DIS||0,
+      pptoOnl:(c.pptoOnl||0)*factor, ventaOnl:v.ONL, pptoHom:(c.pptoHom||0)*factor, ventaHom:v.HOM||0, ventaDis:v.DIS||0,
       pptoTotal:(c.pptoTotal||0)*factor, ventaTotal:v.total, sinPpto:false
     };
   });
@@ -36238,10 +36239,10 @@ function rosterCompleto(){
     var norm = normNombre(nomOriginal);
     if(yaEsta[norm]) return;
     yaEsta[norm] = true;
-    var v = vpe[norm] || {ESP:0,MIX:0,PRO:0,ONL:0,total:0};
+    var v = vpe[norm] || {ESP:0,MIX:0,PRO:0,ONL:0,HOM:0,total:0};
     out[nomOriginal] = {
       pptoEsp:0, ventaEsp:v.ESP, pptoMix:0, ventaMix:v.MIX, pptoPro:0, ventaPro:v.PRO,
-      pptoOnl:0, ventaOnl:v.ONL, ventaDis:v.DIS||0, pptoTotal:0, ventaTotal:v.total, sinPpto:true
+      pptoOnl:0, ventaOnl:v.ONL, pptoHom:0, ventaHom:v.HOM||0, ventaDis:v.DIS||0, pptoTotal:0, ventaTotal:v.total, sinPpto:true
     };
   });
   return out;
@@ -36573,7 +36574,8 @@ function renderCumplimiento(){
     'ESPECIALIZADO': ejeF.reduce(function(a,x){return a+x[1].pptoEsp;},0),
     'CANAL MIXTO':   ejeF.reduce(function(a,x){return a+x[1].pptoMix;},0),
     'PROYECTOS':     ejeF.reduce(function(a,x){return a+x[1].pptoPro;},0),
-    'ONLINE':        ejeF.reduce(function(a,x){return a+x[1].pptoOnl;},0)
+    'ONLINE':        ejeF.reduce(function(a,x){return a+x[1].pptoOnl;},0),
+    'CANAL HOMECENTER': ejeF.reduce(function(a,x){return a+(x[1].pptoHom||0);},0)
   };
   if(DATA.pptoCanalMes){
     var fct = factorProrrateo();
@@ -36660,7 +36662,7 @@ function ejeRender(){
   var cons = rosterCompleto();
   var ejecutivos = Object.keys(cons).map(function(nom){
     var c = cons[nom];
-    return { nombre:nom, pptoTotal:c.pptoTotal, ventaTotal:c.ventaTotal, ventaEsp:c.ventaEsp||0, ventaMix:c.ventaMix||0, ventaPro:c.ventaPro||0, ventaOnl:c.ventaOnl||0, ventaDis:c.ventaDis||0, pptoEsp:c.pptoEsp||0, pptoMix:c.pptoMix||0, pptoPro:c.pptoPro||0, pptoOnl:c.pptoOnl||0, sinPpto:!!c.sinPpto };
+    return { nombre:nom, pptoTotal:c.pptoTotal, ventaTotal:c.ventaTotal, ventaEsp:c.ventaEsp||0, ventaMix:c.ventaMix||0, ventaPro:c.ventaPro||0, ventaOnl:c.ventaOnl||0, ventaHom:c.ventaHom||0, ventaDis:c.ventaDis||0, pptoEsp:c.pptoEsp||0, pptoMix:c.pptoMix||0, pptoPro:c.pptoPro||0, pptoOnl:c.pptoOnl||0, pptoHom:c.pptoHom||0, sinPpto:!!c.sinPpto };
   });
 
   var q = ((document.getElementById('eje-busq')||{}).value||'').toLowerCase();
@@ -36678,21 +36680,21 @@ function ejeRender(){
     var bar = Math.round(e.ventaTotal/maxV*100);
     html += '<tr style="background:#fff;">'
       + '<td style="padding:4px 8px;font-weight:600;font-size:11px;white-space:nowrap;border-bottom:1px solid #fff;">'+esc(e.nombre)+'</td>'
-      + CELDAS(e.pptoEsp,e.ventaEsp,'#dbe6f7')+CELDAS(e.pptoMix,e.ventaMix,'#e3ecd0')+CELDAS(e.pptoPro,e.ventaPro,'#fde3cf')+CELDAS(e.pptoOnl,e.ventaOnl,'#e6e0f0')
+      + CELDAS(e.pptoEsp,e.ventaEsp,'#dbe6f7')+CELDAS(e.pptoMix,e.ventaMix,'#e3ecd0')+CELDAS(e.pptoPro,e.ventaPro,'#fde3cf')+CELDAS(e.pptoOnl,e.ventaOnl,'#e6e0f0')+CELDAS(e.pptoHom,e.ventaHom,'#fbd5e5')
       + '<td style="background:#d9edf2;padding:4px 8px;text-align:right;font-size:11px;white-space:nowrap;">'+$m(e.ventaDis)+'</td>'
       + CELDAS(mi.sinMeta?0:e.pptoTotal,e.ventaTotal,'#fff');
   });
   // Fila TOTAL de lo que se está mostrando (respeta búsqueda y rango), igual que la app en vivo.
   if(rows.length){
-    var T={Esp:[0,0],Mix:[0,0],Pro:[0,0],Onl:[0,0]}, tD=0, tP=0, tV=0;
-    rows.forEach(function(e){ ['Esp','Mix','Pro','Onl'].forEach(function(k){ T[k][0]+=e['ppto'+k]||0; T[k][1]+=e['venta'+k]||0; }); tD+=e.ventaDis||0; tP+=e.pptoTotal; tV+=e.ventaTotal; });
+    var T={Esp:[0,0],Mix:[0,0],Pro:[0,0],Onl:[0,0],Hom:[0,0]}, tD=0, tP=0, tV=0;
+    rows.forEach(function(e){ ['Esp','Mix','Pro','Onl','Hom'].forEach(function(k){ T[k][0]+=e['ppto'+k]||0; T[k][1]+=e['venta'+k]||0; }); tD+=e.ventaDis||0; tP+=e.pptoTotal; tV+=e.ventaTotal; });
     html += '<tr style="background:#000;color:#fff;font-weight:800;"><td style="padding:6px 8px;">Total general</td>'
-      + TOTC(T.Esp,'#2f6fd0')+TOTC(T.Mix,'#6b8e23')+TOTC(T.Pro,'#e36c0a')+TOTC(T.Onl,'#8e7cc3')
+      + TOTC(T.Esp,'#2f6fd0')+TOTC(T.Mix,'#6b8e23')+TOTC(T.Pro,'#e36c0a')+TOTC(T.Onl,'#8e7cc3')+TOTC(T.Hom,'#be185d')
       + '<td style="background:#2a8a9a;padding:6px 8px;text-align:right;white-space:nowrap;">'+$m(tD)+'</td>'
       + TOTC([tP,tV],'#000')+'</tr>';
   }
   var tbody = document.getElementById('eje-tbody');
-  if(tbody) tbody.innerHTML = html || '<tr><td colspan="17" style="padding:20px;text-align:center;color:#94a3b8;">Sin resultados</td></tr>';
+  if(tbody) tbody.innerHTML = html || '<tr><td colspan="20" style="padding:20px;text-align:center;color:#94a3b8;">Sin resultados</td></tr>';
   var cnt = document.getElementById('eje-cnt');
   if(cnt) cnt.textContent = rows.length + ' de ' + ejecutivos.length + ' ejecutivos';
 }
