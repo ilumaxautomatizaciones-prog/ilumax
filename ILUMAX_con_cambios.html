@@ -14311,11 +14311,43 @@ async function ppReglaOcGuardar(num){
 function ppCorte(){ const c = (PP.ajustes && PP.ajustes._corte) || '2026-09-19'; return new Date(c+'T23:59:59'); }
 function ppFinSemana(){ const l = ppLunes(new Date()); return new Date(l.getTime()+6*86400000+12*3600e3); }
 async function ppSetCorte(v){ if(!v) return; PP.ajustes._corte = v; await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Fecha de corte de pagos actualizada','ok'); }
-async function ppRevision(num, v){
+async function ppRevision(num, v, fechaNo, notaNo){
   const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {}; A.saldo = A.saldo || {};
-  if(!v){ delete A.saldo.rev; }
-  else { const nota = v==='no' ? (prompt('¿Por qué no se puede pagar todavía? (opcional)') || '') : ''; A.saldo.rev = {estado:v, nota: nota.trim()||null, semana: ppIso(ppLunes(new Date())), por:(CU&&CU.nombre)||'', en:new Date().toISOString()}; }
+  if(v==='pagado'){ ppMarcarSaldo(num); ppPintar(); return; }   // ya se pagó → pregunta fecha y valor pagado
+  const hoyIso = ppIso(new Date());
+  const quitarFecha = () => { if(A.saldo.revFecha){ if(A.saldo.fechaPrev) A.saldo.fecha = A.saldo.fechaPrev; else delete A.saldo.fecha; delete A.saldo.fechaPrev; delete A.saldo.revFecha; } };
+  if(!v){ delete A.saldo.rev; quitarFecha(); }
+  else if(v==='ok'){
+    if(!A.saldo.revFecha){ A.saldo.fechaPrev = A.saldo.fecha || null; A.saldo.revFecha = true; }
+    A.saldo.fecha = hoyIso;   // "se paga esta semana" → pasa a Programación por semana (esta semana)
+    A.saldo.rev = {estado:'ok', nota:null, semana: ppIso(ppLunes(new Date())), por:(CU&&CU.nombre)||'', en:new Date().toISOString()};
+  }
+  else {
+    if(!fechaNo){ ppRevNoModal(num); return; }
+    if(!A.saldo.revFecha){ A.saldo.fechaPrev = A.saldo.fecha || null; A.saldo.revFecha = true; }
+    A.saldo.fecha = fechaNo;  // fecha elegida: de ahí se corre el pago
+    A.saldo.rev = {estado:'no', nota: (notaNo||'').trim()||null, semana: ppIso(ppLunes(new Date())), por:(CU&&CU.nombre)||'', en:new Date().toISOString()};
+  }
   await ppGuardarAjustes(); ppPintar();
+}
+function ppRevNoModal(num){
+  let ov = document.getElementById('pp-rev-no'); if(ov) ov.remove();
+  ov = document.createElement('div'); ov.id = 'pp-rev-no';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9500;display:flex;align-items:flex-start;justify-content:center;padding:10vh 16px;overflow:auto;';
+  const sug = ppIso(new Date(Date.now()+7*86400000));
+  ov.innerHTML = `<div style="background:var(--w);border-radius:14px;max-width:420px;width:100%;padding:16px 18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><b style="font-size:14px;">⏳ Aún no se puede pagar · ${reabastEsc(num)}</b><button class="btn btn-g btn-sm" onclick="document.getElementById('pp-rev-no').remove()">✕</button></div>
+    <label class="arte-mu" style="font-size:11.5px;">¿Para qué fecha se pagará?</label>
+    <input type="date" id="pp-rev-no-f" class="inp" value="${sug}" style="margin:4px 0 8px;">
+    <label class="arte-mu" style="font-size:11.5px;">Motivo (opcional)</label>
+    <input type="text" id="pp-rev-no-n" class="inp" placeholder="Ej: el proveedor pidió pagar después del zarpe" style="margin:4px 0 10px;">
+    <div style="display:flex;gap:8px;justify-content:flex-end;"><button class="btn btn-g" onclick="document.getElementById('pp-rev-no').remove()">Cancelar</button><button class="btn btn-p" onclick="ppRevNoGuardar('${reabastEsc(num)}')">Guardar</button></div></div>`;
+  document.body.appendChild(ov);
+}
+function ppRevNoGuardar(num){
+  const f = document.getElementById('pp-rev-no-f').value, n = document.getElementById('pp-rev-no-n').value;
+  if(!f){ if(typeof toast==='function') toast('Elige la fecha de pago','wa'); return; }
+  document.getElementById('pp-rev-no').remove(); ppRevision(num, 'no', f, n);
 }
 function ppPuedeEditar(){ return reabastEsAdmin() || (typeof tesoPuedePagar==='function' && tesoPuedePagar()) || (typeof tesoPuedeAutorizar==='function' && tesoPuedeAutorizar()); }
 
@@ -14519,7 +14551,7 @@ function ppPintarInterno(el){
     const r = p.rev && p.rev.semana===ppIso(ppLunes(new Date())) ? p.rev : null;   // la revisión vale para la semana en que se hizo
     const chip = r ? (r.estado==='ok' ? '<span class="bdg ba" style="font-size:9.5px;">✅ Se paga esta semana</span>' : `<span class="bdg br" style="font-size:9.5px;" title="${reabastEsc(r.nota||'')}">⏸ Aún no${r.nota?' · '+reabastEsc(r.nota.slice(0,30)):''}</span>`)
       : listo ? '<span class="bdg bpu" style="font-size:9.5px;">🟢 Listo para pagar</span>' : '';
-    const sel = puede ? `<select class="inp" style="margin:0;padding:2px 4px;font-size:10.5px;width:auto;" onchange="ppRevision('${reabastEsc(p.num)}', this.value)"><option value="">Revisar…</option><option value="ok" ${r&&r.estado==='ok'?'selected':''}>✅ Se paga esta semana</option><option value="no" ${r&&r.estado==='no'?'selected':''}>⏸ Aún no se puede</option></select>` : '';
+    const sel = puede ? `<select class="inp" style="margin:0;padding:2px 4px;font-size:10.5px;width:auto;" onchange="ppRevision('${reabastEsc(p.num)}', this.value)"><option value="">Revisar…</option><option value="ok" ${r&&r.estado==='ok'?'selected':''}>✅ Se paga esta semana</option><option value="no" ${r&&r.estado==='no'?'selected':''}>⏸ Aún no se puede</option><option value="pagado">💵 Ya se pagó</option></select>` : '';
     return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start;">${chip}${sel}</div>`;
   };
   const filaEstado = p => p.estado==='pagado' ? '<span class="bdg ba" style="font-size:9.5px;">Pagado</span>'
