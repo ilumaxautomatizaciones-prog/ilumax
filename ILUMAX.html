@@ -14389,7 +14389,7 @@ function ppConstruir(){
       const pendTeso = pagadoTeso ? tesoPendienteAnticipo(reg) : 0;
       if(pagadoPanel || pagadoTeso || (etAnt && etAnt.estado==='completada')){
         const fp = (reg && (reg.fecha_pago||reg.pagado_en)) || fecPanel || (etAnt && etAnt.fecha_fin);
-        pagos.push({...base, tipo:'anticipo', usd: pagadoTeso ? tesoPagadoUsd(reg) : antUsd, fecha: fp ? new Date(fp) : null, estado:'pagado', origen:'Pagado'});
+        pagos.push({...base, tipo:'anticipo', usd: pagadoTeso ? tesoPagadoUsd(reg) : antUsd, esp: antUsd, fecha: fp ? new Date(fp) : null, estado:'pagado', origen:'Pagado'});
         if(pendTeso > 0.004) pagos.push({...base, tipo:'anticipo', usd:pendTeso, fecha:new Date(), estado:'pendiente', origen:'Saldo pendiente del anticipo (Tesorería)'});
       } else {
         let fecha = null, origen = '';
@@ -14426,7 +14426,7 @@ function ppConstruir(){
       let pendUsd = salUsd;
       if(A.saldo && A.saldo.pagado){
         const p = A.saldo.pagado;
-        pagos.push({...base, tipo:'saldo', usd: Number(p.usd)||salUsd, fecha: p.fecha ? new Date(p.fecha+'T12:00:00') : null, estado:'pagado', origen:'Pagado (registrado en el ERP)', nota:p.nota, emb});
+        pagos.push({...base, tipo:'saldo', usd: Number(p.usd)||salUsd, esp: salUsd, fecha: p.fecha ? new Date(p.fecha+'T12:00:00') : null, estado:'pagado', origen:'Pagado (registrado en el ERP)', nota:p.nota, emb});
         pendUsd = Math.round((salUsd - (Number(p.usd)||salUsd))*100)/100;
         if(pendUsd>0.004) pagos.push({...base, tipo:'saldo', usd:pendUsd, fecha:new Date(), estado:'pendiente', origen:'Resto del saldo', emb, rev});
       } else {
@@ -14560,12 +14560,16 @@ function ppPintarInterno(el){
   const porOC = {}; todos.forEach(p=>{ (porOC[p.num] = porOC[p.num] || []).push(p); });
   const fx = d => d ? new Date(d).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : 'sin fecha';
   // Resumen de la OC: total de la factura, anticipo (valor + fecha de pago) y saldo (valor + fecha), pagado o por pagar.
+  // Diferencia entre lo pagado y lo que correspondía (solo pagos ya registrados): + a favor (se pagó de más), − debe (se pagó de menos)
+  const difOC = l => { const d = Math.round(l.filter(x=>x.estado==='pagado' && x.esp!=null).reduce((a,x)=>a+(x.usd-x.esp),0)*100)/100; return Math.abs(d)>=0.5 ? d : 0; };
+  const difHtml = d => d>0 ? `<span style="color:var(--gr);font-weight:800;">➕ A favor ${usd(d)}</span>` : `<span style="color:var(--rd);font-weight:800;">➖ Debe ${usd(-d)}</span>`;
   const resOC = num => {
     const l = porOC[num] || [], t = l[0] ? l[0].tot : 0;
     const A = l.filter(x=>x.tipo==='anticipo'), S = l.filter(x=>x.tipo==='saldo');
     const one = x => `${usd(x.usd)} ${x.estado==='pagado' ? '<span style="color:var(--gr);font-weight:700;">✅ pagado '+fx(x.fecha)+'</span>' : '<span style="color:#b45309;">⏳ '+fx(x.fecha)+'</span>'}`;
     const aTxt = A.length ? A.map(one).join('<br>') : (l[0] && l[0].modo && l[0].modo.tot ? '<span class="arte-mu">No aplica (pago total)</span>' : '<span class="arte-mu">—</span>');
-    return `<div style="font-size:10.5px;line-height:1.5;white-space:nowrap;"><b>Total factura ${usd(t)}</b><br><b>Anticipo:</b> ${aTxt}<br><b>Saldo:</b> ${S.length ? S.map(one).join('<br>') : '<span class="arte-mu">—</span>'}</div>`;
+    const dif = difOC(l);
+    return `<div style="font-size:10.5px;line-height:1.5;white-space:nowrap;"><b>Total factura ${usd(t)}</b><br><b>Anticipo:</b> ${aTxt}<br><b>Saldo:</b> ${S.length ? S.map(one).join('<br>') : '<span class="arte-mu">—</span>'}${dif ? '<br>'+difHtml(dif) : ''}</div>`;
   };
   const puede = ppPuedeEditar();
   const filaPago = p => `<tr style="${p.estado==='pagado'?'opacity:.6;':''}">
@@ -14607,7 +14611,7 @@ function ppPintarInterno(el){
       const pg = a => a.filter(x=>x.estado==='pagado'), pd = a => a.filter(x=>x.estado!=='pagado');
       const lastF = a => a.map(x=>x.fecha).filter(Boolean).sort((x,y)=>y-x)[0] || null;
       const pagado = sum(pg(l)), porPagar = sum(pd(l));
-      return {num:n, prov:l[0].prov, ocId:l[0].ocId, tot:l[0].tot||0, antUsd:sum(A), antPag:sum(pg(A)), antF:lastF(pg(A)) || lastF(A), antOk:pg(A).length>0 && !pd(A).length,
+      return {dif:difOC(l), num:n, prov:l[0].prov, ocId:l[0].ocId, tot:l[0].tot||0, antUsd:sum(A), antPag:sum(pg(A)), antF:lastF(pg(A)) || lastF(A), antOk:pg(A).length>0 && !pd(A).length,
         salUsd:sum(S), salPag:sum(pg(S)), salF:lastF(pg(S)) || lastF(S), salOk:pg(S).length>0 && !pd(S).length, pagado, porPagar,
         est: porPagar<=0.01 && pagado>0 ? 'completa' : pagado>0 ? 'parcial' : 'sin'}; })
     .filter(r=>(!f.resEst || r.est===f.resEst) && enRango(r.antF,aD,aH) && enRango(r.salF,sD,sH));
@@ -14629,11 +14633,11 @@ function ppPintarInterno(el){
       <div><label>Fecha del saldo</label><div class="oct-rng"><input class="inp" type="date" value="${RS.salD||''}" onchange="ppResSet('salD',this.value)"><input class="inp" type="date" value="${RS.salH||''}" onchange="ppResSet('salH',this.value)"></div></div>
       <div style="display:flex;align-items:flex-end;"><button class="btn btn-g btn-sm" onclick="ppResLimpiar()">✖ Limpiar filtros</button></div>
     </div>
-    <div class="oct-wrap" style="max-height:62vh;"><table class="oct-t"><thead><tr>${rth('num','OC')}${rth('prov','Proveedor')}${rth('tot','Total factura US$',1)}${rth('antUsd','Anticipo US$',1)}${rth('antF','Fecha anticipo')}${rth('salUsd','Saldo US$',1)}${rth('salF','Fecha saldo')}${rth('pagado','Pagado US$',1)}${rth('porPagar','Por pagar US$',1)}${rth('est','Estado')}</tr></thead><tbody>
+    <div class="oct-wrap" style="max-height:62vh;"><table class="oct-t"><thead><tr>${rth('num','OC')}${rth('prov','Proveedor')}${rth('tot','Total factura US$',1)}${rth('antUsd','Anticipo US$',1)}${rth('antF','Fecha anticipo')}${rth('salUsd','Saldo US$',1)}${rth('salF','Fecha saldo')}${rth('pagado','Pagado US$',1)}${rth('porPagar','Por pagar US$',1)}${rth('dif','A favor / Debe US$',1)}${rth('est','Estado')}</tr></thead><tbody>
       ${ocsRes.map(r=>`<tr onclick="reabastAbrirDetalleOC('${r.ocId}')"><td class="oct-f">${reabastEsc(r.num)}</td><td>${reabastEsc(r.prov)}</td><td class="num"><b>${usd(r.tot)}</b></td>
         <td class="num">${r.antUsd?usd(r.antUsd):'—'}</td><td>${r.antF?(r.antOk?'✅ ':'⏳ ')+fx(r.antF):'—'}</td>
         <td class="num">${r.salUsd?usd(r.salUsd):'—'}</td><td>${r.salF?(r.salOk?'✅ ':'⏳ ')+fx(r.salF):'—'}</td>
-        <td class="num" style="color:var(--gr);font-weight:700;">${usd(r.pagado)}</td><td class="num">${r.porPagar>0.01?usd(r.porPagar):'—'}</td><td>${estRes[r.est]}</td></tr>`).join('') || '<tr><td colspan="10" style="padding:14px;text-align:center;color:var(--mu);">Ninguna OC con esos filtros</td></tr>'}
+        <td class="num" style="color:var(--gr);font-weight:700;">${usd(r.pagado)}</td><td class="num">${r.porPagar>0.01?usd(r.porPagar):'—'}</td><td class="num">${r.dif?difHtml(r.dif):'—'}</td><td>${estRes[r.est]}</td></tr>`).join('') || '<tr><td colspan="11" style="padding:14px;text-align:center;color:var(--mu);">Ninguna OC con esos filtros</td></tr>'}
     </tbody></table></div>
     <div class="arte-mu" style="font-size:10.5px;margin-top:6px;">✅ = pagado en esa fecha · ⏳ = programado. El total de la factura es el valor de la compra (Base compras / OC); anticipo y saldo salen de la programación de pagos.</div>
   </div>`;
