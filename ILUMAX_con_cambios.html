@@ -12788,7 +12788,7 @@ function tesoCalcularAnticipo(o){
   const prov = (REABAST.proveedores||[]).find(p=>(p.nombre||'').toLowerCase()===(o.proveedor||'').toLowerCase()) || {};
   const pct = o.deposito_pct!=null ? Number(o.deposito_pct) : (prov.porcentaje_anticipo!=null ? Number(prov.porcentaje_anticipo) : 0);
   const items = REABAST.ocItems[o.id]||[];
-  const fob = items.reduce((a,it)=>a+(Number(it.precio_fob_usd)||0)*(Number(it.cantidad)||0),0);
+  const fob = items.reduce((a,it)=>a+(Number(it.precio_fob_usd)||0)*(Number(it.cantidad)||0),0) + (Number(o.costo_extra_usd)||0); // incluye costo extra del proveedor
   const trm = Number(o.trm) || (typeof OC_TRM_APROX!=='undefined' ? OC_TRM_APROX : 0);
   const usd = Math.round(fob*pct*100)/100;
   return {pct, fob, usd, trm, cop: Math.round(fob*pct*trm), saldo: Math.round((fob-usd)*100)/100, prov};
@@ -17550,13 +17550,13 @@ function reabastHtmlDocOC(ocId, variante){
   // El anticipo es el MISMO en las dos órdenes: siempre se calcula sobre el valor de la orden al
   // proveedor (FOB sin el 1.015). En la intercompañía solo cambia el saldo.
   const totalFob = filas.reduce((a,f)=>a+f.cant*f.fob,0);
-  const deposito = totalFob * depositoPct;
   const extraUsd = Number(o.costo_extra_usd)||0, extraCop = extraUsd*(Number(o.trm)||0), extraMotivo = String(o.costo_extra_motivo||'').trim();
+  const deposito = (totalFob + extraUsd) * depositoPct;
   const balance = totalAmount + extraUsd - deposito;
   // Mismo cálculo pero en pesos colombianos (costo landeado: FOB × factor × TRM), para que se vea
   // cuánto hay que pagar de anticipo y de saldo en ambas monedas.
   const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*(Number(it.cantidad)||0),0);
-  const depositoCop = totalCop * depositoPct;
+  const depositoCop = (totalCop + extraCop) * depositoPct;
   const balanceCop = totalCop + extraCop - depositoCop;
   const fmtCop = n => n==null ? '' : Math.round(n).toLocaleString('es-CO');
   const celda = 'padding:4px 6px;border:1px solid #999;font-size:10.5px;vertical-align:middle;';
@@ -17740,11 +17740,11 @@ async function reabastExcelOCBlob(ocId, variante){
   // El anticipo es el MISMO en las dos órdenes: siempre se calcula sobre el valor de la orden al
   // proveedor (FOB sin el 1.015). En la intercompañía solo cambia el saldo.
   const totalFob = filas.reduce((a,f)=>a+f.cant*f.fob,0);
-  const deposito = totalFob * depositoPct;
   const extraUsd = Number(o.costo_extra_usd)||0, extraCop = extraUsd*(Number(o.trm)||0), extraMotivo = String(o.costo_extra_motivo||'').trim();
+  const deposito = (totalFob + extraUsd) * depositoPct;
   const balance = totalAmount + extraUsd - deposito;
   const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*(Number(it.cantidad)||0),0);
-  const depositoCop = totalCop * depositoPct;
+  const depositoCop = (totalCop + extraCop) * depositoPct;
   const balanceCop = totalCop + extraCop - depositoCop;
 
   // ── Colores (mismos que la plantilla impresa: rótulos naranjas, encabezado de tabla gris) ──
@@ -19358,7 +19358,7 @@ function ocpTotalesOC(){
   const qty = OCP.items.reduce((a,it)=>a+(Number(it.cantidad)||0),0);
   const pct = OCP.oc.deposito_pct!=null ? Number(OCP.oc.deposito_pct) : (OCP.prov.porcentaje_anticipo!=null?Number(OCP.prov.porcentaje_anticipo):0);
   const extra = Number(OCP.oc.costo_extra_usd)||0;
-  return {tot: tot+extra, goods: tot, extra, qty, pct, dep: tot*pct};
+  return {tot: tot+extra, goods: tot, extra, qty, pct, dep: (tot+extra)*pct};
 }
 
 // ── persistencia ──
