@@ -12797,6 +12797,8 @@ async function tesoCargar(forzar){
   if(TESO.lista && !forzar) return TESO.lista;
   const rows = await sb.get('configuracion','clave=like.teso_anticipo_*&select=clave,valor');
   TESO.lista = (rows||[]).map(r=>{ try{ return JSON.parse(r.valor); }catch(e){ return null; } }).filter(Boolean);
+  // Anticipos aún sin pagar: se recalculan con el valor actual de la OC (incluye costo extra)
+  for(const r of TESO.lista){ if(r.estado==='pagado'||r.estado==='anulado') continue; const o = (REABAST.ordenesCompra||[]).find(x=>x.id===r.ocId); if(!o) continue; const a = tesoCalcularAnticipo(o); if(a.usd && (Math.abs(a.fob-(r.fob_total||0))>0.004 || Math.abs(a.usd-(r.monto_usd||0))>0.004)){ Object.assign(r,{pct:a.pct, fob_total:a.fob, monto_usd:a.usd, monto_cop:a.cop, saldo_usd:a.saldo, trm:a.trm}); tesoGuardar(r).catch(()=>{}); } }
   return TESO.lista;
 }
 async function tesoGuardar(reg){
@@ -14400,7 +14402,8 @@ function ppConstruir(){
     const sumCol = k => filas.reduce((a,f)=>a+(ppNum(f[k])>0 ? ppNum(f[k]) : 0),0);
     const maxFecha = k => { let b = null; filas.forEach(f=>{ const d = pciFecha(f[k]); if(d && (!b || d>b)) b = d; }); return b; };
     const calc = tesoCalcularAnticipo(o);
-    const totOC = sumCol('Compras $') || calc.fob || 0;
+    const extraOC = Number(o.costo_extra_usd)||0, pctX = calc.pct>1 ? calc.pct/100 : calc.pct; // costo extra del proveedor: mueve total, anticipo y saldo
+    const totOC = (sumCol('Compras $') ? sumCol('Compras $')+extraOC : calc.fob) || 0;
     const etAnt = (REABAST.ocEtapas[o.id]||[]).find(e=>e.etapa_id==='anticipo_pagado');
     // Modalidad: pago TOTAL (100% anticipado, o 100% contra ETD sin anticipo) o PARCIAL (anticipo + saldo); y si es un parcial de embarque (rama)
     const sinAntM = segSinAnticipo(o, etAnt), pctM = calc.pct>1 ? calc.pct/100 : calc.pct;
@@ -14410,7 +14413,7 @@ function ppConstruir(){
     const base = {ocId:o.id, num:o.numero_oc, prov:o.proveedor||'—', ocEstado:o.estado_general, modo, lote, tot:totOC};
     // ── Anticipo ──
     const sinAnt = segSinAnticipo(o, etAnt);
-    let antUsd = sumCol('VALOR ANTICIPO USD') || calc.usd;
+    let antUsd = sumCol('VALOR ANTICIPO USD') ? sumCol('VALOR ANTICIPO USD')+extraOC*pctX : calc.usd;
     if(A.anticipo && A.anticipo.usd!=null) antUsd = Number(A.anticipo.usd);
     if(!sinAnt && antUsd>0.004){
       const reg = typeof tesoRegDe==='function' ? tesoRegDe(o.id) : null;
@@ -14442,10 +14445,10 @@ function ppConstruir(){
     const vsLinea = f => ppNum(f['VALOR SALDO USD'])>0 ? ppNum(f['VALOR SALDO USD']) : 0;
     const lPag = filas.filter(f=>{ const d = pciFecha(f['FECHA PAGO SALDO']); return d && d <= corte; });
     const lPend = filas.filter(f=>!lPag.includes(f));
-    let salUsd = sumCol('VALOR SALDO USD');
+    let salUsd = sumCol('VALOR SALDO USD') ? sumCol('VALOR SALDO USD')+extraOC*(1-pctX) : 0;
     if(!salUsd) salUsd = Math.max(0, calc.fob - (sinAnt ? 0 : antUsd));
     // Si anticipo + saldo pasan del valor de la compra (celdas repetidas en el Excel), el saldo = compra − anticipo.
-    const compras = sumCol('Compras $') || calc.fob;
+    const compras = sumCol('Compras $') ? sumCol('Compras $')+extraOC : calc.fob;
     if(compras>0 && salUsd + (sinAnt ? 0 : antUsd) > compras*1.05) salUsd = Math.max(0, compras - (sinAnt ? 0 : antUsd));
     // OC original con embarques parciales (ramas): el Excel de Base compras trae el saldo de TODA la OC y las ramas ya tienen su propio saldo → aquí solo queda lo que sigue en la OC original
     if(ramasDe && !(A.saldo && A.saldo.usd!=null)) salUsd = Math.max(0, Math.round((calc.fob - (sinAnt ? 0 : calc.usd))*100)/100);
