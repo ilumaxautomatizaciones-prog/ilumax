@@ -35500,58 +35500,58 @@ async function rvGuardarAppsScript(asunto) {
 // RV.datos solo trae el mes cargado; aquí se consulta cada mes y se deja en caché 1 hora (RV._anual).
 async function rvDatosAnioParaExcel() {
   const hoy = new Date(), anio = hoy.getFullYear();
-  if(RV._anual && RV._anual.anio===anio && (Date.now()-RV._anual.ts) < 3600000) return RV._anual;
+  if(RV._anual && RV._anual.anio===anio && (Date.now()-RV._anual.ts) < 600000) return RV._anual;
   const btn = document.getElementById('rv-btn-xlsx');
   const estado = (txt) => { if(btn){ btn.disabled = true; btn.innerHTML = '⏳ ' + txt; } };
-  const datos = [], fallos = [];
+  const porMes = {}; // mes(0-11) -> lista de candidatos [{fuente, filas}]
+  const cand = (mes, fuente, filas) => { if(filas.length) (porMes[mes] = porMes[mes] || []).push({fuente, filas}); };
+  const serial = (iso) => { const p=String(iso||'').slice(0,10).split('-').map(Number); return p.length===3&&p[0] ? Math.round((Date.UTC(p[0],p[1]-1,p[2])-Date.UTC(1899,11,30))/86400000) : 0; };
   try {
-    for(let m=0; m<=hoy.getMonth(); m++){
-      const mm = String(m+1).padStart(2,'0'), sig = new Date(anio, m+1, 1);
-      const desde = anio+'-'+mm+'-01', hasta = sig.getFullYear()+'-'+String(sig.getMonth()+1).padStart(2,'0')+'-01';
-      const parametros = "f350_id_cia = 1 AND f350_fecha >= ''"+desde+"'' AND f350_fecha < ''"+hasta+"''";
-      let items = null, err = null;
-      for(const tam of [500, 100]){
-        try { items = await _siesaFetchPaginas((msg)=>estado('Mes '+(m+1)+'/'+(hoy.getMonth()+1)+' · '+String(msg).replace(/^📡\s*/,'')), 'API_v2_Ventas_Facturas_DesdePedido', parametros, tam); err = null; break; }
-        catch(e){ err = e; items = null; }
+    // 1) Facturas sincronizadas automáticamente desde SIESA (tabla en Supabase)
+    estado('Leyendo facturas de Supabase…');
+    try {
+      const tmp = {};
+      for(let off=0; ; off+=1000){
+        const rows = await sb.get('ventas_facturas_siesa','select=fecha,nro_documento,cliente,vendedor,canal,subtotal,estado&estado=neq.9&fecha=gte.'+anio+'-01-01&order=fecha.asc,rowid.asc&limit=1000&offset='+off) || [];
+        rows.forEach(r=>{ const m=parseInt(String(r.fecha).slice(5,7),10)-1; (tmp[m]=tmp[m]||[]).push({Fecha:serial(r.fecha),'Nro documento':r.nro_documento||'','Razon social cliente factura':r.cliente||'','Nombre vendedor':r.vendedor||'','Desc. tipo de cliente':r.canal||'','Valor subtotal local':parseFloat(r.subtotal)||0}); });
+        if(rows.length<1000) break;
       }
-      if(!items){ fallos.push(mm+' ('+(err&&err.message||'sin respuesta')+')'); continue; }
-      const porFactura = {};
-      items.forEach(it=>{
-        if(Number(it.f350_ind_estado) === 9) return;
-        const rowid = it.f350_rowid; if(rowid == null || porFactura[rowid]) return;
-        porFactura[rowid] = {
-          Fecha: (()=>{ const p=String(it.f350_fecha||'').slice(0,10).split('-').map(Number); return p.length===3&&p[0] ? Math.round((Date.UTC(p[0],p[1]-1,p[2])-Date.UTC(1899,11,30))/86400000) : 0; })(),
-          'Nro documento': String(it.f350_prefijo || it.f350_id_tipo_docto || '').trim() + String(it.f350_consec_docto || ''),
-          'Razon social cliente factura': String(it.f200_razon_social_fact || '').trim(),
-          'Nombre vendedor': String(it.f200_razon_social_vendedor || '').trim(),
-          'Desc. tipo de cliente': String(it.f461_id_tipo_cli_fact || '').trim(),
-          'Valor subtotal local': parseFloat(it.f461_vlr_neto || 0) || 0,
-        };
-      });
-      Object.values(porFactura).forEach(r=>datos.push(r));
-    }
+      Object.keys(tmp).forEach(m=>cand(+m,'SIESA',tmp[m]));
+    } catch(e){ console.warn('Excel detallado — tabla SIESA:', e); }
+    // 1b) Facturas de todos los meses que sube la tarea de las 7:30 desde INV - DUV (Biable)
+    try {
+      const tmp = {};
+      for(let off=0; ; off+=1000){
+        const rows = await sb.get('ventas_facturas_excel','select=fecha,nro_documento,cliente,vendedor,canal,ciudad,subtotal&fecha=gte.'+anio+'-01-01&order=fecha.asc,nro_documento.asc&limit=1000&offset='+off) || [];
+        rows.forEach(r=>{ const m=parseInt(String(r.fecha).slice(5,7),10)-1; (tmp[m]=tmp[m]||[]).push({Fecha:serial(r.fecha),'Nro documento':r.nro_documento||'','Razon social cliente factura':r.cliente||'','Nombre vendedor':r.vendedor||'','Desc. tipo de cliente':r.canal||'','Ciudad':r.ciudad||'','Valor subtotal local':parseFloat(r.subtotal)||0}); });
+        if(rows.length<1000) break;
+      }
+      Object.keys(tmp).forEach(m=>cand(+m,'Excel INV-DUV',tmp[m]));
+    } catch(e){ console.warn('Excel detallado — facturas INV-DUV:', e); }
+    // 2) Reportes diarios guardados (último de cada mes)
+    estado('Leyendo reportes guardados…');
+    try {
+      const snaps = await sb.get('ventas_diarias_snapshots','select=fecha,payload&fecha=gte.'+anio+'-01-01&order=fecha.desc') || [];
+      const vistos = new Set();
+      snaps.forEach(s=>{ const m=parseInt(String(s.fecha).slice(5,7),10)-1; if(vistos.has(m)) return; vistos.add(m);
+        cand(m,'Reporte guardado',((s.payload&&s.payload.datos)||[]).filter(r=>r.Fecha && rvFecha(r.Fecha).getMonth()===m && rvFecha(r.Fecha).getFullYear()===anio)); });
+    } catch(e){ console.warn('Excel detallado — snapshots:', e); }
+    // 3) Lo cargado en pantalla
+    const pant = {};
+    (RV.datos||[]).forEach(r=>{ if(!r.Fecha) return; const d=rvFecha(r.Fecha); if(d.getFullYear()!==anio) return; (pant[d.getMonth()]=pant[d.getMonth()]||[]).push(r); });
+    Object.keys(pant).forEach(m=>cand(+m,'Pantalla',pant[m]));
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = '📊 Excel detallado'; }
   }
-  if(!datos.length) return {anio, datos:[], fallos, ts:Date.now(), vacio:true};
-  // Meses que SIESA no devolvió: se completan con el último snapshot guardado de ese mes en Supabase
-  if(fallos.length){
-    try {
-      const snaps = await sb.get('ventas_diarias_snapshots','select=fecha,payload&fecha=gte.'+anio+'-01-01&order=fecha.desc') || [];
-      const hechos = new Set(datos.map(r=>rvFecha(r.Fecha).getMonth())), vistos = new Set();
-      snaps.forEach(s=>{
-        const mes = parseInt(String(s.fecha).slice(5,7),10)-1;
-        if(hechos.has(mes) || vistos.has(mes)) return;
-        vistos.add(mes);
-        ((s.payload&&s.payload.datos)||[]).forEach(r=>{ if(r.Fecha && rvFecha(r.Fecha).getMonth()===mes) datos.push(r); });
-      });
-    } catch(e){ console.warn('Excel detallado — snapshots:', e); }
-  }
-  if(fallos.length){
-    const meses = new Set(datos.map(r=>rvFecha(r.Fecha).getMonth()));
-    (RV.datos||[]).forEach(r=>{ if(r.Fecha && rvFecha(r.Fecha).getFullYear()===anio && !meses.has(rvFecha(r.Fecha).getMonth())) datos.push(r); });
-  }
-  RV._anual = {anio, datos, fallos, ts:Date.now()};
+  // Por mes se usa la fuente más completa: la de fecha más reciente y, a igual fecha, la de más facturas
+  const datos = [], origen = {};
+  Object.keys(porMes).forEach(m=>{
+    const mx = c => Math.max(...c.filas.map(r=>r.Fecha||0));
+    const mejor = porMes[m].slice().sort((a,b)=> mx(b)-mx(a) || b.filas.length-a.filas.length)[0];
+    origen[+m] = mejor.fuente; mejor.filas.forEach(r=>datos.push(r));
+  });
+  const faltan = []; for(let m=0;m<=hoy.getMonth();m++) if(!origen.hasOwnProperty(m)) faltan.push(String(m+1).padStart(2,'0'));
+  RV._anual = {anio, datos, fallos:faltan, origen, ts:Date.now(), vacio:!datos.length};
   return RV._anual;
 }
 // ── Excel detallado de ventas (Reporte diario): tabla de facturas + tablas dinámicas con fórmulas SUMIFS/COUNTIFS ──
@@ -35559,12 +35559,12 @@ async function rvExportarExcelDetallado() {
   if(!RV.cargado || !(RV.datos||[]).length){ toast('Primero carga los datos de ventas','wa'); return; }
   try { await reabastCargarExcelJS(); } catch(e){}
   if(typeof ExcelJS === 'undefined'){ toast('No pude cargar el generador de Excel — revisa tu conexión','er'); return; }
-  toast('📡 Consultando SIESA: ventas de enero a hoy (puede tardar unos minutos)...','inf');
+  toast('📡 Reuniendo las ventas de enero a hoy...','inf');
   let fuente = null;
   try { fuente = await rvDatosAnioParaExcel(); } catch(e){ console.warn('Excel detallado — SIESA:', e); }
   const origenDatos = (fuente && fuente.datos && fuente.datos.length) ? fuente.datos : RV.datos;
-  if(!(fuente && fuente.datos && fuente.datos.length)) toast('⚠️ No pude traer el año desde SIESA — el Excel solo tendrá lo cargado en pantalla','wa');
-  else if(fuente.fallos && fuente.fallos.length) toast('⚠️ SIESA no respondió para el mes '+fuente.fallos.join(', ')+' — se completó con lo cargado','wa');
+  if(!(fuente && fuente.datos && fuente.datos.length)) toast('⚠️ No encontré ventas del año — el Excel solo tendrá lo cargado en pantalla','wa');
+  else if(fuente.fallos && fuente.fallos.length) toast('⚠️ No hay datos de los meses '+fuente.fallos.join(', ')+' (ni en SIESA ni en reportes guardados)','wa');
   toast('⏳ Generando Excel detallado de ventas...','inf');
   const MES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const MESL = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
