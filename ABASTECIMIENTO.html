@@ -33463,6 +33463,7 @@ function renderReporteVentas() {
           <button class="btn btn-or btn-sm" id="rv-btn-siesa-sync" onclick="rvActualizarDesdeSiesa()">🔄 Actualizar desde SIESA</button>
           <button class="btn btn-gr btn-sm" id="rv-btn-enviar" style="display:none;" onclick="rvEnviarCorreo()">📧 Enviar</button>
           <button class="btn btn-bl btn-sm" id="rv-btn-descargar" style="display:none;" onclick="rvDescargarReporte()">⬇️ Descargar</button>
+          <select id="rv-sel-mes" class="btn btn-g btn-sm" style="display:none;cursor:pointer;" onchange="rvVerMes(this.value)" title="Ver las ventas de otro mes (enero a hoy)"></select>
           <button class="btn btn-gr btn-sm" id="rv-btn-xlsx" style="display:none;" onclick="rvExportarExcelDetallado()" title="Excel con todas las facturas y tablas dinámicas con fórmulas: canal, vendedor, cliente, ciudad y mes a mes">📊 Excel detallado</button>
           <button class="btn btn-g btn-sm" id="rv-btn-config" onclick="rvConfigCorreo()">⚙️ Config correo</button>
         </div>
@@ -33849,6 +33850,50 @@ async function rvActualizarDesdeSiesa() {
   }
 }
 
+
+// ── Ver otro mes (usa las facturas que sube la tarea de INV - DUV a ventas_facturas_excel) ──
+const RV_MESES_L = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+function rvRenderSelectorMes() {
+  const sel = document.getElementById('rv-sel-mes'); if(!sel) return;
+  const hoy = new Date(), act = RV._mesVista || '';
+  let h = '<option value="">📅 Mes actual</option>';
+  for(let m=0; m<hoy.getMonth(); m++){ const v = hoy.getFullYear()+'-'+String(m+1).padStart(2,'0'); h += '<option value="'+v+'"'+(v===act?' selected':'')+'>'+RV_MESES_L[m]+' '+hoy.getFullYear()+'</option>'; }
+  sel.innerHTML = h; sel.style.display = '';
+}
+async function rvVerMes(val) {
+  const sel = document.getElementById('rv-sel-mes');
+  try {
+    if(!RV._actual) RV._actual = { datos:RV.datos, td:RV.td, consolidado:RV.consolidado, recaudo:RV.recaudo, semana:RV.semana, fechas:RV.fechas, origenArchivo:RV.origenArchivo };
+    if(!val) {
+      const a = RV._actual;
+      Object.assign(RV, { datos:a.datos, td:a.td, consolidado:a.consolidado, recaudo:a.recaudo, semana:a.semana, fechas:a.fechas, origenArchivo:a.origenArchivo });
+      RV._mesVista = ''; RV._actual = null;
+    } else {
+      if(sel) sel.disabled = true;
+      toast('📅 Cargando ' + RV_MESES_L[parseInt(val.slice(5),10)-1] + '...','inf');
+      const [a, m] = val.split('-').map(Number), sig = new Date(a, m, 1);
+      const hasta = sig.getFullYear()+'-'+String(sig.getMonth()+1).padStart(2,'0')+'-01';
+      const serial = (iso) => { const p=String(iso||'').slice(0,10).split('-').map(Number); return Math.round((Date.UTC(p[0],p[1]-1,p[2])-Date.UTC(1899,11,30))/86400000); };
+      let datos = [];
+      for(let off=0; ; off+=1000){
+        const rows = await sb.get('ventas_facturas_excel','select=fecha,nro_documento,cliente,vendedor,canal,ciudad,subtotal&fecha=gte.'+val+'-01&fecha=lt.'+hasta+'&order=fecha.asc,nro_documento.asc&limit=1000&offset='+off) || [];
+        rows.forEach(r=>datos.push({Fecha:serial(r.fecha),'Nro documento':r.nro_documento||'','Razon social cliente factura':r.cliente||'','Nombre vendedor':r.vendedor||'','Desc. tipo de cliente':r.canal||'','Ciudad':r.ciudad||'','Valor subtotal local':parseFloat(r.subtotal)||0}));
+        if(rows.length<1000) break;
+      }
+      if(!datos.length){ toast('No hay facturas guardadas de ese mes todavía','wa'); if(sel){ sel.value = RV._mesVista||''; } return; }
+      RV.datos = datos;
+      RV.fechas = [...new Set(datos.map(r=>r.Fecha))].sort((x,y)=>x-y);
+      RV.td = _rvCalcularTD(datos);
+      RV._mesVista = val;
+      RV.origenArchivo = '📅 ' + RV_MESES_L[m-1] + ' ' + a + ' (histórico · solo ventas; el presupuesto mostrado es del mes actual)';
+      rvSincronizarVentaConsolidado();
+    }
+    RV.filtroPreset = 'todo'; RV.filtroDesde = null; RV.filtroHasta = null;
+    rvActivarUI();
+  } catch(e) {
+    console.error('rvVerMes', e); toast('❌ No pude cargar ese mes: '+e.message,'er');
+  } finally { const s = document.getElementById('rv-sel-mes'); if(s) s.disabled = false; }
+}
 // ── Persistencia en Supabase (snapshot por fecha de corte) ─────────────
 function rvUltimaFechaISO() {
   if(!RV.fechas.length) return null;
@@ -34254,6 +34299,7 @@ function rvActivarUI() {
   if(btnDes) btnDes.style.display = '';
   const btnXl = document.getElementById('rv-btn-xlsx');
   if(btnXl) btnXl.style.display = '';
+  rvRenderSelectorMes();
 
   const dropzone = document.getElementById('rv-dropzone');
   if(dropzone) dropzone.style.display = 'none';
