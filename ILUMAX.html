@@ -11223,8 +11223,12 @@ function segPlanFechas(o, celdas){
   const mas = (d,n,hab) => hab ? ocSumarHabiles(d, n) : new Date(new Date(d).getTime()+n*86400000);
   const sigHabil = d => { const x = new Date(d); do{ x.setDate(x.getDate()+1); }while(!ocEsHabil(x)); return x; };
   const A = segEtdEta(o);
+  let prodCur = false, prodSeen = false, inspD = null;   // Embarque e Inspección arrancan juntos al terminar Producción (la inspección no retrasa el embarque)
   for(const col of SEG_COLS){
-    const d = celdas[col.id]; if(!d || d.st==='na' || d.st==='sinant' || d.st==='sininsp') continue;
+    if(prodSeen && prodCur===false) prodCur = cur ? new Date(cur) : null;
+    if(col.id==='produccion') prodSeen = true;
+    const d = celdas[col.id]; if(col.id==='inspeccion'){ inspD = d; continue; }
+    if(!d || d.st==='na' || d.st==='sinant' || d.st==='sininsp') continue;
     const hab = !!(d.es && d.es.length===1 && (OC_ETAPAS_POR_ID[d.es[0].etapa_id]||{}).habiles);
     if(d.st==='ok' || d.st==='tarde'){ if(d.fin){ cur = new Date(d.fin); atras = false; } continue; }
     // ETD ingresado → la salida (fin de Embarque) es esa fecha; ETA ingresado → fin de Tránsito es esa fecha
@@ -11235,12 +11239,15 @@ function segPlanFechas(o, celdas){
       if(col.id==='produccion'){ try{ const v = ceFinProduccion(o); if(v && v.fecha) fin = new Date(v.fecha); }catch(e){} }
       if(fin){ if(fin < hoy){ fin = new Date(hoy); atras = true; } else atras = false; cur = fin; } continue; }
     if(d.st==='pend'){
+      const desdeProd = col.id==='embarque' && prodCur;   // el embarque cuenta desde el día hábil siguiente a terminar Producción
+      if(desdeProd) cur = new Date(prodCur);
       if(!cur) continue;   // sin etapa previa con fecha no hay desde dónde proyectar
       if(cur < hoy){ cur = new Date(hoy); atras = true; }   // la etapa anterior ya debió terminar y no se ha actualizado: no se proyecta en el pasado
-      const base = atras ? sigHabil(cur) : new Date(cur.getTime()+86400000);   // cada etapa arranca el día siguiente (día hábil siguiente si hay retraso)
+      const base = (atras || desdeProd) ? sigHabil(cur) : new Date(cur.getTime()+86400000);   // cada etapa arranca el día siguiente (día hábil siguiente si hay retraso)
       atras = false;
       cur = mas(base, Number(d.obj)||0, hab); plan[col.id] = cur; }
   }
+  if(inspD && inspD.st==='pend' && prodCur){ let b = new Date(prodCur); if(b<hoy) b = new Date(hoy); plan.inspeccion = mas(sigHabil(b), Number(inspD.obj)||0, true); }
   return plan;
 }
 function segCelda(o, col){
@@ -12298,7 +12305,7 @@ function segHtmlCelda(o, c, d, prev){
   const main = c.usd && segAnticipo(o)>0 ? segUsd(segAnticipo(o)) : null;
   if(d.st==='pend'){
     if(prev){ const dd = Math.ceil((prev - Date.now())/86400000), vencida = dd<0;
-      return `<span class="seg-c seg-pend" style="border-style:dashed;border-color:${vencida?'#fca5a5':'#93c5fd'};background:${vencida?'#fef2f2':'#eff6ff'};color:${vencida?'#b91c1c':'#1d4ed8'};" title="${tip('aún no le toca · debería cumplirse el '+prev.toLocaleDateString('es-CO')+(vencida?' (ya pasó esa fecha)':' (en '+dd+' d)'))}"><span class="m">${main?`<span style="font-weight:500;">${main}</span>`:''}<span class="l1" style="font-weight:600;opacity:.85;">≈ ${segDM(prev)}</span><span class="l2" style="opacity:.7;">${vencida?'debió ser':'prevista'}</span></span></span>`; }
+      return `<span class="seg-c seg-pend" style="border-style:dashed;border-color:${vencida?'#fca5a5':'#93c5fd'};background:${vencida?'#fef2f2':'#eff6ff'};color:${vencida?'#b91c1c':'#1d4ed8'};" title="${tip((c.id==='embarque'?'POSIBLE ETD (proyección, aún sin ETD informado por el agente) · ':'')+'aún no le toca · debería cumplirse el '+prev.toLocaleDateString('es-CO')+(vencida?' (ya pasó esa fecha)':' (en '+dd+' d)'))}"><span class="m">${main?`<span style="font-weight:500;">${main}</span>`:''}<span class="l1" style="font-weight:600;opacity:.85;">≈ ${segDM(prev)}</span><span class="l2" style="opacity:.7;">${c.id==='embarque'?'POSIBLE ETD':(vencida?'debió ser':'prevista')}</span></span></span>`; }
     return `<span class="seg-c seg-pend" title="${tip('aún no le toca')}"><span class="m">${main?`<span style="font-weight:500;">${main}</span>`:''}</span></span>`; }
   const hb = habiles ? ' hábiles' : '';
   if(d.st==='ok') return `<span class="seg-c seg-ok" ${open} title="${tip('cumplida a tiempo en '+reabastFmtDuracion(d.real)+hb)}">${main ? lin(main, segDM(d.fin)) : lin(segDM(d.fin)||'✓', '')}<span class="x">✓</span></span>`;
@@ -12797,6 +12804,8 @@ async function tesoCargar(forzar){
   if(TESO.lista && !forzar) return TESO.lista;
   const rows = await sb.get('configuracion','clave=like.teso_anticipo_*&select=clave,valor');
   TESO.lista = (rows||[]).map(r=>{ try{ return JSON.parse(r.valor); }catch(e){ return null; } }).filter(Boolean);
+  // Anticipos aún sin pagar: se recalculan con el valor actual de la OC (incluye costo extra)
+  for(const r of TESO.lista){ if(r.estado==='pagado'||r.estado==='anulado') continue; const o = (REABAST.ordenesCompra||[]).find(x=>x.id===r.ocId); if(!o) continue; const a = tesoCalcularAnticipo(o); if(a.usd && (Math.abs(a.fob-(r.fob_total||0))>0.004 || Math.abs(a.usd-(r.monto_usd||0))>0.004)){ Object.assign(r,{pct:a.pct, fob_total:a.fob, monto_usd:a.usd, monto_cop:a.cop, saldo_usd:a.saldo, trm:a.trm}); tesoGuardar(r).catch(()=>{}); } }
   return TESO.lista;
 }
 async function tesoGuardar(reg){
@@ -14400,7 +14409,8 @@ function ppConstruir(){
     const sumCol = k => filas.reduce((a,f)=>a+(ppNum(f[k])>0 ? ppNum(f[k]) : 0),0);
     const maxFecha = k => { let b = null; filas.forEach(f=>{ const d = pciFecha(f[k]); if(d && (!b || d>b)) b = d; }); return b; };
     const calc = tesoCalcularAnticipo(o);
-    const totOC = sumCol('Compras $') || calc.fob || 0;
+    const extraOC = Number(o.costo_extra_usd)||0, pctX = calc.pct>1 ? calc.pct/100 : calc.pct; // costo extra del proveedor: mueve total, anticipo y saldo
+    const totOC = (sumCol('Compras $') ? sumCol('Compras $')+extraOC : calc.fob) || 0;
     const etAnt = (REABAST.ocEtapas[o.id]||[]).find(e=>e.etapa_id==='anticipo_pagado');
     // Modalidad: pago TOTAL (100% anticipado, o 100% contra ETD sin anticipo) o PARCIAL (anticipo + saldo); y si es un parcial de embarque (rama)
     const sinAntM = segSinAnticipo(o, etAnt), pctM = calc.pct>1 ? calc.pct/100 : calc.pct;
@@ -14410,7 +14420,7 @@ function ppConstruir(){
     const base = {ocId:o.id, num:o.numero_oc, prov:o.proveedor||'—', ocEstado:o.estado_general, modo, lote, tot:totOC};
     // ── Anticipo ──
     const sinAnt = segSinAnticipo(o, etAnt);
-    let antUsd = sumCol('VALOR ANTICIPO USD') || calc.usd;
+    let antUsd = sumCol('VALOR ANTICIPO USD') ? sumCol('VALOR ANTICIPO USD')+extraOC*pctX : calc.usd;
     if(A.anticipo && A.anticipo.usd!=null) antUsd = Number(A.anticipo.usd);
     if(!sinAnt && antUsd>0.004){
       const reg = typeof tesoRegDe==='function' ? tesoRegDe(o.id) : null;
@@ -14442,10 +14452,10 @@ function ppConstruir(){
     const vsLinea = f => ppNum(f['VALOR SALDO USD'])>0 ? ppNum(f['VALOR SALDO USD']) : 0;
     const lPag = filas.filter(f=>{ const d = pciFecha(f['FECHA PAGO SALDO']); return d && d <= corte; });
     const lPend = filas.filter(f=>!lPag.includes(f));
-    let salUsd = sumCol('VALOR SALDO USD');
+    let salUsd = sumCol('VALOR SALDO USD') ? sumCol('VALOR SALDO USD')+extraOC*(1-pctX) : 0;
     if(!salUsd) salUsd = Math.max(0, calc.fob - (sinAnt ? 0 : antUsd));
     // Si anticipo + saldo pasan del valor de la compra (celdas repetidas en el Excel), el saldo = compra − anticipo.
-    const compras = sumCol('Compras $') || calc.fob;
+    const compras = sumCol('Compras $') ? sumCol('Compras $')+extraOC : calc.fob;
     if(compras>0 && salUsd + (sinAnt ? 0 : antUsd) > compras*1.05) salUsd = Math.max(0, compras - (sinAnt ? 0 : antUsd));
     // OC original con embarques parciales (ramas): el Excel de Base compras trae el saldo de TODA la OC y las ramas ya tienen su propio saldo → aquí solo queda lo que sigue en la OC original
     if(ramasDe && !(A.saldo && A.saldo.usd!=null)) salUsd = Math.max(0, Math.round((calc.fob - (sinAnt ? 0 : calc.usd))*100)/100);
@@ -15113,6 +15123,7 @@ async function fcTrmAuto(){
     const r = await fetch('https://www.datos.gov.co/resource/mcec-87by.json?$order=vigenciadesde%20DESC&$limit=1'); const j = await r.json(); const fila = j && j[0];
     const v = fila && parseFloat(String(fila.valor).replace(',','.')); if(!v) throw new Error('sin dato');
     FC.trmAuto = Math.round(v*100)/100; FC.trmVig = fila.vigenciadesde ? String(fila.vigenciadesde).slice(0,10) : '';
+    FC.trmFuente = 'oficial'; FC.trmErr = false; return;
   }catch(e){ FC.trmAuto = null; FC.trmErr = true; }
 }
 const fcR2 = n => Math.round((Number(n)||0)*100)/100;
@@ -15253,7 +15264,7 @@ function fcHtml(){
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
       <div><div style="font-size:15px;font-weight:800;">💹 Flujo de caja</div><div class="arte-mu">Egresos de importaciones (anticipos y saldos) + cartera + bancos · se recalcula con cada filtro</div></div>
       <div class="fc-bar" style="margin:0;"><label class="arte-mu">TRM <input class="inp" type="number" step="0.01" style="width:120px;" value="${trm}" onchange="fcTrmSet(this.value)" ${puede?'':'disabled'}></label>
-        <span class="arte-mu" style="font-size:11px;">${FC.data.trm?'✏️ manual <span class="arte-link" onclick="fcTrmRefrescar()">↺ usar oficial</span>':FC.trmAuto?'🟢 oficial Superfinanciera'+(FC.trmVig?' · '+FC.trmVig:'')+' <span class="arte-link" onclick="fcTrmRefrescar()">↻</span>':'🟡 sin conexión · valor aproximado'}</span>
+        <span class="arte-mu" style="font-size:11px;">${FC.data.trm?'✏️ manual <span class="arte-link" onclick="fcTrmRefrescar()">↺ usar oficial</span>':FC.trmAuto?'🟢 oficial Superfinanciera'+(FC.trmVig?' · '+FC.trmVig:'')+' <span class="arte-link" onclick="fcTrmRefrescar()">↻</span>':'<span style="color:var(--rd);font-weight:700;">🔴 No hay conexión con la TRM oficial · valor provisional</span> <a class="btn btn-bl btn-sm" href="https://www.datos.gov.co/resource/mcec-87by.json?$order=vigenciadesde%20DESC&$limit=1" target="_blank" rel="noopener" style="text-decoration:none;">🔗 Ver TRM oficial</a> <span class="arte-link" onclick="fcTrmRefrescar()">↻ reintentar</span> · escribe el valor oficial en el campo para confirmarlo'}</span>
         <label class="arte-mu">Saldo inicial COP <input class="inp" type="number" style="width:130px;" value="${fcNum(FC.data.saldoIni)}" onchange="fcSaldoSet(this.value)" ${puede?'':'disabled'}></label>
         <button class="btn btn-g btn-sm" onclick="fcAbrirEn(FC.cont)">↻ Actualizar</button>
         <button class="btn btn-bl btn-sm" onclick="ppExcel()">📊 Excel dinámico completo</button></div></div>
