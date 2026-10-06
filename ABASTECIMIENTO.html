@@ -17166,6 +17166,8 @@ function reabastAbrirDetalleOC(ocId){
         <div class="fg"><label class="fl">Delivery date must be</label><input class="inp" id="ocd-entrega" value="${reabastEsc(o.terminos_entrega||'')}" placeholder="Ej: 30 Days order date"></div>
         <div class="fg"><label class="fl">Destino (To:)</label><input class="inp" id="ocd-destino" value="${reabastEsc(o.destino||'To: Buenaventura (COL) final destination: Cali (COL).')}"></div>
         <div class="fg"><label class="fl">% Depósito (ej: 10 = 10%)</label><input class="inp" type="number" step="0.01" id="ocd-deposito" value="${depositoInputPct}"></div>
+        <div class="fg"><label class="fl">Costo extra (US$) — manejo, políticas del proveedor…</label><input class="inp" type="number" step="0.01" min="0" id="ocd-extra" value="${Number(o.costo_extra_usd)||''}" placeholder="0.00"></div>
+        <div class="fg"><label class="fl">Motivo del costo extra</label><input class="inp" id="ocd-extra-motivo" value="${reabastEsc(o.costo_extra_motivo||'')}" placeholder="Ej: Handling fee"></div>
         ${(()=>{ const pr = (REABAST.etapasDe ? null : null) || (REABAST.ocEtapas[o.id]||[]).find(e=>e.etapa_id==='produccion'); if(!pr) return ''; const fin = pr.estado==='completada';
           return `<div class="fg"><label class="fl">Lead time producción (días)</label><input class="inp" type="number" min="1" step="1" id="ocd-lead" value="${Number(pr.dias_esperado)||''}" ${fin?'disabled title="La producción ya terminó"':'title="Al cambiarlo se recalculan todas las fechas de la OC"'}></div>`; })()}
       </div>
@@ -17329,15 +17331,22 @@ async function reabastGuardarDatosDocOC(ocId){
     terminos_pago:       (document.getElementById('ocd-pago').value||'').trim() || null,
     destino:             (document.getElementById('ocd-destino').value||'').trim() || null,
     deposito_pct:        document.getElementById('ocd-deposito').value!=='' ? Number(document.getElementById('ocd-deposito').value)/100 : null,
+    costo_extra_usd:     Math.max(0, Number(document.getElementById('ocd-extra')?.value)||0),
+    costo_extra_motivo:  (document.getElementById('ocd-extra-motivo')?.value||'').trim() || null,
     fecha_orden:         document.getElementById('ocd-fecha').value || null,
     comprador_nombre:    (document.getElementById('ocd-comprador-nombre').value||'').trim() || null,
     comprador_correo:    (document.getElementById('ocd-comprador-correo').value||'').trim() || null,
     comprador_telefono:  (document.getElementById('ocd-comprador-telefono').value||'').trim() || null,
   };
   try{
+    const oPrev = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId);
+    const extraAntes = Number(oPrev && oPrev.costo_extra_usd)||0, motivoAntes = (oPrev && oPrev.costo_extra_motivo)||'';
     await sbReabast.patch('ordenes_compra', 'id=eq.'+ocId, payload);
     const o = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId);
     if(o) Object.assign(o, payload);
+    if(extraAntes !== payload.costo_extra_usd){
+      try{ await ocnAgregar(ocId, [{tipo:'condiciones', campo:'Costo extra (US$)', antes: extraAntes ? 'US$ '+extraAntes.toFixed(2) : '—', despues: payload.costo_extra_usd ? 'US$ '+payload.costo_extra_usd.toFixed(2) : '—', motivo: payload.costo_extra_motivo || motivoAntes || 'Costo adicional del proveedor', origen:'detalle de la OC'}]); }catch(e){}
+    }
     if(typeof toast==='function') toast('Datos del documento guardados','ok');
     reabastAbrirDetalleOC(ocId); // repinta para reflejar el nuevo anticipo/saldo si cambió el % depósito
   }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
@@ -17542,12 +17551,13 @@ function reabastHtmlDocOC(ocId, variante){
   // proveedor (FOB sin el 1.015). En la intercompañía solo cambia el saldo.
   const totalFob = filas.reduce((a,f)=>a+f.cant*f.fob,0);
   const deposito = totalFob * depositoPct;
-  const balance = totalAmount - deposito;
+  const extraUsd = Number(o.costo_extra_usd)||0, extraCop = extraUsd*(Number(o.trm)||0), extraMotivo = String(o.costo_extra_motivo||'').trim();
+  const balance = totalAmount + extraUsd - deposito;
   // Mismo cálculo pero en pesos colombianos (costo landeado: FOB × factor × TRM), para que se vea
   // cuánto hay que pagar de anticipo y de saldo en ambas monedas.
   const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*(Number(it.cantidad)||0),0);
   const depositoCop = totalCop * depositoPct;
-  const balanceCop = totalCop - depositoCop;
+  const balanceCop = totalCop + extraCop - depositoCop;
   const fmtCop = n => n==null ? '' : Math.round(n).toLocaleString('es-CO');
   const celda = 'padding:4px 6px;border:1px solid #999;font-size:10.5px;vertical-align:middle;';
   const celdaC = celda+'text-align:center;';
@@ -17651,7 +17661,8 @@ function reabastHtmlDocOC(ocId, variante){
   </table>
   <table style="width:56%;margin-left:auto;margin-bottom:14px;">
     <tr><td style="${etiqueta}">TOTAL QTY</td><td style="${celdaN}">${reabastFmtN(totalQty)}</td><td style="${celdaN}">US$ ${fmtMoney(totalAmount)}</td><td style="${celdaN}">COP $${fmtCop(totalCop)}</td></tr>
-    <tr><td style="${etiqueta}">TOTAL</td><td></td><td style="${celdaN}">US$ ${fmtMoney(totalAmount)}</td><td style="${celdaN}">COP $${fmtCop(totalCop)}</td></tr>
+    ${extraUsd>0 ? `<tr><td style="${etiqueta}">EXTRA COST${extraMotivo?' ('+reabastEsc(extraMotivo)+')':''}</td><td></td><td style="${celdaN}">US$ ${fmtMoney(extraUsd)}</td><td style="${celdaN}">${extraCop?'COP $'+fmtCop(extraCop):''}</td></tr>` : ''}
+    <tr><td style="${etiqueta}">TOTAL</td><td></td><td style="${celdaN}">US$ ${fmtMoney(totalAmount+extraUsd)}</td><td style="${celdaN}">COP $${fmtCop(totalCop+extraCop)}</td></tr>
     <tr><td style="${etiqueta}">DEPOSIT (Anticipo)</td><td style="${celdaC}">${depositoPct?Math.round(depositoPct*100)+'%':'0%'}</td><td style="${celdaN}">US$ ${fmtMoney(deposito)}</td><td style="${celdaN}">COP $${fmtCop(depositoCop)}</td></tr>
     <tr><td style="${etiqueta}">BALANCE (Saldo)</td><td></td><td style="${celdaN}">US$ ${fmtMoney(balance)}</td><td style="${celdaN}">COP $${fmtCop(balanceCop)}</td></tr>
   </table>
@@ -17730,10 +17741,11 @@ async function reabastExcelOCBlob(ocId, variante){
   // proveedor (FOB sin el 1.015). En la intercompañía solo cambia el saldo.
   const totalFob = filas.reduce((a,f)=>a+f.cant*f.fob,0);
   const deposito = totalFob * depositoPct;
-  const balance = totalAmount - deposito;
+  const extraUsd = Number(o.costo_extra_usd)||0, extraCop = extraUsd*(Number(o.trm)||0), extraMotivo = String(o.costo_extra_motivo||'').trim();
+  const balance = totalAmount + extraUsd - deposito;
   const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*(Number(it.cantidad)||0),0);
   const depositoCop = totalCop * depositoPct;
-  const balanceCop = totalCop - depositoCop;
+  const balanceCop = totalCop + extraCop - depositoCop;
 
   // ── Colores (mismos que la plantilla impresa: rótulos naranjas, encabezado de tabla gris) ──
   const NARANJA = 'FFFFC000', GRIS = 'FFF2F2F2', AZUL_OSC = 'FF1F2937', BLANCO = 'FFFFFFFF', VERDE = 'FFDCFCE7', ROJO_TXT = 'FFCC0000';
@@ -17830,7 +17842,8 @@ async function reabastExcelOCBlob(ocId, variante){
 
   const filasTot = [
     ['TOTAL QTY', reabastFmtN(totalQty), '', ''],
-    ['TOTAL', '', totalAmount, totalCop],
+    ...(extraUsd>0 ? [['EXTRA COST'+(extraMotivo?' ('+extraMotivo+')':''), '', extraUsd, extraCop||'']] : []),
+    ['TOTAL', '', totalAmount+extraUsd, totalCop+extraCop],
     [`DEPOSIT (Anticipo ${depositoPct?Math.round(depositoPct*100)+'%':'0%'})`, '', deposito, depositoCop],
     ['BALANCE (Saldo)', '', balance, balanceCop],
   ];
@@ -19344,7 +19357,8 @@ function ocpTotalesOC(){
   const tot = OCP.items.reduce((a,it)=>a+(Number(it.precio_fob_usd)||0)*(Number(it.cantidad)||0),0);
   const qty = OCP.items.reduce((a,it)=>a+(Number(it.cantidad)||0),0);
   const pct = OCP.oc.deposito_pct!=null ? Number(OCP.oc.deposito_pct) : (OCP.prov.porcentaje_anticipo!=null?Number(OCP.prov.porcentaje_anticipo):0);
-  return {tot, qty, pct, dep: tot*pct};
+  const extra = Number(OCP.oc.costo_extra_usd)||0;
+  return {tot: tot+extra, goods: tot, extra, qty, pct, dep: tot*pct};
 }
 
 // ── persistencia ──
@@ -19399,7 +19413,7 @@ function ocpHtmlEnvio(){
       <span class="arte-kv"><em>OC</em>${ocpEsc(o.numero_oc)}</span>
       <span class="arte-kv"><em>Proveedor</em>${ocpEsc(o.proveedor||'—')}</span>
       <span class="arte-kv"><em>Ítems</em>${OCP.items.length} · ${ocpNum(t.qty,0)} und</span>
-      <span class="arte-kv"><em>Total</em>US$ ${ocpNum(t.tot)}</span>
+      <span class="arte-kv"><em>Total</em>US$ ${ocpNum(t.tot)}${t.extra>0?' <small>(incl. extra US$ '+ocpNum(t.extra)+')</small>':''}</span>
       <span class="arte-kv"><em>Anticipo</em>${Math.round(t.pct*1000)/10}% · US$ ${ocpNum(t.dep)}</span>
     </div>
     ${faltan.length ? `<div class="arte-alerta" style="margin-top:8px;">⚠ Antes de enviar, completa en el detalle de la OC: <strong>${faltan.map(ocpEsc).join(', ')}</strong>.
@@ -20020,13 +20034,20 @@ function ocpHtmlPI(){
     </div>` : ''}
   </div>`;
 }
-function ocpNombreSellado(){ const n = OCP.d.pi.original_nombre||'PI.xlsx'; const ext = (n.match(/\.(xlsx|xlsm|pdf|docx)$/i)||[,'xlsx'])[1].toLowerCase(); return n.replace(/\.(xlsx|xlsm|pdf|docx)$/i,'')+'_SELLADA.'+ext; }
+function ocpNombreSellado(){ const n = OCP.d.pi.original_nombre||'PI.xlsx'; let ext = (n.match(/\.(xlsx|xlsm|xls|pdf|docx)$/i)||[,'xlsx'])[1].toLowerCase(); if(ext==='xls') ext = 'xlsx'; return n.replace(/\.(xlsx|xlsm|xls|pdf|docx)$/i,'')+'_SELLADA.'+ext; }
 function ocpRefrescarPI(){ const z = document.getElementById('ocp-pi-zona'); if(z) z.innerHTML = ocpHtmlPI(); ocpProgreso(); ocpActualizarChipsDif(); if(OCP.d.pi.tipo==='pdf') ocpPdfPreview(); else if((OCP.d.pi.tipo||'xlsx')==='xlsx') ocpXlsPreview(); }
 
 // Inserta el sello como imagen en el .xlsx original, tocando solo el dibujo de la hoja (así no se
 // pierden las fotos, fórmulas, formatos ni figuras que trae el archivo del proveedor).
 async function ocpSellarXlsx(buf, hojaIdx, celda){
   await ocpCargarScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js','JSZip');
+  // Los .xls antiguos (formato binario, como la PI de algunos proveedores) no son un ZIP: se pasan a .xlsx
+  // con SheetJS (mismas hojas y celdas) y sobre ese archivo se pone el sello.
+  { const h = new Uint8Array(buf.slice(0,2)); if(!(h[0]===0x50 && h[1]===0x4B)){
+      if(typeof XLSX==='undefined') throw new Error('No se pudo cargar el conversor de Excel (.xls)');
+      const wb0 = XLSX.read(buf, {type:'array', cellStyles:true});
+      buf = XLSX.write(wb0, {type:'array', bookType:'xlsx', cellStyles:true});
+  } }
   const zip = await JSZip.loadAsync(buf);
   const leer = p => zip.file(p) ? zip.file(p).async('string') : null;
   const dir = p => p.slice(0, p.lastIndexOf('/')+1);
