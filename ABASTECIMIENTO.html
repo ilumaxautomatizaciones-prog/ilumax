@@ -31637,40 +31637,29 @@ async function ppGuardarPersona() {
   const usu = AC.usuarios.find(u => u.email === email);
 
   let ok=0, err=0;
+  // Guardado en lote: 1 PATCH por valor (ids en bloque) + 1 POST con todas las filas nuevas
+  const ahoraIso = new Date().toISOString();
+  const ids={true:[],false:[]}, nuevos=[];
   for(const [subCod, val] of entries) {
-    try {
-      // Upsert manual por (sub_codigo, email_usuario): la restricción única real de la
-      // tabla es (area, sub_codigo, email_usuario), así que se busca la fila existente en
-      // caché y se hace PATCH por id, o POST si es un permiso nuevo.
-      // OJO: la fila puede estar en caché (AC.permsPersona) sin id todavía porque
-      // ppTogglePildora/ppToggleCategoriaSubs/ppSeleccionarTodosPermisos la agregan
-      // optimistamente al marcarla; por eso se exige existing.id (no solo existing) para
-      // decidir PATCH vs POST — si no, un permiso recién activado (sin fila previa en la
-      // BD) intentaría un PATCH con id=eq.undefined que no actualiza ninguna fila y queda
-      // como "guardado" sin guardarse — igual que el mismo bug ya corregido en
-      // acGuardarPermisosArea().
-      const existing = AC.permsPersona.find(p => p.sub_codigo===subCod && p.email_usuario===email && p.id);
-      if(existing) {
-        await sb.patch('permisos_ppto', `id=eq.${existing.id}`,
-          { puede_ver: val, puede_llenar: val, actualizado: new Date().toISOString() });
-        existing.puede_ver = val; existing.puede_llenar = val;
-      } else {
-        const nuevo = await sb.post('permisos_ppto', {
-          area: usu?.area || '',
-          sub_codigo: subCod,
-          email_usuario: email,
-          puede_ver: val,
-          puede_llenar: val,
-        });
-        // Reemplaza la fila optimista sin id (si la había) por la real ya con id,
-        // para no dejar un duplicado en caché durante la misma sesión.
-        const iSinId = AC.permsPersona.findIndex(p => p.sub_codigo===subCod && p.email_usuario===email && !p.id);
-        if(iSinId>=0) AC.permsPersona.splice(iSinId,1);
-        if(nuevo?.[0]) AC.permsPersona.push(nuevo[0]);
-      }
-      ok++;
-    } catch(e) { err++; console.warn('ppGuardarPersona err:', e); }
+    const ex = AC.permsPersona.find(p => p.sub_codigo===subCod && p.email_usuario===email && p.id);
+    if(ex) ids[!!val].push(ex.id);
+    else nuevos.push({area: usu?.area || '', sub_codigo: subCod, email_usuario: email, puede_ver: !!val, puede_llenar: !!val});
   }
+  try {
+    for(const v of [true,false]) {
+      for(let i=0;i<ids[v].length;i+=100) {
+        const lote=ids[v].slice(i,i+100);
+        await sb.patch('permisos_ppto', `id=in.(${lote.join(',')})`, { puede_ver:v, puede_llenar:v, actualizado:ahoraIso });
+        ok+=lote.length;
+      }
+    }
+    if(nuevos.length) {
+      const res = await sb.upsert('permisos_ppto', nuevos, 'area,sub_codigo,email_usuario');
+      AC.permsPersona = AC.permsPersona.filter(p => !(p.email_usuario===email && !p.id));
+      (res||[]).forEach(r => { if(!AC.permsPersona.some(p=>p.id===r.id)) AC.permsPersona.push(r); });
+      ok+=nuevos.length;
+    }
+  } catch(e) { err=entries.length-ok; console.warn('ppGuardarPersona err:', e); }
 
   // Limpiar pendientes de la persona
   if(AC._pp.cambiosPendientes[email]) delete AC._pp.cambiosPendientes[email];
