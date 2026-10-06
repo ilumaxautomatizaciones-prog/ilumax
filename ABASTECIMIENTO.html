@@ -17579,6 +17579,7 @@ function reabastHtmlDocOC(ocId, variante){
   }
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>OC ${reabastEsc(o.numero_oc)}${variante==='intercompania'?' (intercompañía)':''}</title>
   <style>
+    *{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important;}
     body{font-family:Calibri,Arial,sans-serif;font-size:11px;color:#111;margin:16px;}
     table{border-collapse:collapse;width:100%;}
     .box{border:1px solid #999;}
@@ -23207,6 +23208,7 @@ function tiGenerarHtmlActa(entrega) {
   .firma .linea{border-top:1px solid #000;margin-top:40px;padding-top:5px;font-size:11px;font-weight:700;}
   .firma .dato{font-size:11px;margin-top:14px;text-align:left;}
   .pie{text-align:center;font-size:9.5px;color:#94a3b8;margin-top:22px;}
+  *{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important;}
   @media print {
     body{background:#fff;}
     .hoja{box-shadow:none;margin:0;max-width:100%;}
@@ -33461,6 +33463,7 @@ function renderReporteVentas() {
           <button class="btn btn-or btn-sm" id="rv-btn-siesa-sync" onclick="rvActualizarDesdeSiesa()">🔄 Actualizar desde SIESA</button>
           <button class="btn btn-gr btn-sm" id="rv-btn-enviar" style="display:none;" onclick="rvEnviarCorreo()">📧 Enviar</button>
           <button class="btn btn-bl btn-sm" id="rv-btn-descargar" style="display:none;" onclick="rvDescargarReporte()">⬇️ Descargar</button>
+          <button class="btn btn-gr btn-sm" id="rv-btn-xlsx" style="display:none;" onclick="rvExportarExcelDetallado()" title="Excel con todas las facturas y tablas dinámicas con fórmulas: canal, vendedor, cliente, ciudad y mes a mes">📊 Excel detallado</button>
           <button class="btn btn-g btn-sm" id="rv-btn-config" onclick="rvConfigCorreo()">⚙️ Config correo</button>
         </div>
       </div>
@@ -34249,6 +34252,8 @@ function rvActivarUI() {
   if(btnEnv) btnEnv.style.display = '';
   const btnDes = document.getElementById('rv-btn-descargar');
   if(btnDes) btnDes.style.display = '';
+  const btnXl = document.getElementById('rv-btn-xlsx');
+  if(btnXl) btnXl.style.display = '';
 
   const dropzone = document.getElementById('rv-dropzone');
   if(dropzone) dropzone.style.display = 'none';
@@ -35489,6 +35494,251 @@ async function rvGuardarAppsScript(asunto) {
     toast('✅ Guardado — enviando...','ok');
     await rvEnviarCorreo();
   } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+// Facturas de TODO el año en curso (enero a hoy) directo de SIESA, mes por mes, para el Excel detallado.
+// RV.datos solo trae el mes cargado; aquí se consulta cada mes y se deja en caché 1 hora (RV._anual).
+async function rvDatosAnioParaExcel() {
+  const hoy = new Date(), anio = hoy.getFullYear();
+  if(RV._anual && RV._anual.anio===anio && (Date.now()-RV._anual.ts) < 3600000) return RV._anual;
+  const btn = document.getElementById('rv-btn-xlsx');
+  const estado = (txt) => { if(btn){ btn.disabled = true; btn.innerHTML = '⏳ ' + txt; } };
+  const datos = [], fallos = [];
+  try {
+    for(let m=0; m<=hoy.getMonth(); m++){
+      const mm = String(m+1).padStart(2,'0'), sig = new Date(anio, m+1, 1);
+      const desde = anio+'-'+mm+'-01', hasta = sig.getFullYear()+'-'+String(sig.getMonth()+1).padStart(2,'0')+'-01';
+      const parametros = "f350_id_cia = 1 AND f350_fecha >= ''"+desde+"'' AND f350_fecha < ''"+hasta+"''";
+      let items = null, err = null;
+      for(const tam of [500, 100]){
+        try { items = await _siesaFetchPaginas((msg)=>estado('Mes '+(m+1)+'/'+(hoy.getMonth()+1)+' · '+String(msg).replace(/^📡\s*/,'')), 'API_v2_Ventas_Facturas_DesdePedido', parametros, tam); err = null; break; }
+        catch(e){ err = e; items = null; }
+      }
+      if(!items){ fallos.push(mm+' ('+(err&&err.message||'sin respuesta')+')'); continue; }
+      const porFactura = {};
+      items.forEach(it=>{
+        if(Number(it.f350_ind_estado) === 9) return;
+        const rowid = it.f350_rowid; if(rowid == null || porFactura[rowid]) return;
+        porFactura[rowid] = {
+          Fecha: (()=>{ const p=String(it.f350_fecha||'').slice(0,10).split('-').map(Number); return p.length===3&&p[0] ? Math.round((Date.UTC(p[0],p[1]-1,p[2])-Date.UTC(1899,11,30))/86400000) : 0; })(),
+          'Nro documento': String(it.f350_prefijo || it.f350_id_tipo_docto || '').trim() + String(it.f350_consec_docto || ''),
+          'Razon social cliente factura': String(it.f200_razon_social_fact || '').trim(),
+          'Nombre vendedor': String(it.f200_razon_social_vendedor || '').trim(),
+          'Desc. tipo de cliente': String(it.f461_id_tipo_cli_fact || '').trim(),
+          'Valor subtotal local': parseFloat(it.f461_vlr_neto || 0) || 0,
+        };
+      });
+      Object.values(porFactura).forEach(r=>datos.push(r));
+    }
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '📊 Excel detallado'; }
+  }
+  if(!datos.length) return {anio, datos:[], fallos, ts:Date.now(), vacio:true};
+  // Meses que SIESA no devolvió: se completan con el último snapshot guardado de ese mes en Supabase
+  if(fallos.length){
+    try {
+      const snaps = await sb.get('ventas_diarias_snapshots','select=fecha,payload&fecha=gte.'+anio+'-01-01&order=fecha.desc') || [];
+      const hechos = new Set(datos.map(r=>rvFecha(r.Fecha).getMonth())), vistos = new Set();
+      snaps.forEach(s=>{
+        const mes = parseInt(String(s.fecha).slice(5,7),10)-1;
+        if(hechos.has(mes) || vistos.has(mes)) return;
+        vistos.add(mes);
+        ((s.payload&&s.payload.datos)||[]).forEach(r=>{ if(r.Fecha && rvFecha(r.Fecha).getMonth()===mes) datos.push(r); });
+      });
+    } catch(e){ console.warn('Excel detallado — snapshots:', e); }
+  }
+  if(fallos.length){
+    const meses = new Set(datos.map(r=>rvFecha(r.Fecha).getMonth()));
+    (RV.datos||[]).forEach(r=>{ if(r.Fecha && rvFecha(r.Fecha).getFullYear()===anio && !meses.has(rvFecha(r.Fecha).getMonth())) datos.push(r); });
+  }
+  RV._anual = {anio, datos, fallos, ts:Date.now()};
+  return RV._anual;
+}
+// ── Excel detallado de ventas (Reporte diario): tabla de facturas + tablas dinámicas con fórmulas SUMIFS/COUNTIFS ──
+async function rvExportarExcelDetallado() {
+  if(!RV.cargado || !(RV.datos||[]).length){ toast('Primero carga los datos de ventas','wa'); return; }
+  try { await reabastCargarExcelJS(); } catch(e){}
+  if(typeof ExcelJS === 'undefined'){ toast('No pude cargar el generador de Excel — revisa tu conexión','er'); return; }
+  toast('📡 Consultando SIESA: ventas de enero a hoy (puede tardar unos minutos)...','inf');
+  let fuente = null;
+  try { fuente = await rvDatosAnioParaExcel(); } catch(e){ console.warn('Excel detallado — SIESA:', e); }
+  const origenDatos = (fuente && fuente.datos && fuente.datos.length) ? fuente.datos : RV.datos;
+  if(!(fuente && fuente.datos && fuente.datos.length)) toast('⚠️ No pude traer el año desde SIESA — el Excel solo tendrá lo cargado en pantalla','wa');
+  else if(fuente.fallos && fuente.fallos.length) toast('⚠️ SIESA no respondió para el mes '+fuente.fallos.join(', ')+' — se completó con lo cargado','wa');
+  toast('⏳ Generando Excel detallado de ventas...','inf');
+  const MES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const MESL = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const COP = '$ #,##0', FEC = 'dd/mm/yyyy';
+  const EST = pvExcelEstilos();
+  const fill = argb => ({type:'pattern',pattern:'solid',fgColor:{argb}});
+  const tit = {font:{bold:true,size:14,color:{argb:EST.AZUL_OSC}}};
+  const nota = {font:{italic:true,size:9,color:{argb:'FF64748B'}}};
+  const filas = origenDatos.filter(r=>r.Fecha).map(r=>{
+    const d = rvFecha(r.Fecha);
+    return {fecha:r.Fecha, anio:d.getFullYear(), mes:d.getMonth()+1,
+      doc:String(r['Nro documento']||''), cli:String(r['Razon social cliente factura']||'(sin cliente)').trim()||'(sin cliente)',
+      ven:String(r['Nombre vendedor']||'(sin vendedor)').trim()||'(sin vendedor)', canal:String(r['Desc. tipo de cliente']||'(sin canal)').trim()||'(sin canal)',
+      ciu:String(r['Ciudad']||'').trim(), val:parseFloat(r['Valor subtotal local'])||0};
+  }).sort((a,b)=>a.fecha-b.fecha || a.doc.localeCompare(b.doc));
+  if(!filas.length){ toast('No hay facturas con fecha para exportar','wa'); return; }
+  const anios = [...new Set(filas.map(f=>f.anio))].sort();
+  const anio = anios[anios.length-1];
+  const N = filas.length + 1;                       // última fila de Detalle (encabezado en fila 1)
+  const hayCiudad = filas.some(f=>f.ciu);
+  const sumDe = (fn) => filas.filter(f=>f.anio===anio).filter(fn).reduce((a,f)=>a+f.val,0);
+  const cntDe = (fn) => filas.filter(f=>f.anio===anio).filter(fn).length;
+  const porTotal = campo => { const m={}; filas.forEach(f=>{ m[f[campo]]=(m[f[campo]]||0)+f.val; }); return Object.keys(m).sort((a,b)=>m[b]-m[a]); };
+  const canales = porTotal('canal'), vendedores = porTotal('ven'), clientes = porTotal('cli'), ciudades = hayCiudad ? porTotal('ciu').filter(Boolean) : [];
+
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX'; wb.created = new Date();
+  wb.calcProperties = {fullCalcOnLoad:true};
+  const wsR = wb.addWorksheet('Resumen', {views:[{showGridLines:false}]});
+  const wsD = wb.addWorksheet('Detalle');
+  // Columnas de Detalle: A Fecha · B Año · C Mes · D Documento · E Cliente · F Vendedor · G Canal · H Ciudad · I Valor
+  const COL = {anio:'B', mes:'C', cli:'E', ven:'F', canal:'G', ciu:'H', val:'I'};
+  const D = c => `Detalle!$${c}:$${c}`;
+  const YR = 'Resumen!$C$3';
+
+  // ── Detalle: tabla de Excel con filtros; Año y Mes son fórmulas sobre la fecha ──
+  wsD.addTable({name:'tblVentas', ref:'A1', headerRow:true, totalsRow:false,
+    style:{theme:'TableStyleMedium2', showRowStripes:true},
+    columns:['Fecha','Año','Mes','Nro documento','Cliente','Vendedor','Canal','Ciudad','Valor subtotal'].map(n=>({name:n, filterButton:true})),
+    rows: filas.map(f=>[f.fecha, f.anio, f.mes, f.doc, f.cli, f.ven, f.canal, f.ciu, f.val])});
+  filas.forEach((f,i)=>{ const r=i+2;
+    wsD.getCell(r,1).numFmt = FEC;
+    wsD.getCell(r,2).value = {formula:`YEAR(A${r})`, result:f.anio};
+    wsD.getCell(r,3).value = {formula:`MONTH(A${r})`, result:f.mes};
+    wsD.getCell(r,9).numFmt = COP;
+  });
+  wsD.columns = [{width:12},{width:7},{width:6},{width:16},{width:42},{width:34},{width:20},{width:16},{width:16}];
+  wsD.views = [{state:'frozen', ySplit:1}];
+
+  // ── Matriz Clave × Mes con SUMIFS (la clave está en la columna A) ──
+  const hoja = (nombre, titulo, etiqueta, claves, colClave, claveKey) => {
+    const ws = wb.addWorksheet(nombre, {views:[{showGridLines:false, state:'frozen', xSplit:1, ySplit:4}]});
+    ws.getCell(1,1).value = titulo; ws.getCell(1,1).style = tit;
+    ws.getCell(2,1).value = 'Año (se cambia en la hoja Resumen, celda C3). Todas las cifras son fórmulas SUMIFS sobre la hoja Detalle.'; ws.getCell(2,1).style = nota;
+    MES.forEach((m,i)=>{ const c=ws.getCell(3,i+2); c.value=i+1; c.style={font:{size:8,color:{argb:'FF94A3B8'}},alignment:{horizontal:'center'}}; });
+    [etiqueta,...MES,'Total año','% part.'].forEach((h,i)=>{ const c=ws.getCell(4,i+1); c.value=h; c.style=EST.th; });
+    const r0 = 5, rN = r0 + claves.length - 1, rT = rN + 1;
+    claves.forEach((k,i)=>{ const r=r0+i;
+      const a=ws.getCell(r,1); a.value=k; a.style={font:{size:9},border:EST.bordeCelda};
+      let tot=0;
+      for(let m=1;m<=12;m++){
+        const v = sumDe(f=>f[claveKey]===k && f.mes===m); tot+=v;
+        const c = ws.getCell(r,m+1);
+        c.value = {formula:`SUMIFS(${D(COL.val)},${D(COL.anio)},${YR},${D(colClave)},$A${r},${D(COL.mes)},${pvColLetra(m+1)}$3)`, result:v};
+        c.numFmt = COP; c.style = {font:{size:9},border:EST.bordeCelda,numFmt:COP};
+      }
+      const t=ws.getCell(r,14); t.value={formula:`SUM(B${r}:M${r})`,result:tot}; t.style={font:{bold:true,size:9},border:EST.bordeCelda,numFmt:COP};
+      const p=ws.getCell(r,15); p.value={formula:`IF(N$${rT}=0,0,N${r}/N$${rT})`,result:0}; p.style={font:{size:9},border:EST.bordeCelda,numFmt:'0.0%'};
+    });
+    const tt = ws.getCell(rT,1); tt.value='Total general'; tt.style=EST.canalHdr;
+    for(let c=2;c<=14;c++){ const L=pvColLetra(c); const cell=ws.getCell(rT,c);
+      const v = c<14 ? sumDe(f=>f.mes===c-1) : sumDe(()=>true);
+      cell.value={formula:`SUM(${L}${r0}:${L}${rN})`,result:v}; cell.style={...EST.canalHdr,numFmt:COP,alignment:{horizontal:'right'}}; }
+    const pp=ws.getCell(rT,15); pp.value=1; pp.style={...EST.canalHdr,numFmt:'0.0%'};
+    ws.getColumn(1).width = 34; for(let c=2;c<=14;c++) ws.getColumn(c).width = 15; ws.getColumn(15).width = 9;
+    ws.addConditionalFormatting({ref:`B${r0}:M${rN}`, rules:[{type:'colorScale', cfvo:[{type:'min'},{type:'max'}], color:[{argb:'FFFFFFFF'},{argb:'FF93C5FD'}]}]});
+    ws.addConditionalFormatting({ref:`O${r0}:O${rN}`, rules:[{type:'dataBar', cfvo:[{type:'num',value:0},{type:'num',value:1}], color:{argb:'FF60A5FA'}}]});
+    // % part. con el total ya conocido
+    const totAnio = sumDe(()=>true);
+    claves.forEach((k,i)=>{ const v=sumDe(f=>f[claveKey]===k); ws.getCell(r0+i,15).value={formula:`IF(N$${rT}=0,0,N${r0+i}/N$${rT})`,result:totAnio?v/totAnio:0}; });
+    return {ws, r0, rN, rT};
+  };
+  const hC = hoja('Canal x Mes', `Ventas por canal — mes a mes`, 'CANAL', canales, COL.canal, 'canal');
+  const hV = hoja('Vendedor x Mes', `Ventas por vendedor — mes a mes`, 'VENDEDOR', vendedores, COL.ven, 'ven');
+
+  // ── Vendedor × Canal ──
+  {
+    const ws = wb.addWorksheet('Vendedor x Canal', {views:[{showGridLines:false, state:'frozen', xSplit:1, ySplit:3}]});
+    ws.getCell(1,1).value='Ventas por vendedor y canal (año de la hoja Resumen)'; ws.getCell(1,1).style=tit;
+    ws.getCell(2,1).value='Fórmulas SUMIFS sobre la hoja Detalle.'; ws.getCell(2,1).style=nota;
+    ['VENDEDOR',...canales,'Total'].forEach((h,i)=>{ const c=ws.getCell(3,i+1); c.value=h; c.style=EST.th; });
+    const r0=4, rN=r0+vendedores.length-1, rT=rN+1, cT=canales.length+2;
+    vendedores.forEach((v,i)=>{ const r=r0+i; const a=ws.getCell(r,1); a.value=v; a.style={font:{size:9},border:EST.bordeCelda};
+      canales.forEach((cn,j)=>{ const c=ws.getCell(r,j+2);
+        c.value={formula:`SUMIFS(${D(COL.val)},${D(COL.anio)},${YR},${D(COL.ven)},$A${r},${D(COL.canal)},${pvColLetra(j+2)}$3)`, result:sumDe(f=>f.ven===v&&f.canal===cn)};
+        c.style={font:{size:9},border:EST.bordeCelda,numFmt:COP}; });
+      const t=ws.getCell(r,cT); t.value={formula:`SUM(B${r}:${pvColLetra(cT-1)}${r})`,result:sumDe(f=>f.ven===v)}; t.style={font:{bold:true,size:9},border:EST.bordeCelda,numFmt:COP}; });
+    const tt=ws.getCell(rT,1); tt.value='Total general'; tt.style=EST.canalHdr;
+    for(let c=2;c<=cT;c++){ const L=pvColLetra(c); const cell=ws.getCell(rT,c);
+      cell.value={formula:`SUM(${L}${r0}:${L}${rN})`, result: c<cT ? sumDe(f=>f.canal===canales[c-2]) : sumDe(()=>true)}; cell.style={...EST.canalHdr,numFmt:COP,alignment:{horizontal:'right'}}; }
+    ws.getColumn(1).width=34; for(let c=2;c<=cT;c++) ws.getColumn(c).width=17;
+    ws.addConditionalFormatting({ref:`B${r0}:${pvColLetra(cT-1)}${rN}`, rules:[{type:'colorScale', cfvo:[{type:'min'},{type:'max'}], color:[{argb:'FFFFFFFF'},{argb:'FFFCD34D'}]}]});
+  }
+
+  // ── Cliente / Ciudad: total, # facturas, ticket y % ──
+  const listado = (nombre, titulo, etiqueta, claves, colClave, claveKey) => {
+    const ws = wb.addWorksheet(nombre, {views:[{showGridLines:false, state:'frozen', ySplit:3}]});
+    ws.getCell(1,1).value=titulo; ws.getCell(1,1).style=tit;
+    ws.getCell(2,1).value='Año de la hoja Resumen. Ordenado de mayor a menor venta del histórico cargado; las cifras son fórmulas SUMIFS/COUNTIFS sobre Detalle.'; ws.getCell(2,1).style=nota;
+    [etiqueta,'# Facturas','Venta total','Ticket promedio','% part.'].forEach((h,i)=>{ const c=ws.getCell(3,i+1); c.value=h; c.style=EST.th; });
+    const r0=4, rN=r0+claves.length-1, rT=rN+1, tot=sumDe(()=>true);
+    claves.forEach((k,i)=>{ const r=r0+i; const v=sumDe(f=>f[claveKey]===k), n=cntDe(f=>f[claveKey]===k);
+      const a=ws.getCell(r,1); a.value=k; a.style={font:{size:9},border:EST.bordeCelda};
+      const b=ws.getCell(r,2); b.value={formula:`COUNTIFS(${D(COL.anio)},${YR},${D(colClave)},$A${r})`,result:n}; b.style={font:{size:9},border:EST.bordeCelda,numFmt:'#,##0'};
+      const c=ws.getCell(r,3); c.value={formula:`SUMIFS(${D(COL.val)},${D(COL.anio)},${YR},${D(colClave)},$A${r})`,result:v}; c.style={font:{bold:true,size:9},border:EST.bordeCelda,numFmt:COP};
+      const d=ws.getCell(r,4); d.value={formula:`IF(B${r}=0,0,C${r}/B${r})`,result:n?v/n:0}; d.style={font:{size:9},border:EST.bordeCelda,numFmt:COP};
+      const e=ws.getCell(r,5); e.value={formula:`IF(C$${rT}=0,0,C${r}/C$${rT})`,result:tot?v/tot:0}; e.style={font:{size:9},border:EST.bordeCelda,numFmt:'0.0%'}; });
+    const tt=ws.getCell(rT,1); tt.value='Total general'; tt.style=EST.canalHdr;
+    const t2=ws.getCell(rT,2); t2.value={formula:`SUM(B${r0}:B${rN})`,result:cntDe(()=>true)}; t2.style={...EST.canalHdr,numFmt:'#,##0',alignment:{horizontal:'right'}};
+    const t3=ws.getCell(rT,3); t3.value={formula:`SUM(C${r0}:C${rN})`,result:tot}; t3.style={...EST.canalHdr,numFmt:COP,alignment:{horizontal:'right'}};
+    const t4=ws.getCell(rT,4); t4.value={formula:`IF(B${rT}=0,0,C${rT}/B${rT})`,result:cntDe(()=>true)?tot/cntDe(()=>true):0}; t4.style={...EST.canalHdr,numFmt:COP,alignment:{horizontal:'right'}};
+    const t5=ws.getCell(rT,5); t5.value=1; t5.style={...EST.canalHdr,numFmt:'0.0%'};
+    ws.getColumn(1).width=46; [2,3,4,5].forEach(c=>ws.getColumn(c).width=18);
+    ws.addConditionalFormatting({ref:`E${r0}:E${rN}`, rules:[{type:'dataBar', cfvo:[{type:'num',value:0},{type:'num',value:1}], color:{argb:'FF34D399'}}]});
+    return {ws, r0, rN, rT};
+  };
+  const hCl = listado('Clientes','Ventas por cliente','CLIENTE',clientes,COL.cli,'cli');
+  if(ciudades.length) listado('Ciudades','Ventas por ciudad','CIUDAD',ciudades,COL.ciu,'ciu');
+
+  // ── Resumen (primera hoja): año editable + indicadores + venta por mes y por canal ──
+  wsR.getCell(1,2).value = '📊 VENTAS DETALLADAS — ILUMAX'; wsR.getCell(1,2).style = tit;
+  wsR.getCell(2,2).value = `Generado el ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})} · ${filas.length} facturas · de ${MESL[rvFecha(filas[0].fecha).getMonth()]} ${rvFecha(filas[0].fecha).getFullYear()} a ${MESL[rvFecha(filas[filas.length-1].fecha).getMonth()]} ${rvFecha(filas[filas.length-1].fecha).getFullYear()} · Origen: ${RV.origenArchivo||'—'}`;
+  wsR.getCell(2,2).style = nota;
+  wsR.getCell(3,2).value = 'Año a analizar ►'; wsR.getCell(3,2).style = {font:{bold:true,size:10}};
+  const cA = wsR.getCell(3,3); cA.value = anio; cA.style = {font:{bold:true,size:12,color:{argb:'FF1D4ED8'}},fill:fill('FFFEF3C7'),border:EST.bordeCelda,alignment:{horizontal:'center'}};
+  wsR.getCell(3,4).value = '← cambia este año y todas las hojas se recalculan'; wsR.getCell(3,4).style = nota;
+  const totA = sumDe(()=>true), nA = cntDe(()=>true);
+  const kpi = (fila, etq, formula, result, fmt) => { const a=wsR.getCell(fila,2); a.value=etq; a.style={font:{bold:true,size:10},fill:fill(EST.GRIS),border:EST.bordeCelda};
+    const b=wsR.getCell(fila,3); b.value={formula,result}; b.style={font:{bold:true,size:11},border:EST.bordeCelda,numFmt:fmt,alignment:{horizontal:'right'}}; };
+  kpi(5,'Venta total del año', `SUMIFS(${D(COL.val)},${D(COL.anio)},${YR})`, totA, COP);
+  kpi(6,'# Facturas', `COUNTIFS(${D(COL.anio)},${YR})`, nA, '#,##0');
+  kpi(7,'Ticket promedio', `IF(C6=0,0,C5/C6)`, nA?totA/nA:0, COP);
+  kpi(8,'Clientes con venta', `COUNTIF(Clientes!$C$${hCl.r0}:$C$${hCl.rN},">0")`, clientes.filter(k=>sumDe(f=>f.cli===k)>0).length, '#,##0');
+  kpi(9,'Vendedores con venta', `COUNTIF('Vendedor x Mes'!$N$${hV.r0}:$N$${hV.rN},">0")`, vendedores.filter(k=>sumDe(f=>f.ven===k)>0).length, '#,##0');
+  const vm = Array.from({length:12},(_,i)=>sumDe(f=>f.mes===i+1)); const mejor = Math.max(...vm) > 0 ? MESL[vm.indexOf(Math.max(...vm))] : '-';
+  kpi(10,'Mejor mes', `IFERROR(INDEX($B$13:$B$24,MATCH(MAX($C$13:$C$24),$C$13:$C$24,0)),"-")`, mejor, 'General');
+  // Venta por mes
+  wsR.getCell(12,2).value=''; ['MES','Venta','# Facturas','Ticket promedio','% del año'].forEach((h,i)=>{ const c=wsR.getCell(12,i+2); c.value=h; c.style=EST.th; });
+  for(let m=1;m<=12;m++){ const r=12+m; const v=sumDe(f=>f.mes===m), n=cntDe(f=>f.mes===m);
+    const a=wsR.getCell(r,2); a.value=MESL[m-1]; a.style={font:{size:9},border:EST.bordeCelda};
+    const b=wsR.getCell(r,3); b.value={formula:`SUMIFS(${D(COL.val)},${D(COL.anio)},${YR},${D(COL.mes)},${m})`,result:v}; b.style={font:{bold:true,size:9},border:EST.bordeCelda,numFmt:COP};
+    const c=wsR.getCell(r,4); c.value={formula:`COUNTIFS(${D(COL.anio)},${YR},${D(COL.mes)},${m})`,result:n}; c.style={font:{size:9},border:EST.bordeCelda,numFmt:'#,##0'};
+    const d=wsR.getCell(r,5); d.value={formula:`IF(D${r}=0,0,C${r}/D${r})`,result:n?v/n:0}; d.style={font:{size:9},border:EST.bordeCelda,numFmt:COP};
+    const e=wsR.getCell(r,6); e.value={formula:`IF(C$25=0,0,C${r}/C$25)`,result:totA?v/totA:0}; e.style={font:{size:9},border:EST.bordeCelda,numFmt:'0.0%'}; }
+  const t0=wsR.getCell(25,2); t0.value='Total año'; t0.style=EST.canalHdr;
+  const t1=wsR.getCell(25,3); t1.value={formula:'SUM(C13:C24)',result:totA}; t1.style={...EST.canalHdr,numFmt:COP,alignment:{horizontal:'right'}};
+  const t2=wsR.getCell(25,4); t2.value={formula:'SUM(D13:D24)',result:nA}; t2.style={...EST.canalHdr,numFmt:'#,##0',alignment:{horizontal:'right'}};
+  const t3=wsR.getCell(25,5); t3.value={formula:'IF(D25=0,0,C25/D25)',result:nA?totA/nA:0}; t3.style={...EST.canalHdr,numFmt:COP,alignment:{horizontal:'right'}};
+  const t4=wsR.getCell(25,6); t4.value=1; t4.style={...EST.canalHdr,numFmt:'0.0%'};
+  wsR.addConditionalFormatting({ref:'C13:C24', rules:[{type:'dataBar', cfvo:[{type:'min'},{type:'max'}], color:{argb:'FF60A5FA'}}]});
+  // Venta por canal (enlaza con la hoja Canal x Mes)
+  ['CANAL','Venta','% part.'].forEach((h,i)=>{ const c=wsR.getCell(12,i+8); c.value=h; c.style=EST.th; });
+  canales.forEach((k,i)=>{ const r=13+i, src=hC.r0+i; const v=sumDe(f=>f.canal===k);
+    const a=wsR.getCell(r,8); a.value={formula:`'Canal x Mes'!A${src}`,result:k}; a.style={font:{size:9},border:EST.bordeCelda};
+    const b=wsR.getCell(r,9); b.value={formula:`'Canal x Mes'!N${src}`,result:v}; b.style={font:{bold:true,size:9},border:EST.bordeCelda,numFmt:COP};
+    const c=wsR.getCell(r,10); c.value={formula:`'Canal x Mes'!O${src}`,result:totA?v/totA:0}; c.style={font:{size:9},border:EST.bordeCelda,numFmt:'0.0%'}; });
+  wsR.addConditionalFormatting({ref:`I13:I${12+canales.length}`, rules:[{type:'dataBar', cfvo:[{type:'min'},{type:'max'}], color:{argb:'FFFBBF24'}}]});
+  const nf = 28;
+  wsR.getCell(nf,2).value='Hojas: Detalle (todas las facturas, con filtros) · Canal x Mes · Vendedor x Mes · Vendedor x Canal · Clientes'+(ciudades.length?' · Ciudades':'')+'. Para ver otro año cambia la celda C3; para filtrar por fecha, canal o vendedor usa los filtros de la hoja Detalle (las demás hojas siempre muestran el total del año).';
+  wsR.getCell(nf,2).style={font:{size:9,color:{argb:'FF475569'}},alignment:{wrapText:true,vertical:'top'}}; wsR.mergeCells(nf,2,nf+2,10);
+  wsR.columns=[{width:3},{width:26},{width:20},{width:14},{width:18},{width:12},{width:3},{width:24},{width:20},{width:10}];
+
+  const fch = rvFecha(filas[filas.length-1].fecha);
+  await pvExcelDescargar(wb, `Ventas_detalladas_ILUMAX_${fch.getFullYear()}-${String(fch.getMonth()+1).padStart(2,'0')}-${String(fch.getDate()).padStart(2,'0')}.xlsx`);
+  toast(`✅ Excel detallado generado — ${filas.length} facturas, ${canales.length} canales, ${vendedores.length} vendedores`,'ok');
 }
 
 function rvDescargarReporte() {
