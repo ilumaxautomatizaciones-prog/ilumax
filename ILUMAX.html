@@ -5706,26 +5706,32 @@ function presTblAnio(){
 }
 function presTblCambiarAnio(d){ PRES_TBL.anio = presTblAnio()+d; PRES_TBL_PEND = {}; PRES_TBL.solo = undefined; presTblRender(); }
 var PRES_TBL = { col:'cat', dir:1 };
-function presTblOrden(col){ if(PRES_TBL.col===col) PRES_TBL.dir=-PRES_TBL.dir; else { PRES_TBL.col=col; PRES_TBL.dir=(col==='cat'||col==='sub'||col==='cc')?1:-1; } presTblRender(); }
+function presTblOrden(col){ if(PRES_TBL.col===col) PRES_TBL.dir=-PRES_TBL.dir; else { PRES_TBL.col=col; PRES_TBL.dir=(col==='cat'||col==='sub'||col==='cc'||col==='desc')?1:-1; } presTblRender(); }
 function presTblEditable(p){ return !p || !p.estado || p.estado==='borrador' || p.estado==='devuelto'; }
+function presTblItemsDe(p){ return (Array.isArray(p.items) && p.items.length) ? p.items : [{ cc:p.centroCosto||'', desc:p.obs||'', valor:p.monto }]; }
+function presTblClave(sub, cc, desc){ return sub+'||'+siesaResolverCC(cc||'')+'||'+String(desc||'').trim().toLowerCase(); }
+var PRES_TBL_ROWS = {};
+// Una fila por ÍTEM (subcategoría + centro de costo + descripción), no por subcategoría
 function presTblFilas(anio){
-  var porSub = {};
+  var rows = {};
   getPresupuestos().filter(function(p){ return p.area===CU.area && p.anio===anio; }).forEach(function(p){
-    var k = p.subCodigo;
-    var f = porSub[k] || (porSub[k] = { sub:k, cat:p.catNombre||'', subNombre:p.subNombre||k, cc:'', m:{}, p:{}, total:0, estados:{} });
-    f.m[p.mes] = (f.m[p.mes]||0) + (parseFloat(p.monto)||0);
-    f.p[p.mes] = p;
-    f.total += parseFloat(p.monto)||0;
-    f.estados[p.estado||'borrador'] = 1;
-    if(!f.cc){ var it=(p.items&&p.items[0])||{}; f.cc = nombreCentroCostoCod(it.cc||p.centroCosto||''); }
+    presTblItemsDe(p).forEach(function(it){
+      var k = presTblClave(p.subCodigo, it.cc, it.desc);
+      var f = rows[k] || (rows[k] = { k:k, sub:p.subCodigo, cat:p.catNombre||'', subNombre:p.subNombre||p.subCodigo, ccCod:siesaResolverCC(it.cc||''), cc:nombreCentroCostoCod(it.cc||''), desc:String(it.desc||'').trim(), m:{}, p:{}, total:0, estados:{} });
+      var v = parseFloat(it.valor)||0;
+      f.m[p.mes] = (f.m[p.mes]||0) + v; f.p[p.mes] = p; f.total += v; f.estados[p.estado||'borrador'] = 1;
+    });
   });
+  var conDatos = {}; Object.keys(rows).forEach(function(k){ conDatos[rows[k].sub] = 1; });
   (typeof SUBS_ILUMAX!=='undefined' ? SUBS_ILUMAX : []).forEach(function(sb_){
-    if(porSub[sb_.codigo]) return;
+    if(conDatos[sb_.codigo]) return;
     var cat = (typeof CATS_ILUMAX!=='undefined' ? CATS_ILUMAX : []).find(function(c){ return sb_.codigo.indexOf(c.codigo)===0; });
-    porSub[sb_.codigo] = { sub:sb_.codigo, cat:cat?cat.nombre:'', subNombre:sb_.nombre, cc:'', m:{}, p:{}, total:0, estados:{}, vacia:true };
+    var k = sb_.codigo+'||vacia';
+    rows[k] = { k:k, sub:sb_.codigo, cat:cat?cat.nombre:'', subNombre:sb_.nombre, ccCod:'', cc:'', desc:'', m:{}, p:{}, total:0, estados:{}, vacia:true };
   });
-  var filas = Object.values(porSub), c = PRES_TBL.col, d = PRES_TBL.dir;
-  var val = function(f){ return c==='cat' ? (f.cat+' '+f.subNombre).toLowerCase() : c==='sub' ? f.subNombre.toLowerCase() : c==='cc' ? f.cc.toLowerCase() : c==='total' ? f.total : (f.m[parseInt(c.slice(1),10)]||0); };
+  PRES_TBL_ROWS = rows;
+  var filas = Object.values(rows), c = PRES_TBL.col, d = PRES_TBL.dir;
+  var val = function(f){ return c==='cat' ? (f.cat+' '+f.subNombre+' '+f.desc).toLowerCase() : c==='sub' ? (f.subNombre+' '+f.desc).toLowerCase() : c==='desc' ? f.desc.toLowerCase() : c==='cc' ? f.cc.toLowerCase() : c==='total' ? f.total : (f.m[parseInt(c.slice(1),10)]||0); };
   filas.sort(function(x,y){ var a=val(x), b=val(y); return (a<b?-1:a>b?1:0)*d; });
   return filas;
 }
@@ -5738,44 +5744,48 @@ function presTblRender(){
   if(PRES_TBL.q===undefined) PRES_TBL.q = '';
   var nm=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   var th = function(col,txt,al){ var on=PRES_TBL.col===col; return '<th onclick="presTblOrden(\''+col+'\')" style="cursor:pointer;user-select:none;padding:7px 6px;font-size:10px;font-weight:800;color:'+(on?'var(--bl)':'var(--mu)')+';text-align:'+(al||'right')+';white-space:nowrap;position:sticky;top:0;background:var(--w);border-bottom:2px solid var(--b1);">'+txt+(on?(PRES_TBL.dir>0?' ▲':' ▼'):' ↕')+'</th>'; };
+  var thf = function(t){ return '<th style="position:sticky;top:0;background:var(--w);border-bottom:2px solid var(--b1);font-size:10px;color:var(--mu);padding:7px 6px;">'+t+'</th>'; };
   var tot = {}, totAll = 0;
   var body = filas.map(function(f){
-    var cells = '';
+    var kk = encodeURIComponent(f.k), cells = '';
     for(var m=1;m<=12;m++){
       var p=f.p[m], ed=presTblEditable(p), v=f.m[m]||0;
       tot[m]=(tot[m]||0)+v;
+      var pend = PRES_TBL_PEND[f.k+'@@'+m];
+      if(pend!==undefined) v = pend;
       cells += '<td style="padding:2px 3px;">'+(ed && f.vacia
         ? '<input type="text" readonly placeholder="+" title="Define centro de costo y descripción" onclick="presTblEditarFila(\''+f.sub+'\')" style="width:84px;text-align:right;font-size:11px;padding:4px 5px;border:1px dashed var(--b1);border-radius:6px;background:var(--bg);cursor:pointer;">'
         : ed
-        ? '<input type="number" min="0" data-sub="'+f.sub+'" data-mes="'+m+'" value="'+(v||'')+'" placeholder="·" onchange="presTblEditar(this)" style="width:84px;text-align:right;font-size:11px;padding:4px 5px;border:1px solid var(--b1);border-radius:6px;background:var(--w);">'
+        ? '<input type="number" min="0" data-k="'+kk+'" data-mes="'+m+'" value="'+(v||'')+'" placeholder="·" onchange="presTblEditar(this)" style="width:84px;text-align:right;font-size:11px;padding:4px 5px;border:1px solid '+(pend!==undefined?'#f59e0b':'var(--b1)')+';border-radius:6px;background:'+(pend!==undefined?'#fef9c3':'var(--w)')+';">'
         : '<div title="Estado: '+(p.estado||'')+' — no editable" style="text-align:right;font-size:11px;padding:4px 6px;color:var(--mu);">'+fmt(v)+'</div>')+'</td>';
     }
     totAll += f.total;
-    return '<tr class="pres-tbl-fila" data-vacia="'+(f.vacia?1:0)+'" data-q="'+presNorm(f.cat+' '+f.subNombre+' '+f.sub+' '+f.cc).replace(/"/g,'')+'" style="border-bottom:1px solid var(--b1);">'
+    return '<tr class="pres-tbl-fila" data-vacia="'+(f.vacia?1:0)+'" data-q="'+presNorm(f.cat+' '+f.subNombre+' '+f.desc+' '+f.sub+' '+f.cc).replace(/"/g,'')+'" style="border-bottom:1px solid var(--b1);">'
       + '<td style="padding:6px;font-size:10px;color:var(--mu);white-space:nowrap;">'+f.cat+'</td>'
       + '<td style="padding:6px;font-size:11px;font-weight:600;white-space:nowrap;">'+f.subNombre+'</td>'
+      + '<td style="padding:6px;font-size:11px;white-space:nowrap;">'+(f.desc||'<span style="color:var(--mu);">—</span>')+'</td>'
       + '<td style="padding:6px;font-size:10px;color:var(--mu);white-space:nowrap;">'+(f.cc||'—')+'</td>'
       + cells
       + '<td style="padding:6px;font-size:12px;font-weight:800;color:var(--bl);text-align:right;white-space:nowrap;">'+fmt(f.total)+'</td>'
       + '<td style="padding:6px;">'+Object.keys(f.estados).map(bdgEstado).join(' ')+'</td>'
-      + '<td style="padding:6px;white-space:nowrap;"><button class="btn btn-g btn-xs" title="Editar (abre el formulario de creación)" onclick="presTblEditarFila(\''+f.sub+'\')">✏️</button>'+(f.vacia?'':' <button class="btn btn-rd btn-xs" title="Borrar fila" onclick="presTblEliminarFila(\''+f.sub+'\')">🗑️</button>')+'</td></tr>';
+      + '<td style="padding:6px;white-space:nowrap;"><button class="btn btn-g btn-xs" title="Editar (abre el formulario de creación)" onclick="presTblEditarFila(\''+f.sub+'\')">✏️</button>'+(f.vacia?'':' <button class="btn btn-rd btn-xs" title="Borrar este ítem" onclick="presTblEliminarFila(\''+kk+'\')">🗑️</button>')+'</td></tr>';
   }).join('');
-  var foot = '<tr style="background:var(--s1);font-weight:800;"><td colspan="3" style="padding:7px 6px;font-size:11px;">TOTAL '+anio+'</td>'
+  var foot = '<tr style="background:var(--s1);font-weight:800;"><td colspan="4" style="padding:7px 6px;font-size:11px;">TOTAL '+anio+'</td>'
     + nm.map(function(_,i){ return '<td style="padding:7px 6px;font-size:11px;text-align:right;">'+fmt(tot[i+1]||0)+'</td>'; }).join('')
     + '<td style="padding:7px 6px;font-size:12px;text-align:right;color:var(--bl);">'+fmt(totAll)+'</td><td></td><td></td></tr>';
   el.innerHTML = '<div class="area-card" style="margin-bottom:14px;padding:12px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
-    + '<div style="font-size:13px;font-weight:800;">📅 Presupuesto '+anio+' — '+CU.area+' <span style="font-weight:400;font-size:10px;color:var(--mu);">· clic en un encabezado para ordenar · edita las casillas y pulsa 💾 Guardar cambios · deja 0 para borrar un mes</span></div>'
+    + '<div style="font-size:13px;font-weight:800;">📅 Presupuesto '+anio+' — '+CU.area+' <span style="font-weight:400;font-size:10px;color:var(--mu);">· una fila por ítem · clic en un encabezado para ordenar · edita las casillas y pulsa 💾 Guardar cambios · deja 0 para borrar un mes</span></div>'
     + '<div style="display:flex;gap:6px;align-items:center;"><button class="btn btn-g btn-sm" onclick="presTblCambiarAnio(-1)">‹</button><b style="font-size:13px;">'+anio+'</b><button class="btn btn-g btn-sm" onclick="presTblCambiarAnio(1)">›</button><button id="pres-tbl-guardar" class="btn btn-bl btn-sm" style="display:'+(presTblPendN()?'inline-flex':'none')+';" onclick="presTblGuardar()">💾 Guardar cambios ('+presTblPendN()+')</button>'
     + (presTblPendN()?'<button class="btn btn-g btn-sm" onclick="presTblDescartar()">Descartar</button>':'')
     + '<button class="btn btn-p btn-sm" onclick="abrirModalPres()">+ Agregar</button></div></div>'
     + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">'
-    + '<input id="pres-tbl-q" class="inp" placeholder="🔍 Buscar categoría o subcategoría..." value="'+String(PRES_TBL.q).replace(/"/g,'&quot;')+'" oninput="PRES_TBL.q=this.value;presTblFiltrar()" style="flex:1 1 220px;font-size:12px;">'
+    + '<input id="pres-tbl-q" class="inp" placeholder="🔍 Buscar categoría, subcategoría o ítem..." value="'+String(PRES_TBL.q).replace(/"/g,'&quot;')+'" oninput="PRES_TBL.q=this.value;presTblFiltrar()" style="flex:1 1 220px;font-size:12px;">'
     + '<label style="display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer;"><input type="checkbox" id="pres-tbl-solo" '+(PRES_TBL.solo?'checked ':'')+'onchange="PRES_TBL.solo=this.checked;presTblFiltrar()"> Solo con valores</label>'
     + '<span id="pres-tbl-n" style="font-size:10px;color:var(--mu);"></span></div>'
     + '<div style="overflow:auto;max-height:480px;border:1px solid var(--b1);border-radius:10px;"><table style="border-collapse:collapse;min-width:100%;">'
-    + '<thead><tr>'+th('cat','Categoría','left')+th('sub','Subcategoría','left')+th('cc','Centro de costo','left')
-    + nm.map(function(n,i){ return th('m'+(i+1),n); }).join('')+th('total','Total')+'<th style="position:sticky;top:0;background:var(--w);border-bottom:2px solid var(--b1);font-size:10px;color:var(--mu);padding:7px 6px;">Estado</th><th style="position:sticky;top:0;background:var(--w);border-bottom:2px solid var(--b1);font-size:10px;color:var(--mu);padding:7px 6px;">Acciones</th></tr></thead>'
+    + '<thead><tr>'+th('cat','Categoría','left')+th('sub','Subcategoría','left')+th('desc','Ítem / descripción','left')+th('cc','Centro de costo','left')
+    + nm.map(function(n,i){ return th('m'+(i+1),n); }).join('')+th('total','Total')+thf('Estado')+thf('Acciones')+'</tr></thead>'
     + '<tbody>'+body+foot+'</tbody></table></div></div>';
   presTblFiltrar();
 }
@@ -5784,13 +5794,13 @@ function presTblFiltrar(){
   document.querySelectorAll('#pres-tabla-anio .pres-tbl-fila').forEach(function(r){
     tot++; var ok = (!q || r.dataset.q.indexOf(q)>=0) && (!solo || r.dataset.vacia!=='1'); r.style.display = ok?'':'none'; if(ok) n++;
   });
-  var e = document.getElementById('pres-tbl-n'); if(e) e.textContent = n+' de '+tot+' subcategorías';
+  var e = document.getElementById('pres-tbl-n'); if(e) e.textContent = n+' de '+tot+' filas';
 }
 var PRES_TBL_PEND = {};
 function presTblPendN(){ return Object.keys(PRES_TBL_PEND).length; }
 function presTblEditar(inp){
-  var sub=inp.dataset.sub, mes=parseInt(inp.dataset.mes,10);
-  PRES_TBL_PEND[sub+'|'+mes] = Math.max(0, parseFloat(inp.value)||0);
+  var k = decodeURIComponent(inp.dataset.k), mes = parseInt(inp.dataset.mes,10);
+  PRES_TBL_PEND[k+'@@'+mes] = Math.max(0, parseFloat(inp.value)||0);
   inp.style.background = '#fef9c3'; inp.style.borderColor = '#f59e0b';
   var b = document.getElementById('pres-tbl-guardar');
   if(b){ b.style.display='inline-flex'; b.textContent = '💾 Guardar cambios ('+presTblPendN()+')'; }
@@ -5799,49 +5809,60 @@ function presTblDescartar(){ PRES_TBL_PEND = {}; presTblRender(); }
 function presTblApi(fn, payload){
   return api(fn, payload).then(function(r){ return !r || r.ok!==false; }).catch(function(){ return false; });
 }
+function presTblRecalc(p){ p.monto = presTblItemsDe(p).reduce(function(a,it){ return a+(parseFloat(it.valor)||0); },0); p.ts = new Date().toISOString(); }
 async function presTblGuardar(){
   var keys = Object.keys(PRES_TBL_PEND); if(!keys.length) return;
-  var anio = presTblAnio(), presups = getPresupuestos(), tareas = [], avisos = [];
-  keys.forEach(function(k){
-    var sub = k.split('|')[0], mes = parseInt(k.split('|')[1],10), v = PRES_TBL_PEND[k];
-    var p = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===sub; });
-    if(p){
-      if(!presTblEditable(p)){ avisos.push('Mes '+mes+' ya está en revisión'); return; }
-      if(v===0){ presups = presups.filter(function(x){ return x.id!==p.id; }); tareas.push(['eliminarPresupuesto',{id:p.id}]); return; }
-      if(Array.isArray(p.items) && p.items.length>1){ avisos.push('Mes '+mes+' tiene varios ítems: edítalo con ✏️ Editar del mes'); return; }
-      var it0 = (p.items&&p.items[0]) || { cc:p.centroCosto||'', desc:p.obs||'', valor:0 };
-      it0.valor=v; p.items=[it0]; p.monto=v; p.ts=new Date().toISOString();
-      tareas.push(['guardarPresupuesto',{presupuesto:p}]);
-    } else {
+  var anio = presTblAnio(), presups = getPresupuestos(), tocados = {}, borrar = {}, avisos = [];
+  keys.forEach(function(pk){
+    var k = pk.split('@@')[0], mes = parseInt(pk.split('@@')[1],10), v = PRES_TBL_PEND[pk], f = PRES_TBL_ROWS[k];
+    if(!f || f.vacia) return;
+    var p = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===f.sub; });
+    if(p && !presTblEditable(p)){ avisos.push('Mes '+mes+' ya está en revisión'); return; }
+    if(!p){
       if(!(v>0)) return;
-      var ref = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub; });
-      var itr = ref && ref.items && ref.items[0] ? ref.items[0] : { cc: ref?ref.centroCosto:'', desc: ref?ref.obs:'' };
-      if(!ref || !itr.cc || !String(itr.desc||'').trim()){ avisos.push('Sin centro de costo/descripción de referencia para '+(ref?ref.subNombre:sub)); return; }
-      var nuevo = { id:'PRES-'+presAreaSlug(CU.area)+'-'+sub+'-'+anio+'-'+mes, area:CU.area, catCodigo:ref.catCodigo, catNombre:ref.catNombre,
-        subCodigo:sub, subNombre:ref.subNombre, mes:mes, anio:anio, monto:v, obs:ref.obs||itr.desc, items:[{cc:itr.cc, desc:itr.desc, valor:v}],
-        centroCosto:siesaResolverCC(itr.cc), estado:'borrador', autor:CU.nombre, autorEmail:CU.email, fecha:new Date().toLocaleDateString('es-CO'), ts:new Date().toISOString() };
-      presups.push(nuevo); tareas.push(['guardarPresupuesto',{presupuesto:nuevo}]);
+      var ref = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===f.sub; });
+      p = { id:'PRES-'+presAreaSlug(CU.area)+'-'+f.sub+'-'+anio+'-'+mes, area:CU.area, catCodigo:ref?ref.catCodigo:f.sub.substring(0,4), catNombre:ref?ref.catNombre:f.cat,
+        subCodigo:f.sub, subNombre:f.subNombre, mes:mes, anio:anio, monto:0, obs:f.desc, items:[], centroCosto:f.ccCod,
+        estado:'borrador', autor:CU.nombre, autorEmail:CU.email, fecha:new Date().toLocaleDateString('es-CO'), ts:new Date().toISOString() };
+      presups.push(p);
     }
+    var items = presTblItemsDe(p).map(function(it){ return {cc:it.cc, desc:it.desc, valor:it.valor}; });
+    var idx = items.findIndex(function(it){ return presTblClave(f.sub, it.cc, it.desc)===k; });
+    if(idx>=0){ if(v>0) items[idx].valor = v; else items.splice(idx,1); }
+    else if(v>0) items.push({cc:f.ccCod, desc:f.desc, valor:v});
+    p.items = items; presTblRecalc(p);
+    if(!items.length) borrar[p.id] = 1; else tocados[p.id] = p;
   });
-  savePresupuestos(presups); PRES_TBL_PEND = {}; presTblRender();
-  var res = await Promise.all(tareas.map(function(t){ return presTblApi(t[0], t[1]); }));
-  var mal = res.filter(function(r){ return !r; }).length;
+  Object.keys(borrar).forEach(function(id){ delete tocados[id]; });
+  presups = presups.filter(function(x){ return !borrar[x.id]; });
+  savePresupuestos(presups); PRES_TBL_PEND = {}; presTblRender(); renderPres();
+  var tareas = Object.values(tocados).map(function(p){ return presTblApi('guardarPresupuesto',{presupuesto:p}); })
+    .concat(Object.keys(borrar).map(function(id){ return presTblApi('eliminarPresupuesto',{id:id}); }));
+  var res = await Promise.all(tareas), mal = res.filter(function(r){ return !r; }).length;
   if(mal) toast('⚠️ '+mal+' cambio(s) no se guardaron en Supabase','err');
-  else toast('✅ '+tareas.length+' cambio(s) guardados'+(avisos.length?' · '+avisos.join('; '):''), avisos.length?'wa':'ok');
+  else toast('✅ Cambios guardados'+(avisos.length?' · '+avisos.join('; '):''), avisos.length?'wa':'ok');
 }
-async function presTblEliminarFila(sub){
-  var anio=presTblAnio(), presups=getPresupuestos();
-  var mios = presups.filter(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub; });
-  var borrables = mios.filter(presTblEditable);
-  if(!borrables.length){ toast('Esa fila ya está en revisión — no se puede borrar','wa'); return; }
-  var nom = mios[0] ? mios[0].subNombre : sub;
-  if(!confirm('¿Borrar "'+nom+'" de '+anio+' ('+borrables.length+' mes(es))? No se puede deshacer.')) return;
-  var ids = {}; borrables.forEach(function(p){ ids[p.id]=1; });
-  savePresupuestos(presups.filter(function(x){ return !ids[x.id]; }));
-  Object.keys(PRES_TBL_PEND).forEach(function(k){ if(k.split('|')[0]===sub) delete PRES_TBL_PEND[k]; });
+async function presTblEliminarFila(kk){
+  var k = decodeURIComponent(kk), f = PRES_TBL_ROWS[k]; if(!f) return;
+  var anio = presTblAnio(), presups = getPresupuestos();
+  var meses = Object.keys(f.p).map(Number).filter(function(m){ return presTblEditable(f.p[m]); });
+  if(!meses.length){ toast('Ese ítem ya está en revisión — no se puede borrar','wa'); return; }
+  if(!confirm('¿Borrar el ítem "'+(f.desc||f.subNombre)+'" de '+f.subNombre+' en '+anio+' ('+meses.length+' mes(es))? No se puede deshacer.')) return;
+  var tocados = {}, borrar = {};
+  meses.forEach(function(m){
+    var p = presups.find(function(x){ return x.id===f.p[m].id; }); if(!p) return;
+    p.items = presTblItemsDe(p).filter(function(it){ return presTblClave(f.sub, it.cc, it.desc)!==k; });
+    presTblRecalc(p);
+    if(!p.items.length) borrar[p.id]=1; else tocados[p.id]=p;
+  });
+  presups = presups.filter(function(x){ return !borrar[x.id]; });
+  savePresupuestos(presups);
+  Object.keys(PRES_TBL_PEND).forEach(function(pk){ if(pk.split('@@')[0]===k) delete PRES_TBL_PEND[pk]; });
   presTblRender(); renderPres();
-  var res = await Promise.all(borrables.map(function(p){ return presTblApi('eliminarPresupuesto',{id:p.id}); }));
-  if(res.some(function(r){ return !r; })) toast('⚠️ Algunos no se borraron en Supabase','err'); else toast('🗑️ Fila borrada','ok');
+  var tareas = Object.values(tocados).map(function(p){ return presTblApi('guardarPresupuesto',{presupuesto:p}); })
+    .concat(Object.keys(borrar).map(function(id){ return presTblApi('eliminarPresupuesto',{id:id}); }));
+  var res = await Promise.all(tareas);
+  if(res.some(function(r){ return !r; })) toast('⚠️ Algunos cambios no se guardaron en Supabase','err'); else toast('🗑️ Ítem borrado','ok');
 }
 function presTblEditarFila(sub){
   var anio=presTblAnio();
@@ -5870,6 +5891,7 @@ function presTblEditarFila(sub){
   irPresStep(3);
   openMo('mo-pres');
 }
+
 function renderPresVistaLider(el, mes, anio) {
   el.innerHTML = '<div id="pres-tabla-anio"></div><div id="pres-vista-mes"></div>';
   presTblRender();
