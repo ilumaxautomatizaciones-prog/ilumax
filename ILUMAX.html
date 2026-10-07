@@ -5732,47 +5732,95 @@ function presTblRender(){
       + '<td style="padding:6px;font-size:10px;color:var(--mu);white-space:nowrap;">'+(f.cc||'—')+'</td>'
       + cells
       + '<td style="padding:6px;font-size:12px;font-weight:800;color:var(--bl);text-align:right;white-space:nowrap;">'+fmt(f.total)+'</td>'
-      + '<td style="padding:6px;">'+Object.keys(f.estados).map(bdgEstado).join(' ')+'</td></tr>';
+      + '<td style="padding:6px;">'+Object.keys(f.estados).map(bdgEstado).join(' ')+'</td>'
+      + '<td style="padding:6px;white-space:nowrap;"><button class="btn btn-g btn-xs" title="Editar descripción y centro de costo" onclick="presTblEditarFila(\''+f.sub+'\')">✏️</button> <button class="btn btn-rd btn-xs" title="Borrar fila" onclick="presTblEliminarFila(\''+f.sub+'\')">🗑️</button></td></tr>';
   }).join('');
   var foot = '<tr style="background:var(--s1);font-weight:800;"><td colspan="3" style="padding:7px 6px;font-size:11px;">TOTAL '+anio+'</td>'
     + nm.map(function(_,i){ return '<td style="padding:7px 6px;font-size:11px;text-align:right;">'+fmt(tot[i+1]||0)+'</td>'; }).join('')
-    + '<td style="padding:7px 6px;font-size:12px;text-align:right;color:var(--bl);">'+fmt(totAll)+'</td><td></td></tr>';
+    + '<td style="padding:7px 6px;font-size:12px;text-align:right;color:var(--bl);">'+fmt(totAll)+'</td><td></td><td></td></tr>';
   el.innerHTML = '<div class="area-card" style="margin-bottom:14px;padding:12px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
-    + '<div style="font-size:13px;font-weight:800;">📅 Presupuesto '+anio+' — '+CU.area+' <span style="font-weight:400;font-size:10px;color:var(--mu);">· clic en un encabezado para ordenar · edita directo las casillas (solo borrador/devuelto)</span></div>'
-    + '<button class="btn btn-p btn-sm" onclick="abrirModalPres()">+ Agregar</button></div>'
+    + '<div style="font-size:13px;font-weight:800;">📅 Presupuesto '+anio+' — '+CU.area+' <span style="font-weight:400;font-size:10px;color:var(--mu);">· clic en un encabezado para ordenar · edita las casillas y pulsa 💾 Guardar cambios · deja 0 para borrar un mes</span></div>'
+    + '<div style="display:flex;gap:6px;align-items:center;"><button id="pres-tbl-guardar" class="btn btn-bl btn-sm" style="display:'+(presTblPendN()?'inline-flex':'none')+';" onclick="presTblGuardar()">💾 Guardar cambios ('+presTblPendN()+')</button>'
+    + (presTblPendN()?'<button class="btn btn-g btn-sm" onclick="presTblDescartar()">Descartar</button>':'')
+    + '<button class="btn btn-p btn-sm" onclick="abrirModalPres()">+ Agregar</button></div></div>'
     + '<div style="overflow:auto;max-height:480px;border:1px solid var(--b1);border-radius:10px;"><table style="border-collapse:collapse;min-width:100%;">'
     + '<thead><tr>'+th('cat','Categoría','left')+th('sub','Subcategoría','left')+th('cc','Centro de costo','left')
-    + nm.map(function(n,i){ return th('m'+(i+1),n); }).join('')+th('total','Total')+'<th style="position:sticky;top:0;background:var(--w);border-bottom:2px solid var(--b1);font-size:10px;color:var(--mu);padding:7px 6px;">Estado</th></tr></thead>'
+    + nm.map(function(n,i){ return th('m'+(i+1),n); }).join('')+th('total','Total')+'<th style="position:sticky;top:0;background:var(--w);border-bottom:2px solid var(--b1);font-size:10px;color:var(--mu);padding:7px 6px;">Estado</th><th style="position:sticky;top:0;background:var(--w);border-bottom:2px solid var(--b1);font-size:10px;color:var(--mu);padding:7px 6px;">Acciones</th></tr></thead>'
     + '<tbody>'+body+foot+'</tbody></table></div></div>';
 }
+var PRES_TBL_PEND = {};
+function presTblPendN(){ return Object.keys(PRES_TBL_PEND).length; }
 function presTblEditar(inp){
-  var sub=inp.dataset.sub, mes=parseInt(inp.dataset.mes,10), anio=new Date().getFullYear();
-  var v = Math.max(0, parseFloat(inp.value)||0);
-  var presups = getPresupuestos();
-  var p = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===sub; });
-  var guardar;
-  if(p){
-    if(!presTblEditable(p)){ toast('Este mes ya fue enviado a revisión — no se puede editar','wa'); presTblRender(); return; }
-    if(Array.isArray(p.items) && p.items.length>1){ toast('Ese mes tiene varios ítems — edítalo con el botón ✏️ Editar del mes','wa'); presTblRender(); return; }
-    var it0 = (p.items&&p.items[0]) || { cc:p.centroCosto||'', desc:p.obs||'', valor:0 };
-    it0.valor = v; p.items=[it0]; p.monto=v; p.ts=new Date().toISOString();
-    guardar = p;
-  } else {
-    if(!(v>0)){ presTblRender(); return; }
-    var ref = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub; });
-    var itr = ref && ref.items && ref.items[0] ? ref.items[0] : { cc: ref?ref.centroCosto:'', desc: ref?ref.obs:'' };
-    if(!ref || !itr.cc || !String(itr.desc||'').trim()){ toast('Esa subcategoría no tiene centro de costo/descripción de referencia — agrégala con "+ Agregar"','wa'); presTblRender(); return; }
-    guardar = { id:'PRES-'+presAreaSlug(CU.area)+'-'+sub+'-'+anio+'-'+mes, area:CU.area, catCodigo:ref.catCodigo, catNombre:ref.catNombre,
-      subCodigo:sub, subNombre:ref.subNombre, mes:mes, anio:anio, monto:v, obs:ref.obs||itr.desc, items:[{cc:itr.cc, desc:itr.desc, valor:v}],
-      centroCosto:siesaResolverCC(itr.cc), estado:'borrador', autor:CU.nombre, autorEmail:CU.email, fecha:new Date().toLocaleDateString('es-CO'), ts:new Date().toISOString() };
-    presups.push(guardar);
-  }
-  savePresupuestos(presups);
-  presTblRender();
-  api('guardarPresupuesto', {presupuesto: guardar}).then(function(r){
-    if(r && r.ok===false) toast('⚠️ No se guardó en Supabase: '+(r.error||''),'err'); else toast('✅ Guardado','ok');
-  }).catch(function(e){ toast('⚠️ No se guardó en Supabase: '+e.message,'err'); });
+  var sub=inp.dataset.sub, mes=parseInt(inp.dataset.mes,10);
+  PRES_TBL_PEND[sub+'|'+mes] = Math.max(0, parseFloat(inp.value)||0);
+  inp.style.background = '#fef9c3'; inp.style.borderColor = '#f59e0b';
+  var b = document.getElementById('pres-tbl-guardar');
+  if(b){ b.style.display='inline-flex'; b.textContent = '💾 Guardar cambios ('+presTblPendN()+')'; }
+}
+function presTblDescartar(){ PRES_TBL_PEND = {}; presTblRender(); }
+function presTblApi(fn, payload){
+  return api(fn, payload).then(function(r){ return !r || r.ok!==false; }).catch(function(){ return false; });
+}
+async function presTblGuardar(){
+  var keys = Object.keys(PRES_TBL_PEND); if(!keys.length) return;
+  var anio = new Date().getFullYear(), presups = getPresupuestos(), tareas = [], avisos = [];
+  keys.forEach(function(k){
+    var sub = k.split('|')[0], mes = parseInt(k.split('|')[1],10), v = PRES_TBL_PEND[k];
+    var p = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===sub; });
+    if(p){
+      if(!presTblEditable(p)){ avisos.push('Mes '+mes+' ya está en revisión'); return; }
+      if(v===0){ presups = presups.filter(function(x){ return x.id!==p.id; }); tareas.push(['eliminarPresupuesto',{id:p.id}]); return; }
+      if(Array.isArray(p.items) && p.items.length>1){ avisos.push('Mes '+mes+' tiene varios ítems: edítalo con ✏️ Editar del mes'); return; }
+      var it0 = (p.items&&p.items[0]) || { cc:p.centroCosto||'', desc:p.obs||'', valor:0 };
+      it0.valor=v; p.items=[it0]; p.monto=v; p.ts=new Date().toISOString();
+      tareas.push(['guardarPresupuesto',{presupuesto:p}]);
+    } else {
+      if(!(v>0)) return;
+      var ref = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub; });
+      var itr = ref && ref.items && ref.items[0] ? ref.items[0] : { cc: ref?ref.centroCosto:'', desc: ref?ref.obs:'' };
+      if(!ref || !itr.cc || !String(itr.desc||'').trim()){ avisos.push('Sin centro de costo/descripción de referencia para '+(ref?ref.subNombre:sub)); return; }
+      var nuevo = { id:'PRES-'+presAreaSlug(CU.area)+'-'+sub+'-'+anio+'-'+mes, area:CU.area, catCodigo:ref.catCodigo, catNombre:ref.catNombre,
+        subCodigo:sub, subNombre:ref.subNombre, mes:mes, anio:anio, monto:v, obs:ref.obs||itr.desc, items:[{cc:itr.cc, desc:itr.desc, valor:v}],
+        centroCosto:siesaResolverCC(itr.cc), estado:'borrador', autor:CU.nombre, autorEmail:CU.email, fecha:new Date().toLocaleDateString('es-CO'), ts:new Date().toISOString() };
+      presups.push(nuevo); tareas.push(['guardarPresupuesto',{presupuesto:nuevo}]);
+    }
+  });
+  savePresupuestos(presups); PRES_TBL_PEND = {}; presTblRender();
+  var res = await Promise.all(tareas.map(function(t){ return presTblApi(t[0], t[1]); }));
+  var mal = res.filter(function(r){ return !r; }).length;
+  if(mal) toast('⚠️ '+mal+' cambio(s) no se guardaron en Supabase','err');
+  else toast('✅ '+tareas.length+' cambio(s) guardados'+(avisos.length?' · '+avisos.join('; '):''), avisos.length?'wa':'ok');
+}
+async function presTblEliminarFila(sub){
+  var anio=new Date().getFullYear(), presups=getPresupuestos();
+  var mios = presups.filter(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub; });
+  var borrables = mios.filter(presTblEditable);
+  if(!borrables.length){ toast('Esa fila ya está en revisión — no se puede borrar','wa'); return; }
+  var nom = mios[0] ? mios[0].subNombre : sub;
+  if(!confirm('¿Borrar "'+nom+'" de '+anio+' ('+borrables.length+' mes(es))? No se puede deshacer.')) return;
+  var ids = {}; borrables.forEach(function(p){ ids[p.id]=1; });
+  savePresupuestos(presups.filter(function(x){ return !ids[x.id]; }));
+  Object.keys(PRES_TBL_PEND).forEach(function(k){ if(k.split('|')[0]===sub) delete PRES_TBL_PEND[k]; });
+  presTblRender(); renderPres();
+  var res = await Promise.all(borrables.map(function(p){ return presTblApi('eliminarPresupuesto',{id:p.id}); }));
+  if(res.some(function(r){ return !r; })) toast('⚠️ Algunos no se borraron en Supabase','err'); else toast('🗑️ Fila borrada','ok');
+}
+async function presTblEditarFila(sub){
+  var anio=new Date().getFullYear(), presups=getPresupuestos();
+  var mios = presups.filter(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub && presTblEditable(x); });
+  if(!mios.length){ toast('Esa fila ya está en revisión — no se puede editar','wa'); return; }
+  var it0 = (mios[0].items&&mios[0].items[0])||{cc:mios[0].centroCosto, desc:mios[0].obs};
+  var desc = prompt('Descripción para todos los meses de "'+mios[0].subNombre+'":', it0.desc||''); if(desc===null) return;
+  var cc = prompt('Código de centro de costo (ej. 12005):', siesaResolverCC(it0.cc||'')); if(cc===null) return;
+  if(!desc.trim() || !cc.trim()){ toast('Descripción y centro de costo son obligatorios','wa'); return; }
+  mios.forEach(function(p){
+    var its = (p.items&&p.items.length) ? p.items : [{valor:p.monto}];
+    its[0].desc = desc.trim(); its[0].cc = cc.trim(); p.items = its; p.obs = desc.trim(); p.centroCosto = siesaResolverCC(cc.trim());
+  });
+  savePresupuestos(presups); presTblRender();
+  var res = await Promise.all(mios.map(function(p){ return presTblApi('guardarPresupuesto',{presupuesto:p}); }));
+  if(res.some(function(r){ return !r; })) toast('⚠️ Algunos no se guardaron en Supabase','err'); else toast('✅ Fila actualizada','ok');
 }
 
 function renderPresVistaLider(el, mes, anio) {
@@ -34163,6 +34211,20 @@ async function paGuardar(subCod, area, catCod, ptoId, estado) {
 }
 
 // ── CONFIGURAR ───────────────────────────────────────────────────────
+
+function paFiltrarConfig(){
+  var norm = function(t){ return String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase(); };
+  var qc = norm((document.getElementById('pa-f-cat')||{}).value||'');
+  var n1 = 0; document.querySelectorAll('.pa-cfg-cat').forEach(function(e){ var ok = !qc || e.dataset.q.indexOf(qc)>=0; e.style.display = ok?'':'none'; if(ok) n1++; });
+  var qs = norm((document.getElementById('pa-f-sub')||{}).value||'');
+  var fc = (document.getElementById('pa-f-subcat')||{}).value||'';
+  var fa = (document.getElementById('pa-f-subarea')||{}).value||'';
+  var n2 = 0; document.querySelectorAll('.pa-cfg-sub').forEach(function(e){
+    var ok = (!qs || e.dataset.q.indexOf(qs)>=0) && (!fc || e.dataset.cat===fc) && (!fa || e.dataset.areas.split('|').indexOf(fa)>=0);
+    e.style.display = ok?'':'none'; if(ok) n2++; });
+  var a=document.getElementById('pa-f-cat-n'); if(a) a.textContent = n1+' de '+PA.cats.length;
+  var b=document.getElementById('pa-f-sub-n'); if(b) b.textContent = n2+' de '+PA.subs.length;
+}
 function paRenderConfigurar(el) {
   const areasConocidas = [...new Set(PA.perms.map(p=>p.area))].filter(Boolean).sort();
 
@@ -34178,9 +34240,13 @@ function paRenderConfigurar(el) {
         <input class="pa-inp" id="pa-cat-nom" placeholder="Nombre (ej: GASTOS FINANCIEROS)" style="margin-bottom:5px;">
         <button class="btn btn-bl btn-sm" style="width:100%;" onclick="paCrearCat()">+ Agregar</button>
       </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+        <input class="pa-inp" id="pa-f-cat" placeholder="🔍 Buscar categoría (nombre o código)..." oninput="paFiltrarConfig()" style="flex:1;">
+        <span id="pa-f-cat-n" style="font-size:10px;color:var(--mu);white-space:nowrap;">${PA.cats.length} de ${PA.cats.length}</span>
+      </div>
       <div style="max-height:280px;overflow-y:auto;">
         ${PA.cats.map(c=>`
-        <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--b1);border-radius:8px;margin-bottom:5px;">
+        <div class="pa-cfg-cat" data-q="${(c.nombre+' '+c.codigo).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/"/g,'')}" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--b1);border-radius:8px;margin-bottom:5px;">
           <div style="width:8px;height:8px;border-radius:50%;background:${PA_COLORES[c.codigo]||'#64748b'};"></div>
           <div style="flex:1;"><div style="font-size:11px;font-weight:700;">${c.nombre}</div><div style="font-size:9px;color:var(--mu);">${c.codigo}</div></div>
           <span style="font-size:9px;color:var(--mu);">${PA.subs.filter(s=>s.cat_codigo===c.codigo).length} sub</span>
@@ -34211,11 +34277,17 @@ function paRenderConfigurar(el) {
         </div>
         <button class="btn btn-bl btn-sm" style="width:100%;" onclick="paCrearSub()">+ Agregar subcategoría</button>
       </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
+        <input class="pa-inp" id="pa-f-sub" placeholder="🔍 Buscar subcategoría (nombre, código, centro de costo)..." oninput="paFiltrarConfig()" style="flex:1 1 200px;">
+        <select class="pa-inp" id="pa-f-subcat" onchange="paFiltrarConfig()" style="flex:0 1 150px;"><option value="">Todas las categorías</option>${PA.cats.map(c=>`<option value="${c.codigo}">${c.codigo} · ${c.nombre}</option>`).join('')}</select>
+        <select class="pa-inp" id="pa-f-subarea" onchange="paFiltrarConfig()" style="flex:0 1 130px;"><option value="">Todas las áreas</option>${areasConocidas.map(a=>`<option value="${a}">${a}</option>`).join('')}</select>
+        <span id="pa-f-sub-n" style="font-size:10px;color:var(--mu);white-space:nowrap;">${PA.subs.length} de ${PA.subs.length}</span>
+      </div>
       <div style="max-height:380px;overflow-y:auto;">
         ${PA.subs.map(s=>{
           const permsS = PA.perms.filter(p=>p.sub_codigo===s.codigo);
           const areas  = [...new Set(permsS.map(p=>p.area))];
-          return `<div style="padding:7px 10px;border:1px solid var(--b1);border-radius:8px;margin-bottom:4px;">
+          return `<div class="pa-cfg-sub" data-q="${(s.nombre+' '+s.codigo+' '+(s.centro_costo||'')).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/"/g,'')}" data-cat="${s.cat_codigo}" data-areas="${areas.join('|').replace(/"/g,'')}" style="padding:7px 10px;border:1px solid var(--b1);border-radius:8px;margin-bottom:4px;">
             <div style="display:flex;align-items:center;gap:6px;">
               <div style="flex:1;"><div style="font-size:11px;font-weight:700;">${s.nombre}</div><div style="font-size:9px;color:var(--mu);">${s.codigo}${s.centro_costo?' · CC:'+s.centro_costo:''}</div></div>
               <button class="btn btn-g btn-xs" title="Editar" onclick="paEditarSub('${s.codigo}')">✏️</button>
