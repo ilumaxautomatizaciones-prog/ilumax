@@ -5472,7 +5472,7 @@ function renderPresHeader(mes, anio) {
              : esGerencia()     ? '📋 Presupuestos — Vista Gerencia'
              : '📊 Presupuesto — ' + CU.area;
   // Contabilidad también sube su propio presupuesto (área Cartera)
-  var subBtn = (esLider() || esContabilidad()) ? '<button class="btn btn-p btn-sm" onclick="abrirModalPres()">+ Subir presupuesto</button>' : '';
+  var subBtn = (esLider() || esContabilidad()) ? '<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-sm" onclick="pxlAbrir()" title="Sube el Excel de la plantilla de gastos">📥 Subir Excel de gastos</button><button class="btn btn-p btn-sm" onclick="abrirModalPres()">+ Subir presupuesto</button></div>' : '';
 
   el.innerHTML = '<div class="pres-header">'
     + '<div class="pres-header-top">'
@@ -7341,6 +7341,138 @@ async function guardarPresupuestoWizard() {
   } else {
     toast(nuevos.length + ' mes(es) guardado(s) en Supabase ✅', 'ok');
   }
+}
+
+
+// ══════════════════════════════════════════════════════════
+// SUBIR EXCEL DE GASTOS (plantilla «Plantilla_Presupuesto_Gastos_ILUMAX_2027.xlsx»)
+// Hoja «Presupuesto», datos desde la fila 9: A categoría · B subcategoría · D centro de costo ·
+// E descripción · F..Q ENE..DIC. Una fila = un ítem; se agrupa por subcategoría+mes (igual que el
+// asistente) y se guarda como borrador del área del usuario que sube.
+// ══════════════════════════════════════════════════════════
+var PXL = {regs:[], errores:[], filas:0, anio:null, areaXlsx:''};
+function pxlNz(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\s+/g,' ').trim(); }
+function pxlNum(v){
+  if(v===null || v===undefined || v==='') return 0;
+  if(typeof v==='number') return v;
+  var s = String(v).replace(/[\s$]/g,'');
+  if(/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g,'').replace(',','.');
+  else s = s.replace(',','.');
+  var n = Number(s); return isNaN(n) ? NaN : n;
+}
+function pxlAbrir(){
+  var i = document.getElementById('pxl-file');
+  if(!i){ i = document.createElement('input'); i.type='file'; i.id='pxl-file'; i.accept='.xlsx,.xlsm'; i.style.display='none';
+    i.onchange = function(){ if(i.files[0]) pxlLeer(i.files[0]); i.value=''; }; document.body.appendChild(i); }
+  i.click();
+}
+async function pxlLeer(file){
+  try{
+    var wb = XLSX.read(await file.arrayBuffer(), {type:'array'});
+    var ws = wb.Sheets['Presupuesto'];
+    if(!ws){ toast('No encuentro la hoja «Presupuesto». Usa la plantilla oficial de gastos.','er'); return; }
+    var rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null, blankrows:true});
+    PXL.anio = parseInt((rows[5]||[])[1],10) || presWizardAnio;
+    PXL.areaXlsx = String((rows[3]||[])[1]||'').trim();
+    var meses = {}, errores = [], filas = 0, grupos = {};
+    for(var i=8;i<rows.length;i++){
+      var r = rows[i]||[], n = i+1;
+      var cat = String(r[0]||'').trim(), sub = String(r[1]||'').trim(), ccT = String(r[3]||'').trim(), desc = String(r[4]||'').trim();
+      var vals = []; for(var m=0;m<12;m++) vals.push(pxlNum(r[5+m]));
+      var vacia = !cat && !sub && !ccT && !desc && vals.every(function(v){ return !v; });
+      if(vacia) continue;
+      filas++;
+      var err = null;
+      if(!cat) err = 'falta la categoría'; else if(!sub) err = 'falta la subcategoría';
+      var s = null;
+      if(!err){
+        var catCod = cat.split(' - ')[0].trim();
+        s = SUBS_ILUMAX.find(function(x){ return x.codigo.indexOf(catCod)===0 && pxlNz(x.nombre)===pxlNz(sub); });
+        if(!s) err = 'la subcategoría «'+sub+'» no existe en esa categoría o no tienes permiso para presupuestarla';
+      }
+      var ccCod = ccT.split(' - ')[0].trim();
+      if(!err && !ccT) err = 'falta el centro de costo';
+      if(!err && !CENTROS_COSTO_ILUMAX.some(function(c){ return c.codigo===ccCod; })) err = 'centro de costo no válido «'+ccT+'»';
+      if(!err && !desc) err = 'falta la descripción';
+      if(!err && vals.some(function(v){ return isNaN(v) || v<0; })) err = 'hay un valor mensual que no es un número válido';
+      if(!err && !vals.some(function(v){ return v>0; })) err = 'no tiene ningún valor mensual';
+      if(err){ errores.push('Fila '+n+': '+err); continue; }
+      vals.forEach(function(v,idx){
+        if(v>0){
+          var k = s.codigo+'|'+(idx+1);
+          (grupos[k] = grupos[k] || {sub:s, cat:cat.split(' - ')[0].trim(), mes:idx+1, items:[]}).items.push({cc:ccCod, desc:desc, valor:v});
+        }
+      });
+    }
+    var slug = presAreaSlug(CU.area), regs = [];
+    Object.keys(grupos).forEach(function(k){
+      var g = grupos[k], c = CATS_ILUMAX.find(function(x){ return x.codigo===g.cat; });
+      var monto = g.items.reduce(function(t,it){ return t+it.valor; },0);
+      regs.push({
+        id: 'PRES-'+slug+'-'+g.sub.codigo+'-'+PXL.anio+'-'+g.mes, area: CU.area,
+        catCodigo: g.cat, catNombre: c ? c.nombre : '', subCodigo: g.sub.codigo, subNombre: g.sub.nombre,
+        mes: g.mes, anio: PXL.anio, monto: monto,
+        obs: g.items.map(function(it){ return it.desc; }).filter(Boolean).join('; '),
+        items: g.items, centroCosto: siesaResolverCC(g.items[0].cc),
+        estado: 'borrador', autor: CU.nombre, autorEmail: CU.email,
+        fecha: new Date().toLocaleDateString('es-CO'), ts: new Date().toISOString()
+      });
+    });
+    PXL.regs = regs; PXL.errores = errores; PXL.filas = filas;
+    pxlVistaPrevia();
+  }catch(e){ console.error(e); toast('No pude leer el Excel: '+e.message,'er'); }
+}
+function pxlVistaPrevia(){
+  document.getElementById('mo-pxl')?.remove();
+  var existentes = getPresupuestos();
+  var pisa = PXL.regs.filter(function(r){ return existentes.some(function(p){ return p.id===r.id; }); }).length;
+  var total = PXL.regs.reduce(function(t,r){ return t+r.monto; },0);
+  var subs = {}; PXL.regs.forEach(function(r){ subs[r.subCodigo]=1; });
+  var fm = function(n){ return '$'+Math.round(n).toLocaleString('es-CO'); };
+  var avisoArea = (PXL.areaXlsx && pxlNz(PXL.areaXlsx)!==pxlNz(CU.area))
+    ? '<div style="background:#fff3cd;border-radius:8px;padding:8px 10px;margin-bottom:10px;">⚠️ El Excel dice área «<b>'+PXL.areaXlsx+'</b>» pero tu área en la app es «<b>'+CU.area+'</b>». Se guardará en <b>'+CU.area+'</b>.</div>' : '';
+  var errHtml = PXL.errores.length
+    ? '<div style="background:#fde2e2;border-radius:8px;padding:8px 10px;margin-bottom:10px;max-height:150px;overflow:auto;"><b>❌ '+PXL.errores.length+' fila(s) con problemas (NO se subirán):</b><br>'+PXL.errores.slice(0,40).map(function(e){ return '• '+e; }).join('<br>')+(PXL.errores.length>40?'<br>… y '+(PXL.errores.length-40)+' más':'')+'</div>' : '';
+  var puede = PXL.regs.length>0;
+  var mo = document.createElement('div'); mo.id='mo-pxl';
+  mo.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = '<div style="background:var(--w);border-radius:16px;width:100%;max-width:560px;max-height:90vh;overflow:auto;">'
+    + '<div style="padding:16px 20px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;"><div style="font-size:14px;font-weight:800;">📥 Vista previa — presupuesto de gastos '+PXL.anio+'</div><button onclick="document.getElementById(\'mo-pxl\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button></div>'
+    + '<div style="padding:16px 20px;font-size:12.5px;">'
+    + avisoArea
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">'
+    + '<div style="background:var(--s2,#f2f4f7);border-radius:10px;padding:10px;"><div style="font-size:10px;color:var(--mu);">TOTAL A SUBIR</div><div style="font-size:18px;font-weight:800;">'+fm(total)+'</div></div>'
+    + '<div style="background:var(--s2,#f2f4f7);border-radius:10px;padding:10px;"><div style="font-size:10px;color:var(--mu);">FILAS LEÍDAS</div><div style="font-size:18px;font-weight:800;">'+(PXL.filas-PXL.errores.length)+' / '+PXL.filas+'</div></div></div>'
+    + '<div style="margin-bottom:10px;">Se crearán/actualizarán <b>'+PXL.regs.length+'</b> registros (cuenta + mes) en <b>'+Object.keys(subs).length+'</b> cuentas, como <b>borrador</b> de <b>'+CU.area+'</b>.'
+    + (pisa ? '<br>⚠️ <b>'+pisa+'</b> de esos registros ya existen y se <b>reemplazarán</b> con los valores del Excel.' : '') + '</div>'
+    + errHtml
+    + (puede ? '' : '<div style="color:var(--rd);margin-bottom:10px;">No hay filas válidas para subir. Corrige el Excel (revisa la columna ESTADO) y vuelve a subirlo.</div>')
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;"><button class="btn btn-sm" onclick="document.getElementById(\'mo-pxl\').remove()">Cancelar</button>'
+    + (puede ? '<button class="btn btn-p btn-sm" id="pxl-ok" onclick="pxlGuardar()">✅ Guardar '+PXL.regs.length+' registros</button>' : '')
+    + '</div></div></div>';
+  document.body.appendChild(mo);
+}
+async function pxlGuardar(){
+  var btn = document.getElementById('pxl-ok'); if(btn){ btn.disabled=true; btn.textContent='⏳ Guardando...'; }
+  var presups = getPresupuestos();
+  PXL.regs.forEach(function(n){
+    var idx = presups.findIndex(function(p){ return p.id===n.id; });
+    if(idx>=0){ n.estado = presups[idx].estado || 'borrador'; n.autor = presups[idx].autor || n.autor; n.autorEmail = presups[idx].autorEmail || n.autorEmail; presups[idx] = n; }
+    else presups.push(n);
+  });
+  savePresupuestos(presups);
+  document.getElementById('mo-pxl')?.remove();
+  renderPres();
+  var fallidos = 0;
+  for(var i=0;i<PXL.regs.length;i+=10){
+    var lote = PXL.regs.slice(i,i+10);
+    var res = await Promise.all(lote.map(function(n){
+      return api('guardarPresupuesto', {presupuesto:n}).then(function(r){ return !r || r.ok!==false; }).catch(function(){ return false; });
+    }));
+    fallidos += res.filter(function(ok){ return !ok; }).length;
+  }
+  if(fallidos) toast('⚠️ '+fallidos+' de '+PXL.regs.length+' registros no se pudieron guardar en Supabase (quedaron locales, vuelve a subir el Excel)','err');
+  else toast(PXL.regs.length+' registros guardados en Supabase ✅','ok');
 }
 
 function guardarPresupuesto(){ guardarPresupuestoWizard(); }
@@ -12572,6 +12704,33 @@ const PROVEEDOR_SECCIONES = [
   ]},
 ];
 let PROVEEDOR_EDIT_ID = null;
+// Al escribir el % de anticipo → el % de saldo se llena solo (100 − anticipo), y con anticipo,
+// saldo y días de crédito se arma el Término de pago. Si el usuario escribe a mano en el
+// Término de pago, ya no se lo pisamos durante esa edición.
+function pvAutoPago(origen){
+  const g = id => document.getElementById(id);
+  const ant = g('pv-pct-anticipo'), sal = g('pv-pct-saldo'), dia = g('pv-dias-pago-bl'), tp = g('pv-termino-pago');
+  if(!ant || !sal || !tp) return;
+  if(origen==='anticipo' && ant.value!==''){
+    const A = Number(ant.value);
+    if(!isNaN(A)) sal.value = Math.max(0, Math.round((100-A)*100)/100);
+  }
+  if(tp.dataset.manual==='1') return;
+  if(ant.value==='' && sal.value==='') return;
+  const A = Number(ant.value||0), S = Number(sal.value||0), D = Number(dia && dia.value || 0);
+  const n = x => String(Math.round(x*100)/100);
+  let t;
+  if(A>0 && S>0) t = 'T/T '+n(A)+'% deposit in advance. Balance '+n(S)+'% '+(D>0 ? D+' days after BL' : 'against BL');
+  else if(A>0) t = 'T/T '+n(A)+'% in advance';
+  else t = 'T/T '+n(S||100)+'% '+(D>0 ? D+' days after BL' : 'against BL');
+  tp.value = t;
+}
+document.addEventListener('input', function(e){
+  const id = e.target && e.target.id;
+  if(id==='pv-pct-anticipo') pvAutoPago('anticipo');
+  else if(id==='pv-pct-saldo' || id==='pv-dias-pago-bl') pvAutoPago('otro');
+  else if(id==='pv-termino-pago') e.target.dataset.manual = '1';
+});
 function abrirModalProveedor(p){
   PROVEEDOR_EDIT_ID = p ? p.id : null;
   if(!document.getElementById('modal-proveedor')) reabastInjectModalProveedor();
@@ -12585,6 +12744,7 @@ function abrirModalProveedor(p){
     if(c.esPorcentaje && v!=='') v = Math.round(Number(v)*100*100)/100;
     el.value = v;
   });
+  { const tpEl = document.getElementById('pv-termino-pago'); if(tpEl) delete tpEl.dataset.manual; }
   document.getElementById('pv-titulo').textContent = p ? ('Editar proveedor · '+p.nombre) : 'Nuevo proveedor';
   document.getElementById('modal-proveedor').classList.add('on');
 }
@@ -16227,6 +16387,24 @@ function reabastVerDetalleReferencia(r){
 function reabastCerrarDetalleReferencia(){
   const mo = document.getElementById('modal-referencia-detalle'); if(mo) mo.classList.remove('on');
 }
+// Duplicar: abre una referencia NUEVA (código y EAN nuevos) con el resto de datos copiados de la
+// original — pensado para referencias que solo cambian el tono de luz u otro detalle.
+function reabastDuplicarDesdeDetalle(){
+  const r = REFERENCIA_DETALLE_ACTUAL; if(!r) return;
+  reabastCerrarDetalleReferencia();
+  abrirModalReferencia(null);
+  const excluir = new Set(['referencia','ean13','ean14_master','ean14_internal','referencia_ilumax']);
+  REFERENCIA_CAMPOS.forEach(c=>{
+    if(excluir.has(c.campo) || c.transient || c.campo==='_siglas_proveedor') return;
+    const el = document.getElementById(c.id); if(!el) return;
+    if(r[c.campo]!=null && r[c.campo]!=='') el.value = r[c.campo];
+  });
+  const sg = document.getElementById('rf-proveedor-siglas');
+  if(sg){ const mp = (REABAST.proveedores||[]).find(p=>(p.nombre||'').toLowerCase()===String(r.proveedor_predeterminado||'').toLowerCase()); sg.value = mp ? (mp.siglas||'') : ''; }
+  const obs = document.getElementById('rf-observaciones'); if(obs) obs.value = r.observaciones||'';
+  if(r.ean14_master) reabastGenerarEAN14('2','rf-ean14-master');
+  const t = document.getElementById('rf-titulo'); if(t) t.textContent = 'Nueva referencia (copia de '+r.referencia+') — cambia lo que sea distinto';
+}
 function reabastEditarDesdeDetalle(){
   const r = REFERENCIA_DETALLE_ACTUAL;
   reabastCerrarDetalleReferencia();
@@ -16243,6 +16421,7 @@ function reabastInjectModalDetalleReferencia(){
       <div style="padding:18px;" id="rd-body"></div>
       <div style="padding:14px 18px;border-top:1px solid var(--b1);display:flex;justify-content:flex-end;gap:8px;">
         <button class="btn btn-g btn-sm" onclick="reabastCerrarDetalleReferencia()">Cerrar</button>
+        <button class="btn btn-g btn-sm" onclick="reabastDuplicarDesdeDetalle()" title="Crea una referencia nueva con los mismos datos, con código y EAN nuevos">⧉ Duplicar</button>
         <button class="btn btn-bl btn-sm" onclick="reabastEditarDesdeDetalle()">✎ Editar</button>
       </div>
     </div>
@@ -16405,6 +16584,37 @@ const REFERENCIA_CAMPOS = [
   {id:'rf-canal',              campo:'canal',                    label:'Canal', tipo:'select', opciones:CANALES_REFERENCIA},
   {id:'rf-abc-manual',        campo:'clasificacion_abc_manual', label:'Clasificación ABC', tipo:'select', opciones:['A','B','C'], ayuda:'Si lo dejas vacío, se calcula solo según la rotación de ventas — solo llénalo si quieres forzar una clasificación distinta.'},
 ];
+// Categoría / Subcategoría / Potencia: si lo escrito no existe, se crea nueva al guardar (con código
+// consecutivo) y queda disponible para todos (configuracion.ref_catalogo_extra).
+(function(){
+  const aviso = ' Si no existe en la lista, escríbela y se crea nueva al guardar.';
+  REFERENCIA_CAMPOS.forEach(c=>{ if(c.id==='rf-categoria'||c.id==='rf-subcategoria'||c.id==='rf-potencia') c.ayuda = (c.ayuda||'')+aviso; });
+})();
+let REF_CAT_EXTRA = {};
+async function reabastCatalogoExtraCargar(){
+  try{
+    const r = await sb.get('configuracion','clave=eq.ref_catalogo_extra');
+    REF_CAT_EXTRA = (r && r[0] && r[0].valor) ? JSON.parse(r[0].valor) : {};
+    REFERENCIA_CAMPOS.forEach(c=>{
+      const ex = REF_CAT_EXTRA[c.id]; if(!ex || !c.codigos) return;
+      Object.keys(ex).forEach(k=>{ if(!c.codigos[k]) c.codigos[k]=ex[k]; if(c.opciones.indexOf(k)<0) c.opciones.push(k); });
+      const dl = document.getElementById('dl-'+c.id);
+      if(dl) dl.innerHTML = c.opciones.map(o=>'<option value="'+reabastEsc(o)+'">').join('');
+    });
+  }catch(e){ console.warn('catálogo extra:', e); }
+}
+function reabastCrearOpcionCatalogo(c, v){
+  const existente = c.opciones.find(o=>String(o).toLowerCase()===v.toLowerCase());
+  if(existente) return existente;
+  const nuevo = v.toUpperCase();
+  const max = Math.max(0, ...Object.values(c.codigos).map(x=>parseInt(x,10)||0));
+  const cod = String(max+1).padStart(4,'0');
+  c.codigos[nuevo] = cod; c.opciones.push(nuevo);
+  (REF_CAT_EXTRA[c.id] = REF_CAT_EXTRA[c.id]||{})[nuevo] = cod;
+  sb.upsert('configuracion',{clave:'ref_catalogo_extra', valor:JSON.stringify(REF_CAT_EXTRA), tipo:'json'},'clave').catch(e=>console.warn(e));
+  if(typeof toast==='function') toast('Se creó "'+nuevo+'" en '+c.label+' (código '+cod+')','ok');
+  return nuevo;
+}
 // Fecha creación: automática (se asigna sola al crear el SKU, no es un campo del formulario).
 // Fecha inicio de ventas: automática también — la llena el proceso diario de ventas cuando
 // la referencia registra su primera venta, no se edita a mano aquí.
@@ -16418,8 +16628,8 @@ const REFERENCIA_SECCIONES = [
     ['rf-nombre-comercial'],
     ['rf-descripcion'],
     ['rf-ean13'],
-    ['rf-master-pack','rf-ean14-master'],
     ['rf-internal-pack','rf-ean14-internal'],
+    ['rf-master-pack','rf-ean14-master'],
     ['__CBM__'],
     ['rf-abc-manual','rf-canal'],
     ['__EAN14_ADICIONALES__'],
@@ -16589,6 +16799,7 @@ function abrirModalReferencia(r){
   ['rf-cbm-largo','rf-cbm-ancho','rf-cbm-alto'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   reabastCambiarUnidadCBM('m3');
   reabastActualizarDatalistsReferencia();
+  reabastCatalogoExtraCargar();
   reabastRenderHistorialCompras(r ? r.referencia : null);
   reabastPintarHistorialPrecioFOB(r ? r.referencia : null, 'rf-fob-historial');
   document.getElementById('modal-referencia').classList.add('on');
@@ -16883,6 +17094,7 @@ async function guardarReferencia(){
       const match = (REABAST.proveedores||[]).find(p=> (p.siglas||'').toLowerCase()===v.toLowerCase());
       if(match && match.nombre) v = match.nombre;
     }
+    if(v && (c.id==='rf-categoria'||c.id==='rf-subcategoria'||c.id==='rf-potencia') && c.codigos && !c.codigos[v]) v = reabastCrearOpcionCatalogo(c, v);
     payload[c.campo] = v ? (c.tipo==='number' ? Number(v) : v) : null;
     // Campos del árbol de producto (categoría, línea, subcategoría, potencia, marca): el código
     // interno se guarda aparte, nunca se muestra en el formulario.
@@ -21654,6 +21866,14 @@ function ocActualizarDatalistProveedor(){
 }
 // Campo Nombre y campo Siglas se completan uno al otro en cuanto reconoce el proveedor —
 // igual que reabastSincronizarProveedor en Referencias, pero con los ids propios de la OC.
+// Mientras se escribe el nombre: si ya coincide exacto con un proveedor, completa la sigla sin esperar al blur.
+function ocSigAuto(el){
+  const nz = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+  const vn = nz(el.value); if(!vn) return;
+  const m = (REABAST.proveedores||[]).find(p=> nz(p.nombre)===vn);
+  const sg = document.getElementById('oc-proveedor-siglas');
+  if(m && sg){ sg.value = m.siglas||''; ocProveedorSeleccionado(); if(typeof ocActualizarLote==='function') ocActualizarLote(); }
+}
 function ocSincronizarProveedor(origen, el){
   const v = (el.value||'').trim();
   const otroEl = document.getElementById(origen==='siglas' ? 'oc-proveedor' : 'oc-proveedor-siglas');
@@ -21663,7 +21883,10 @@ function ocSincronizarProveedor(origen, el){
     match = (REABAST.proveedores||[]).find(p=> (p.siglas||'').toLowerCase()===v.toLowerCase());
     if(match){ el.value = match.siglas || v; if(otroEl) otroEl.value = match.nombre || ''; }
   } else {
-    match = (REABAST.proveedores||[]).find(p=> (p.siglas||'').toLowerCase()===v.toLowerCase() || (p.nombre||'').toLowerCase()===v.toLowerCase());
+    const nz = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+    const vn = nz(v), provs = REABAST.proveedores||[];
+    match = provs.find(p=> nz(p.siglas)===vn || nz(p.nombre)===vn);
+    if(!match){ const parc = provs.filter(p=> nz(p.nombre).includes(vn) || nz(p.nombre_comercial).includes(vn)); if(parc.length===1) match = parc[0]; }
     if(match){ el.value = match.nombre || v; if(otroEl) otroEl.value = match.siglas || ''; }
   }
 }
@@ -21716,7 +21939,7 @@ function reabastInjectModalOC(){
         <div class="fg2">
           <div class="fg">
             <label class="fl">Proveedor (nombre — o escribe la sigla y se completa solo)<span class="ayuda">Al elegirlo, autocompleta Incoterm, Payment Terms y % Depósito con lo que tenga guardado ese proveedor.</span></label>
-            <input class="inp campo-clave" id="oc-proveedor" list="dl-oc-proveedor" placeholder="Buscar o escribir uno nuevo…" onchange="ocSincronizarProveedor('nombre',this);ocProveedorSeleccionado();">
+            <input class="inp campo-clave" id="oc-proveedor" list="dl-oc-proveedor" placeholder="Buscar o escribir uno nuevo…" oninput="ocSigAuto(this)" onchange="ocSincronizarProveedor('nombre',this);ocProveedorSeleccionado();">
             <datalist id="dl-oc-proveedor"></datalist>
           </div>
           <div class="fg">
