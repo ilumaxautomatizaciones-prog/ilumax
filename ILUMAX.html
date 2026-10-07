@@ -30493,6 +30493,9 @@ const AC_MODULOS_NUEVOS = ['adelanto','gastos','descuento','rendicion','reabast'
 // todo"; en cuanto hay algo configurado, solo se ve lo que esté en la lista.
 function moduloPermitido(id) {
   if(!CU) return true;
+  // Presupuesto por Áreas: acceso SOLO a quien lo tenga marcado de forma explícita (ni siquiera
+  // los admin entran por defecto) — se asigna en Admin Center → Módulos por Rol / por persona.
+  if(id==='ppto-areas') return !!(CU.modulos && CU.modulos.includes('ppto-areas'));
   if(CU.rol==='admin') return true;
   if((id==='reabast' || id==='tesoreria') && typeof reabastEsEditor==='function' && reabastEsEditor()) return true;
   if(!CU.modulos || !CU.modulos.length) return true;
@@ -33219,6 +33222,7 @@ const PA_COLORES = { '5105':'#2563eb','5110':'#7c3aed','5115':'#dc2626','5120':'
 async function renderPptoAreas() {
   const el = document.getElementById('ppto-areas-content');
   if(!el) return;
+  if(!moduloPermitido('ppto-areas')){ el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--rd);">⛔ No tienes acceso a Presupuesto por Áreas.</div>'; return; }
   el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:200px;"><span class="spin-sm spin-bl"></span></div>';
   try { await paCargarTodo(); } catch(e) {
     el.innerHTML = `<div style="padding:20px;color:var(--rd);">❌ Error: ${e.message}</div>`; return;
@@ -33232,7 +33236,7 @@ async function paCargarTodo() {
   const [cats, subs, perms, ptos] = await Promise.all([
     sb.get('categorias_ppto','activo=eq.true&order=orden.asc').catch(()=>[]),
     sb.get('subcategorias_ppto','activo=eq.true&order=cat_codigo.asc,orden.asc').catch(()=>[]),
-    sb.get('permisos_ppto', esAdm ? 'order=area.asc' : `area=eq.${encodeURIComponent(miArea)}`).catch(()=>[]),
+    (async()=>{ if(!esAdm) return sb.get('permisos_ppto', `area=eq.${encodeURIComponent(miArea)}`); const todo=[]; for(let o=0;o<20000;o+=1000){ const l=await sb.get('permisos_ppto','order=area.asc,sub_codigo.asc,email_usuario.asc&limit=1000&offset='+o); todo.push(...l); if(l.length<1000) break; } return todo; })().catch(()=>[]),
     sb.get('presupuestos',`anio=eq.${PA.anioSel}&mes=eq.${PA.mesSel}&order=cat_codigo.asc,sub_codigo.asc`).catch(()=>[]),
   ]);
   PA.cats  = cats  || [];
