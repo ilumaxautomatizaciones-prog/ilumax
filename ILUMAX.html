@@ -33872,6 +33872,7 @@ function paRenderShell(el) {
     <button class="pa-tab ${PA.tabActivo==='ingresar'?'pa-tab-on':''}" onclick="paTab('ingresar')">✏️ ${esAdm?'Ingresar / Editar':'Mis valores'}</button>
     ${esAdm?`<button class="pa-tab ${PA.tabActivo==='configurar'?'pa-tab-on':''}" onclick="paTab('configurar')">⚙️ Configurar</button>`:''}
     ${esAdm?`<button class="pa-tab ${PA.tabActivo==='consolidar'?'pa-tab-on':''}" onclick="paTab('consolidar')">✅ Consolidar</button>`:''}
+    ${esAdm?`<button class="pa-tab ${PA.tabActivo==='manual'?'pa-tab-on':''}" onclick="paTab('manual')">📖 Manual</button>`:''}
   </div>
   <style>
     .pa-tab{padding:10px 16px;border:none;background:none;font-size:11px;font-weight:700;color:var(--mu);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-2px;}
@@ -33895,7 +33896,8 @@ function paTab(tab) {
       (tab==='resumen'   && txt.includes('resumen')) ||
       (tab==='ingresar'  && (txt.includes('ingresar')||txt.includes('mis val'))) ||
       (tab==='configurar'&& txt.includes('configurar')) ||
-      (tab==='consolidar'&& txt.includes('consolidar'))
+      (tab==='consolidar'&& txt.includes('consolidar')) ||
+      (tab==='manual' && txt.includes('manual'))
     );
   });
   paRenderTab();
@@ -33908,6 +33910,7 @@ function paRenderTab() {
   if(PA.tabActivo==='ingresar')   paRenderIngresar(el);
   if(PA.tabActivo==='configurar') paRenderConfigurar(el);
   if(PA.tabActivo==='consolidar') paRenderConsolidar(el);
+  if(PA.tabActivo==='manual')     paRenderManual(el);
 }
 
 async function paRecargar() {
@@ -34091,7 +34094,7 @@ function paRenderIngresar(el) {
           const obs    = pto?.obs || '';
           const ptoId  = pto?.id || '';
           const ec = {aprobado:'#16a34a',enviado:'#2563eb',devuelto:'#dc2626',borrador:'#94a3b8'}[estado]||'#94a3b8';
-          const bloqueado = estado==='aprobado';
+          const bloqueado = estado==='aprobado' && !esAdm;
           const key = `${sub.codigo}__${area.replace(/\s/g,'_')}`;
 
           return `<div style="padding:12px;border:1px solid ${estado==='devuelto'?'#fecaca':estado==='enviado'?'#bfdbfe':'var(--b1)'};border-radius:10px;margin-bottom:8px;background:${estado==='devuelto'?'#fef2f2':estado==='enviado'?'#eff6ff':'var(--w)'};">
@@ -34113,6 +34116,7 @@ function paRenderIngresar(el) {
                 <input type="text" class="pa-inp" id="pa-obs-${key}" value="${obs}" placeholder="Opcional..." ${bloqueado?'disabled':''}>
               </div>
               ${!bloqueado ? `<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;padding-top:16px;">
+                ${esAdm && ptoId ? `<button class="btn btn-rd btn-sm" title="Borrar este valor" onclick="paEliminarPto('${ptoId}')">🗑️ Borrar</button>` : ''}
                 <button class="btn btn-bl btn-sm" onclick="paGuardar('${sub.codigo}','${area}','${sub.cat_codigo}','${ptoId}','borrador')">💾 Guardar</button>
                 ${estado!=='enviado'?`<button class="btn btn-gr btn-sm" onclick="paGuardar('${sub.codigo}','${area}','${sub.cat_codigo}','${ptoId}','enviado')">📤 Enviar</button>`:''}
               </div>` : ''}
@@ -34180,6 +34184,8 @@ function paRenderConfigurar(el) {
           <div style="width:8px;height:8px;border-radius:50%;background:${PA_COLORES[c.codigo]||'#64748b'};"></div>
           <div style="flex:1;"><div style="font-size:11px;font-weight:700;">${c.nombre}</div><div style="font-size:9px;color:var(--mu);">${c.codigo}</div></div>
           <span style="font-size:9px;color:var(--mu);">${PA.subs.filter(s=>s.cat_codigo===c.codigo).length} sub</span>
+          <button class="btn btn-g btn-xs" title="Editar nombre" onclick="paEditarCat('${c.codigo}')">✏️</button>
+          <button class="btn btn-rd btn-xs" title="Eliminar" onclick="paEliminarCat('${c.codigo}')">🗑️</button>
         </div>`).join('')}
       </div>
     </div>
@@ -34205,13 +34211,15 @@ function paRenderConfigurar(el) {
         </div>
         <button class="btn btn-bl btn-sm" style="width:100%;" onclick="paCrearSub()">+ Agregar subcategoría</button>
       </div>
-      <div style="max-height:220px;overflow-y:auto;">
-        ${PA.subs.slice(0,30).map(s=>{
+      <div style="max-height:380px;overflow-y:auto;">
+        ${PA.subs.map(s=>{
           const permsS = PA.perms.filter(p=>p.sub_codigo===s.codigo);
           const areas  = [...new Set(permsS.map(p=>p.area))];
           return `<div style="padding:7px 10px;border:1px solid var(--b1);border-radius:8px;margin-bottom:4px;">
             <div style="display:flex;align-items:center;gap:6px;">
               <div style="flex:1;"><div style="font-size:11px;font-weight:700;">${s.nombre}</div><div style="font-size:9px;color:var(--mu);">${s.codigo}${s.centro_costo?' · CC:'+s.centro_costo:''}</div></div>
+              <button class="btn btn-g btn-xs" title="Editar" onclick="paEditarSub('${s.codigo}')">✏️</button>
+              <button class="btn btn-rd btn-xs" title="Eliminar" onclick="paEliminarSub('${s.codigo}')">🗑️</button>
             </div>
             <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:2px;">
               ${areas.map(a=>`<span class="pa-badge" style="background:rgba(37,99,235,.1);color:#1e40af;">${a}</span>`).join('')}
@@ -34219,7 +34227,6 @@ function paRenderConfigurar(el) {
             </div>
           </div>`;
         }).join('')}
-        ${PA.subs.length>30?`<div style="font-size:10px;color:var(--mu);text-align:center;padding:6px;">... y ${PA.subs.length-30} más</div>`:''}
       </div>
     </div>
   </div>`;
@@ -34264,6 +34271,62 @@ async function paCrearSub() {
     toast('✅ Subcategoría creada con permisos','ok');
     await paRecargar();
   } catch(e){toast('❌ '+e.message,'er');}
+}
+
+
+// ── Gestores (Zuly, Alexandra, Olga, admin): editar / eliminar categorías, subcategorías y valores ──
+async function paEditarCat(cod){
+  const c = PA.cats.find(x=>x.codigo===cod); if(!c) return;
+  const nom = prompt('Nuevo nombre para la categoría '+cod+':', c.nombre); if(nom===null || !nom.trim()) return;
+  try{ await sb.patch('categorias_ppto','codigo=eq.'+encodeURIComponent(cod),{nombre:nom.trim()}); toast('✅ Categoría actualizada','ok'); await paRecargar(); }catch(e){ toast('❌ '+e.message,'er'); }
+}
+async function paEliminarCat(cod){
+  const c = PA.cats.find(x=>x.codigo===cod); if(!c) return;
+  const n = PA.subs.filter(s=>s.cat_codigo===cod).length;
+  if(!confirm('¿Eliminar la categoría "'+c.nombre+'"'+(n?' y sus '+n+' subcategoría(s)':'')+'?\nLos valores ya ingresados no se borran; dejan de mostrarse en esta pantalla.')) return;
+  try{
+    await sb.patch('subcategorias_ppto','cat_codigo=eq.'+encodeURIComponent(cod),{activo:false});
+    await sb.patch('categorias_ppto','codigo=eq.'+encodeURIComponent(cod),{activo:false});
+    toast('🗑️ Categoría eliminada','ok'); await paRecargar();
+  }catch(e){ toast('❌ '+e.message,'er'); }
+}
+async function paEditarSub(cod){
+  const s = PA.subs.find(x=>x.codigo===cod); if(!s) return;
+  const nom = prompt('Nombre de la subcategoría '+cod+':', s.nombre); if(nom===null || !nom.trim()) return;
+  const cc = prompt('Centro de costo (vacío = ninguno):', s.centro_costo||''); if(cc===null) return;
+  const actuales = [...new Set(PA.perms.filter(p=>p.sub_codigo===cod).map(p=>p.area))].filter(Boolean);
+  const as = prompt('Áreas que la llenan (separadas por coma):', actuales.join(', ')); if(as===null) return;
+  const nuevas = [...new Set(as.split(',').map(x=>x.trim()).filter(Boolean))];
+  try{
+    await sb.patch('subcategorias_ppto','codigo=eq.'+encodeURIComponent(cod),{nombre:nom.trim(), centro_costo:cc.trim()});
+    for(const a of actuales.filter(x=>!nuevas.includes(x))) await sb.delete('permisos_ppto','sub_codigo=eq.'+encodeURIComponent(cod)+'&area=eq.'+encodeURIComponent(a));
+    for(const a of nuevas.filter(x=>!actuales.includes(x))) await sb.post('permisos_ppto',{area:a,sub_codigo:cod,puede_ver:true,puede_llenar:true}).catch(()=>{});
+    toast('✅ Subcategoría actualizada','ok'); await paRecargar();
+  }catch(e){ toast('❌ '+e.message,'er'); }
+}
+async function paEliminarSub(cod){
+  const s = PA.subs.find(x=>x.codigo===cod); if(!s) return;
+  if(!confirm('¿Eliminar la subcategoría "'+s.nombre+'"?\nLos valores ya ingresados no se borran; dejan de mostrarse en esta pantalla.')) return;
+  try{ await sb.patch('subcategorias_ppto','codigo=eq.'+encodeURIComponent(cod),{activo:false}); toast('🗑️ Subcategoría eliminada','ok'); await paRecargar(); }catch(e){ toast('❌ '+e.message,'er'); }
+}
+async function paEliminarPto(id){
+  if(!id) return;
+  if(!confirm('¿Borrar este valor presupuestado? No se puede deshacer.')) return;
+  try{ await sb.delete('presupuestos','id=eq.'+encodeURIComponent(id)); toast('🗑️ Valor borrado','ok'); await paRecargar(); }catch(e){ toast('❌ '+e.message,'er'); }
+}
+function paRenderManual(el){
+  const h = t => '<div style="font-size:13px;font-weight:800;margin:14px 0 6px;">'+t+'</div>';
+  const li = a => '<ul style="margin:0 0 6px 18px;padding:0;font-size:12px;line-height:1.7;">'+a.map(x=>'<li>'+x+'</li>').join('')+'</ul>';
+  el.innerHTML = '<div class="pa-card" style="max-width:820px;">'
+    + '<div style="font-size:15px;font-weight:800;">📖 Manual — Presupuesto por Áreas</div>'
+    + '<div style="font-size:11px;color:var(--mu);margin-top:2px;">Para administradores y gestores. Tienes control total: puedes crear, editar y eliminar todo.</div>'
+    + h('1. Elegir mes, año y área') + li(['Arriba escoges el <b>mes</b> y el <b>año</b>; en <b>Ingresar / Editar</b> puedes filtrar por <b>área</b> o ver todas.'])
+    + h('📊 Resumen') + li(['Totales por categoría y área del período elegido.','Úsalo para ver rápido cuánto lleva cada área.'])
+    + h('✏️ Ingresar / Editar') + li(['Escribe el <b>monto</b> y una observación y pulsa <b>💾 Guardar</b> (queda en borrador) o <b>📤 Enviar</b> (pasa a revisión).','Puedes editar cualquier valor, <b>incluso los ya aprobados o enviados</b> (los demás usuarios no).','El botón <b>🗑️</b> borra el valor de esa subcategoría/área (pide confirmación).'])
+    + h('⚙️ Configurar') + li(['<b>Categorías:</b> agrégalas con código y nombre; ✏️ cambia el nombre; 🗑️ la elimina junto con sus subcategorías.','<b>Subcategorías:</b> elige la categoría, código, nombre, centro de costo y las <b>áreas que la llenan</b>. ✏️ edita nombre, centro de costo y áreas (separadas por coma); 🗑️ la elimina.','Eliminar no borra los valores ya guardados: solo deja de mostrarse. Si te equivocas, pide a TI reactivarla.'])
+    + h('✅ Consolidar') + li(['Revisa lo enviado por las áreas: <b>Aprobar</b> (puedes ajustar el monto) o <b>Devolver</b> con el motivo.'])
+    + h('Otros presupuestos') + li(['En <b>Presupuestos</b> (gastos) el botón <b>📊 Exportar Excel</b> descarga todas las áreas solo para ti; los demás usuarios descargan únicamente la suya.','La tabla anual de <b>Mi Área</b> se ordena haciendo clic en los encabezados y se edita directo en las casillas.','Al crear un presupuesto por subcategoría usa <b>⚡ Aplicar a varios meses</b> (año, semestre, trimestre o meses marcados).'])
+    + '</div>';
 }
 
 // ── CONSOLIDAR ───────────────────────────────────────────────────────
