@@ -8813,7 +8813,7 @@ function _renderFilasInv(mostrar, preciosMap) {
       <td style="padding:9px 12px;text-align:right;font-weight:700;">${fmtCOP(valor)}</td>
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.bodega||''}</td>
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.um||''}</td>
-      <td style="padding:9px 12px;text-align:right;font-size:11px;color:var(--bl);font-weight:700;">${INV_LISTA_SEL ? fmtCOP(precioLista) : '—'}</td>
+      <td style="padding:9px 12px;text-align:right;font-size:11px;color:var(--bl);font-weight:700;white-space:nowrap;">${invPrecioCelda(r.referencia)}</td>
       <td style="padding:9px 12px;"><button class="btn btn-g btn-sm" data-item='${JSON.stringify({referencia:r.referencia,descripcion:r.descripcion,bodega:r.bodega,existencia:exist}).replace(/'/g,"&#39;")}' onclick="abrirModalReabast(JSON.parse(this.dataset.item))">🔁 Solicitar</button></td>
       <td style="padding:9px 12px;max-width:220px;">${invListasChips(r.referencia)}</td>
       <td style="padding:9px 12px;min-width:150px;">${invCanalesChips(r.referencia)}</td>
@@ -8845,12 +8845,79 @@ async function invListasCargar(items){
     (rows||[]).forEach(r=>{ const k = pvClaveRef(r.referencia); const kk = k+'|'+r.lista; const p = parseFloat(r.precio)||0; if(!INV_LISTAS_REF[k]) INV_LISTAS_REF[k]=[]; if(vistos[kk]){ if(p) vistos[kk].precio = p; return; } vistos[kk] = {lista:String(r.lista), precio:p}; INV_LISTAS_REF[k].push(vistos[kk]); });
   }
 }
+function invListaNombre(id){ const c=(INV_LISTAS_CAT||[]).find(x=>String(x.lista_id)===String(id)); return c ? c.nombre : id; }
+const INV_LISTA_BASE = '1'; // P1: lista de respaldo cuando la referencia no tiene precio en la lista elegida
+// Precio que se muestra: lista elegida → P1 → (si no hay) la primera lista que tenga precio
+function invPrecioDe(ref){
+  const ls = INV_LISTAS_REF[pvClaveRef(ref)]; if(ls===undefined) return undefined;
+  const conP = ls.filter(l=>l.precio>0);
+  const sel = INV_LISTA_SEL ? conP.find(l=>String(l.lista)===String(INV_LISTA_SEL)) : null;
+  if(sel) return {lista:sel.lista, precio:sel.precio, respaldo:false};
+  const p1 = conP.find(l=>String(l.lista)===INV_LISTA_BASE);
+  if(p1) return {lista:p1.lista, precio:p1.precio, respaldo:!!INV_LISTA_SEL};
+  return null;
+}
+function invPrecioCelda(ref){
+  const p = invPrecioDe(ref);
+  if(p===undefined) return '<span style="color:var(--mu2);">…</span>';
+  const puede = invPuedeGestionarCanales();
+  const btn = puede ? ` <button class="btn btn-g btn-sm" style="padding:1px 6px;font-size:10px;" title="Poner o cambiar el precio de lista" onclick="invPrecioEditar('${String(ref).replace(/'/g,"")}')">✎</button>` : '';
+  if(!p) return '<span style="color:var(--mu2);font-weight:600;">Sin precio</span>'+btn;
+  return '$'+Math.round(p.precio).toLocaleString('es-CO')+` <span style="font-size:9px;font-weight:700;color:${p.respaldo?'var(--am)':'var(--mu)'};" title="${p.respaldo?'No tiene precio en la lista elegida: se muestra el de P1':'Lista '+invListaNombre(p.lista)}">${invListaNombre(p.lista)}${p.respaldo?' (respaldo)':''}</span>`+btn;
+}
 function invListasChips(ref){
   const k = pvClaveRef(ref); const ls = INV_LISTAS_REF[k];
   if(ls===undefined) return '<span style="color:var(--mu2);font-size:10px;">…</span>';
-  if(!ls.length) return '<span style="color:var(--mu2);font-size:10px;">Sin lista</span>';
-  const nom = id => { const c=(INV_LISTAS_CAT||[]).find(x=>String(x.lista_id)===String(id)); return c ? c.nombre : id; };
-  return ls.slice().sort((x,y)=>String(nom(x.lista)).localeCompare(String(nom(y.lista)),'es',{numeric:true})).map(l=>`<span title="Lista ${nom(l.lista)}: ${l.precio?('$'+Math.round(l.precio).toLocaleString('es-CO')):'sin precio'}" style="display:inline-block;background:var(--bg);border:1px solid var(--b1);border-radius:10px;padding:1px 6px;margin:1px 2px 1px 0;font-size:9px;font-weight:700;color:var(--bl);">${nom(l.lista)}</span>`).join('');
+  const nom = invListaNombre;
+  const chips = ls.length ? ls.slice().sort((x,y)=>String(nom(x.lista)).localeCompare(String(nom(y.lista)),'es',{numeric:true})).map(l=>`<span title="Lista ${nom(l.lista)}" style="display:inline-block;background:var(--bg);border:1px solid var(--b1);border-radius:10px;padding:1px 6px;margin:1px 2px 1px 0;font-size:9px;font-weight:700;color:var(--bl);white-space:nowrap;">${nom(l.lista)} <span style="color:var(--tx);">${l.precio?('$'+Math.round(l.precio).toLocaleString('es-CO')):'—'}</span></span>`).join('') : '<span style="color:var(--mu2);font-size:10px;">Sin lista</span>';
+  const ed = invPuedeGestionarCanales() ? ` <button class="btn btn-g btn-sm" style="padding:1px 6px;font-size:10px;" title="Agregar o cambiar el precio en una lista" onclick="invPrecioEditar('${String(ref).replace(/'/g,"")}')">＋</button>` : '';
+  return chips + ed;
+}
+async function invPrecioEditar(ref){
+  if(!invPuedeGestionarCanales()) return;
+  const k = pvClaveRef(ref);
+  if(!INV_LISTAS_CAT.length){ try{ INV_LISTAS_CAT = await sb.get('listas_catalogo','activa=eq.true&order=orden.asc'); }catch(e){} }
+  const actuales = INV_LISTAS_REF[k] || [];
+  const inicial = INV_LISTA_SEL || INV_LISTA_BASE;
+  let m = document.getElementById('inv-precio-modal'); if(m) m.remove();
+  m = document.createElement('div'); m.id='inv-precio-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99990;display:flex;align-items:center;justify-content:center;';
+  const precioDe = id => { const l = actuales.find(x=>String(x.lista)===String(id)); return l && l.precio ? l.precio : ''; };
+  m.innerHTML = `<div style="background:var(--w,#fff);color:var(--tx,#111);border:1px solid var(--b1,#ccc);border-radius:12px;width:min(420px,92vw);padding:16px;">
+    <div style="font-weight:800;margin-bottom:4px;">Precio de lista · referencia ${k}</div>
+    <div style="font-size:11px;color:var(--mu);margin-bottom:10px;">Elige la lista (por ejemplo Home Center) y escribe el precio. Si la referencia ya tiene precio en esa lista, se reemplaza.</div>
+    <label style="font-size:11px;font-weight:700;">Lista</label>
+    <select id="inv-pr-lista" class="inp" style="width:100%;margin-bottom:10px;" onchange="document.getElementById('inv-pr-valor').value=(window.__invPrecios||{})[this.value]||''">
+      ${(INV_LISTAS_CAT||[]).map(c=>`<option value="${c.lista_id}" ${String(c.lista_id)===String(inicial)?'selected':''}>${c.nombre}${c.canal_principal?' — '+c.canal_principal:''}</option>`).join('')}
+    </select>
+    <label style="font-size:11px;font-weight:700;">Precio (COP)</label>
+    <input id="inv-pr-valor" class="inp" type="number" min="0" step="1" style="width:100%;" value="${precioDe(inicial)}" placeholder="Ej: 4283">
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;"><button class="btn btn-sm" onclick="document.getElementById('inv-precio-modal').remove()">Cancelar</button><button class="btn btn-sm" style="background:var(--bl);color:#fff;" onclick="invPrecioGuardar('${String(ref).replace(/'/g,"")}')">Guardar</button></div></div>`;
+  window.__invPrecios = {}; actuales.forEach(l=>{ if(l.precio) window.__invPrecios[l.lista] = l.precio; });
+  m.addEventListener('click',e=>{ if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+  document.getElementById('inv-pr-valor').focus();
+}
+async function invPrecioGuardar(ref){
+  const lista = String(document.getElementById('inv-pr-lista').value);
+  const precio = parseFloat(document.getElementById('inv-pr-valor').value);
+  if(!(precio>0)){ toast('Escribe un precio mayor a 0','wa'); return; }
+  const k = pvClaveRef(ref); const ahora = new Date().toISOString(); const hoy = ahora.slice(0,10);
+  try{
+    const vars = encodeURIComponent(pvVariantesRefs([ref]).map(r=>'"'+r+'"').join(','));
+    const ex = await sb.get('precios_lista', `lista=eq.${encodeURIComponent(lista)}&referencia=in.(${vars})&select=id&limit=100`);
+    if(ex && ex.length){
+      await sb.patch('precios_lista', `id=in.(${ex.map(r=>r.id).join(',')})`, {precio, actualizado:ahora, subido_por:(CU&&CU.nombre)||'Portal', periodo:hoy});
+    } else {
+      const inv = (INV_DATA||[]).find(r=>pvClaveRef(r.referencia)===k) || {};
+      const cat = inv.categoria || (typeof pvCatRP==='function' ? await pvCatRP(ref) : '') || null;
+      await sb.post('precios_lista', {lista, referencia:k, descripcion:(inv.descripcion||'').trim().slice(0,200), precio, categoria:cat, periodo:hoy, subido_por:(CU&&CU.nombre)||'Portal', actualizado:ahora});
+    }
+    delete INV_LISTAS_REF[k];
+    document.getElementById('inv-precio-modal')?.remove();
+    toast('✅ Precio guardado en la lista '+invListaNombre(lista),'ok');
+    filtrarInvMod();
+  }catch(e){ toast('❌ No se pudo guardar el precio: '+e.message,'er'); }
 }
 function invCanalesChips(ref){
   const k = pvClaveRef(ref); const cs = (INV_CANALES_MAP||{})[k] || [];
