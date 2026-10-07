@@ -5688,7 +5688,99 @@ function renderItemsPresHtml(p) {
     + '<tbody>' + filas + '</tbody></table>';
 }
 
+// ── TABLA ANUAL EDITABLE (categoría / subcategoría × 12 meses), ordenable por cualquier columna ──
+var PRES_TBL = { col:'cat', dir:1 };
+function presTblOrden(col){ if(PRES_TBL.col===col) PRES_TBL.dir=-PRES_TBL.dir; else { PRES_TBL.col=col; PRES_TBL.dir=(col==='cat'||col==='sub'||col==='cc')?1:-1; } presTblRender(); }
+function presTblEditable(p){ return !p || !p.estado || p.estado==='borrador' || p.estado==='devuelto'; }
+function presTblFilas(anio){
+  var porSub = {};
+  getPresupuestos().filter(function(p){ return p.area===CU.area && p.anio===anio; }).forEach(function(p){
+    var k = p.subCodigo;
+    var f = porSub[k] || (porSub[k] = { sub:k, cat:p.catNombre||'', subNombre:p.subNombre||k, cc:'', m:{}, p:{}, total:0, estados:{} });
+    f.m[p.mes] = (f.m[p.mes]||0) + (parseFloat(p.monto)||0);
+    f.p[p.mes] = p;
+    f.total += parseFloat(p.monto)||0;
+    f.estados[p.estado||'borrador'] = 1;
+    if(!f.cc){ var it=(p.items&&p.items[0])||{}; f.cc = nombreCentroCostoCod(it.cc||p.centroCosto||''); }
+  });
+  var filas = Object.values(porSub), c = PRES_TBL.col, d = PRES_TBL.dir;
+  var val = function(f){ return c==='cat' ? (f.cat+' '+f.subNombre).toLowerCase() : c==='sub' ? f.subNombre.toLowerCase() : c==='cc' ? f.cc.toLowerCase() : c==='total' ? f.total : (f.m[parseInt(c.slice(1),10)]||0); };
+  filas.sort(function(x,y){ var a=val(x), b=val(y); return (a<b?-1:a>b?1:0)*d; });
+  return filas;
+}
+function presTblRender(){
+  var el = document.getElementById('pres-tabla-anio'); if(!el) return;
+  var anio = new Date().getFullYear();
+  var filas = presTblFilas(anio);
+  if(!filas.length){ el.innerHTML=''; return; }
+  var nm=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  var th = function(col,txt,al){ var on=PRES_TBL.col===col; return '<th onclick="presTblOrden(\''+col+'\')" style="cursor:pointer;user-select:none;padding:7px 6px;font-size:10px;font-weight:800;color:'+(on?'var(--bl)':'var(--mu)')+';text-align:'+(al||'right')+';white-space:nowrap;position:sticky;top:0;background:var(--w);border-bottom:2px solid var(--b1);">'+txt+(on?(PRES_TBL.dir>0?' ▲':' ▼'):' ↕')+'</th>'; };
+  var tot = {}, totAll = 0;
+  var body = filas.map(function(f){
+    var cells = '';
+    for(var m=1;m<=12;m++){
+      var p=f.p[m], ed=presTblEditable(p), v=f.m[m]||0;
+      tot[m]=(tot[m]||0)+v;
+      cells += '<td style="padding:2px 3px;">'+(ed
+        ? '<input type="number" min="0" data-sub="'+f.sub+'" data-mes="'+m+'" value="'+(v||'')+'" placeholder="·" onchange="presTblEditar(this)" style="width:84px;text-align:right;font-size:11px;padding:4px 5px;border:1px solid var(--b1);border-radius:6px;background:var(--w);">'
+        : '<div title="Estado: '+(p.estado||'')+' — no editable" style="text-align:right;font-size:11px;padding:4px 6px;color:var(--mu);">'+fmt(v)+'</div>')+'</td>';
+    }
+    totAll += f.total;
+    return '<tr style="border-bottom:1px solid var(--b1);">'
+      + '<td style="padding:6px;font-size:10px;color:var(--mu);white-space:nowrap;">'+f.cat+'</td>'
+      + '<td style="padding:6px;font-size:11px;font-weight:600;white-space:nowrap;">'+f.subNombre+'</td>'
+      + '<td style="padding:6px;font-size:10px;color:var(--mu);white-space:nowrap;">'+(f.cc||'—')+'</td>'
+      + cells
+      + '<td style="padding:6px;font-size:12px;font-weight:800;color:var(--bl);text-align:right;white-space:nowrap;">'+fmt(f.total)+'</td>'
+      + '<td style="padding:6px;">'+Object.keys(f.estados).map(bdgEstado).join(' ')+'</td></tr>';
+  }).join('');
+  var foot = '<tr style="background:var(--s1);font-weight:800;"><td colspan="3" style="padding:7px 6px;font-size:11px;">TOTAL '+anio+'</td>'
+    + nm.map(function(_,i){ return '<td style="padding:7px 6px;font-size:11px;text-align:right;">'+fmt(tot[i+1]||0)+'</td>'; }).join('')
+    + '<td style="padding:7px 6px;font-size:12px;text-align:right;color:var(--bl);">'+fmt(totAll)+'</td><td></td></tr>';
+  el.innerHTML = '<div class="area-card" style="margin-bottom:14px;padding:12px;">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+    + '<div style="font-size:13px;font-weight:800;">📅 Presupuesto '+anio+' — '+CU.area+' <span style="font-weight:400;font-size:10px;color:var(--mu);">· clic en un encabezado para ordenar · edita directo las casillas (solo borrador/devuelto)</span></div>'
+    + '<button class="btn btn-p btn-sm" onclick="abrirModalPres()">+ Agregar</button></div>'
+    + '<div style="overflow:auto;max-height:480px;border:1px solid var(--b1);border-radius:10px;"><table style="border-collapse:collapse;min-width:100%;">'
+    + '<thead><tr>'+th('cat','Categoría','left')+th('sub','Subcategoría','left')+th('cc','Centro de costo','left')
+    + nm.map(function(n,i){ return th('m'+(i+1),n); }).join('')+th('total','Total')+'<th style="position:sticky;top:0;background:var(--w);border-bottom:2px solid var(--b1);font-size:10px;color:var(--mu);padding:7px 6px;">Estado</th></tr></thead>'
+    + '<tbody>'+body+foot+'</tbody></table></div></div>';
+}
+function presTblEditar(inp){
+  var sub=inp.dataset.sub, mes=parseInt(inp.dataset.mes,10), anio=new Date().getFullYear();
+  var v = Math.max(0, parseFloat(inp.value)||0);
+  var presups = getPresupuestos();
+  var p = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===sub; });
+  var guardar;
+  if(p){
+    if(!presTblEditable(p)){ toast('Este mes ya fue enviado a revisión — no se puede editar','wa'); presTblRender(); return; }
+    if(Array.isArray(p.items) && p.items.length>1){ toast('Ese mes tiene varios ítems — edítalo con el botón ✏️ Editar del mes','wa'); presTblRender(); return; }
+    var it0 = (p.items&&p.items[0]) || { cc:p.centroCosto||'', desc:p.obs||'', valor:0 };
+    it0.valor = v; p.items=[it0]; p.monto=v; p.ts=new Date().toISOString();
+    guardar = p;
+  } else {
+    if(!(v>0)){ presTblRender(); return; }
+    var ref = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub; });
+    var itr = ref && ref.items && ref.items[0] ? ref.items[0] : { cc: ref?ref.centroCosto:'', desc: ref?ref.obs:'' };
+    if(!ref || !itr.cc || !String(itr.desc||'').trim()){ toast('Esa subcategoría no tiene centro de costo/descripción de referencia — agrégala con "+ Agregar"','wa'); presTblRender(); return; }
+    guardar = { id:'PRES-'+presAreaSlug(CU.area)+'-'+sub+'-'+anio+'-'+mes, area:CU.area, catCodigo:ref.catCodigo, catNombre:ref.catNombre,
+      subCodigo:sub, subNombre:ref.subNombre, mes:mes, anio:anio, monto:v, obs:ref.obs||itr.desc, items:[{cc:itr.cc, desc:itr.desc, valor:v}],
+      centroCosto:siesaResolverCC(itr.cc), estado:'borrador', autor:CU.nombre, autorEmail:CU.email, fecha:new Date().toLocaleDateString('es-CO'), ts:new Date().toISOString() };
+    presups.push(guardar);
+  }
+  savePresupuestos(presups);
+  presTblRender();
+  api('guardarPresupuesto', {presupuesto: guardar}).then(function(r){
+    if(r && r.ok===false) toast('⚠️ No se guardó en Supabase: '+(r.error||''),'err'); else toast('✅ Guardado','ok');
+  }).catch(function(e){ toast('⚠️ No se guardó en Supabase: '+e.message,'err'); });
+}
+
 function renderPresVistaLider(el, mes, anio) {
+  el.innerHTML = '<div id="pres-tabla-anio"></div><div id="pres-vista-mes"></div>';
+  presTblRender();
+  renderPresVistaLiderMes(document.getElementById('pres-vista-mes'), mes, anio);
+}
+function renderPresVistaLiderMes(el, mes, anio) {
   var presups = getPresupuestos().filter(p => p.area===CU.area && p.mes===mes && p.anio===anio);
 
   if (!presups.length) {
@@ -10160,9 +10252,75 @@ function infHtmlShell(){
     ${INF.manual ? infManual() : ''}
     <div id="inf-body"></div></div>`;
 }
+
+// ═══ Llegadas: cruce con el inventario (Fecha_ult_entrada de SIESA) + confirmación manual ═══
+var INF_ING = { cargado:false, cargando:false, byRef:{}, conf:{} };
+async function infIngCargar(d){
+  if(INF_ING.cargado || INF_ING.cargando) return;
+  INF_ING.cargando = true;
+  try{
+    let desde = '2026-01-01';
+    (d||[]).forEach(x=>{ const f = x.o && x.o.fecha_orden ? String(x.o.fecha_orden).slice(0,10) : null; if(f && f < desde) desde = f; });
+    const per = await sb.get('inventario','select=periodo&order=periodo.desc&limit=1');
+    const periodo = per && per[0] ? per[0].periodo : null;
+    const by = {};
+    if(periodo){
+      for(let off=0; off<30000; off+=1000){
+        const rows = await sb.get('inventario','select=referencia,bodega,existencia,fecha_ult_entrada&periodo=eq.'+encodeURIComponent(periodo)+'&fecha_ult_entrada=gte.'+desde+'&order=id.asc&limit=1000&offset='+off);
+        (rows||[]).forEach(r=>{
+          const k = pvClaveRef(r.referencia), g = by[k] || (by[k] = { fecha:'', bodegas:{}, exist:0 });
+          if(r.fecha_ult_entrada > g.fecha){ g.fecha = r.fecha_ult_entrada; g.bodegas = {}; g.exist = 0; }
+          if(r.fecha_ult_entrada === g.fecha){ g.bodegas[r.bodega||''] = 1; g.exist += parseFloat(r.existencia)||0; }
+        });
+        if(!rows || rows.length<1000) break;
+      }
+    }
+    INF_ING.byRef = by;
+    const cf = await sbReabast.get('llegadas_confirmadas','select=*&order=id.desc&limit=1000').catch(()=>[]);
+    INF_ING.conf = {}; (cf||[]).forEach(c=>{ const k=c.oc_id+'|'+pvClaveRef(c.referencia); if(!INF_ING.conf[k]) INF_ING.conf[k]=c; });
+    INF_ING.cargado = true;
+  }catch(e){ console.warn('Llegadas↔inventario:', e); }
+  INF_ING.cargando = false;
+  infPintar();
+}
+function infIngEstado(ocId, ref, orden, q){
+  const k = pvClaveRef(ref), conf = INF_ING.conf[ocId+'|'+k], ing = INF_ING.byRef[k];
+  const fo = orden ? String(orden).slice(0,10) : '';
+  const pos = !!(ing && ing.fecha && (!fo || ing.fecha >= fo));
+  return { conf, ing, pos };
+}
+function infIngCelda(ocId, ref, q, st){
+  const fd = s => s ? new Date(s+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}) : '';
+  if(st.conf){
+    const c = st.conf;
+    return '<span style="color:#16a34a;font-weight:700;" title="'+reabastEsc((c.nota||''))+'">✅ Confirmado</span><div style="font-size:10px;color:var(--mu);">'+reabastEsc(c.confirmado_por||'')+' · '+fd(String(c.confirmado_en||'').slice(0,10))+' · ingresó '+infFmt(c.cantidad_ingresada)+(c.nota?' · «'+reabastEsc(c.nota)+'»':'')+'</div>';
+  }
+  if(st.pos){
+    return '<span style="color:#b45309;font-weight:700;">📦 Posible ingreso '+fd(st.ing.fecha)+'</span><div style="font-size:10px;color:var(--mu);">Bodega(s): '+reabastEsc(Object.keys(st.ing.bodegas).join(', '))+' · existencia ahí: '+infFmt(st.ing.exist)+' · esperado: '+infFmt(q)+'</div>'
+      + '<button class="btn btn-gr btn-xs" style="margin-top:3px;" onclick="event.stopPropagation();infIngConfirmar(\''+ocId+'\',\''+String(ref).replace(/\\/g,'').replace(/\'/g,'')+'\','+q+',\''+st.ing.fecha+'\')">Confirmar llegada</button>';
+  }
+  return '<span class="arte-mu">—</span>';
+}
+async function infIngConfirmar(ocId, ref, qEsp, fecha){
+  const oc = (REABAST.ordenesCompra||[]).find(o=>String(o.id)===String(ocId)) || {};
+  const qs = prompt('¿Qué cantidad ingresó realmente de '+ref+'? (esperado: '+qEsp+')', qEsp);
+  if(qs===null) return;
+  const q = parseFloat(String(qs).replace(/[^0-9.-]/g,''));
+  if(isNaN(q)){ toast('Cantidad no válida','wa'); return; }
+  const nota = prompt('Nota (opcional) — ej. llegó completo / faltaron unidades:', '') || '';
+  const row = { oc_id:String(ocId), numero_oc:oc.numero_oc||'', referencia:ref, cantidad_esperada:qEsp, cantidad_ingresada:q, fecha_ingreso:fecha||null, confirmado_por:(CU&&CU.nombre)||'', confirmado_email:(CU&&CU.email)||'', nota:nota };
+  try{
+    await sbReabast.post('llegadas_confirmadas', row);
+    row.confirmado_en = new Date().toISOString();
+    INF_ING.conf[String(ocId)+'|'+pvClaveRef(ref)] = row;
+    toast('✅ Llegada confirmada: '+ref,'ok');
+    infPintar();
+  }catch(e){ toast('No se pudo guardar: '+e.message,'er'); }
+}
 function infPintar(){
   const b = document.getElementById('inf-body'); if(!b) return;
   const d = infDatos();
+  if(!INF_ING.cargado && !INF_ING.cargando) infIngCargar(d);
   if(INF.modo==='ref'){ infRefShell(b, d); return; }
   const cap = (typeof CBM_CAPAS!=='undefined' ? CBM_CAPAS[2].cap : 68);
   const tot = d.reduce((a,x)=>a+x.cbm,0), sin = d.reduce((a,x)=>a+x.sin,0);
@@ -10203,9 +10361,9 @@ function infPintar(){
         const cont = x.emb && x.emb.contenedor ? x.emb.contenedor : (x.cbm>0 ? cbmContenedores(x.cbm).txt : '—');
         const pre = x.emb ? (x.emb.estado==='embarcada'?'🚢 Embarcada':x.emb.estado==='en_gestion'?'✋ En gestión':'🔔 Por gestionar') : '<span class="arte-mu">—</span>';
         const tk = INF.q ? INF.q.toLowerCase().split(/[\s,;]+/).filter(Boolean) : [];
-        const itsOc = (REABAST.ocItems[x.o.id]||[]).map(it=>{ const ref = String(it.referencia||'').trim(), M = (REABAST.referenciasMaestro||{})[ref]||{}, desc = it.descripcion||M.descripcion_en||'', cu = cbmRefInfo(ref).cbm, q = Number(it.cantidad)||0; return {ref, desc, q, cbm: cu ? q*cu : null, hit: tk.length && tk.every(k=>(x.o.numero_oc+' '+(x.o.proveedor||'')+' '+ref+' '+desc).toLowerCase().includes(k))}; });
-        const subf = abOc ? `<tr><td colspan="8" style="background:var(--s1);padding:6px 14px;"><table style="font-size:11px;width:100%;"><thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th style="text-align:right;">CBM</th><th>Llega</th></tr></thead><tbody>${itsOc.map(i=>`<tr style="${i.hit?'background:#fef9c3;':''}"><td><b>${reabastEsc(i.ref)}</b></td><td>${reabastEsc(i.desc)}</td><td style="text-align:right;font-weight:700;">${infFmt(i.q)}</td><td style="text-align:right;">${i.cbm==null?'<span style="color:#b45309;">sin CBM</span>':infFmt(i.cbm,2)+' m³'}</td><td style="white-space:nowrap;">${x.fecha?x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}):'—'}${x.estimada?' ≈':''}</td></tr>`).join('')}</tbody></table></td></tr>` : '';
-        return `<tr onclick="INF.ocAb['${x.o.id}']=!INF.ocAb['${x.o.id}'];infPintar()" style="cursor:pointer;"><td><b>${abOc?'▾':'▸'} ${reabastEsc(x.o.numero_oc)}</b></td><td>${reabastEsc(x.o.proveedor||'')}</td><td style="white-space:nowrap;">${x.fecha?x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short'}):'—'}${x.estimada?' <span class="arte-mu" title="Fecha estimada/recalculada">≈</span>':''}</td><td>${reabastEsc(x.etapa||'')}</td><td style="text-align:right;">${x.nItems}</td><td style="text-align:right;font-weight:700;">${infFmt(x.cbm)} m³${x.sin?` <span style="color:#b45309;" title="${x.sin} ítem(s) sin CBM">⚠️</span>`:''}</td><td>${reabastEsc(cont)}</td><td>${pre}</td></tr>`+subf; }).join('')}</tbody></table></div>`:''}
+        const itsOc = (REABAST.ocItems[x.o.id]||[]).map(it=>{ const ref = String(it.referencia||'').trim(), M = (REABAST.referenciasMaestro||{})[ref]||{}, desc = it.descripcion||M.descripcion_en||'', cu = cbmRefInfo(ref).cbm, q = Number(it.cantidad)||0; return {ref, desc, q, st: infIngEstado(x.o.id, ref, x.o.fecha_orden, q), cbm: cu ? q*cu : null, hit: tk.length && tk.every(k=>(x.o.numero_oc+' '+(x.o.proveedor||'')+' '+ref+' '+desc).toLowerCase().includes(k))}; });
+        const subf = abOc ? `<tr><td colspan="8" style="background:var(--s1);padding:6px 14px;"><table style="font-size:11px;width:100%;"><thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th style="text-align:right;">CBM</th><th>Llega</th><th>Ingreso a inventario</th></tr></thead><tbody>${itsOc.map(i=>`<tr style="${i.hit?'background:#fef9c3;':''}"><td><b>${reabastEsc(i.ref)}</b></td><td>${reabastEsc(i.desc)}</td><td style="text-align:right;font-weight:700;">${infFmt(i.q)}</td><td style="text-align:right;">${i.cbm==null?'<span style="color:#b45309;">sin CBM</span>':infFmt(i.cbm,2)+' m³'}</td><td style="white-space:nowrap;">${x.fecha?x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}):'—'}${x.estimada?' ≈':''}</td><td>${infIngCelda(x.o.id, i.ref, i.q, i.st)}</td></tr>`).join('')}</tbody></table></td></tr>` : '';
+        return `<tr onclick="INF.ocAb['${x.o.id}']=!INF.ocAb['${x.o.id}'];infPintar()" style="cursor:pointer;"><td><b>${abOc?'▾':'▸'} ${reabastEsc(x.o.numero_oc)}</b>${(()=>{ const its=itsOc, pend=its.filter(i=>i.st.pos&&!i.st.conf).length, ok=its.length&&its.every(i=>i.st.conf); return ok?' <span style="color:#16a34a;font-size:10px;font-weight:700;">✅ ingresó</span>':pend?' <span style="color:#b45309;font-size:10px;font-weight:700;" title="Ítems con ingreso a inventario por confirmar">📦 '+pend+'</span>':''; })()}</td><td>${reabastEsc(x.o.proveedor||'')}</td><td style="white-space:nowrap;">${x.fecha?x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short'}):'—'}${x.estimada?' <span class="arte-mu" title="Fecha estimada/recalculada">≈</span>':''}</td><td>${reabastEsc(x.etapa||'')}</td><td style="text-align:right;">${x.nItems}</td><td style="text-align:right;font-weight:700;">${infFmt(x.cbm)} m³${x.sin?` <span style="color:#b45309;" title="${x.sin} ítem(s) sin CBM">⚠️</span>`:''}</td><td>${reabastEsc(cont)}</td><td>${pre}</td></tr>`+subf; }).join('')}</tbody></table></div>`:''}
     </div>`; }).join('');
   b.innerHTML = h;
 }
@@ -24484,8 +24642,9 @@ async function invduvSincronizar(inputEl) {
       const bod = str(r[cI['Bodega']]); const k = ref+'|'+bod;
       const ex = num(r[cI['Cant_existencia_actual']]);
       const fc = fechaISOdeCelda(r[cI['FECHA CREACION']]);
-      if(inv[k]) { inv[k].existencia += ex; if(fc && (!inv[k].fecha_creacion || fc < inv[k].fecha_creacion)) inv[k].fecha_creacion = fc; continue; }
-      inv[k] = {referencia:ref, bodega:bod, descripcion:str(r[cI['Nombre Item']]).slice(0,200), existencia:ex, costo_prom:r2(num(r[cI['Costo_prom_uni']])), um:str(r[cI['Unidad de Medida']]), fecha_creacion: fc, categoria: str(r[cI['Nombre Tipo de Inventario']])};
+      const fue = feISO(r[cI['Fecha_ult_entrada']]);
+      if(inv[k]) { if(fue && (!inv[k].fecha_ult_entrada || fue > inv[k].fecha_ult_entrada)) inv[k].fecha_ult_entrada = fue; inv[k].existencia += ex; if(fc && (!inv[k].fecha_creacion || fc < inv[k].fecha_creacion)) inv[k].fecha_creacion = fc; continue; }
+      inv[k] = {referencia:ref, bodega:bod, descripcion:str(r[cI['Nombre Item']]).slice(0,200), existencia:ex, costo_prom:r2(num(r[cI['Costo_prom_uni']])), um:str(r[cI['Unidad de Medida']]), fecha_creacion: fc, fecha_ult_entrada: fue, categoria: str(r[cI['Nombre Tipo de Inventario']])};
     }
     const invL = Object.values(inv); invL.forEach(x => x.existencia = r2(x.existencia));
     log('📦 INVENTARIO: ' + invL.length + ' referencia+bodega');
@@ -24566,7 +24725,7 @@ async function invduvSincronizar(inputEl) {
     const ahora = hoy.toISOString(); const quien = (CU && CU.nombre) || 'Portal';
     const upd = [], ins = [];
     invL.forEach(x => {
-      const f = {descripcion:x.descripcion, existencia:x.existencia, costo_prom:x.costo_prom, um:x.um, periodo, subido_por:quien, actualizado:ahora, fecha_creacion:x.fecha_creacion||null};
+      const f = {descripcion:x.descripcion, existencia:x.existencia, costo_prom:x.costo_prom, um:x.um, periodo, subido_por:quien, actualizado:ahora, fecha_creacion:x.fecha_creacion||null, fecha_ult_entrada:x.fecha_ult_entrada||null};
       f.categoria = x.categoria || categoriaPorRef[x.referencia] || null; // «Nombre Tipo de Inventario» del Excel (si no viene, conserva la que ya tenía)
       const ids = idx[x.referencia+'|'+x.bodega];
       if(ids) ids.forEach(id => upd.push({id, referencia:x.referencia, bodega:x.bodega, ...f}));
@@ -24635,6 +24794,7 @@ async function subirExcelInventario(inputEl) {
     if(iCosto < 0) iCosto = headers.findIndex(h => h.includes('costo prom. uni') && !h.includes('ins'));
     const iCat   = headers.findIndex(h => h === 'nombre tipo de inventario');
     const iFcr   = headers.findIndex(h => h === 'fecha creacion' || h === 'fecha_creacion item');
+    const iFue   = headers.findIndex(h => h === 'fecha_ult_entrada');
     const iBod   = headers.findIndex(h => h === 'bodega');
     const iUbic  = headers.findIndex(h => h.includes('ubicaci'));
     const iLote  = headers.findIndex(h => h === 'lote');
@@ -24670,6 +24830,7 @@ async function subirExcelInventario(inputEl) {
         periodo:     periodo,
         ...(iCat >= 0 && String(row[iCat]||'').trim() ? {categoria: String(row[iCat]).trim()} : {}),
         ...(iFcr >= 0 && fcDe(row[iFcr]) ? {fecha_creacion: fcDe(row[iFcr])} : {}),
+        ...(iFue >= 0 && feISO(row[iFue]) ? {fecha_ult_entrada: feISO(row[iFue])} : {}),
       });
     }
 
@@ -24731,7 +24892,7 @@ async function subirExcelInventario(inputEl) {
         try {
           await sb.patch('inventario',
             'referencia=eq.' + encodeURIComponent(r.referencia) + '&bodega=eq.' + encodeURIComponent(r.bodega||''),
-            Object.assign({ existencia: r.existencia, costo_prom: r.costo_prom, periodo: r.periodo, subido_por: r.subido_por }, r.categoria ? {categoria: r.categoria} : {}, r.fecha_creacion ? {fecha_creacion: r.fecha_creacion} : {})
+            Object.assign({ existencia: r.existencia, costo_prom: r.costo_prom, periodo: r.periodo, subido_por: r.subido_por }, r.categoria ? {categoria: r.categoria} : {}, r.fecha_creacion ? {fecha_creacion: r.fecha_creacion} : {}, r.fecha_ult_entrada ? {fecha_ult_entrada: r.fecha_ult_entrada} : {})
           );
         } catch(e) { console.warn('Error actualizando', r.referencia, e); }
         // Progress cada 50
@@ -27747,6 +27908,7 @@ var PV_SKU_ACTUAL = null; // { referencia, descripcion, categoria }
 // Categoría según el RP (referencias_maestro del módulo Abastecimiento) cuando la lista de precios/inventario no la trae.
 var PV_CAT_RP = null;
 // Variantes con ceros a la izquierda de una lista de referencias (el inventario de SIESA trae 00094; el presupuesto guarda 94)
+var feISO = v => { if(v==null||v==='') return null; if(typeof v==='number'){ if(v>=20000101&&v<=29991231){ const t=String(v); return t.slice(0,4)+'-'+t.slice(4,6)+'-'+t.slice(6,8); } if(v>30000&&v<80000){ const d=new Date(Date.UTC(1899,11,30)+Math.round(v)*86400000); return isNaN(d)?null:d.toISOString().slice(0,10); } return null; } const t=String(v).trim(); let m=t.match(/^(\d{4})(\d{2})(\d{2})$/); if(m) return t==='00000000'?null:m[1]+'-'+m[2]+'-'+m[3]; if(/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0,10); return feISO(parseFloat(t)); };
 function pvVariantesRefs(refs){ const v=new Set(); (refs||[]).forEach(s=>{ s=String(s==null?'':s).trim(); if(!s) return; v.add(s); if(/^\d+$/.test(s)){ const k=s.replace(/^0+/,'')||'0'; v.add(k); for(let L=3;L<=8;L++) v.add(k.padStart(L,'0')); } }); return [...v]; }
 function pvClaveRef(s){ s=String(s==null?'':s).trim(); return /^\d+$/.test(s) ? (s.replace(/^0+/,'')||'0') : s; }
 async function pvCatRPCargar(){
