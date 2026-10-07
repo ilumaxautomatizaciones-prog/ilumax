@@ -25670,8 +25670,8 @@ async function pvDetalleCanal(anio, canal, soloEmail) {
   for(const h of hdrs) {
     const det = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${h.id}&order=categoria.asc,referencia.asc`);
     (det||[]).forEach(r=>{
-      const k = r.referencia;
-      if(!map[k]) { map[k] = Object.assign({}, r); return; }
+      const k = /^\d+$/.test(r.referencia||'') ? (String(r.referencia).replace(/^0+/,'')||'0') : r.referencia;
+      if(!map[k]) { map[k] = Object.assign({}, r, {referencia:k}); return; }
       for(let m=1;m<=12;m++){ const u='u'+String(m).padStart(2,'0'), rr='r'+String(m).padStart(2,'0');
         map[k][u] = (parseFloat(map[k][u])||0) + (parseFloat(r[u])||0);
         map[k][rr] = Math.max(parseFloat(map[k][rr])||0, parseFloat(r[rr])||0); }
@@ -26597,22 +26597,48 @@ async function pvAdmImportar() {
       else { const n = await sb.post('presupuesto_ventas', {anio:PV.anio, lista_id:lista, canal, jefe_zona:dueno.nombre, email_jefe:dueno.email||CU.email, estado:'borrador'}); pid = n[0].id; }
       await pvHistSnap(pid, canal, 'subir Excel (admin)', PV.anio, lista, true);
       const exist = await sb.get('presupuesto_detalle', `presupuesto_id=eq.${pid}&select=id,referencia`);
-      const idPorRef = {}; (exist||[]).forEach(e=>idPorRef[e.referencia]=e.id);
+      const idPorRef = {}; (exist||[]).forEach(e=>{ idPorRef[e.referencia]=e.id; if(/^\d+$/.test(e.referencia)) idPorRef['n'+(e.referencia.replace(/^0+/,'')||'0')]=e.id; });
       // precios/descripcion/categoría desde la lista de precios
+      // Normaliza cada SKU del Excel a la referencia EXACTA del programa (94 → 00094): se busca por valor numérico
+      // en todas las formas con ceros a la izquierda y se toma la que tiene categoría.
       const refs = [...new Set(filas.map(f=>f.sku))];
-      const info = {};
-      for(let i=0;i<refs.length;i+=80){
-        const lote = refs.slice(i,i+80).map(r=>'"'+r.replace(/"/g,'')+'"').join(',');
-        const rows = await sb.get('precios_lista', `lista=eq.${lista}&referencia=in.(${encodeURIComponent(lote)})&select=referencia,descripcion,precio,categoria`);
-        (rows||[]).forEach(r=>info[r.referencia]=r);
+      const info = {}; const canonDe = {};
+      const claveNum = s => /^\d+$/.test(String(s)) ? String(s).replace(/^0+/,'') || '0' : null;
+      const variantes = s => { const k = claveNum(s); if(k===null) return [String(s)]; const v=new Set([String(s),k]); for(let L=3; L<=8; L++) v.add(k.padStart(L,'0')); return [...v]; };
+      const porClave = {};
+      for(let i=0;i<refs.length;i+=25){
+        const lote = refs.slice(i,i+25).flatMap(variantes).map(r=>'"'+r.replace(/"/g,'')+'"').join(',');
+        const rows = await sb.get('precios_lista', `referencia=in.(${encodeURIComponent(lote)})&select=lista,referencia,descripcion,precio,categoria&limit=1000`);
+        (rows||[]).forEach(r=>{ const k = claveNum(r.referencia)!==null ? claveNum(r.referencia) : r.referencia; (porClave[k]=porClave[k]||[]).push(r); });
       }
+      refs.forEach(s=>{
+        const k = claveNum(s)!==null ? claveNum(s) : s;
+        const c = porClave[k]||[];
+        if(!c.length) return;
+        const conCat = c.filter(r=>r.categoria);
+        const base = conCat.length ? conCat : c;
+        // forma más usada entre las que tienen categoría
+        const cnt = {}; base.forEach(r=>cnt[r.referencia]=(cnt[r.referencia]||0)+1);
+        const forma = Object.entries(cnt).sort((x,y)=>y[1]-x[1]||y[0].length-x[0].length)[0][0];
+        const delaLista = c.filter(r=>String(r.lista)===String(lista) && r.precio!=null);
+        const rr = delaLista.find(r=>r.referencia===forma) || delaLista[0] || base.find(r=>r.referencia===forma) || base[0];
+        info[s] = Object.assign({}, rr, {referencia:(claveNum(s)!==null?claveNum(s):forma), categoria:(base.find(r=>r.referencia===forma)||base[0]).categoria||rr.categoria, precio:delaLista.length?(delaLista.find(r=>r.referencia===forma)||delaLista[0]).precio:null});
+        canonDe[s] = claveNum(s)!==null ? claveNum(s) : forma; // se guarda SIN ceros a la izquierda (94, no 00094)
+      });
+      // Si dos SKUs del Excel resultan en la misma referencia del programa (ej. 94 y 00094) se suman
+      const unif = {};
+      filas.forEach(f=>{ const ref = canonDe[f.sku]||f.sku; if(!unif[ref]) unif[ref]=Object.assign({}, f, {sku:ref, u:f.u.slice()}); else f.u.forEach((v,i)=>unif[ref].u[i]+=v); });
+      filas.length = 0; Object.values(unif).forEach(x=>filas.push(x));
+      Object.keys(info).forEach(s=>{ info[info[s].referencia] = info[s]; });
       let nuevos=0, act=0, sinPrecio=0; const ins=[];
       for(const f of filas){
         const inf = info[f.sku]; if(!inf && !f.precioArchivo) sinPrecio++;
         const payload = { presupuesto_id:pid, referencia:f.sku, categoria:inf?.categoria||'Sin categoría', descripcion:inf?.descripcion||f.descArchivo||f.sku, precio_lista:parseFloat(inf?.precio)||f.precioArchivo||0, actualizado:new Date().toISOString() };
         f.u.forEach((v,i)=>payload['u'+String(i+1).padStart(2,'0')]=v);
-        if(idPorRef[f.sku]) { await sb.patch('presupuesto_detalle', `id=eq.${idPorRef[f.sku]}`, payload); act++; }
-        else { ins.push(payload); idPorRef[f.sku] = -1; nuevos++; }
+        const kf = claveNum(f.sku)!==null ? 'n'+claveNum(f.sku) : f.sku;
+        const idEx = idPorRef[f.sku] || idPorRef[kf];
+        if(idEx && idEx!==-1) { await sb.patch('presupuesto_detalle', `id=eq.${idEx}`, payload); act++; }
+        else if(!idEx) { ins.push(payload); idPorRef[f.sku] = -1; idPorRef[kf] = -1; nuevos++; }
       }
       for(let i=0;i<ins.length;i+=100) await sb.post('presupuesto_detalle', ins.slice(i,i+100));
       rep.push(`${canal}: ${nuevos} nuevos, ${act} actualizados${sinPrecio?`, ${sinPrecio} sin precio en la lista`:''}${mixtas?' (⚠ había listas mixtas, se usó la más frecuente)':''}`);
