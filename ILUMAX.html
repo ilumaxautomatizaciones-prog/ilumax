@@ -25456,7 +25456,7 @@ function renderPVShell(el, canales, todosLosCanales) {
         ${PV_SOLO_LECTURA ? '' : `<button class="btn btn-g btn-sm" onclick="pvHistAbrir()" title="Mira las copias de este presupuesto de los últimos 5 días y recupera lo que se borró o se cambió por error">🕘 Historial</button>`}
         <button class="btn btn-g btn-sm" onclick="pvExportar()" title="Excel a color de TODOS los canales de esta persona, un bloque por canal (Cant, Precio, Venta, Resumen) — para juntar a todas las personas usa 'Excel combinado (todos)'">📊 Excel</button>
         ${(CU?.rol==='admin' || pvEsAprobador()) ? `<button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>` : ''}
-        ${(CU?.rol==='admin' || pvEsAprobador()) ? `<button class="btn btn-g btn-sm" onclick="pvExportarCombinadoTodo()" title="Excel a color con las mismas hojas que el botón Excel (Cant, Precio, Venta, Resumen) más una hoja de todas las filas juntas — con fórmulas en vivo (Venta = Cant × Precio) y una hoja de Instrucciones">📋 Excel combinado (todos)</button>` : ''}
+        <button class="btn btn-g btn-sm" onclick="pvExportarCombinadoTodo()" title="Excel a color con las mismas hojas que el botón Excel (Cant, Precio, Venta, Resumen) más una hoja de todas las filas juntas — con fórmulas en vivo (Venta = Cant × Precio) y una hoja de Instrucciones">📋 Excel combinado (todos)</button>
         ${(CU?.rol==='admin' || !PV_SOLO_LECTURA) ? `<button class="btn btn-bl btn-sm" onclick="pvAdmSubirAbrir()" title="Sube el presupuesto desde un Excel sencillo (SKU | cantidad mes a mes | lista de precio | canal)">📤 Subir presupuesto (Excel)</button>` : ''}
         ${CU?.rol==='admin' ? `<button class="btn btn-g btn-sm" onclick="pvListaCliEditar()" title="Qué cliente corresponde a cada lista de precios (7, 13, 57, 29…)">⚙ Clientes por lista</button>` : ''}
         ${CU?.rol==='admin' ? `<button class="btn btn-or btn-sm" onclick="pvMigrarAnio()" title="Mueve lo que ya está cargado al año correcto (sin tocar ningún dato, solo le cambia el año)">📅 Mover a 2027</button>` : ''}
@@ -28701,6 +28701,7 @@ async function pvExportarCombinadoTodo() {
         '• "Venta" → el resultado en pesos (Cantidad × Precio), celda por celda, calculado automáticamente — no la edites a mano, es una fórmula que apunta a "Cant" y "Precio".',
         '• "Resumen" → el total del año por canal y por categoría, con el % que representa cada uno — también son fórmulas que suman lo que hay en "Venta".',
         '• "Todos los canales" → la misma información pero en una sola tabla plana, una fila por SKU y canal (para filtrar, dinamizar o pegar en otro reporte).',
+        '• Hojas con el nombre de cada persona (Cindy, Johanna, Omar…) → solo lo que subió esa persona, en la misma tabla plana, con su fila TOTAL (se actualiza si filtras).',
       ]},
       {sub:'Fórmulas vivas: si algo no cuadra, revisa aquí antes de editar a mano', items: [
         'Todas las columnas "Total" y la fila "TOTAL GENERAL" son SUMAS de Excel (=SUMA), no números pegados — si cambias una cantidad o un precio, los totales de esa misma hoja se recalculan solos al abrir o recalcular el archivo.',
@@ -28743,6 +28744,49 @@ async function pvExportarCombinadoTodo() {
   });
   wsT.autoFilter = { from:{row:1,column:1}, to:{row:Math.max(1,rt-1),column:21} };
   wsT.columns = [{width:16},{width:16},{width:16},{width:10},{width:38},{width:16},{width:11},...Array(12).fill({width:9}),{width:11},{width:14}];
+
+  // ═══ Una hoja por persona (jefe de zona) que subió presupuesto: mismas columnas, solo sus filas + TOTAL ═══
+  const personas = [...new Set(canales.filter(c=>hdrPorCanal[c] && (dataPorCanal[c]||[]).length).map(c=>(hdrPorCanal[c].jefe_zona||'').trim()).filter(Boolean))].sort((x,y)=>x.localeCompare(y,'es'));
+  const usados = new Set(wb.worksheets.map(w=>w.name.toLowerCase()));
+  personas.forEach(pers=>{
+    let nom = pers.replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,31) || 'Persona';
+    let base = nom, k = 2;
+    while(usados.has(nom.toLowerCase())){ nom = base.slice(0,28)+' '+k++; }
+    usados.add(nom.toLowerCase());
+    const ws = wb.addWorksheet(nom, {views:[{state:'frozen', ySplit:1}]});
+    encT.forEach((h,i)=>{ const c=ws.getCell(1,i+1); c.value=h; c.style=EST.th; });
+    let r0 = 2;
+    canales.forEach(canal=>{
+      const hdr = hdrPorCanal[canal]; const detalle = dataPorCanal[canal]||[];
+      if(!hdr || !detalle.length || (hdr.jefe_zona||'').trim()!==pers) return;
+      const listaNombre = (PV.catalogo.find(c=>c.lista_id===hdr.lista_id)||{}).nombre || hdr.lista_id || '—';
+      detalle.forEach(r=>{
+        const esLibre = pvEsLineaLibre(r);
+        const precio = parseFloat(r.precio_lista)||0;
+        const fill = (r0-2)%2===1?{type:'pattern',pattern:'solid',fgColor:{argb:EST.FILA_PAR}}:undefined;
+        const vals = [canal, hdr.jefe_zona||'', listaNombre, esLibre?'sin SKU':r.referencia, r.descripcion||'', r.categoria||'Sin categoría', esLibre?'':precio];
+        vals.forEach((v,i)=>{ const c=ws.getCell(r0,i+1); c.value=v; c.style={font:{size:9}, border:EST.bordeCelda, fill, numFmt: i===6?'$ #,##0':undefined}; });
+        for(let mi=0; mi<12; mi++){
+          const c = ws.getCell(r0, 8+mi);
+          c.value = parseFloat(r['u'+String(mi+1).padStart(2,'0')])||0;
+          c.style = {font:{size:9}, border:EST.bordeCelda, alignment:{horizontal:'right'}, numFmt:'#,##0', fill};
+        }
+        const cTU = ws.getCell(r0,20); cTU.value = {formula:`SUM(H${r0}:S${r0})`}; cTU.style = {font:{bold:true,size:9}, border:EST.bordeCelda, alignment:{horizontal:'right'}, numFmt:'#,##0', fill};
+        const cTC = ws.getCell(r0,21); cTC.value = esLibre ? '' : {formula:`T${r0}*G${r0}`}; cTC.style = {font:{bold:true,size:9}, border:EST.bordeCelda, alignment:{horizontal:'right'}, numFmt:'$ #,##0', fill};
+        r0++;
+      });
+    });
+    ws.autoFilter = { from:{row:1,column:1}, to:{row:Math.max(1,r0-1),column:21} };
+    // Fila TOTAL (suma de unidades por mes, total unidades y total COP)
+    const ft = r0, tst = {font:{bold:true,size:9}, border:EST.bordeCelda, alignment:{horizontal:'right'}, fill:{type:'pattern',pattern:'solid',fgColor:{argb:'FFFFE699'}}};
+    ws.getCell(ft,1).value='TOTAL'; ws.getCell(ft,1).style={font:{bold:true,size:9}, border:EST.bordeCelda, fill:tst.fill};
+    for(let col=8; col<=21; col++){
+      const L = pvColLetra(col);
+      const c = ws.getCell(ft,col); c.value = {formula:`SUBTOTAL(109,${L}2:${L}${Math.max(2,r0-1)})`};
+      c.style = Object.assign({}, tst, {numFmt: col===21?'$ #,##0':'#,##0'});
+    }
+    ws.columns = [{width:16},{width:16},{width:16},{width:10},{width:38},{width:16},{width:11},...Array(12).fill({width:9}),{width:11},{width:14}];
+  });
 
   await pvExcelDescargar(wb, `Presupuesto_Ventas_Combinado_Todos_ILUMAX_${anio}.xlsx`);
   toast(`✅ Excel combinado a color generado — ${skuList.length} SKUs, ${canales.length} canales`,'ok');
