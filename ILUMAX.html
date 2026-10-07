@@ -7008,6 +7008,7 @@ function renderCamposPorMes() {
     + '<button onclick="document.getElementById(\'pw-replicar-panel-'+numMes+'\').style.display=\'none\'" style="background:var(--w);border:1px solid var(--b1);border-radius:8px;padding:8px 14px;font-size:11px;cursor:pointer;">Cancelar</button>'
     + '</div>'
     + '</div>'
+    + pwQuickHtml(numMes, items, centrosOpc)
     + refHtml
     + '<div style="font-size:10px;font-weight:700;color:var(--mu);margin-bottom:6px;">ÍTEMS DEL MES <span style="font-weight:400;color:var(--mu);">— Centro de Costo, Descripción y Valor son obligatorios</span></div>'
     + '<table style="width:100%;border-collapse:collapse;margin-bottom:2px;">'
@@ -7050,6 +7051,59 @@ function pwItemCambio(mes, idx, campo, val, inputEl) {
   if(el) el.textContent = fmt(total);
 }
 
+
+// ── Aplicación rápida a varios meses (año / semestre / trimestre / meses marcados) ──
+var pwQuick = { meses:{}, modo:'mes', valor:'', cc:null, desc:null };
+function pwQuickLeer(){
+  var v=document.getElementById('pw-q-valor'), m=document.getElementById('pw-q-modo'), c=document.getElementById('pw-q-cc'), d=document.getElementById('pw-q-desc');
+  if(v) pwQuick.valor=v.value; if(m) pwQuick.modo=m.value; if(c) pwQuick.cc=c.value; if(d) pwQuick.desc=d.value;
+}
+function pwQuickHtml(numMes, items, centrosOpc){
+  var it0 = (items&&items[0])||{};
+  var cc = pwQuick.cc!==null ? pwQuick.cc : siesaResolverCC(it0.cc||'');
+  var desc = pwQuick.desc!==null ? pwQuick.desc : (it0.desc||'');
+  var nm=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  var bs='border:1px solid var(--b1);background:var(--w);border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;';
+  var presets=[['anio','Año'],['s1','Sem 1'],['s2','Sem 2'],['q1','T1'],['q2','T2'],['q3','T3'],['q4','T4'],['none','Limpiar']];
+  return '<div style="background:var(--bld);border:1px solid var(--b1);border-radius:10px;padding:10px 12px;margin-bottom:10px;">'
+    + '<div style="font-size:10px;font-weight:800;color:var(--bl);margin-bottom:6px;">⚡ APLICAR A VARIOS MESES</div>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">'
+    + presets.map(function(p){ return '<button type="button" onclick="pwQuickSel(\''+p[0]+'\')" style="'+bs+'">'+p[1]+'</button>'; }).join('')
+    + '</div>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">'
+    + nm.map(function(n,i){ var m=i+1; return '<label style="display:flex;align-items:center;gap:3px;background:var(--w);border:1px solid var(--b1);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:10px;font-weight:600;">'
+        + '<input type="checkbox" '+(pwQuick.meses[m]?'checked ':'')+'onchange="pwQuick.meses['+m+']=this.checked" style="accent-color:var(--bl);">'+n+'</label>'; }).join('')
+    + '</div>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">'
+    + '<select id="pw-q-cc" class="inp" style="font-size:11px;flex:1 1 150px;"><option value="">-- Centro de costo --</option>'
+    + (centrosOpc||[]).map(function(c){ return '<option value="'+c.codigo+'"'+(c.codigo===cc?' selected':'')+'>'+c.codigo+' — '+c.nombre+'</option>'; }).join('')
+    + '</select>'
+    + '<input id="pw-q-desc" class="inp" placeholder="Descripción" value="'+String(desc).replace(/"/g,'&quot;')+'" style="font-size:11px;flex:1 1 140px;">'
+    + '<input id="pw-q-valor" class="inp" type="number" min="0" placeholder="Valor" value="'+(pwQuick.valor||'')+'" style="font-size:11px;font-weight:700;width:110px;text-align:right;">'
+    + '<select id="pw-q-modo" class="inp" style="font-size:11px;width:140px;"><option value="mes"'+(pwQuick.modo==='mes'?' selected':'')+'>Valor por mes</option><option value="total"'+(pwQuick.modo==='total'?' selected':'')+'>Total a repartir</option></select>'
+    + '<button type="button" onclick="pwQuickAplicar()" style="background:var(--bl);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">✅ Aplicar</button>'
+    + '</div></div>';
+}
+function pwQuickSel(k){
+  pwQuickLeer();
+  var r={anio:[1,12],s1:[1,6],s2:[7,12],q1:[1,3],q2:[4,6],q3:[7,9],q4:[10,12]}[k];
+  if(k==='none') pwQuick.meses={};
+  else { pwQuick.meses={}; for(var m=r[0];m<=r[1];m++) pwQuick.meses[m]=true; }
+  renderCamposPorMes();
+}
+function pwQuickAplicar(){
+  pwQuickLeer();
+  var ms=[]; for(var m=1;m<=12;m++) if(pwQuick.meses[m]) ms.push(m);
+  var val=parseFloat(pwQuick.valor)||0;
+  if(!ms.length){ toast('Marca al menos un mes','wa'); return; }
+  if(!(val>0)){ toast('Escribe el valor','wa'); return; }
+  if(!pwQuick.cc){ toast('Selecciona el centro de costo','wa'); return; }
+  if(!String(pwQuick.desc||'').trim()){ toast('Escribe la descripción','wa'); return; }
+  var porMes = pwQuick.modo==='total' ? Math.round(val/ms.length) : val;
+  ms.forEach(function(m){ presWizardItemsPorMes[m]=[{cc:pwQuick.cc, desc:String(pwQuick.desc).trim(), valor:porMes}]; });
+  renderWizardMeses(); renderCamposPorMes();
+  toast('✅ Aplicado a '+ms.length+' mes(es): '+porMes.toLocaleString('es-CO')+' c/u','ok');
+}
 function pwMostrarReplicar(mes) {
   var panel = document.getElementById('pw-replicar-panel-'+mes);
   if(panel) panel.style.display = panel.style.display==='none' ? 'block' : 'none';
@@ -8156,6 +8210,10 @@ function exportarExcel(tipo) {
 
   } else if(tipo === 'presupuestos') {
     var pres = getPresupuestos();
+    // Solo admin y gestores de Ppto. por Áreas descargan todo; los demás solo su propia área
+    var _verTodo = (typeof paGestor==='function') ? paGestor() : (CU && CU.rol==='admin');
+    if(!_verTodo) pres = pres.filter(function(p){ return p.area === (CU && CU.area); });
+    if(!pres.length){ toast('No tienes presupuestos para exportar','wa'); return; }
     var data2 = pres.map(function(p) {
       return {
         'ID':           p.id || '',
