@@ -27630,6 +27630,15 @@ async function pvBuscarRef(q) {
         }
       }
 
+      // Precio de respaldo (lista P1) cuando la referencia solo está en inventario / sin precio en esta lista
+      if((rows||[]).some(r=>!r.precio)){
+        try{
+          const vs = pvVariantesRefs(rows.filter(r=>!r.precio).map(r=>r.referencia));
+          const p1 = await sb.get('precios_lista', `lista=eq.1&referencia=in.(${vs.join(',')})&select=referencia,precio&order=id.desc&limit=200`);
+          const mp = {}; (p1||[]).forEach(x=>{ const k=pvClaveRef(x.referencia); if(x.precio && !mp[k]) mp[k]=x.precio; });
+          rows.forEach(r=>{ if(!r.precio && mp[pvClaveRef(r.referencia)]){ r.precio = mp[pvClaveRef(r.referencia)]; r._p1 = true; } });
+        }catch(e){}
+      }
       // Completa la categoría con la del RP cuando falta
       if((rows||[]).some(r=>!r.categoria)){ const mrp = await pvCatRPCargar(); (rows||[]).forEach(r=>{ if(!r.categoria) r.categoria = mrp[pvClaveRef(r.referencia)] || r.categoria; }); }
 
@@ -27660,6 +27669,11 @@ async function pvBuscarRef(q) {
           </div>
         </div>`;
       }).join('') || '<div style="padding:8px;color:var(--mu);font-size:12px;">Sin resultados en lista ni inventario</div>';
+      // Si lo escrito coincide exacto con una referencia, se autocompleta sola
+      const ex = (rows||[]).filter(r=>pvClaveRef(r.referencia)===pvClaveRef(q));
+      if(ex.length===1 && document.getElementById('sku-ref').value.trim()===q.trim()){
+        pvSeleccionarRef(ex[0].referencia, ex[0].descripcion||'', ex[0].precio||0, ex[0].categoria||'');
+      }
     } catch(e){ console.warn('pvBuscarRef error:', e); }
   }, 350);
 }
