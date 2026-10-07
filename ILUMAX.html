@@ -5706,19 +5706,64 @@ function presTblAnio(){
 }
 function presTblCambiarAnio(d){ PRES_TBL.anio = presTblAnio()+d; PRES_TBL_PEND = {}; PRES_TBL.solo = undefined; presTblRender(); }
 var PRES_TBL = { col:'cat', dir:1 };
+// ── Historial de centros de costo: sugiere el más usado por el área para esa subcategoría/categoría ──
+function presCcLastKey(){ return 'ilx_cc_last_'+presAreaSlug(CU&&CU.area||''); }
+function presCcRecordar(cc){ try{ if(cc) localStorage.setItem(presCcLastKey(), cc); }catch(e){} }
+function presCcFrecuentes(subCod){
+  var cat = String(subCod||'').substring(0,4), cuenta = {};
+  getPresupuestos().filter(function(p){ return p.area===(CU&&CU.area); }).forEach(function(p){
+    var w = p.subCodigo===subCod ? 10 : ((p.catCodigo||String(p.subCodigo||'').substring(0,4))===cat ? 3 : 1);
+    presTblItemsDe(p).forEach(function(it){ var c=siesaResolverCC(it.cc||''); if(c) cuenta[c]=(cuenta[c]||0)+w; });
+  });
+  var last=''; try{ last = localStorage.getItem(presCcLastKey())||''; }catch(e){}
+  if(last) cuenta[last] = (cuenta[last]||0)+2;
+  return Object.keys(cuenta).sort(function(a,b){ return cuenta[b]-cuenta[a]; });
+}
+function presCcSugerido(subCod){
+  var perm = centrosCostoParaCategoria(String(subCod||'').substring(0,4));
+  var f = presCcFrecuentes(subCod).filter(function(c){ return perm.some(function(x){ return x.codigo===c; }); });
+  return f[0] || '';
+}
+function presCcOpciones(lista, subCod, sel){
+  var fr = presCcFrecuentes(subCod);
+  var ord = lista.slice().sort(function(a,b){ var ia=fr.indexOf(a.codigo), ib=fr.indexOf(b.codigo); return (ia<0?999:ia)-(ib<0?999:ib); });
+  return '<option value="">-- Centro de costo --</option>'+ord.map(function(c){ var u=fr.indexOf(c.codigo)>=0 && fr.indexOf(c.codigo)<3; return '<option value="'+c.codigo+'"'+(c.codigo===sel?' selected':'')+'>'+(u?'★ ':'')+c.codigo+' — '+c.nombre+'</option>'; }).join('');
+}
 var PRES_TBL_NUEVAS = [];
 var PRES_QA = { abierto:false, subTxt:'', subCod:'', cc:'', desc:'', valor:'', per:'' };
 function presQaToggle(){ PRES_QA.abierto = !PRES_QA.abierto; presTblRender(); if(PRES_QA.abierto) setTimeout(function(){ var i=document.getElementById('pres-qa-sub'); if(i) i.focus(); },50); }
 function presQaEtiqueta(s){ var cat=(CATS_ILUMAX||[]).find(function(c){ return s.codigo.indexOf(c.codigo)===0; }); return s.nombre+' · '+(cat?cat.nombre:'')+' ('+s.codigo+')'; }
 function presQaSubCambio(txt){
-  PRES_QA.subTxt = txt;
-  var s = (SUBS_ILUMAX||[]).find(function(x){ return presQaEtiqueta(x)===txt; });
-  PRES_QA.subCod = s ? s.codigo : '';
+  PRES_QA.subTxt = txt; PRES_QA.subCod = '';
+  presQaLista(txt);
+}
+function presQaLista(q){
+  var res = document.getElementById('pres-qa-res'); if(!res) return;
+  var t = presNorm(q).trim();
+  if(!t){ res.style.display='none'; res.innerHTML=''; return; }
+  var pal = t.split(/\s+/), arr = [];
+  (SUBS_ILUMAX||[]).forEach(function(s){
+    var cat = (CATS_ILUMAX||[]).find(function(c){ return s.codigo.indexOf(c.codigo)===0; });
+    var nom = presNorm(s.nombre), txt = presNorm(s.nombre+' '+(s.grupo6||'')+' '+(cat?cat.nombre:'')+' '+s.codigo);
+    if(!pal.every(function(w){ return txt.indexOf(w)>=0; })) return;
+    arr.push({s:s, cat:cat, r: nom.indexOf(t)===0?0 : nom.indexOf(t)>=0?1 : pal.every(function(w){return nom.indexOf(w)>=0;})?2:3});
+  });
+  arr.sort(function(a,b){ return a.r-b.r || a.s.nombre.localeCompare(b.s.nombre); });
+  res.style.display='block';
+  if(!arr.length){ res.innerHTML='<div style="padding:8px 10px;font-size:11px;color:var(--mu);">Sin resultados</div>'; return; }
+  res.innerHTML = arr.slice(0,40).map(function(x){
+    return '<div onmousedown="presQaElegir(\''+x.s.codigo+'\')" style="padding:6px 10px;cursor:pointer;font-size:11px;border-bottom:1px solid var(--b1);" onmouseover="this.style.background=\'var(--bld)\'" onmouseout="this.style.background=\'\'"><b>'+x.s.nombre+'</b> <span style="color:var(--mu);font-size:10px;">· '+(x.cat?x.cat.nombre:'')+' ('+x.s.codigo+')</span></div>';
+  }).join('') + (arr.length>40?'<div style="padding:5px 10px;font-size:10px;color:var(--mu);">'+arr.length+' resultados · escribe más para afinar</div>':'');
+}
+function presQaElegir(cod){
+  var s = (SUBS_ILUMAX||[]).find(function(x){ return x.codigo===cod; }); if(!s) return;
+  PRES_QA.subCod = cod; PRES_QA.subTxt = presQaEtiqueta(s);
+  var inp = document.getElementById('pres-qa-sub'); if(inp) inp.value = PRES_QA.subTxt;
+  var res = document.getElementById('pres-qa-res'); if(res){ res.style.display='none'; res.innerHTML=''; }
   var sel = document.getElementById('pres-qa-cc'); if(!sel) return;
-  var cat = s ? (CATS_ILUMAX||[]).find(function(c){ return s.codigo.indexOf(c.codigo)===0; }) : null;
-  var lista = centrosCostoParaCategoria(cat?cat.codigo:null);
-  if(!lista.some(function(c){ return c.codigo===PRES_QA.cc; })) PRES_QA.cc='';
-  sel.innerHTML = '<option value="">-- Centro de costo --</option>'+lista.map(function(c){ return '<option value="'+c.codigo+'"'+(c.codigo===PRES_QA.cc?' selected':'')+'>'+c.codigo+' — '+c.nombre+'</option>'; }).join('');
+  var cat = (CATS_ILUMAX||[]).find(function(c){ return s.codigo.indexOf(c.codigo)===0; });
+  PRES_QA.cc = presCcSugerido(s.codigo);
+  sel.innerHTML = presCcOpciones(centrosCostoParaCategoria(cat?cat.codigo:null), s.codigo, PRES_QA.cc);
 }
 function presQaHtml(){
   if(!PRES_QA.abierto) return '';
@@ -5730,10 +5775,10 @@ function presQaHtml(){
   return '<div style="background:var(--bld);border:1px solid var(--b1);border-radius:10px;padding:10px 12px;margin-bottom:10px;">'
     + '<div style="font-size:10px;font-weight:800;color:var(--bl);margin-bottom:6px;">⚡ AGREGAR FILA RÁPIDA — escribe para buscar la subcategoría</div>'
     + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">'
-    + '<input id="pres-qa-sub" list="pres-qa-dl" placeholder="🔍 Subcategoría..." value="'+String(PRES_QA.subTxt).replace(/"/g,'&quot;')+'" oninput="presQaSubCambio(this.value)" '+inp.replace('style="','style="flex:2 1 260px;')+'>'
-    + '<datalist id="pres-qa-dl">'+subs.map(function(x){ return '<option value="'+presQaEtiqueta(x).replace(/"/g,'&quot;')+'">'; }).join('')+'</datalist>'
+    + '<div style="position:relative;flex:2 1 260px;"><input id="pres-qa-sub" autocomplete="off" placeholder="🔍 Subcategoría (ej: vehiculo, celular, arriendo)..." value="'+String(PRES_QA.subTxt).replace(/"/g,'&quot;')+'" oninput="presQaSubCambio(this.value)" onfocus="if(!PRES_QA.subCod)presQaLista(this.value)" onblur="setTimeout(function(){var r=document.getElementById(\'pres-qa-res\');if(r)r.style.display=\'none\';},200)" '+inp.replace('style="','style="width:100%;box-sizing:border-box;')+'>'
+    + '<div id="pres-qa-res" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:50;background:var(--w);border:1px solid var(--b1);border-radius:8px;max-height:260px;overflow:auto;box-shadow:0 6px 18px rgba(0,0,0,.15);"></div></div>'
     + '<select id="pres-qa-cc" onchange="PRES_QA.cc=this.value" '+inp.replace('style="','style="flex:1 1 180px;')+'><option value="">-- Centro de costo --</option>'
-    + lista.map(function(c){ return '<option value="'+c.codigo+'"'+(c.codigo===PRES_QA.cc?' selected':'')+'>'+c.codigo+' — '+c.nombre+'</option>'; }).join('')+'</select>'
+    + presCcOpciones(lista, PRES_QA.subCod, PRES_QA.cc).replace('<option value="">-- Centro de costo --</option>','')+'</select>'
     + '<input id="pres-qa-desc" placeholder="Descripción del ítem" value="'+String(PRES_QA.desc).replace(/"/g,'&quot;')+'" oninput="PRES_QA.desc=this.value" '+inp.replace('style="','style="flex:1 1 180px;')+'>'
     + '<input id="pres-qa-valor" type="number" min="0" placeholder="Valor por mes (opcional)" value="'+(PRES_QA.valor||'')+'" oninput="PRES_QA.valor=this.value" '+inp.replace('style="','style="width:150px;text-align:right;')+'>'
     + '<select id="pres-qa-per" onchange="PRES_QA.per=this.value" '+inp+'>'
@@ -5748,6 +5793,7 @@ function presQaAgregar(){
   if(!PRES_QA.cc){ toast('Selecciona el centro de costo','wa'); return; }
   var desc = String(PRES_QA.desc||'').trim();
   if(!desc){ toast('Escribe la descripción del ítem','wa'); return; }
+  presCcRecordar(PRES_QA.cc);
   var k = presTblClave(s.codigo, PRES_QA.cc, desc);
   if(PRES_TBL_ROWS[k] && !PRES_TBL_ROWS[k].vacia){ toast('Ese ítem ya existe en la tabla','wa'); return; }
   var cat = CATS_ILUMAX.find(function(c){ return s.codigo.indexOf(c.codigo)===0; });
@@ -5808,26 +5854,24 @@ function presTblRender(){
       tot[m]=(tot[m]||0)+v;
       var pend = PRES_TBL_PEND[f.k+'@@'+m];
       if(pend!==undefined) v = pend;
-      cells += '<td style="padding:2px 3px;">'+(ed && f.vacia
-        ? '<input type="text" readonly placeholder="+" title="Define centro de costo y descripción" onclick="presTblEditarFila(\''+f.sub+'\')" style="width:84px;text-align:right;font-size:11px;padding:4px 5px;border:1px dashed var(--b1);border-radius:6px;background:var(--bg);cursor:pointer;">'
+      cells += '<td style="padding:2px 1px;">'+(ed && f.vacia
+        ? '<input type="text" readonly placeholder="+" title="Define centro de costo y descripción" onclick="presTblEditarFila(\''+f.sub+'\')" style="width:100%;box-sizing:border-box;text-align:right;font-size:10px;padding:3px 2px;border:1px dashed var(--b1);border-radius:6px;background:var(--bg);cursor:pointer;">'
         : ed
-        ? '<input type="number" min="0" data-k="'+kk+'" data-mes="'+m+'" value="'+(v||'')+'" placeholder="·" onchange="presTblEditar(this)" style="width:84px;text-align:right;font-size:11px;padding:4px 5px;border:1px solid '+(pend!==undefined?'#f59e0b':'var(--b1)')+';border-radius:6px;background:'+(pend!==undefined?'#fef9c3':'var(--w)')+';">'
+        ? '<input type="number" min="0" data-k="'+kk+'" data-mes="'+m+'" value="'+(v||'')+'" placeholder="·" onchange="presTblEditar(this)" style="width:100%;box-sizing:border-box;text-align:right;font-size:10px;padding:3px 2px;border:1px solid '+(pend!==undefined?'#f59e0b':'var(--b1)')+';border-radius:6px;background:'+(pend!==undefined?'#fef9c3':'var(--w)')+';">'
         : '<div title="Estado: '+(p.estado||'')+' — no editable" style="text-align:right;font-size:11px;padding:4px 6px;color:var(--mu);">'+fmt(v)+'</div>')+'</td>';
     }
     totAll += f.total;
     return '<tr class="pres-tbl-fila" data-vacia="'+(f.vacia?1:0)+'" data-q="'+presNorm(f.cat+' '+f.subNombre+' '+f.desc+' '+f.sub+' '+f.cc).replace(/"/g,'')+'" style="border-bottom:1px solid var(--b1);">'
-      + '<td style="padding:6px;font-size:10px;color:var(--mu);white-space:nowrap;">'+f.cat+'</td>'
-      + '<td style="padding:6px;font-size:11px;font-weight:600;white-space:nowrap;">'+f.subNombre+'</td>'
-      + '<td style="padding:6px;font-size:11px;white-space:nowrap;">'+(f.desc||'<span style="color:var(--mu);">—</span>')+(f.nueva?' <span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;">NUEVA</span>':'')+'</td>'
-      + '<td style="padding:6px;font-size:10px;color:var(--mu);white-space:nowrap;">'+(f.cc||'—')+'</td>'
+      + '<td style="padding:4px;font-size:10px;font-weight:600;line-height:1.2;">'+f.subNombre+'<div style="font-weight:400;color:var(--mu);font-size:9px;">'+f.cat+'</div></td>'
+      + '<td style="padding:4px;font-size:10px;line-height:1.2;">'+(f.desc||'<span style="color:var(--mu);">—</span>')+(f.nueva?' <span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;">NUEVA</span>':'')+'<div>'+Object.keys(f.estados).map(bdgEstado).join(' ')+'</div></td>'
+      + '<td style="padding:4px;font-size:9px;color:var(--mu);line-height:1.2;">'+(f.cc||'—')+'</td>'
       + cells
-      + '<td style="padding:6px;font-size:12px;font-weight:800;color:var(--bl);text-align:right;white-space:nowrap;">'+fmt(f.total)+'</td>'
-      + '<td style="padding:6px;">'+Object.keys(f.estados).map(bdgEstado).join(' ')+'</td>'
-      + '<td style="padding:6px;white-space:nowrap;"><button class="btn btn-g btn-xs" title="Editar (abre el formulario de creación)" onclick="presTblEditarFila(\''+f.sub+'\')">✏️</button>'+(f.vacia?'':' <button class="btn btn-rd btn-xs" title="Borrar este ítem" onclick="presTblEliminarFila(\''+kk+'\')">🗑️</button>')+'</td></tr>';
+      + '<td style="padding:4px;font-size:10px;font-weight:800;color:var(--bl);text-align:right;">'+fmt(f.total)+'</td>'
+      + '<td style="padding:2px;white-space:nowrap;text-align:center;"><button class="btn btn-g btn-xs" title="Editar (abre el formulario de creación)" onclick="presTblEditarFila(\''+f.sub+'\')">✏️</button>'+(f.vacia?'':' <button class="btn btn-rd btn-xs" title="Borrar este ítem" onclick="presTblEliminarFila(\''+kk+'\')">🗑️</button>')+'</td></tr>';
   }).join('');
-  var foot = '<tr style="background:var(--s1);font-weight:800;"><td colspan="4" style="padding:7px 6px;font-size:11px;">TOTAL '+anio+'</td>'
-    + nm.map(function(_,i){ return '<td style="padding:7px 6px;font-size:11px;text-align:right;">'+fmt(tot[i+1]||0)+'</td>'; }).join('')
-    + '<td style="padding:7px 6px;font-size:12px;text-align:right;color:var(--bl);">'+fmt(totAll)+'</td><td></td><td></td></tr>';
+  var foot = '<tr style="background:var(--s1);font-weight:800;"><td colspan="3" style="padding:6px 4px;font-size:10px;">TOTAL '+anio+'</td>'
+    + nm.map(function(_,i){ return '<td style="padding:6px 2px;font-size:9px;text-align:right;">'+fmt(tot[i+1]||0)+'</td>'; }).join('')
+    + '<td style="padding:6px 4px;font-size:10px;text-align:right;color:var(--bl);">'+fmt(totAll)+'</td><td></td></tr>';
   el.innerHTML = '<div class="area-card" style="margin-bottom:14px;padding:12px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
     + '<div style="font-size:13px;font-weight:800;">📅 Presupuesto '+anio+' — '+CU.area+' <span style="font-weight:400;font-size:10px;color:var(--mu);">· una fila por ítem · clic en un encabezado para ordenar · edita las casillas y pulsa 💾 Guardar cambios · deja 0 para borrar un mes</span></div>'
@@ -5839,9 +5883,9 @@ function presTblRender(){
     + '<input id="pres-tbl-q" class="inp" placeholder="🔍 Buscar categoría, subcategoría o ítem..." value="'+String(PRES_TBL.q).replace(/"/g,'&quot;')+'" oninput="PRES_TBL.q=this.value;presTblFiltrar()" style="flex:1 1 220px;font-size:12px;">'
     + '<label style="display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer;"><input type="checkbox" id="pres-tbl-solo" '+(PRES_TBL.solo?'checked ':'')+'onchange="PRES_TBL.solo=this.checked;presTblFiltrar()"> Solo con valores</label>'
     + '<span id="pres-tbl-n" style="font-size:10px;color:var(--mu);"></span></div>'
-    + '<div style="overflow:auto;max-height:480px;border:1px solid var(--b1);border-radius:10px;"><table style="border-collapse:collapse;min-width:100%;">'
-    + '<thead><tr>'+th('cat','Categoría','left')+th('sub','Subcategoría','left')+th('desc','Ítem / descripción','left')+th('cc','Centro de costo','left')
-    + nm.map(function(n,i){ return th('m'+(i+1),n); }).join('')+th('total','Total')+thf('Estado')+thf('Acciones')+'</tr></thead>'
+    + '<div style="overflow:auto;max-height:560px;border:1px solid var(--b1);border-radius:10px;"><style>#pres-tabla-anio td,#pres-tabla-anio th{overflow-wrap:anywhere}#pres-tabla-anio input[type=number]::-webkit-inner-spin-button{display:none}#pres-tabla-anio input[type=number]{-moz-appearance:textfield}</style><table style="border-collapse:collapse;width:100%;min-width:1000px;table-layout:fixed;"><colgroup><col style="width:11%"><col style="width:11%"><col style="width:7%">'+nm.map(function(){return '<col style="width:5%">';}).join('')+'<col style="width:7%"><col style="width:6%"></colgroup>'
+    + '<thead><tr>'+th('sub','Subcategoría','left')+th('desc','Ítem / descripción','left')+th('cc','Centro de costo','left')
+    + nm.map(function(n,i){ return th('m'+(i+1),n); }).join('')+th('total','Total')+thf('')+'</tr></thead>'
     + '<tbody>'+body+foot+'</tbody></table></div></div>';
   presTblFiltrar();
 }
@@ -7181,7 +7225,7 @@ function pwValidarItemsMes(mes) {
   var items = presWizardItemsPorMes[mes] || [];
   var errores = [];
   items.forEach(function(it, idx) {
-    var vacioTotal = !it.cc && !it.desc && !(parseFloat(it.valor) > 0);
+    var vacioTotal = !it.desc && !(parseFloat(it.valor) > 0);
     if(vacioTotal) return;
     if(!it.cc) errores.push(mes+'-'+idx+'-cc');
     if(!it.desc) errores.push(mes+'-'+idx+'-desc');
@@ -7213,7 +7257,7 @@ function renderCamposPorMes() {
     } else if(exist && exist.monto) {
       presWizardItemsPorMes[numMes] = [{cc: exist.centroCosto||'', desc: exist.obs||'', valor: exist.monto}];
     } else {
-      presWizardItemsPorMes[numMes] = [{cc:'', desc:'', valor:''}];
+      presWizardItemsPorMes[numMes] = [{cc:(presWizardSub?presCcSugerido(presWizardSub.codigo):''), desc:'', valor:''}];
     }
   }
 
@@ -7328,6 +7372,7 @@ function pwItemCambio(mes, idx, campo, val, inputEl) {
   if(!presWizardItemsPorMes[mes]) presWizardItemsPorMes[mes] = [];
   if(!presWizardItemsPorMes[mes][idx]) presWizardItemsPorMes[mes][idx] = {cc:'',desc:'',valor:''};
   presWizardItemsPorMes[mes][idx][campo] = campo==='valor' ? (parseFloat(val)||0) : val;
+  if(campo==='cc' && val) presCcRecordar(val);
   // Si el campo ya quedó completo, quitar en vivo la marca de "obligatorio faltante"
   var key = mes+'-'+idx+'-'+campo;
   var completo = campo==='valor' ? (parseFloat(val) > 0) : !!val;
@@ -7350,7 +7395,7 @@ function pwQuickLeer(){
 }
 function pwQuickHtml(numMes, items, centrosOpc){
   var it0 = (items&&items[0])||{};
-  var cc = pwQuick.cc!==null ? pwQuick.cc : siesaResolverCC(it0.cc||'');
+  var cc = pwQuick.cc!==null ? pwQuick.cc : (siesaResolverCC(it0.cc||'') || (presWizardSub?presCcSugerido(presWizardSub.codigo):''));
   var desc = pwQuick.desc!==null ? pwQuick.desc : (it0.desc||'');
   var nm=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   var bs='border:1px solid var(--b1);background:var(--w);border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;';
@@ -7450,7 +7495,7 @@ function pwAplicarReplicar(mesOrigen) {
 
 function pwAgregarItem(mes) {
   if(!presWizardItemsPorMes[mes]) presWizardItemsPorMes[mes] = [];
-  presWizardItemsPorMes[mes].push({cc:'', desc:'', valor:''});
+  presWizardItemsPorMes[mes].push({cc:(presWizardSub?presCcSugerido(presWizardSub.codigo):''), desc:'', valor:''});
   renderCamposPorMes();
   // Foco al último input descripción
   setTimeout(function(){
@@ -7600,7 +7645,7 @@ function leerValoresCamposMes() {
     var obsEl = document.getElementById('pres-obs-'+numMes);
     var obs = obsEl ? obsEl.value : (items.map(function(it){return it.desc;}).filter(Boolean).join('; '));
     if(total > 0 || items.some(function(it){ return it.desc; })) {
-      resultado[numMes] = { monto: total, obs: obs, items: items };
+      resultado[numMes] = { monto: total, obs: obs, items: items.filter(function(it){ return it.desc || (parseFloat(it.valor)>0); }) };
     }
   });
   return resultado;
