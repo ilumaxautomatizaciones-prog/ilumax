@@ -5733,7 +5733,7 @@ function presTblRender(){
       + cells
       + '<td style="padding:6px;font-size:12px;font-weight:800;color:var(--bl);text-align:right;white-space:nowrap;">'+fmt(f.total)+'</td>'
       + '<td style="padding:6px;">'+Object.keys(f.estados).map(bdgEstado).join(' ')+'</td>'
-      + '<td style="padding:6px;white-space:nowrap;"><button class="btn btn-g btn-xs" title="Editar descripción y centro de costo" onclick="presTblEditarFila(\''+f.sub+'\')">✏️</button> <button class="btn btn-rd btn-xs" title="Borrar fila" onclick="presTblEliminarFila(\''+f.sub+'\')">🗑️</button></td></tr>';
+      + '<td style="padding:6px;white-space:nowrap;"><button class="btn btn-g btn-xs" title="Editar (abre el formulario de creación)" onclick="presTblEditarFila(\''+f.sub+'\')">✏️</button> <button class="btn btn-rd btn-xs" title="Borrar fila" onclick="presTblEliminarFila(\''+f.sub+'\')">🗑️</button></td></tr>';
   }).join('');
   var foot = '<tr style="background:var(--s1);font-weight:800;"><td colspan="3" style="padding:7px 6px;font-size:11px;">TOTAL '+anio+'</td>'
     + nm.map(function(_,i){ return '<td style="padding:7px 6px;font-size:11px;text-align:right;">'+fmt(tot[i+1]||0)+'</td>'; }).join('')
@@ -5806,23 +5806,25 @@ async function presTblEliminarFila(sub){
   var res = await Promise.all(borrables.map(function(p){ return presTblApi('eliminarPresupuesto',{id:p.id}); }));
   if(res.some(function(r){ return !r; })) toast('⚠️ Algunos no se borraron en Supabase','err'); else toast('🗑️ Fila borrada','ok');
 }
-async function presTblEditarFila(sub){
-  var anio=new Date().getFullYear(), presups=getPresupuestos();
-  var mios = presups.filter(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub && presTblEditable(x); });
-  if(!mios.length){ toast('Esa fila ya está en revisión — no se puede editar','wa'); return; }
-  var it0 = (mios[0].items&&mios[0].items[0])||{cc:mios[0].centroCosto, desc:mios[0].obs};
-  var desc = prompt('Descripción para todos los meses de "'+mios[0].subNombre+'":', it0.desc||''); if(desc===null) return;
-  var cc = prompt('Código de centro de costo (ej. 12005):', siesaResolverCC(it0.cc||'')); if(cc===null) return;
-  if(!desc.trim() || !cc.trim()){ toast('Descripción y centro de costo son obligatorios','wa'); return; }
-  mios.forEach(function(p){
-    var its = (p.items&&p.items.length) ? p.items : [{valor:p.monto}];
-    its[0].desc = desc.trim(); its[0].cc = cc.trim(); p.items = its; p.obs = desc.trim(); p.centroCosto = siesaResolverCC(cc.trim());
-  });
-  savePresupuestos(presups); presTblRender();
-  var res = await Promise.all(mios.map(function(p){ return presTblApi('guardarPresupuesto',{presupuesto:p}); }));
-  if(res.some(function(r){ return !r; })) toast('⚠️ Algunos no se guardaron en Supabase','err'); else toast('✅ Fila actualizada','ok');
+function presTblEditarFila(sub){
+  var anio=new Date().getFullYear();
+  var mios = getPresupuestos().filter(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub; });
+  var ed = mios.filter(presTblEditable);
+  if(!ed.length){ toast('Esa fila ya está en revisión — no se puede editar','wa'); return; }
+  if(PRES_TBL_PEND && presTblPendN() && !confirm('Tienes cambios sin guardar en la tabla que se perderán. ¿Continuar?')) return;
+  PRES_TBL_PEND = {};
+  var p0 = ed[0];
+  presWizardCat  = { codigo: p0.catCodigo, nombre: p0.catNombre };
+  presWizardSub  = { codigo: p0.subCodigo, nombre: p0.subNombre };
+  presWizardAnio = anio;
+  presWizardMeses = ed.map(function(x){ return x.mes; }).sort(function(a,b){ return a-b; });
+  presWizardItemsPorMes = {};
+  presWizardCamposInvalidos = {};
+  presWizardMesActivo = presWizardMeses[0];
+  presWizardStep = 3;
+  irPresStep(3);
+  openMo('mo-pres');
 }
-
 function renderPresVistaLider(el, mes, anio) {
   el.innerHTML = '<div id="pres-tabla-anio"></div><div id="pres-vista-mes"></div>';
   presTblRender();
