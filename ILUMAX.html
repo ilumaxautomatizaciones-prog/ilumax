@@ -8603,6 +8603,8 @@ function renderInvVista() {
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">U.M.</th>
               <th style="background:var(--bg);padding:9px 12px;position:sticky;top:0;border-bottom:1px solid var(--b1);"></th>
               <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);" id="th-inv-precio-lista">Precio lista</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Listas</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Canales</th>
             </tr>
           </thead>
           <tbody id="tbody-inv-mod"></tbody>
@@ -8749,13 +8751,16 @@ async function filtrarInvMod() {
   if(!tbody) return;
 
   if(!items.length) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--mu);">Sin resultados</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:32px;color:var(--mu);">Sin resultados</td></tr>';
     return;
   }
 
   const mostrar = items.slice(0, 500);
 
   // Primer render, sin precio de lista (para no bloquear la vista mientras se consulta)
+  const seqInv = ++INV_RENDER_SEQ;
+  await invCanalesCargar();
+  let preciosMapAct = {};
   tbody.innerHTML = _renderFilasInv(mostrar, {});
 
   // Si hay una lista de precios seleccionada, traer los precios (por lotes de 100 referencias)
@@ -8764,15 +8769,19 @@ async function filtrarInvMod() {
     try {
       const refs = [...new Set(mostrar.map(r => r.referencia).filter(Boolean))];
       const preciosMap = {};
-      for(let i = 0; i < refs.length; i += 100) {
-        const lote = refs.slice(i, i + 100).map(r => encodeURIComponent(r)).join(',');
+      // Se busca con y sin ceros a la izquierda (00094 / 94) y se guarda por valor numérico
+      for(let i = 0; i < refs.length; i += 20) {
+        const lote = encodeURIComponent(pvVariantesRefs(refs.slice(i, i + 20)).map(r => '"'+r+'"').join(','));
         const rows = await sb.get('precios_lista',
-          `lista=eq.${encodeURIComponent(INV_LISTA_SEL)}&referencia=in.(${lote})&select=referencia,precio`);
-        (rows||[]).forEach(r => { preciosMap[r.referencia] = parseFloat(r.precio)||0; });
+          `lista=eq.${encodeURIComponent(INV_LISTA_SEL)}&referencia=in.(${lote})&select=referencia,precio&limit=1000`);
+        (rows||[]).forEach(r => { const p = parseFloat(r.precio)||0; const k = pvClaveRef(r.referencia); if(p || !preciosMap[k]) preciosMap[k] = p; });
       }
-      tbody.innerHTML = _renderFilasInv(mostrar, preciosMap);
+      preciosMapAct = preciosMap;
+      if(seqInv === INV_RENDER_SEQ) tbody.innerHTML = _renderFilasInv(mostrar, preciosMap);
     } catch(e) { console.warn('Error cargando precios de lista:', e); }
   }
+  // Listas de precios de cada referencia (se completan después del primer render)
+  try{ await invListasCargar(mostrar); if(seqInv === INV_RENDER_SEQ) tbody.innerHTML = _renderFilasInv(mostrar, preciosMapAct); }catch(e){ console.warn('Listas por referencia:', e); }
 }
 
 function esItemNuevo(fechaCreacionISO){
@@ -8794,7 +8803,7 @@ function _renderFilasInv(mostrar, preciosMap) {
     const rowStyle = resaltada
       ? 'border-bottom:1px solid var(--b1);background:#fef9c3;transition:background 2s ease;'
       : 'border-bottom:1px solid var(--b1);';
-    const precioLista = INV_LISTA_SEL ? preciosMap[r.referencia] : undefined;
+    const precioLista = INV_LISTA_SEL ? (preciosMap[r.referencia] || preciosMap[pvClaveRef(r.referencia)]) : undefined;
     return `<tr style="${rowStyle}" ${resaltada ? 'data-resaltada="1"' : ''}>
       <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${r.referencia||''}${resaltada?' <span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">SIESA</span>':''}${esItemNuevo(r.fecha_creacion)?' <span style="background:#0891b2;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">🆕 NUEVO</span>':''}</td>
       <td style="padding:9px 12px;max-width:220px;font-weight:600;font-size:11px;">${(r.descripcion||'').substring(0,50)}</td>
@@ -8806,8 +8815,80 @@ function _renderFilasInv(mostrar, preciosMap) {
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.um||''}</td>
       <td style="padding:9px 12px;text-align:right;font-size:11px;color:var(--bl);font-weight:700;">${INV_LISTA_SEL ? fmtCOP(precioLista) : '—'}</td>
       <td style="padding:9px 12px;"><button class="btn btn-g btn-sm" data-item='${JSON.stringify({referencia:r.referencia,descripcion:r.descripcion,bodega:r.bodega,existencia:exist}).replace(/'/g,"&#39;")}' onclick="abrirModalReabast(JSON.parse(this.dataset.item))">🔁 Solicitar</button></td>
+      <td style="padding:9px 12px;max-width:220px;">${invListasChips(r.referencia)}</td>
+      <td style="padding:9px 12px;min-width:150px;">${invCanalesChips(r.referencia)}</td>
     </tr>`;
   }).join('');
+}
+
+// ── Listas de precios y canales por referencia (Inventario) ──
+var INV_CANALES_MAP = null;      // { referenciaSinCeros: ['Home Center', ...] } — se guarda en configuracion.inventario_canales
+var INV_LISTAS_REF  = {};        // { referenciaSinCeros: [{lista, precio}] }
+var INV_RENDER_SEQ  = 0;
+function invPuedeGestionarCanales(){ return !!(CU && (CU.rol==='admin' || (typeof reabastEsAdmin==='function' && reabastEsAdmin()))); }
+async function invCanalesCargar(forzar){
+  if(INV_CANALES_MAP && !forzar) return INV_CANALES_MAP;
+  try{
+    const r = await sb.get('configuracion','clave=eq.inventario_canales');
+    const v = r && r[0] ? r[0].valor : null;
+    INV_CANALES_MAP = (typeof v==='string' ? JSON.parse(v) : v) || {};
+  }catch(e){ console.warn('Canales de inventario:', e); INV_CANALES_MAP = INV_CANALES_MAP || {}; }
+  return INV_CANALES_MAP;
+}
+async function invListasCargar(items){
+  const refs = [...new Set((items||[]).map(r=>pvClaveRef(r.referencia)).filter(k=>k && INV_LISTAS_REF[k]===undefined))];
+  for(let i=0;i<refs.length;i+=20){
+    const lote = refs.slice(i,i+20);
+    lote.forEach(k=>INV_LISTAS_REF[k]=[]);
+    const rows = await sb.get('precios_lista', `referencia=in.(${encodeURIComponent(pvVariantesRefs(lote).map(r=>'"'+r+'"').join(','))})&select=lista,referencia,precio&limit=1000`);
+    const vistos = {};
+    (rows||[]).forEach(r=>{ const k = pvClaveRef(r.referencia); const kk = k+'|'+r.lista; const p = parseFloat(r.precio)||0; if(!INV_LISTAS_REF[k]) INV_LISTAS_REF[k]=[]; if(vistos[kk]){ if(p) vistos[kk].precio = p; return; } vistos[kk] = {lista:String(r.lista), precio:p}; INV_LISTAS_REF[k].push(vistos[kk]); });
+  }
+}
+function invListasChips(ref){
+  const k = pvClaveRef(ref); const ls = INV_LISTAS_REF[k];
+  if(ls===undefined) return '<span style="color:var(--mu2);font-size:10px;">…</span>';
+  if(!ls.length) return '<span style="color:var(--mu2);font-size:10px;">Sin lista</span>';
+  const nom = id => { const c=(INV_LISTAS_CAT||[]).find(x=>String(x.lista_id)===String(id)); return c ? c.nombre : id; };
+  return ls.slice().sort((x,y)=>String(nom(x.lista)).localeCompare(String(nom(y.lista)),'es',{numeric:true})).map(l=>`<span title="Lista ${nom(l.lista)}: ${l.precio?('$'+Math.round(l.precio).toLocaleString('es-CO')):'sin precio'}" style="display:inline-block;background:var(--bg);border:1px solid var(--b1);border-radius:10px;padding:1px 6px;margin:1px 2px 1px 0;font-size:9px;font-weight:700;color:var(--bl);">${nom(l.lista)}</span>`).join('');
+}
+function invCanalesChips(ref){
+  const k = pvClaveRef(ref); const cs = (INV_CANALES_MAP||{})[k] || [];
+  const chips = cs.length ? cs.map(c=>`<span style="display:inline-block;background:rgba(37,99,235,.10);color:var(--bl);border-radius:10px;padding:1px 7px;margin:1px 2px 1px 0;font-size:9px;font-weight:700;">${c}</span>`).join('') : '<span style="color:var(--mu2);font-size:10px;">—</span>';
+  const ed = invPuedeGestionarCanales() ? ` <button class="btn btn-g btn-sm" style="padding:1px 6px;font-size:10px;" title="Gestionar canales de esta referencia" onclick="invCanalesEditar('${String(ref).replace(/'/g,"")}')">✎</button>` : '';
+  return chips + ed;
+}
+async function invCanalesTodos(){
+  let canales = [...CANALES_DEFAULT];
+  try{ const cfg = await sb.get('configuracion','clave=eq.canales_comerciales'); if(cfg && cfg[0]) canales = String(cfg[0].valor).split(',').map(s=>s.trim()).filter(Boolean); }catch(e){}
+  return canales;
+}
+async function invCanalesEditar(ref){
+  if(!invPuedeGestionarCanales()) return;
+  const k = pvClaveRef(ref); const map = await invCanalesCargar(true); const sel = new Set(map[k]||[]);
+  const canales = await invCanalesTodos();
+  let m = document.getElementById('inv-canales-modal'); if(m) m.remove();
+  m = document.createElement('div'); m.id='inv-canales-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99990;display:flex;align-items:center;justify-content:center;';
+  m.innerHTML = `<div style="background:var(--w,#fff);color:var(--tx,#111);border:1px solid var(--b1,#ccc);border-radius:12px;width:min(420px,92vw);max-height:80vh;overflow:auto;padding:16px;">
+    <div style="font-weight:800;margin-bottom:4px;">Canales de la referencia ${k}</div>
+    <div style="font-size:11px;color:var(--mu);margin-bottom:10px;">Marca los canales donde se vende esta referencia.</div>
+    <div id="inv-can-lista" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">${canales.map(c=>`<label style="display:flex;gap:6px;align-items:center;font-size:12px;"><input type="checkbox" value="${c.replace(/"/g,'&quot;')}" ${sel.has(c)?'checked':''}> ${c}</label>`).join('')}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;"><button class="btn btn-sm" onclick="document.getElementById('inv-canales-modal').remove()">Cancelar</button><button class="btn btn-sm" style="background:var(--bl);color:#fff;" onclick="invCanalesGuardar('${k.replace(/'/g,"")}')">Guardar</button></div></div>`;
+  m.addEventListener('click',e=>{ if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+}
+async function invCanalesGuardar(k){
+  const marcados = [...document.querySelectorAll('#inv-can-lista input:checked')].map(i=>i.value);
+  try{
+    const map = await invCanalesCargar(true);   // se relee para no pisar cambios de otra persona
+    if(marcados.length) map[k] = marcados; else delete map[k];
+    await sb.upsert('configuracion', {clave:'inventario_canales', valor:JSON.stringify(map), tipo:'json'}, 'clave');
+    INV_CANALES_MAP = map;
+    document.getElementById('inv-canales-modal')?.remove();
+    toast('✅ Canales actualizados','ok');
+    filtrarInvMod();
+  }catch(e){ toast('❌ No se pudo guardar: '+e.message,'er'); }
 }
 
 // ══════════════════════════════════════════════════════════
