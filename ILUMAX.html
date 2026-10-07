@@ -2602,6 +2602,112 @@ function logout(){
   sessionStorage.removeItem('ilx_cu');localStorage.removeItem('ilx_cu');location.reload();
 }
 
+// ── VER COMO USUARIO (solo admin, solo lectura) ──
+var VA = {on:false, real:null, usuarios:null, orig:null};
+function vaInit(){
+  if(VA.on) return;
+  const real = VA.real || CU;
+  if(!real || real.rol!=='admin') return;
+  VA.real = real;
+  if(document.getElementById('va-btn')) return;
+  const chip = document.querySelector('.hdr .u-chip'); if(!chip) return;
+  const b = document.createElement('button');
+  b.id='va-btn'; b.className='btn btn-sm'; b.style.marginRight='8px';
+  b.title='Ver la app como otro usuario (solo lectura)'; b.textContent='👁️ Ver como';
+  b.onclick = vaAbrir;
+  chip.parentNode.insertBefore(b, chip);
+}
+async function vaAbrir(){
+  let m = document.getElementById('va-modal'); if(m) m.remove();
+  m = document.createElement('div'); m.id='va-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:flex-start;justify-content:center;padding-top:8vh;';
+  m.innerHTML='<div style="background:var(--s1,#fff);color:var(--tx,#111);border:1px solid var(--b1,#ccc);border-radius:12px;width:min(460px,92vw);max-height:78vh;display:flex;flex-direction:column;padding:16px;gap:10px;">'
+   +'<div style="display:flex;justify-content:space-between;align-items:center;"><b>👁️ Ver como usuario</b><button class="btn btn-sm" onclick="document.getElementById(\'va-modal\').remove()">✕</button></div>'
+   +'<input id="va-q" type="text" placeholder="Buscar por nombre, correo, área o rol…" autocomplete="off" style="padding:9px 11px;border:1px solid var(--b1,#ccc);border-radius:8px;background:var(--s2,#fff);color:inherit;">'
+   +'<div id="va-list" style="overflow:auto;flex:1;min-height:80px;font-size:13px;">Cargando…</div>'
+   +'<div style="font-size:10px;opacity:.7;">Vista de solo lectura: no se guarda nada mientras estés viendo como otro usuario. Al refrescar vuelves a tu usuario.</div></div>';
+  m.addEventListener('click',e=>{ if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+  const q = document.getElementById('va-q'); q.focus();
+  if(!VA.usuarios){
+    try{ VA.usuarios = (await sb.get('usuarios','select=nombre,email,rol,area,rol_pres,color,aprueba,notif_email,activo&activo=eq.true&order=nombre.asc&limit=1000'))||[]; }
+    catch(e){ VA.usuarios=[]; }
+  }
+  const pint = ()=>{
+    const t=(q.value||'').toLowerCase().trim();
+    const L=VA.usuarios.filter(u=>!t||[u.nombre,u.email,u.area,u.rol].join(' ').toLowerCase().includes(t));
+    document.getElementById('va-list').innerHTML = L.length ? L.map(u=>{
+      const i = VA.usuarios.indexOf(u);
+      return '<div onclick="vaVer('+i+')" style="display:flex;gap:9px;align-items:center;padding:7px 8px;border-radius:8px;cursor:pointer;" onmouseover="this.style.background=\'rgba(127,127,127,.15)\'" onmouseout="this.style.background=\'\'">'
+       +'<div style="width:28px;height:28px;border-radius:50%;background:'+(u.color||'#2563eb')+';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;">'+esc2(((u.nombre||'?')[0]))+'</div>'
+       +'<div style="flex:1;min-width:0;"><div style="font-weight:600;">'+esc2(u.nombre||'')+'</div><div style="font-size:11px;opacity:.7;">'+esc2(u.email||'')+' · '+esc2(u.area||'—')+' · '+esc2(u.rol||'')+'</div></div></div>';
+    }).join('') : '<div style="padding:12px;opacity:.7;">Sin resultados</div>';
+  };
+  q.oninput = pint; pint();
+}
+function esc2(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function vaBloquear(){
+  if(VA.orig) return;
+  VA.orig = {sb:{}, rb:{}, api:api, set:Storage.prototype.setItem, rem:Storage.prototype.removeItem};
+  const nega = ()=>{ try{toast('Vista de solo lectura: no se guarda nada','wa');}catch(e){} return Promise.resolve([]); };
+  ['post','patch','delete','upsert'].forEach(f=>{
+    if(typeof sb[f]==='function'){ VA.orig.sb[f]=sb[f]; sb[f]=nega; }
+    if(typeof sbReabast[f]==='function'){ VA.orig.rb[f]=sbReabast[f]; sbReabast[f]=nega; }
+  });
+  const apiO = api;
+  api = async function(action, data){
+    if(/^(get|rrhhGet|login)/.test(action)) return apiO.apply(this, arguments);
+    try{toast('Vista de solo lectura: no se guarda nada','wa');}catch(e){}
+    return {ok:false, error:'solo lectura'};
+  };
+  Storage.prototype.setItem = function(k,v){ if(/^ilx_(cu|ultima)/.test(k)||k.indexOf('ilx_lat_')===0) return; };
+  Storage.prototype.removeItem = function(){};
+}
+function vaDesbloquear(){
+  const o = VA.orig; if(!o) return;
+  Object.keys(o.sb).forEach(f=>{ sb[f]=o.sb[f]; });
+  Object.keys(o.rb).forEach(f=>{ sbReabast[f]=o.rb[f]; });
+  api = o.api; Storage.prototype.setItem=o.set; Storage.prototype.removeItem=o.rem;
+  VA.orig=null;
+}
+async function vaAplicar(nuevo){
+  CU = nuevo;
+  qs('#u-av').textContent = CU.nombre[0];
+  qs('#u-av').style.background = CU.color||'#2563eb';
+  qs('#u-nm').textContent = CU.nombre.split(' ')[0];
+  try{
+    const rows = await sb.get('permisos_modulos','order=tipo.asc,clave.asc').catch(()=>[]);
+    const pm={}; (rows||[]).forEach(r=>{ pm[r.tipo+':'+r.clave]=Array.isArray(r.modulos)?r.modulos:(r.modulos||'').split(',').filter(Boolean); });
+    const emp=pm['empleado:'+CU.email]||[];
+    CU.modulos = emp.length ? emp : [...new Set([...(pm['rol:'+CU.rol]||[]),...(pm['area:'+CU.area]||[])])];
+  }catch(e){ CU.modulos=[]; }
+  try{ await cargarCatsSubsPermisos(); }catch(e){}
+  buildNav();
+  goPage('inicio');
+  try{ renderInicio(); }catch(e){}
+}
+async function vaVer(i){
+  const u = VA.usuarios[i]; if(!u) return;
+  const m=document.getElementById('va-modal'); if(m) m.remove();
+  if(!VA.on){ VA.real = CU; }
+  vaBloquear();
+  VA.on = true;
+  await vaAplicar({email:u.email,nombre:u.nombre,rol:u.rol,rolPres:u.rol_pres||'lider',area:u.area,color:u.color,aprueba:u.aprueba,notifEmail:u.notif_email});
+  let bn=document.getElementById('va-banner'); if(bn) bn.remove();
+  bn=document.createElement('div'); bn.id='va-banner';
+  bn.style.cssText='position:fixed;bottom:0;left:0;right:0;z-index:99998;background:#b45309;color:#fff;padding:8px 14px;display:flex;gap:12px;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-wrap:wrap;';
+  bn.innerHTML='👁️ Vista previa como '+esc2(u.nombre)+' ('+esc2(u.rol||'')+' · '+esc2(u.area||'—')+') — solo lectura'
+   +' <button class="btn btn-sm" onclick="vaAbrir()">Cambiar usuario</button> <button class="btn btn-sm" onclick="vaSalir()">Salir de la vista</button>';
+  document.body.appendChild(bn);
+}
+async function vaSalir(){
+  if(!VA.on) return;
+  vaDesbloquear();
+  const real = VA.real; VA.on=false;
+  const bn=document.getElementById('va-banner'); if(bn) bn.remove();
+  await vaAplicar(real);
+}
+
 // ── APP INIT ──
 const RRHH_TAREAS_DEFAULT = [{"id":"T002","actividad":"Realizar legalizaciones de anticipos ejecutivos","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"2026-09-07","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T003","actividad":"Formato de HV  que faltan","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"Área: OEA.","prioridad":"Media"},{"id":"T004","actividad":"Organizar formato de dotacion","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"Área: OEA.","prioridad":"Media"},{"id":"T005","actividad":"Formatos de Carnet","responsable":"Liz Katherine Sánchez","fechaInicio":"2026-09-07","fechaLimite":"2026-09-07","estado":"Pendiente","fechaFin":"","obs":"Área: OEA.","prioridad":"Media"},{"id":"T006","actividad":"Practicantes Contabilidad","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"Pasantias y Lectiva","prioridad":"Media"},{"id":"T007","actividad":"Praticante Calidad","responsable":"Liz Katherine Sánchez","fechaInicio":"2026-09-02","fechaLimite":"2026-09-15","estado":"En proceso","fechaFin":"","obs":"ya estamo en entrvista","prioridad":"Media"},{"id":"T008","actividad":"Induccion ya quedaron programadas todas las de Luis y Michell","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"2026-09-15","estado":"Pendiente","fechaFin":"","obs":"terminan la  semana que viene","prioridad":"Media"},{"id":"T009","actividad":"Periodos de prueba faltan / Ximena vargas, Katherine Sanchez, Rosa Padilla","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"2026-09-18","estado":"Pendiente","fechaFin":"","obs":"ya se hablo con Cindy que los va realizarr","prioridad":"Media"},{"id":"T010","actividad":"Radicar incapacidades  agosto","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"2026-09-04","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T011","actividad":"Responder casos de incapacidades- Diana acuña angie santana","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"2026-09-08","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T012","actividad":"Radicar incapacidad de Arl Giovanny catano","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"2026-09-08","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T013","actividad":"Nomina Electronica","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"2026-09-07","estado":"Realizado","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T014","actividad":"Contabilizar SGS y Consolidado","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"2026-09-04","estado":"Realizado","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T015","actividad":"CERTIFICADOS DE MONTACARGA","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"2026-09-11","estado":"Pendiente","fechaFin":"","obs":"Seguimiento","prioridad":"Media"},{"id":"T016","actividad":"Enviar Codigo de Etica y Reglamento Interno","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"2026-09-04","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T017","actividad":"Agendar en Buk lo de SST","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T018","actividad":"Citar a Daniela para coopass","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T019","actividad":"Seguimientos Otrosi Asesoras","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T020","actividad":"Formato entrega de Dotacion Sandra daza","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"pediente que lo firme","prioridad":"Media"},{"id":"T021","actividad":"Envio y seguimiento de formato de dotacion 02 semestre Asesoras","responsable":"Liz Katherine Sánchez","fechaInicio":"2026-09-04","fechaLimite":"2026-09-15","estado":"Pendiente","fechaFin":"","obs":"ya se enviaron para firmas","prioridad":"Media"},{"id":"T022","actividad":"hacer Distribucion de Johanna cubillos","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T023","actividad":"Crear cargo de Luis Cambindo en SBS","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T024","actividad":"Cambiar cargo Keinner en SBS Y BUK","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T025","actividad":"Formato de descuento Libranza Sandra Jimenez","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T026","actividad":"Revisar lo de los cursos en alturas","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T027","actividad":"Publicar vacante de Auxiliar de Bodega","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T028","actividad":"Agendar capacitacion de ADT a Johanna cubillos","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T029","actividad":"Hacer nuevo contrato de Laura","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"2026-09-07","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T030","actividad":"Perdir Botas Ximena Vargas","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"2026-09-07","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T031","actividad":"Solicitar Carnet - Mary , Luis , Duvier","responsable":"Liz Katherine Sánchez","fechaInicio":"sep","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T032","actividad":"Incapacidad Mary angel","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T033","actividad":"PEDIR ACTA DE CAPACITACION DE TRABAJO EN EQUIPO Y COMONUICACION","responsable":"Liz Katherine Sánchez","fechaInicio":"2026-09-04","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T034","actividad":"Perfil de cargo de luis","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T035","actividad":"Ximena y Michell","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T036","actividad":"Semana de la Salud","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T037","actividad":"Curso de alturas","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T038","actividad":"Entrega de nomina el 28 hasta medio dia","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T039","actividad":"Actualizar fecha de vacaiciones","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T040","actividad":"afiliar ´padres de Duvier a la caja de compensacion","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T041","actividad":"Mirar factura de ARL bolivar a que corresponde","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T042","actividad":"Egreso de Vacaciones","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T043","actividad":"INCAPACIDADES PENDIENTES POR RADICAR","responsable":"Liz Katherine Sánchez","fechaInicio":"","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"","prioridad":"Media"},{"id":"T044","actividad":"RAMIREZ GALVEZ LUISA MARIA","responsable":"Liz Katherine Sánchez","fechaInicio":"AGOSTO","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"SALUD TOTAL","prioridad":"Media"},{"id":"T045","actividad":"VENTERO CERQUERA ZULY JHOANA","responsable":"Liz Katherine Sánchez","fechaInicio":"AGOSTO","fechaLimite":"","estado":"Pendiente","fechaFin":"","obs":"SALUD TOTAL","prioridad":"Media"},{"id":"T046","actividad":"BARBOSA CANDAMIL CLAUDIA CRISTINA","responsable":"Liz Katherine Sánchez","fechaInicio":"AGOSTO","fechaLimite":"","estado":"Realizado","fechaFin":"","obs":"SANITAS","prioridad":"Media"}];
 
@@ -2655,6 +2761,7 @@ async function startApp(){
 
   try{ await reabastEditoresCargar(); }catch(e){}
   buildNav();
+  try{ vaInit(); }catch(e){}
   buildCatTags();buildDcTags();
   if(!MODO_ABAST) await cargarSolicitudes();
   updSyncSt();
