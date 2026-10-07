@@ -6771,7 +6771,7 @@ function irPresStep(n) {
     var box = document.getElementById('mo-pres-box');
     var panel = document.getElementById('pres-empleados-panel');
     var ov = document.getElementById('mo-pres');
-    if(box) box.style.maxWidth = '560px';
+    if(box){ box.style.maxWidth = '560px'; box.style.width = ''; box.style.maxHeight = '90vh'; }
     if(panel) panel.classList.remove('on');
     if(ov) ov.style.justifyContent = 'center';
   }
@@ -7001,8 +7001,8 @@ function renderWizardMeses() {
       + 'style="padding:7px 4px;border-radius:8px;cursor:pointer;text-align:center;margin-bottom:2px;'
       + 'background:' + (esActivo ? 'var(--bl)' : 'transparent') + ';'
       + 'border:1px solid ' + (esActivo ? 'var(--bl)' : 'transparent') + ';">'
-      + '<div style="font-size:10px;font-weight:' + (esActivo?'800':'600') + ';'
-      + 'color:' + (esActivo ? '#fff' : 'var(--tx)') + ';">' + nom + '</div>'
+      + '<div style="display:flex;align-items:center;justify-content:center;gap:4px;font-size:10px;font-weight:' + (esActivo?'800':'600') + ';'
+      + 'color:' + (esActivo ? '#fff' : 'var(--tx)') + ';"><input type="checkbox" title="Marcar para aplicar el ítem rápido" ' + (pwQuick.meses[numMes]?'checked ':'') + 'onclick="event.stopPropagation();pwQuick.meses[' + numMes + ']=this.checked" style="width:12px;height:12px;margin:0;accent-color:var(--gr);cursor:pointer;">' + nom + '</div>'
       // Punto verde = ya tiene presupuesto guardado este mes; punto rojo = todavía falta.
       // Antes los meses sin datos no mostraban nada, así que al entrar a editar no se
       // distinguía a simple vista qué meses del año quedaban pendientes.
@@ -7016,6 +7016,7 @@ function renderWizardMeses() {
 }
 
 function seleccionarMesWizard(mes) {
+  if(typeof pwQuickLeer==='function') pwQuickLeer();
   presWizardMesActivo = mes;
   renderWizardMeses();
 }
@@ -7212,10 +7213,7 @@ function pwQuickHtml(numMes, items, centrosOpc){
     + '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">'
     + presets.map(function(p){ return '<button type="button" onclick="pwQuickSel(\''+p[0]+'\')" style="'+bs+'">'+p[1]+'</button>'; }).join('')
     + '</div>'
-    + '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">'
-    + nm.map(function(n,i){ var m=i+1; return '<label style="display:flex;align-items:center;gap:3px;background:var(--w);border:1px solid var(--b1);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:10px;font-weight:600;">'
-        + '<input type="checkbox" '+(pwQuick.meses[m]?'checked ':'')+'onchange="pwQuick.meses['+m+']=this.checked" style="accent-color:var(--bl);">'+n+'</label>'; }).join('')
-    + '</div>'
+    + '<div style="font-size:10px;color:var(--mu);margin-bottom:8px;">Marca los meses con la casilla de la izquierda (o usa los botones) y pulsa Aplicar: se <b>agrega</b> este ítem a cada mes marcado.</div>'
     + '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">'
     + '<select id="pw-q-cc" class="inp" style="font-size:11px;flex:1 1 150px;"><option value="">-- Centro de costo --</option>'
     + (centrosOpc||[]).map(function(c){ return '<option value="'+c.codigo+'"'+(c.codigo===cc?' selected':'')+'>'+c.codigo+' — '+c.nombre+'</option>'; }).join('')
@@ -7231,20 +7229,36 @@ function pwQuickSel(k){
   var r={anio:[1,12],s1:[1,6],s2:[7,12],q1:[1,3],q2:[4,6],q3:[7,9],q4:[10,12]}[k];
   if(k==='none') pwQuick.meses={};
   else { pwQuick.meses={}; for(var m=r[0];m<=r[1];m++) pwQuick.meses[m]=true; }
-  renderCamposPorMes();
+  renderWizardMeses();
+}
+function pwItemsMes(m){
+  if(!presWizardItemsPorMes[m]){
+    var exist = getPresupuestosSubMes(presWizardSub ? presWizardSub.codigo : null, m, presWizardAnio);
+    if(exist && exist.items && exist.items.length) presWizardItemsPorMes[m] = exist.items.map(function(it){ return {cc: it.cc||'', desc: it.desc||'', valor: it.valor||0}; });
+    else if(exist && exist.monto) presWizardItemsPorMes[m] = [{cc: exist.centroCosto||'', desc: exist.obs||'', valor: exist.monto}];
+    else presWizardItemsPorMes[m] = [];
+  }
+  return presWizardItemsPorMes[m];
 }
 function pwQuickAplicar(){
   pwQuickLeer();
   var ms=[]; for(var m=1;m<=12;m++) if(pwQuick.meses[m]) ms.push(m);
+  if(!ms.length) ms=[presWizardMesActivo];
   var val=parseFloat(pwQuick.valor)||0;
-  if(!ms.length){ toast('Marca al menos un mes','wa'); return; }
   if(!(val>0)){ toast('Escribe el valor','wa'); return; }
   if(!pwQuick.cc){ toast('Selecciona el centro de costo','wa'); return; }
-  if(!String(pwQuick.desc||'').trim()){ toast('Escribe la descripción','wa'); return; }
+  var desc=String(pwQuick.desc||'').trim();
+  if(!desc){ toast('Escribe la descripción','wa'); return; }
   var porMes = pwQuick.modo==='total' ? Math.round(val/ms.length) : val;
-  ms.forEach(function(m){ presWizardItemsPorMes[m]=[{cc:pwQuick.cc, desc:String(pwQuick.desc).trim(), valor:porMes}]; });
-  renderWizardMeses(); renderCamposPorMes();
-  toast('✅ Aplicado a '+ms.length+' mes(es): '+porMes.toLocaleString('es-CO')+' c/u','ok');
+  ms.forEach(function(m){
+    var its = pwItemsMes(m).filter(function(it){ return it.cc || it.desc || parseFloat(it.valor)>0; });
+    var igual = its.find(function(it){ return it.cc===pwQuick.cc && String(it.desc||'').trim().toLowerCase()===desc.toLowerCase(); });
+    if(igual) igual.valor = porMes; else its.push({cc:pwQuick.cc, desc:desc, valor:porMes});
+    presWizardItemsPorMes[m] = its;
+  });
+  pwQuick.valor=''; pwQuick.desc='';
+  renderWizardMeses();
+  toast('✅ Agregado a '+ms.length+' mes(es): '+porMes.toLocaleString('es-CO')+' c/u. Puedes seguir agregando otro ítem.','ok');
 }
 function pwMostrarReplicar(mes) {
   var panel = document.getElementById('pw-replicar-panel-'+mes);
@@ -7327,8 +7341,8 @@ async function renderPresEmpleadosPanel() {
   // subcategoría de salarios, o con más espacio para la tabla de ítems si no —
   // y se recorre a la izquierda en vez de quedar centrado, para no verse
   // apretado ni dejar tanto espacio vacío alrededor.
-  if(box) box.style.maxWidth = '920px';
-  if(ov) ov.style.justifyContent = 'flex-start';
+  if(box){ box.style.maxWidth = '98vw'; box.style.width = '98vw'; box.style.maxHeight = '96vh'; }
+  if(ov) ov.style.justifyContent = 'center';
   if(!mostrar) return;
 
   var area = CU.area;
