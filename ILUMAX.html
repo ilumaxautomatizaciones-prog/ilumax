@@ -5542,10 +5542,12 @@ function calcEjecucion(area, mes, anio) {
 }
 
 // ── RENDER PRINCIPAL ──────────────────────────────────────
+var PRES_VIEW = { mes:new Date().getMonth()+1, anio:null };
+function presVistaCambiar(k,v){ PRES_VIEW[k]=parseInt(v,10); renderPres(); }
 function renderPres() {
-  const hoy  = new Date();
-  const mes  = hoy.getMonth() + 1;
-  const anio = hoy.getFullYear();
+  if(!PRES_VIEW.anio) PRES_VIEW.anio = PRES_ANIO_DEFECTO;
+  const mes  = PRES_VIEW.mes;
+  const anio = PRES_VIEW.anio;
   const rol  = presRol();
 
   // Tabs según rol
@@ -5563,8 +5565,7 @@ function setPresTab(tab, el) {
   if (el) el.classList.add('on');
   const view = document.getElementById('pv-' + tab);
   if (view) view.classList.add('on');
-  const hoy = new Date();
-  const mes = hoy.getMonth() + 1, anio = hoy.getFullYear();
+  const mes = PRES_VIEW.mes, anio = PRES_VIEW.anio || PRES_ANIO_DEFECTO;
   if (tab === 'mi-area')   renderPresMiArea(mes, anio);
   if (tab === 'historico') renderPresHistorico();
   if (tab === 'todas')     renderPresTodasAreas(mes, anio);
@@ -5584,7 +5585,11 @@ function renderPresHeader(mes, anio) {
   el.innerHTML = '<div class="pres-header">'
     + '<div class="pres-header-top">'
     + '<div><div class="pres-header-title">' + titulo + '</div>'
-    + '<div class="pres-header-sub">' + MESES[mes] + ' ' + anio + '</div></div>'
+    + '<div class="pres-header-sub"><select onchange="presVistaCambiar(\'mes\',this.value)" style="background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:2px 6px;font-size:11px;">'
+    + [1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){ return '<option value="'+m+'"'+(m===mes?' selected':'')+' style="color:#000;">'+MESES[m]+'</option>'; }).join('')
+    + '</select> <select onchange="presVistaCambiar(\'anio\',this.value)" style="background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:2px 6px;font-size:11px;">'
+    + [2025,2026,2027,2028].map(function(a){ return '<option value="'+a+'"'+(a===anio?' selected':'')+' style="color:#000;">'+a+'</option>'; }).join('')
+    + '</select></div></div>'
     + subBtn + '</div></div>';
 }
 
@@ -5689,6 +5694,17 @@ function renderItemsPresHtml(p) {
 }
 
 // ── TABLA ANUAL EDITABLE (categoría / subcategoría × 12 meses), ordenable por cualquier columna ──
+// Año por defecto de los presupuestos (se elaboran anualmente; hoy se hacen los de 2027)
+var PRES_ANIO_DEFECTO = 2027;
+function presTblAnio(){
+  if(PRES_TBL.anio) return PRES_TBL.anio;
+  var hoy=new Date().getFullYear(), ys={};
+  getPresupuestos().forEach(function(p){ if(p.area===CU.area) ys[p.anio]=1; });
+  var ks=Object.keys(ys).map(Number).sort(function(a,b){ return a-b; });
+  PRES_TBL.anio = PRES_ANIO_DEFECTO;
+  return PRES_TBL.anio;
+}
+function presTblCambiarAnio(d){ PRES_TBL.anio = presTblAnio()+d; PRES_TBL_PEND = {}; PRES_TBL.solo = undefined; presTblRender(); }
 var PRES_TBL = { col:'cat', dir:1 };
 function presTblOrden(col){ if(PRES_TBL.col===col) PRES_TBL.dir=-PRES_TBL.dir; else { PRES_TBL.col=col; PRES_TBL.dir=(col==='cat'||col==='sub'||col==='cc')?1:-1; } presTblRender(); }
 function presTblEditable(p){ return !p || !p.estado || p.estado==='borrador' || p.estado==='devuelto'; }
@@ -5715,7 +5731,7 @@ function presTblFilas(anio){
 }
 function presTblRender(){
   var el = document.getElementById('pres-tabla-anio'); if(!el) return;
-  var anio = new Date().getFullYear();
+  var anio = presTblAnio();
   var filas = presTblFilas(anio);
   if(!filas.length){ el.innerHTML=''; return; }
   if(PRES_TBL.solo===undefined) PRES_TBL.solo = filas.length>40;
@@ -5750,7 +5766,7 @@ function presTblRender(){
   el.innerHTML = '<div class="area-card" style="margin-bottom:14px;padding:12px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
     + '<div style="font-size:13px;font-weight:800;">📅 Presupuesto '+anio+' — '+CU.area+' <span style="font-weight:400;font-size:10px;color:var(--mu);">· clic en un encabezado para ordenar · edita las casillas y pulsa 💾 Guardar cambios · deja 0 para borrar un mes</span></div>'
-    + '<div style="display:flex;gap:6px;align-items:center;"><button id="pres-tbl-guardar" class="btn btn-bl btn-sm" style="display:'+(presTblPendN()?'inline-flex':'none')+';" onclick="presTblGuardar()">💾 Guardar cambios ('+presTblPendN()+')</button>'
+    + '<div style="display:flex;gap:6px;align-items:center;"><button class="btn btn-g btn-sm" onclick="presTblCambiarAnio(-1)">‹</button><b style="font-size:13px;">'+anio+'</b><button class="btn btn-g btn-sm" onclick="presTblCambiarAnio(1)">›</button><button id="pres-tbl-guardar" class="btn btn-bl btn-sm" style="display:'+(presTblPendN()?'inline-flex':'none')+';" onclick="presTblGuardar()">💾 Guardar cambios ('+presTblPendN()+')</button>'
     + (presTblPendN()?'<button class="btn btn-g btn-sm" onclick="presTblDescartar()">Descartar</button>':'')
     + '<button class="btn btn-p btn-sm" onclick="abrirModalPres()">+ Agregar</button></div></div>'
     + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">'
@@ -5785,7 +5801,7 @@ function presTblApi(fn, payload){
 }
 async function presTblGuardar(){
   var keys = Object.keys(PRES_TBL_PEND); if(!keys.length) return;
-  var anio = new Date().getFullYear(), presups = getPresupuestos(), tareas = [], avisos = [];
+  var anio = presTblAnio(), presups = getPresupuestos(), tareas = [], avisos = [];
   keys.forEach(function(k){
     var sub = k.split('|')[0], mes = parseInt(k.split('|')[1],10), v = PRES_TBL_PEND[k];
     var p = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===sub; });
@@ -5814,7 +5830,7 @@ async function presTblGuardar(){
   else toast('✅ '+tareas.length+' cambio(s) guardados'+(avisos.length?' · '+avisos.join('; '):''), avisos.length?'wa':'ok');
 }
 async function presTblEliminarFila(sub){
-  var anio=new Date().getFullYear(), presups=getPresupuestos();
+  var anio=presTblAnio(), presups=getPresupuestos();
   var mios = presups.filter(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub; });
   var borrables = mios.filter(presTblEditable);
   if(!borrables.length){ toast('Esa fila ya está en revisión — no se puede borrar','wa'); return; }
@@ -5828,7 +5844,7 @@ async function presTblEliminarFila(sub){
   if(res.some(function(r){ return !r; })) toast('⚠️ Algunos no se borraron en Supabase','err'); else toast('🗑️ Fila borrada','ok');
 }
 function presTblEditarFila(sub){
-  var anio=new Date().getFullYear();
+  var anio=presTblAnio();
   var mios = getPresupuestos().filter(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub; });
   var ed = mios.filter(presTblEditable);
   if(mios.length && !ed.length){ toast('Esa fila ya está en revisión — no se puede editar','wa'); return; }
@@ -6655,24 +6671,41 @@ function siesaRenderPanel() {
 }
 
 // ── HISTÓRICO ────────────────────────────────────────────
+var PRES_HIST = { anio:'', mes:'', q:'', area:'' };
+function presHistSet(k,v){ PRES_HIST[k]=v; renderPresHistorico(); }
 function renderPresHistorico() {
   const el = document.getElementById('pres-historico');
   if (!el) return;
-  var filtro = esContabilidad() ? getPresupuestos() : getPresupuestos().filter(p => p.area===CU.area);
-  var presups = filtro.sort(function(a,b){ return b.anio!==a.anio?b.anio-a.anio:b.mes-a.mes; });
-
-  if (!presups.length) {
+  var verTodo = esContabilidad() || (typeof paGestor==='function' && paGestor());
+  var base = verTodo ? getPresupuestos() : getPresupuestos().filter(p => p.area===CU.area);
+  if (!base.length) {
     el.innerHTML = '<div class="empty"><div class="empty-i">📅</div><div class="empty-t">Sin histórico</div></div>';
     return;
   }
+  if(PRES_HIST.anio==='') PRES_HIST.anio = String(PRES_ANIO_DEFECTO);
+  var anios = Array.from(new Set(base.map(p=>p.anio).concat([PRES_ANIO_DEFECTO]))).sort(function(a,b){ return b-a; });
+  var areas = Array.from(new Set(base.map(p=>p.area))).filter(Boolean).sort();
+  var q = presNorm(PRES_HIST.q).trim();
+  var presups = base.filter(function(p){
+    return (!PRES_HIST.anio || String(p.anio)===PRES_HIST.anio) && (!PRES_HIST.mes || String(p.mes)===PRES_HIST.mes)
+      && (!PRES_HIST.area || p.area===PRES_HIST.area) && (!q || presNorm(p.subNombre+' '+p.catNombre+' '+p.area+' '+p.subCodigo).indexOf(q)>=0);
+  }).sort(function(a,b){ return b.anio!==a.anio?b.anio-a.anio:b.mes-a.mes; });
+  var tot = presups.reduce(function(a,p){ return a+(parseFloat(p.monto)||0); },0);
+  var sel = 'style="padding:7px 10px;border:1px solid var(--b1);border-radius:8px;font-size:12px;background:var(--w);"';
+  var filtros = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
+    + '<select '+sel+' onchange="presHistSet(\'anio\',this.value)"><option value="">Todos los años</option>'+anios.map(function(a){ return '<option value="'+a+'"'+(String(a)===PRES_HIST.anio?' selected':'')+'>'+a+'</option>'; }).join('')+'</select>'
+    + '<select '+sel+' onchange="presHistSet(\'mes\',this.value)"><option value="">Todos los meses</option>'+[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){ return '<option value="'+m+'"'+(String(m)===PRES_HIST.mes?' selected':'')+'>'+MESES[m]+'</option>'; }).join('')+'</select>'
+    + (verTodo ? '<select '+sel+' onchange="presHistSet(\'area\',this.value)"><option value="">Todas las áreas</option>'+areas.map(function(a){ return '<option value="'+a+'"'+(a===PRES_HIST.area?' selected':'')+'>'+a+'</option>'; }).join('')+'</select>' : '')
+    + '<input id="pres-hist-q" placeholder="🔍 Buscar concepto..." value="'+String(PRES_HIST.q).replace(/"/g,'&quot;')+'" oninput="PRES_HIST.q=this.value;clearTimeout(window._phT);window._phT=setTimeout(function(){renderPresHistorico();var i=document.getElementById(\'pres-hist-q\');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},250)" style="flex:1 1 180px;padding:7px 10px;border:1px solid var(--b1);border-radius:8px;font-size:12px;">'
+    + '<span style="font-size:11px;color:var(--mu);">'+presups.length+' registro(s) · Total <b>'+fmt(tot)+'</b></span></div>';
 
-  var tablaHtml = '<div class="chart-wrap"><div class="chart-title">📋 Histórico de presupuestos</div>'
+  var tablaHtml = '<div class="chart-wrap"><div class="chart-title">📋 Histórico de presupuestos</div>' + filtros
     + '<div class="tw"><table class="hist-table"><thead><tr>'
     + '<th>Mes/Año</th><th>Área</th><th>Concepto</th>'
     + (esContabilidad() ? '<th>Código</th>' : '')
     + '<th>Propuesto</th><th>Aprobado</th><th>Estado</th></tr></thead><tbody>';
 
-  presups.slice(0,50).forEach(function(p) {
+  presups.slice(0,500).forEach(function(p) {
     var montoAprob = p.montoAprobado !== undefined ? fmt(p.montoAprobado) : '—';
     tablaHtml += '<tr>'
       + '<td style="font-weight:700;">' + MESES[p.mes] + ' ' + p.anio + '</td>'
@@ -6701,7 +6734,7 @@ function abrirModalPres(catCod, subCod) {
   presWizardCat  = null;
   presWizardSub  = null;
   presWizardStep = 1;
-  presWizardAnio = new Date().getFullYear();
+  presWizardAnio = PRES_ANIO_DEFECTO;
   presWizardMeses = [new Date().getMonth() + 1];
   presWizardMesActivo = new Date().getMonth() + 1;
   presWizardItemsPorMes = {};
@@ -6772,7 +6805,7 @@ function abrirEditarPres(presId) {
 
 // ── WIZARD DE PRESUPUESTO ─────────────────────────────────
 var presWizardStep = 1;
-var presWizardAnio = new Date().getFullYear();
+var presWizardAnio = 2027;
 var presWizardMeses = [new Date().getMonth()+1];
 var presWizardCat  = null;
 var presWizardSub  = null;
@@ -33908,7 +33941,7 @@ const PA = {
   perms: [],   // [{id, area, sub_codigo, puede_ver, puede_llenar}]
   ptos: [],    // [{id, area, cat_codigo, sub_codigo, mes, anio, monto, estado, obs, ...}]
   mesSel: new Date().getMonth() + 1,
-  anioSel: new Date().getFullYear(),
+  anioSel: 2027,
   tabActivo: 'resumen',
 };
 
