@@ -8487,6 +8487,7 @@ async function cargarInventarioSupa() {
     }
     if(todas.length > 0) {
       INV_DATA = invDedup(todas);
+      try{ const mrp = await pvCatRPCargar(); INV_DATA.forEach(r=>{ if(!r.categoria) r.categoria = mrp[pvClaveRef(r.referencia)] || r.categoria; }); }catch(e){}
       INV_PERIODO = todas[0].periodo || '';
       INV_SUBIDO_POR = todas[0].subido_por || '';
     }
@@ -24278,7 +24279,7 @@ async function invduvSincronizar(inputEl) {
       const ex = num(r[cI['Cant_existencia_actual']]);
       const fc = fechaISOdeCelda(r[cI['FECHA CREACION']]);
       if(inv[k]) { inv[k].existencia += ex; if(fc && (!inv[k].fecha_creacion || fc < inv[k].fecha_creacion)) inv[k].fecha_creacion = fc; continue; }
-      inv[k] = {referencia:ref, bodega:bod, descripcion:str(r[cI['Nombre Item']]).slice(0,200), existencia:ex, costo_prom:r2(num(r[cI['Costo_prom_uni']])), um:str(r[cI['Unidad de Medida']]), fecha_creacion: fc};
+      inv[k] = {referencia:ref, bodega:bod, descripcion:str(r[cI['Nombre Item']]).slice(0,200), existencia:ex, costo_prom:r2(num(r[cI['Costo_prom_uni']])), um:str(r[cI['Unidad de Medida']]), fecha_creacion: fc, categoria: str(r[cI['Nombre Tipo de Inventario']])};
     }
     const invL = Object.values(inv); invL.forEach(x => x.existencia = r2(x.existencia));
     log('📦 INVENTARIO: ' + invL.length + ' referencia+bodega');
@@ -24360,9 +24361,10 @@ async function invduvSincronizar(inputEl) {
     const upd = [], ins = [];
     invL.forEach(x => {
       const f = {descripcion:x.descripcion, existencia:x.existencia, costo_prom:x.costo_prom, um:x.um, periodo, subido_por:quien, actualizado:ahora, fecha_creacion:x.fecha_creacion||null};
+      f.categoria = x.categoria || categoriaPorRef[x.referencia] || null; // «Nombre Tipo de Inventario» del Excel (si no viene, conserva la que ya tenía)
       const ids = idx[x.referencia+'|'+x.bodega];
       if(ids) ids.forEach(id => upd.push({id, referencia:x.referencia, bodega:x.bodega, ...f}));
-      else ins.push({referencia:x.referencia, bodega:x.bodega, ubicacion:'', lote:'', categoria:categoriaPorRef[x.referencia]||null, ...f});
+      else ins.push({referencia:x.referencia, bodega:x.bodega, ubicacion:'', lote:'', categoria:x.categoria||categoriaPorRef[x.referencia]||null, ...f});
     });
     log('⬆️ Inventario: ' + upd.length + ' a actualizar · ' + ins.length + ' nuevas');
     if(exist.length > 1000 && upd.length === 0 && ins.length > 500) throw new Error('Ninguna fila del Excel coincidió con el inventario de Supabase; se cancela para no duplicar.');
@@ -24412,20 +24414,27 @@ async function subirExcelInventario(inputEl) {
 
     if(!rows.length) { toast('Excel vacío','er'); return; }
 
-    // Detectar headers — fila 0
-    const headers = rows[0].map(h => String(h||'').toLowerCase().trim());
+    // Detectar la fila de encabezados (en el Excel de Biable/SIESA "Referencia Item" está en la fila 3, no en la 1)
+    let hr = 0;
+    for(let i=0; i<Math.min(rows.length,15); i++){ if(rows[i] && rows[i].some(c => String(c||'').toLowerCase().trim()==='referencia item')){ hr = i; break; } }
+    const headers = rows[hr].map(h => String(h||'').toLowerCase().trim());
     console.log('Headers detectados:', headers);
 
     // Mapear columnas del reporte de Siesa
     // Formato: Referencia, Desc. item, Costo prom. unit., Costo prom. uni., ..., Bodega, Ubicación, Lote, U.M., Existencia
     const iRef   = headers.findIndex(h => h.includes('referencia') || h === 'ref');
-    const iDesc  = headers.findIndex(h => h.includes('desc') || h.includes('descripcion') || h.includes('ítem') || h.includes('item'));
-    const iCosto = headers.findIndex(h => h.includes('costo prom. uni') && !h.includes('ins'));
+    let iDesc  = headers.findIndex(h => h === 'nombre item');
+    if(iDesc < 0) iDesc = headers.findIndex(h => h.includes('desc') || h.includes('descripcion') || h.includes('ítem') || h.includes('item'));
+    let iCosto = headers.findIndex(h => h === 'costo_prom_uni');
+    if(iCosto < 0) iCosto = headers.findIndex(h => h.includes('costo prom. uni') && !h.includes('ins'));
+    const iCat   = headers.findIndex(h => h === 'nombre tipo de inventario');
+    const iFcr   = headers.findIndex(h => h === 'fecha creacion' || h === 'fecha_creacion item');
     const iBod   = headers.findIndex(h => h === 'bodega');
     const iUbic  = headers.findIndex(h => h.includes('ubicaci'));
     const iLote  = headers.findIndex(h => h === 'lote');
-    const iUM    = headers.findIndex(h => h === 'u.m.' || h === 'um' || h === 'u.m');
-    const iExist = headers.findIndex(h => h === 'existencia' || h.includes('existenci'));
+    const iUM    = headers.findIndex(h => h === 'u.m.' || h === 'um' || h === 'u.m' || h === 'unidad de medida');
+    let iExist = headers.findIndex(h => h === 'cant_existencia_actual');
+    if(iExist < 0) iExist = headers.findIndex(h => h === 'existencia' || h.includes('existenci'));
 
     if(iRef < 0 || iExist < 0) {
       toast('No se reconoció el formato. Asegúrate de usar el reporte de existencias de Siesa.','er');
@@ -24435,7 +24444,8 @@ async function subirExcelInventario(inputEl) {
     // Parsear filas
     const periodo = new Date().toISOString().split('T')[0];
     const registros = [];
-    for(let i=1; i<rows.length; i++) {
+    const fcDe = v => { if(v==null||v==='') return null; if(typeof v==='number'){ const d=new Date(Date.UTC(1899,11,30)+Math.round(v)*86400000); return isNaN(d)?null:d.toISOString().slice(0,10); } const t=String(v).trim(); return /^\d{4}-\d{2}-\d{2}/.test(t)?t.slice(0,10):null; };
+    for(let i=hr+1; i<rows.length; i++) {
       const row = rows[i];
       if(!row || !row[iRef]) continue;
       const ref   = String(row[iRef]||'').trim();
@@ -24452,6 +24462,8 @@ async function subirExcelInventario(inputEl) {
         um:          iUM    >= 0 ? String(row[iUM]||'').trim()     : '',
         subido_por:  CU ? CU.nombre : 'Usuario',
         periodo:     periodo,
+        ...(iCat >= 0 && String(row[iCat]||'').trim() ? {categoria: String(row[iCat]).trim()} : {}),
+        ...(iFcr >= 0 && fcDe(row[iFcr]) ? {fecha_creacion: fcDe(row[iFcr])} : {}),
       });
     }
 
@@ -24488,7 +24500,8 @@ async function subirExcelInventario(inputEl) {
           // Verificar si cambió existencia o costo
           var existCambio = Math.abs(parseFloat(r.existencia||0) - parseFloat(ant.existencia||0)) > 0.01;
           var costoCambio = Math.abs(parseFloat(r.costo_prom||0) - parseFloat(ant.costo_prom||0)) > 1;
-          if(existCambio || costoCambio) {
+          var catCambio = !!(r.categoria && r.categoria !== ant.categoria);
+          if(existCambio || costoCambio || catCambio) {
             actualizados.push(r);
           } else {
             sinCambio++;
@@ -24512,7 +24525,7 @@ async function subirExcelInventario(inputEl) {
         try {
           await sb.patch('inventario',
             'referencia=eq.' + encodeURIComponent(r.referencia) + '&bodega=eq.' + encodeURIComponent(r.bodega||''),
-            { existencia: r.existencia, costo_prom: r.costo_prom, periodo: r.periodo, subido_por: r.subido_por }
+            Object.assign({ existencia: r.existencia, costo_prom: r.costo_prom, periodo: r.periodo, subido_por: r.subido_por }, r.categoria ? {categoria: r.categoria} : {}, r.fecha_creacion ? {fecha_creacion: r.fecha_creacion} : {})
           );
         } catch(e) { console.warn('Error actualizando', r.referencia, e); }
         // Progress cada 50
@@ -25963,13 +25976,13 @@ function pvRenderTabla() {
 // por filas repetidas del mismo cargue.
 async function pvActualizarStock() {
   if(!PV.detalle.length) { PV.stockMap = {}; return; }
-  const refs = [...new Set(PV.detalle.map(r=>r.referencia))].join(',');
+  const refs = pvVariantesRefs([...new Set(PV.detalle.map(r=>r.referencia))]).map(r=>'"'+String(r).replace(/"/g,'')+'"').join(',');
   try {
-    const rows = await sb.get('inventario', `referencia=in.(${refs})&select=referencia,bodega,existencia`);
+    const rows = await sb.get('inventario', `referencia=in.(${encodeURIComponent(refs)})&select=referencia,bodega,existencia&limit=5000`);
     const porRefBodega = {};
     (rows||[]).forEach(function(r){
       if(!invBodegaCuenta(r.bodega)) return;   // averías, garantías, muestras… no son stock vendible
-      porRefBodega[r.referencia+'||'+(r.bodega||'')] = { ref: r.referencia, existencia: parseFloat(r.existencia)||0 };
+      porRefBodega[pvClaveRef(r.referencia)+'||'+(r.bodega||'')] = { ref: pvClaveRef(r.referencia), existencia: parseFloat(r.existencia)||0 };
     });
     const map = {};
     Object.values(porRefBodega).forEach(function(x){ map[x.ref] = (map[x.ref]||0) + x.existencia; });
@@ -25978,7 +25991,7 @@ async function pvActualizarStock() {
 }
 
 function pvGetStock(ref) {
-  return (PV.stockMap && PV.stockMap[ref]) || 0;
+  return (PV.stockMap && (PV.stockMap[ref] || PV.stockMap[pvClaveRef(ref)])) || 0;
 }
 
 function pvRenderKPIs(und, cop) {
@@ -26630,6 +26643,7 @@ async function pvAdmImportar() {
       filas.forEach(f=>{ const ref = canonDe[f.sku]||f.sku; if(!unif[ref]) unif[ref]=Object.assign({}, f, {sku:ref, u:f.u.slice()}); else f.u.forEach((v,i)=>unif[ref].u[i]+=v); });
       filas.length = 0; Object.values(unif).forEach(x=>filas.push(x));
       Object.keys(info).forEach(s=>{ info[info[s].referencia] = info[s]; });
+      { const mrp = await pvCatRPCargar(); filas.forEach(f=>{ const i0 = info[f.sku]; if(i0){ if(!i0.categoria) i0.categoria = mrp[pvClaveRef(f.sku)]||i0.categoria; } else if(mrp[pvClaveRef(f.sku)]) info[f.sku] = {referencia:f.sku, categoria:mrp[pvClaveRef(f.sku)]}; }); }
       let nuevos=0, act=0, sinPrecio=0; const ins=[];
       for(const f of filas){
         const inf = info[f.sku]; if(!inf && !f.precioArchivo) sinPrecio++;
@@ -27370,7 +27384,7 @@ async function pvCargarExistencias(ref) {
   el.innerHTML = '⏳ Consultando existencias...';
   try {
     const rows = await sb.get('inventario',
-      `referencia=eq.${encodeURIComponent(ref)}&select=bodega,existencia,um&order=bodega.asc`);
+      `referencia=in.(${encodeURIComponent(pvVariantesRefs([ref]).map(r=>'"'+r+'"').join(','))})&select=bodega,existencia,um&order=bodega.asc`);
     if(!rows || !rows.length) {
       el.innerHTML = 'Sin existencias registradas para esta referencia';
       return;
@@ -27468,6 +27482,9 @@ async function pvBuscarRef(q) {
         }
       }
 
+      // Completa la categoría con la del RP cuando falta
+      if((rows||[]).some(r=>!r.categoria)){ const mrp = await pvCatRPCargar(); (rows||[]).forEach(r=>{ if(!r.categoria) r.categoria = mrp[pvClaveRef(r.referencia)] || r.categoria; }); }
+
       // 3) Render con badge verde (ya en presupuesto) o rojo (no tiene presupuesto en este canal)
       const refsEnPres = new Set((PV.detalle||[]).map(r => String(r.referencia)));
 
@@ -27501,6 +27518,25 @@ async function pvBuscarRef(q) {
 // SKU actualmente buscado/seleccionado en el formulario de la izquierda —
 // se incluye junto con los seleccionados de la derecha al presupuestar por período.
 var PV_SKU_ACTUAL = null; // { referencia, descripcion, categoria }
+// Categoría según el RP (referencias_maestro del módulo Abastecimiento) cuando la lista de precios/inventario no la trae.
+var PV_CAT_RP = null;
+// Variantes con ceros a la izquierda de una lista de referencias (el inventario de SIESA trae 00094; el presupuesto guarda 94)
+function pvVariantesRefs(refs){ const v=new Set(); (refs||[]).forEach(s=>{ s=String(s==null?'':s).trim(); if(!s) return; v.add(s); if(/^\d+$/.test(s)){ const k=s.replace(/^0+/,'')||'0'; v.add(k); for(let L=3;L<=8;L++) v.add(k.padStart(L,'0')); } }); return [...v]; }
+function pvClaveRef(s){ s=String(s==null?'':s).trim(); return /^\d+$/.test(s) ? (s.replace(/^0+/,'')||'0') : s; }
+async function pvCatRPCargar(){
+  if(PV_CAT_RP) return PV_CAT_RP;
+  const m = {};
+  try{
+    for(let off=0; off<20000; off+=1000){
+      const rows = await sbReabast.get('referencias_maestro', 'select=referencia,categoria&categoria=not.is.null&limit=1000&offset='+off);
+      (rows||[]).forEach(r=>{ if(r.categoria) m[pvClaveRef(r.referencia)] = r.categoria; });
+      if(!rows || rows.length<1000) break;
+    }
+  }catch(e){ console.warn('Categorías RP:', e); }
+  PV_CAT_RP = m; return m;
+}
+async function pvCatRP(ref){ const m = await pvCatRPCargar(); return m[pvClaveRef(ref)] || ''; }
+
 function pvSeleccionarRef(ref, desc, precio, categoria) {
   document.getElementById('sku-ref').value  = ref;
   document.getElementById('sku-desc').value = desc;
@@ -27511,6 +27547,7 @@ function pvSeleccionarRef(ref, desc, precio, categoria) {
   pvCargarPreciosOrigenSKU(ref, precio);
   pvCargarHistoricoSKU(ref);
   PV_SKU_ACTUAL = { referencia: String(ref), descripcion: desc, categoria: categoria || 'General' };
+    if(!categoria) pvCatRP(ref).then(c=>{ if(c){ const el=document.getElementById('sku-cat'); if(el && !el.value) el.value=c; if(PV_SKU_ACTUAL && String(PV_SKU_ACTUAL.referencia)===String(ref)) PV_SKU_ACTUAL.categoria=c; } });
   pvActualizarSelCount();
   pvPrefillPeriodoActual();
 }
@@ -28561,9 +28598,9 @@ async function pvExportarPorPersona() {
   const todasRefs = [...new Set(porCanal.flatMap(c=>c.detalle.map(r=>r.referencia)))];
   const stockMap = {};
   try{
-    const rows = await sb.get('inventario', `referencia=in.(${todasRefs.join(',')})&select=referencia,bodega,existencia`);
+    const rows = await sb.get('inventario', `referencia=in.(${encodeURIComponent(pvVariantesRefs(todasRefs).map(r=>'"'+String(r).replace(/"/g,'')+'"').join(','))})&select=referencia,bodega,existencia&limit=5000`);
     const porRefBodega = {};
-    (rows||[]).forEach(r=>{ if(!invBodegaCuenta(r.bodega)) return; porRefBodega[r.referencia+'||'+(r.bodega||'')] = {ref:r.referencia, existencia:parseFloat(r.existencia)||0}; });
+    (rows||[]).forEach(r=>{ if(!invBodegaCuenta(r.bodega)) return; porRefBodega[pvClaveRef(r.referencia)+'||'+(r.bodega||'')] = {ref:pvClaveRef(r.referencia), existencia:parseFloat(r.existencia)||0}; });
     Object.values(porRefBodega).forEach(x=>{ stockMap[x.ref] = (stockMap[x.ref]||0) + x.existencia; });
   }catch(e){ console.warn('Consolidado por persona — stock:', e.message); }
 
