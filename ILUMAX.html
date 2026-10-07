@@ -5706,6 +5706,60 @@ function presTblAnio(){
 }
 function presTblCambiarAnio(d){ PRES_TBL.anio = presTblAnio()+d; PRES_TBL_PEND = {}; PRES_TBL.solo = undefined; presTblRender(); }
 var PRES_TBL = { col:'cat', dir:1 };
+var PRES_TBL_NUEVAS = [];
+var PRES_QA = { abierto:false, subTxt:'', subCod:'', cc:'', desc:'', valor:'', per:'' };
+function presQaToggle(){ PRES_QA.abierto = !PRES_QA.abierto; presTblRender(); if(PRES_QA.abierto) setTimeout(function(){ var i=document.getElementById('pres-qa-sub'); if(i) i.focus(); },50); }
+function presQaEtiqueta(s){ var cat=(CATS_ILUMAX||[]).find(function(c){ return s.codigo.indexOf(c.codigo)===0; }); return s.nombre+' · '+(cat?cat.nombre:'')+' ('+s.codigo+')'; }
+function presQaSubCambio(txt){
+  PRES_QA.subTxt = txt;
+  var s = (SUBS_ILUMAX||[]).find(function(x){ return presQaEtiqueta(x)===txt; });
+  PRES_QA.subCod = s ? s.codigo : '';
+  var sel = document.getElementById('pres-qa-cc'); if(!sel) return;
+  var cat = s ? (CATS_ILUMAX||[]).find(function(c){ return s.codigo.indexOf(c.codigo)===0; }) : null;
+  var lista = centrosCostoParaCategoria(cat?cat.codigo:null);
+  if(!lista.some(function(c){ return c.codigo===PRES_QA.cc; })) PRES_QA.cc='';
+  sel.innerHTML = '<option value="">-- Centro de costo --</option>'+lista.map(function(c){ return '<option value="'+c.codigo+'"'+(c.codigo===PRES_QA.cc?' selected':'')+'>'+c.codigo+' — '+c.nombre+'</option>'; }).join('');
+}
+function presQaHtml(){
+  if(!PRES_QA.abierto) return '';
+  var subs = SUBS_ILUMAX||[];
+  var s = subs.find(function(x){ return x.codigo===PRES_QA.subCod; });
+  var cat = s ? CATS_ILUMAX.find(function(c){ return s.codigo.indexOf(c.codigo)===0; }) : null;
+  var lista = centrosCostoParaCategoria(cat?cat.codigo:null);
+  var inp = 'style="padding:7px 9px;border:1px solid var(--b1);border-radius:8px;font-size:12px;background:var(--w);"';
+  return '<div style="background:var(--bld);border:1px solid var(--b1);border-radius:10px;padding:10px 12px;margin-bottom:10px;">'
+    + '<div style="font-size:10px;font-weight:800;color:var(--bl);margin-bottom:6px;">⚡ AGREGAR FILA RÁPIDA — escribe para buscar la subcategoría</div>'
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">'
+    + '<input id="pres-qa-sub" list="pres-qa-dl" placeholder="🔍 Subcategoría..." value="'+String(PRES_QA.subTxt).replace(/"/g,'&quot;')+'" oninput="presQaSubCambio(this.value)" '+inp.replace('style="','style="flex:2 1 260px;')+'>'
+    + '<datalist id="pres-qa-dl">'+subs.map(function(x){ return '<option value="'+presQaEtiqueta(x).replace(/"/g,'&quot;')+'">'; }).join('')+'</datalist>'
+    + '<select id="pres-qa-cc" onchange="PRES_QA.cc=this.value" '+inp.replace('style="','style="flex:1 1 180px;')+'><option value="">-- Centro de costo --</option>'
+    + lista.map(function(c){ return '<option value="'+c.codigo+'"'+(c.codigo===PRES_QA.cc?' selected':'')+'>'+c.codigo+' — '+c.nombre+'</option>'; }).join('')+'</select>'
+    + '<input id="pres-qa-desc" placeholder="Descripción del ítem" value="'+String(PRES_QA.desc).replace(/"/g,'&quot;')+'" oninput="PRES_QA.desc=this.value" '+inp.replace('style="','style="flex:1 1 180px;')+'>'
+    + '<input id="pres-qa-valor" type="number" min="0" placeholder="Valor por mes (opcional)" value="'+(PRES_QA.valor||'')+'" oninput="PRES_QA.valor=this.value" '+inp.replace('style="','style="width:150px;text-align:right;')+'>'
+    + '<select id="pres-qa-per" onchange="PRES_QA.per=this.value" '+inp+'>'
+    + [['','Llenar los meses en la tabla'],['anio','Año completo'],['s1','Semestre 1'],['s2','Semestre 2'],['q1','T1 (Ene-Mar)'],['q2','T2 (Abr-Jun)'],['q3','T3 (Jul-Sep)'],['q4','T4 (Oct-Dic)']].map(function(o){ return '<option value="'+o[0]+'"'+(PRES_QA.per===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('')
+    + '</select>'
+    + '<button class="btn btn-bl btn-sm" onclick="presQaAgregar()">✅ Agregar fila</button></div>'
+    + '<div style="font-size:10px;color:var(--mu);margin-top:6px;">La fila aparece abajo en la tabla (amarillo = pendiente). Ajusta los valores y pulsa <b>💾 Guardar cambios</b>. Puedes agregar varias seguidas.</div></div>';
+}
+function presQaAgregar(){
+  var s = (SUBS_ILUMAX||[]).find(function(x){ return x.codigo===PRES_QA.subCod; });
+  if(!s){ toast('Elige una subcategoría de la lista','wa'); return; }
+  if(!PRES_QA.cc){ toast('Selecciona el centro de costo','wa'); return; }
+  var desc = String(PRES_QA.desc||'').trim();
+  if(!desc){ toast('Escribe la descripción del ítem','wa'); return; }
+  var k = presTblClave(s.codigo, PRES_QA.cc, desc);
+  if(PRES_TBL_ROWS[k] && !PRES_TBL_ROWS[k].vacia){ toast('Ese ítem ya existe en la tabla','wa'); return; }
+  var cat = CATS_ILUMAX.find(function(c){ return s.codigo.indexOf(c.codigo)===0; });
+  if(!PRES_TBL_NUEVAS.some(function(n){ return n.k===k; })) PRES_TBL_NUEVAS.push({ k:k, sub:s.codigo, subNombre:s.nombre, cat:cat?cat.nombre:'', catCod:cat?cat.codigo:s.codigo.substring(0,4), ccCod:PRES_QA.cc, desc:desc });
+  var v = parseFloat(PRES_QA.valor)||0, per = PRES_QA.per;
+  var R = {anio:[1,12], s1:[1,6], s2:[7,12], q1:[1,3], q2:[4,6], q3:[7,9], q4:[10,12]}[per];
+  if(v>0 && R){ for(var m=R[0]; m<=R[1]; m++) PRES_TBL_PEND[k+'@@'+m] = v; }
+  PRES_QA.desc=''; PRES_QA.valor='';
+  presTblRender();
+  setTimeout(function(){ var i=document.getElementById('pres-qa-desc'); if(i) i.focus(); },50);
+  toast('✅ Fila agregada'+((v>0&&R)?' con valores — pulsa Guardar cambios':' — llena los meses y guarda'),'ok');
+}
 function presTblOrden(col){ if(PRES_TBL.col===col) PRES_TBL.dir=-PRES_TBL.dir; else { PRES_TBL.col=col; PRES_TBL.dir=(col==='cat'||col==='sub'||col==='cc'||col==='desc')?1:-1; } presTblRender(); }
 function presTblEditable(p){ return !p || !p.estado || p.estado==='borrador' || p.estado==='devuelto'; }
 function presTblItemsDe(p){ return (Array.isArray(p.items) && p.items.length) ? p.items : [{ cc:p.centroCosto||'', desc:p.obs||'', valor:p.monto }]; }
@@ -5722,6 +5776,7 @@ function presTblFilas(anio){
       f.m[p.mes] = (f.m[p.mes]||0) + v; f.p[p.mes] = p; f.total += v; f.estados[p.estado||'borrador'] = 1;
     });
   });
+  PRES_TBL_NUEVAS.forEach(function(n){ if(!rows[n.k]) rows[n.k] = { k:n.k, sub:n.sub, cat:n.cat, subNombre:n.subNombre, ccCod:n.ccCod, cc:nombreCentroCostoCod(n.ccCod), desc:n.desc, catCod:n.catCod, m:{}, p:{}, total:0, estados:{}, nueva:true }; });
   var conDatos = {}; Object.keys(rows).forEach(function(k){ conDatos[rows[k].sub] = 1; });
   (typeof SUBS_ILUMAX!=='undefined' ? SUBS_ILUMAX : []).forEach(function(sb_){
     if(conDatos[sb_.codigo]) return;
@@ -5763,7 +5818,7 @@ function presTblRender(){
     return '<tr class="pres-tbl-fila" data-vacia="'+(f.vacia?1:0)+'" data-q="'+presNorm(f.cat+' '+f.subNombre+' '+f.desc+' '+f.sub+' '+f.cc).replace(/"/g,'')+'" style="border-bottom:1px solid var(--b1);">'
       + '<td style="padding:6px;font-size:10px;color:var(--mu);white-space:nowrap;">'+f.cat+'</td>'
       + '<td style="padding:6px;font-size:11px;font-weight:600;white-space:nowrap;">'+f.subNombre+'</td>'
-      + '<td style="padding:6px;font-size:11px;white-space:nowrap;">'+(f.desc||'<span style="color:var(--mu);">—</span>')+'</td>'
+      + '<td style="padding:6px;font-size:11px;white-space:nowrap;">'+(f.desc||'<span style="color:var(--mu);">—</span>')+(f.nueva?' <span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;">NUEVA</span>':'')+'</td>'
       + '<td style="padding:6px;font-size:10px;color:var(--mu);white-space:nowrap;">'+(f.cc||'—')+'</td>'
       + cells
       + '<td style="padding:6px;font-size:12px;font-weight:800;color:var(--bl);text-align:right;white-space:nowrap;">'+fmt(f.total)+'</td>'
@@ -5778,7 +5833,8 @@ function presTblRender(){
     + '<div style="font-size:13px;font-weight:800;">📅 Presupuesto '+anio+' — '+CU.area+' <span style="font-weight:400;font-size:10px;color:var(--mu);">· una fila por ítem · clic en un encabezado para ordenar · edita las casillas y pulsa 💾 Guardar cambios · deja 0 para borrar un mes</span></div>'
     + '<div style="display:flex;gap:6px;align-items:center;"><button class="btn btn-g btn-sm" onclick="presTblCambiarAnio(-1)">‹</button><b style="font-size:13px;">'+anio+'</b><button class="btn btn-g btn-sm" onclick="presTblCambiarAnio(1)">›</button><button id="pres-tbl-guardar" class="btn btn-bl btn-sm" style="display:'+(presTblPendN()?'inline-flex':'none')+';" onclick="presTblGuardar()">💾 Guardar cambios ('+presTblPendN()+')</button>'
     + (presTblPendN()?'<button class="btn btn-g btn-sm" onclick="presTblDescartar()">Descartar</button>':'')
-    + '<button class="btn btn-p btn-sm" onclick="abrirModalPres()">+ Agregar</button></div></div>'
+    + '<button class="btn btn-bl btn-sm" onclick="presQaToggle()">⚡ Agregar fila rápida</button><button class="btn btn-p btn-sm" onclick="abrirModalPres()">+ Agregar</button></div></div>'
+    + presQaHtml()
     + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">'
     + '<input id="pres-tbl-q" class="inp" placeholder="🔍 Buscar categoría, subcategoría o ítem..." value="'+String(PRES_TBL.q).replace(/"/g,'&quot;')+'" oninput="PRES_TBL.q=this.value;presTblFiltrar()" style="flex:1 1 220px;font-size:12px;">'
     + '<label style="display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer;"><input type="checkbox" id="pres-tbl-solo" '+(PRES_TBL.solo?'checked ':'')+'onchange="PRES_TBL.solo=this.checked;presTblFiltrar()"> Solo con valores</label>'
@@ -5821,7 +5877,7 @@ async function presTblGuardar(){
     if(!p){
       if(!(v>0)) return;
       var ref = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===f.sub; });
-      p = { id:'PRES-'+presAreaSlug(CU.area)+'-'+f.sub+'-'+anio+'-'+mes, area:CU.area, catCodigo:ref?ref.catCodigo:f.sub.substring(0,4), catNombre:ref?ref.catNombre:f.cat,
+      p = { id:'PRES-'+presAreaSlug(CU.area)+'-'+f.sub+'-'+anio+'-'+mes, area:CU.area, catCodigo:ref?ref.catCodigo:(f.catCod||f.sub.substring(0,4)), catNombre:ref?ref.catNombre:f.cat,
         subCodigo:f.sub, subNombre:f.subNombre, mes:mes, anio:anio, monto:0, obs:f.desc, items:[], centroCosto:f.ccCod,
         estado:'borrador', autor:CU.nombre, autorEmail:CU.email, fecha:new Date().toLocaleDateString('es-CO'), ts:new Date().toISOString() };
       presups.push(p);
@@ -5834,6 +5890,8 @@ async function presTblGuardar(){
     if(!items.length) borrar[p.id] = 1; else tocados[p.id] = p;
   });
   Object.keys(borrar).forEach(function(id){ delete tocados[id]; });
+  var guardadas = {}; keys.forEach(function(pk){ if(PRES_TBL_PEND[pk]>0) guardadas[pk.split('@@')[0]] = 1; });
+  PRES_TBL_NUEVAS = PRES_TBL_NUEVAS.filter(function(n){ return !guardadas[n.k]; });
   presups = presups.filter(function(x){ return !borrar[x.id]; });
   savePresupuestos(presups); PRES_TBL_PEND = {}; presTblRender(); renderPres();
   var tareas = Object.values(tocados).map(function(p){ return presTblApi('guardarPresupuesto',{presupuesto:p}); })
@@ -5844,6 +5902,11 @@ async function presTblGuardar(){
 }
 async function presTblEliminarFila(kk){
   var k = decodeURIComponent(kk), f = PRES_TBL_ROWS[k]; if(!f) return;
+  if(f.nueva && !Object.keys(f.p).length){
+    PRES_TBL_NUEVAS = PRES_TBL_NUEVAS.filter(function(n){ return n.k!==k; });
+    Object.keys(PRES_TBL_PEND).forEach(function(pk){ if(pk.split('@@')[0]===k) delete PRES_TBL_PEND[pk]; });
+    presTblRender(); return;
+  }
   var anio = presTblAnio(), presups = getPresupuestos();
   var meses = Object.keys(f.p).map(Number).filter(function(m){ return presTblEditable(f.p[m]); });
   if(!meses.length){ toast('Ese ítem ya está en revisión — no se puede borrar','wa'); return; }
