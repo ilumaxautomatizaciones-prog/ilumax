@@ -8504,8 +8504,166 @@ async function confirmarReset(email) {
 // ══════════════════════════════════════════════════════════
 // EXPORTAR A EXCEL — SheetJS
 // ══════════════════════════════════════════════════════════
+// ══ Excel AVANZADO de presupuestos de gastos (ExcelJS: fórmulas vivas, selector de año, mapa de calor, filtros) ══
+async function pxeExcel(){
+  try{ await ppCargarExcelJS(); pxeExcelDinamico(); }
+  catch(e){ console.error(e); if(typeof toast==='function') toast('No cargó el generador avanzado; descargo la versión básica','wa'); exportarExcel('presupuestos_basico'); }
+}
+function pxeExcelDinamico(){
+  var pres = getPresupuestos();
+  var verTodo = (typeof paGestor==='function') ? paGestor() : (CU && CU.rol==='admin');
+  if(!verTodo) pres = pres.filter(function(p){ return p.area === (CU && CU.area); });
+  if(!pres.length){ toast('No tienes presupuestos para exportar','wa'); return; }
+  var NM = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  var NML = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var catDe = function(cod){ var c=(CATS_ILUMAX||[]).find(function(x){ return String(cod).indexOf(x.codigo)===0; }); return c?c.nombre:''; };
+  // ── Filas de detalle: una por ítem y mes ──
+  var det = [];
+  pres.forEach(function(p){
+    var its = (typeof presTblItemsDe==='function') ? presTblItemsDe(p) : (p.items||[]);
+    if(!its || !its.length) its = [{cc:'',desc:'',valor:p.monto||0}];
+    var ap = p.montoAprobado, mt = parseFloat(p.monto)||0;
+    its.forEach(function(it){
+      var v = parseFloat(it.valor)||0;
+      det.push({ anio:parseInt(p.anio,10)||0, mes:parseInt(p.mes,10)||0, area:p.area||'', cat:p.catNombre||catDe(p.subCodigo), sub:p.subNombre||'', cod:String(p.subCodigo||''),
+        cc:(it.cc? (typeof nombreCentroCostoCod==='function'?(it.cc+' — '+(nombreCentroCostoCod(it.cc)||'')):it.cc) : '—'),
+        desc:it.desc||'(sin descripción)', prop:v, apr:(ap!==undefined && ap!==null && ap!=='') ? Math.round(mt>0 ? ap*v/mt : 0) : null,
+        est:p.estado||'borrador', just:p.obs||'', autor:p.autor||'', id:p.id||'' });
+    });
+  });
+  det.sort(function(a,b){ return a.anio-b.anio || a.area.localeCompare(b.area) || a.cod.localeCompare(b.cod) || a.mes-b.mes; });
+  var anios = Array.from(new Set(det.map(function(d){ return d.anio; }))).filter(Boolean).sort();
+  var anioDef = anios.indexOf(2027)>=0 ? 2027 : anios[anios.length-1];
+  var areas = Array.from(new Set(det.map(function(d){ return d.area; }))).sort();
+  var cats = Array.from(new Set(det.map(function(d){ return d.cat; }))).sort();
+  var estados = Array.from(new Set(det.map(function(d){ return d.est; }))).sort();
+  // filas únicas para la matriz
+  var mk = {}, filas = [];
+  det.forEach(function(d){ var k=[d.area,d.cod,d.cc,d.desc].join('||'); if(!mk[k]){ mk[k]=1; filas.push({area:d.area,cat:d.cat,sub:d.sub,cod:d.cod,cc:d.cc,desc:d.desc}); } });
+  filas.sort(function(a,b){ return a.area.localeCompare(b.area) || a.cod.localeCompare(b.cod) || a.desc.localeCompare(b.desc); });
+
+  var AZ='FF1E293B', AM='FFFFF2CC', COP='#,##0;-#,##0;"·"', COP0='#,##0';
+  var sol=function(c){ return {type:'pattern',pattern:'solid',fgColor:{argb:c}}; };
+  var wb=new ExcelJS.Workbook(); wb.creator='ILUMAX'; wb.calcProperties={fullCalcOnLoad:true};
+  var hoja=function(n,t){ return wb.addWorksheet(n,{properties:{tabColor:{argb:t||AZ}},views:[{showGridLines:false}]}); };
+  var put=function(ws,r,c,v,z){ var x=ws.getCell(r,c); x.value=v; if(z) x.numFmt=z; return x; };
+  var enc=function(ws,r,c1,tx){ tx.forEach(function(t,i){ var x=put(ws,r,c1+i,t); x.font={bold:true,color:{argb:'FFFFFFFF'}}; x.fill=sol(AZ); x.alignment={horizontal:'center',vertical:'middle',wrapText:true}; }); ws.getRow(r).height=30; };
+  var titulo=function(ws,t,s){ put(ws,1,1,t).font={bold:true,size:16,color:{argb:AZ}}; if(s) put(ws,2,1,s).font={italic:true,color:{argb:'FF64748B'}}; };
+  var entrada=function(x){ x.fill=sol(AM); x.font={bold:true,color:{argb:'FF1D4ED8'},size:12}; x.alignment={horizontal:'center'}; x.border={top:{style:'thin'},left:{style:'thin'},bottom:{style:'thin'},right:{style:'thin'}}; };
+  var tot=function(ws,r,c1,c2){ for(var c=c1;c<=c2;c++){ var x=ws.getCell(r,c); x.font={bold:true}; x.fill=sol('FFE2E8F0'); x.border={top:{style:'thin'}}; } };
+  var anchos=function(ws,w){ w.forEach(function(a,i){ ws.getColumn(i+1).width=a; }); };
+  var mapa=function(ws,ref,col){ ws.addConditionalFormatting({ref:ref,rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:col||'FF93C5FD'}]}]}); };
+  var N=det.length, FD=N+1000, D=function(L){ return "Detalle!$"+L+"$2:$"+L+"$"+FD; };
+  var listaAnios='"'+anios.join(',')+'"';
+
+  var wsR=hoja('Resumen','FFF5C518'), wsM=hoja('Matriz anual'), wsD=hoja('Detalle'), wsA=hoja('Aprobaciones','FF16A34A');
+
+  // ══ DETALLE (tabla Excel con filtros y cebra) ══
+  titulo(wsD,'Detalle de presupuestos — una fila por ítem y mes');
+  put(wsD,2,1,'Base de todas las demás hojas. Puedes agregar filas debajo (mismas columnas) y los resúmenes se recalculan.').font={italic:true,color:{argb:'FF64748B'}};
+  var cols=['Año','Mes #','Mes','Área','Categoría','Subcategoría','Código','Centro de costo','Ítem / descripción','Propuesto','Aprobado','Vigente','Estado','Justificación','Autor','ID'];
+  wsD.addTable({name:'TblDetalle',ref:'A4',headerRow:true,totalsRow:false,style:{theme:'TableStyleMedium2',showRowStripes:true},
+    columns:cols.map(function(c){ return {name:c,filterButton:true}; }),
+    rows:det.map(function(d){ return [d.anio,d.mes,NML[d.mes]||d.mes,d.area,d.cat,d.sub,d.cod,d.cc,d.desc,d.prop,d.apr===null?'':d.apr,0,d.est,d.just,d.autor,d.id]; })});
+  // Las fórmulas de Detalle se ubican desde la fila 5; los rangos de otras hojas parten en la 5
+  var DR=function(L){ return "Detalle!$"+L+"$5:$"+L+"$"+(FD+4); };
+  for(var i=0;i<N;i++){ var r=5+i; wsD.getCell(r,12).value={formula:'IF(K'+r+'="",J'+r+',K'+r+')'}; [10,11,12].forEach(function(c){ wsD.getCell(r,c).numFmt=COP0; }); }
+  anchos(wsD,[7,7,11,18,24,28,11,30,34,14,14,14,13,32,22,26]);
+  wsD.views=[{state:'frozen',ySplit:4,showGridLines:false}];
+
+  // ══ MATRIZ ANUAL ══
+  titulo(wsM,'Matriz anual por ítem — fórmulas vivas');
+  put(wsM,2,1,'Año:').font={bold:true}; var cA=put(wsM,2,2,anioDef); entrada(cA); cA.dataValidation={type:'list',allowBlank:false,formulae:[listaAnios]};
+  put(wsM,2,4,'← cambia el año y todo se recalcula. Usa los filtros del encabezado por área, categoría o centro de costo; el TOTAL se ajusta al filtro.').font={italic:true,color:{argb:'FF64748B'}};
+  for(var m=1;m<=12;m++){ var h=put(wsM,4,6+m,m); h.font={size:8,color:{argb:'FF94A3B8'}}; h.alignment={horizontal:'center'}; }
+  enc(wsM,5,1,['Área','Categoría','Subcategoría','Código','Centro de costo','Ítem / descripción'].concat(NM).concat(['Total año','% del total']));
+  var f0=6, fN=f0+filas.length-1;
+  filas.forEach(function(f,i){
+    var r=f0+i; [f.area,f.cat,f.sub,f.cod,f.cc,f.desc].forEach(function(v,c){ var x=put(wsM,r,c+1,v); x.font={size:10}; });
+    for(var m=1;m<=12;m++){ var L=wsM.getColumn(6+m).letter;
+      put(wsM,r,6+m,{formula:'SUMIFS('+DR('L')+','+DR('A')+',$B$2,'+DR('D')+',$A'+r+','+DR('G')+',$D'+r+','+DR('H')+',$E'+r+','+DR('I')+',$F'+r+','+DR('B')+','+L+'$4)'},COP).font={size:10}; }
+    put(wsM,r,19,{formula:'SUM(G'+r+':R'+r+')'},COP0).font={bold:true,size:10};
+    put(wsM,r,20,{formula:'IF($S$'+(fN+2)+'=0,0,S'+r+'/$S$'+(fN+2)+')'},'0.0%').font={size:10,color:{argb:'FF64748B'}};
+    for(var c=1;c<=20;c++) wsM.getCell(r,c).border={bottom:{style:'hair',color:{argb:'FFCBD5E1'}}};
+  });
+  var rt=fN+2; put(wsM,rt,1,'TOTAL (según filtro)');
+  for(var c=7;c<=19;c++){ var Lc=wsM.getColumn(c).letter; put(wsM,rt,c,{formula:'SUBTOTAL(109,'+Lc+f0+':'+Lc+fN+')'},COP0); }
+  tot(wsM,rt,1,20);
+  mapa(wsM,'G'+f0+':R'+fN,'FF60A5FA');
+  wsM.autoFilter={from:{row:5,column:1},to:{row:fN,column:20}};
+  anchos(wsM,[16,22,26,11,28,30,11,11,11,11,11,11,11,11,11,11,11,13,10]);
+  wsM.getColumn(20).width=10;
+  wsM.views=[{state:'frozen',xSplit:6,ySplit:5,showGridLines:false}];
+
+  // ══ RESUMEN ══
+  titulo(wsR,'Presupuesto de gastos ILUMAX','Generado el '+new Date().toLocaleDateString('es-CO')+' · '+(verTodo?'Todas las áreas':('Área: '+(CU&&CU.area)))+' · Vigente = valor aprobado si existe, si no el propuesto');
+  put(wsR,4,1,'Año').font={bold:true,size:12}; var cY=put(wsR,4,2,anioDef); entrada(cY); cY.dataValidation={type:'list',allowBlank:false,formulae:[listaAnios]};
+  put(wsR,4,3,'← selecciona el año').font={italic:true,color:{argb:'FF64748B'}};
+  var MR0=16, areasN=areas.length, MRN=MR0+areasN-1, MRT=MRN+1; // matriz Área × Mes
+  var K=[['Total propuesto',{formula:'SUMIFS('+DR('J')+','+DR('A')+',$B$4)'}],
+         ['Total vigente (aprobado / propuesto)',{formula:'SUMIFS('+DR('L')+','+DR('A')+',$B$4)'}],
+         ['Diferencia vigente − propuesto',{formula:'B7-B6'}],
+         ['Promedio mensual vigente',{formula:'B7/12'}],
+         ['Ítems registrados en el año',{formula:'COUNTIFS('+DR('A')+',$B$4)'}],
+         ['Mes de mayor gasto',{formula:'IF(B7=0,"—",INDEX($B$'+(MR0-1)+':$M$'+(MR0-1)+',MATCH(MAX($B$'+MRT+':$M$'+MRT+'),$B$'+MRT+':$M$'+MRT+',0)))'}]];
+  K.forEach(function(k,i){ var r=6+i; put(wsR,r,1,k[0]).font={size:11}; var x=put(wsR,r,2,k[1],i===4?COP0:COP0); x.font={bold:true,size:12,color:{argb:'FF1D4ED8'}}; x.alignment={horizontal:'right'}; [1,2].forEach(function(c){ wsR.getCell(r,c).border={bottom:{style:'hair'}}; }); });
+  put(wsR,MR0-2,1,'Gasto vigente por área y mes').font={bold:true,size:13,color:{argb:AZ}};
+  enc(wsR,MR0-1,1,['Área'].concat(NM).concat(['Total','% del total']));
+  areas.forEach(function(a,i){ var r=MR0+i; put(wsR,r,1,a).font={size:10};
+    for(var m=1;m<=12;m++) put(wsR,r,1+m,{formula:'SUMIFS('+DR('L')+','+DR('A')+',$B$4,'+DR('D')+',$A'+r+','+DR('B')+','+m+')'},COP).font={size:10};
+    put(wsR,r,14,{formula:'SUM(B'+r+':M'+r+')'},COP0).font={bold:true,size:10};
+    put(wsR,r,15,{formula:'IF($N$'+MRT+'=0,0,N'+r+'/$N$'+MRT+')'},'0.0%').font={size:10,color:{argb:'FF64748B'}}; });
+  put(wsR,MRT,1,'TOTAL'); for(var c=2;c<=14;c++){ var L2=wsR.getColumn(c).letter; put(wsR,MRT,c,{formula:'SUM('+L2+MR0+':'+L2+MRN+')'},COP0); } put(wsR,MRT,15,{formula:'IF(N'+MRT+'=0,0,1)'},'0%'); tot(wsR,MRT,1,15);
+  mapa(wsR,'B'+MR0+':M'+MRN,'FF60A5FA'); mapa(wsR,'O'+MR0+':O'+MRN,'FFFCD34D');
+  // Categorías
+  var C0=MRT+4, CN=C0+cats.length-1;
+  put(wsR,C0-2,1,'Gasto por categoría').font={bold:true,size:13,color:{argb:AZ}};
+  enc(wsR,C0-1,1,['Categoría','Propuesto','Vigente','Diferencia','% del vigente']);
+  cats.forEach(function(c,i){ var r=C0+i; put(wsR,r,1,c).font={size:10};
+    put(wsR,r,2,{formula:'SUMIFS('+DR('J')+','+DR('A')+',$B$4,'+DR('E')+',$A'+r+')'},COP0).font={size:10};
+    put(wsR,r,3,{formula:'SUMIFS('+DR('L')+','+DR('A')+',$B$4,'+DR('E')+',$A'+r+')'},COP0).font={size:10,bold:true};
+    put(wsR,r,4,{formula:'C'+r+'-B'+r},'#,##0;[Red]-#,##0;"·"').font={size:10};
+    put(wsR,r,5,{formula:'IF($C$'+(CN+1)+'=0,0,C'+r+'/$C$'+(CN+1)+')'},'0.0%').font={size:10,color:{argb:'FF64748B'}}; });
+  put(wsR,CN+1,1,'TOTAL'); ['B','C','D'].forEach(function(L){ put(wsR,CN+1,L.charCodeAt(0)-64,{formula:'SUM('+L+C0+':'+L+CN+')'},COP0); }); put(wsR,CN+1,5,{formula:'IF(C'+(CN+1)+'=0,0,1)'},'0%'); tot(wsR,CN+1,1,5);
+  mapa(wsR,'C'+C0+':C'+CN,'FF86EFAC'); mapa(wsR,'E'+C0+':E'+CN,'FFFCD34D');
+  // Estados
+  var E0=CN+5, EN=E0+estados.length-1;
+  put(wsR,E0-2,1,'Estado de los presupuestos').font={bold:true,size:13,color:{argb:AZ}};
+  enc(wsR,E0-1,1,['Estado','Filas (ítem-mes)','Vigente']);
+  estados.forEach(function(e,i){ var r=E0+i; put(wsR,r,1,e).font={size:10};
+    put(wsR,r,2,{formula:'COUNTIFS('+DR('A')+',$B$4,'+DR('M')+',$A'+r+')'},COP0).font={size:10};
+    put(wsR,r,3,{formula:'SUMIFS('+DR('L')+','+DR('A')+',$B$4,'+DR('M')+',$A'+r+')'},COP0).font={size:10,bold:true}; });
+  var I0=EN+3; put(wsR,I0,1,'Cómo usarlo').font={bold:true};
+  ['1. Celdas amarillas = editables (año). Todo lo demás se calcula con fórmulas desde la hoja "Detalle".',
+   '2. "Matriz anual": el mismo año en tabla por ítem y mes, con mapa de calor y filtros (el TOTAL respeta el filtro).',
+   '3. "Detalle": cada ítem y mes, con filtros. "Aprobaciones": propuesto vs aprobado por presupuesto, con observaciones.',
+   '4. El archivo es una foto al momento de descargar; vuelve a exportar desde el ERP para refrescar.'].forEach(function(t,i){ put(wsR,I0+1+i,1,t).font={color:{argb:'FF475569'}}; });
+  anchos(wsR,[40,14,14,14,14,12,12,12,12,12,12,12,12,15,11]);
+  wsR.getColumn(1).width=40;
+  wsR.views=[{state:'frozen',ySplit:4,showGridLines:false}];
+
+  // ══ APROBACIONES ══
+  titulo(wsA,'Propuesto vs aprobado por presupuesto');
+  var ac=['ID','Área','Categoría','Subcategoría','Código','Año','Mes','Propuesto','Aprobado','Diferencia','Estado','Justificación','Obs. Contabilidad','Obs. Gerencia','Autor','Aprobado por'];
+  var apRows=pres.slice().sort(function(a,b){ return (a.anio-b.anio)||String(a.area).localeCompare(b.area)||String(a.subCodigo).localeCompare(b.subCodigo)||(a.mes-b.mes); });
+  wsA.addTable({name:'TblAprob',ref:'A3',headerRow:true,totalsRow:false,style:{theme:'TableStyleMedium7',showRowStripes:true},
+    columns:ac.map(function(c){ return {name:c,filterButton:true}; }),
+    rows:apRows.map(function(p){ return [p.id||'',p.area||'',p.catNombre||catDe(p.subCodigo),p.subNombre||'',String(p.subCodigo||''),parseInt(p.anio,10)||'',NML[p.mes]||p.mes,parseFloat(p.monto)||0,(p.montoAprobado!==undefined&&p.montoAprobado!==null)?p.montoAprobado:'',0,p.estado||'borrador',p.obs||'',p.obsContabilidad||'',p.obsGerencia||'',p.autor||'',p.aprobadoPor||'']; })});
+  apRows.forEach(function(p,i){ var r=4+i; wsA.getCell(r,10).value={formula:'IF(I'+r+'="","",I'+r+'-H'+r+')'}; [8,9,10].forEach(function(c){ wsA.getCell(r,c).numFmt='#,##0;[Red]-#,##0'; }); });
+  anchos(wsA,[28,18,24,28,11,7,11,14,14,14,13,32,28,28,20,20]);
+  wsA.views=[{state:'frozen',ySplit:3,showGridLines:false}];
+
+  wb.xlsx.writeBuffer().then(function(buf){
+    var nombre='ILUMAX_Presupuesto_gastos_'+new Date().toISOString().slice(0,10)+'.xlsx';
+    var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download=nombre; document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },1500);
+    toast('✅ Excel exportado: '+nombre,'ok'); try{ registrarAuditoria('presupuestos','export','exportar_excel',{nuevo:nombre}); }catch(e){}
+  }).catch(function(e){ console.error(e); toast('Error al escribir el Excel; descargo la versión básica','wa'); exportarExcel('presupuestos_basico'); });
+}
+
 function exportarExcel(tipo) {
   tipo = tipo || 'solicitudes';
+  if(tipo === 'presupuestos'){ pxeExcel(); return; }
   var wb = { SheetNames: [], Sheets: {} };
 
   if(tipo === 'solicitudes') {
@@ -8559,7 +8717,7 @@ function exportarExcel(tipo) {
     wb.SheetNames.push('Resumen por Área');
     wb.Sheets['Resumen por Área'] = wsR;
 
-  } else if(tipo === 'presupuestos') {
+  } else if(tipo === 'presupuestos_basico') {
     var pres = getPresupuestos();
     // Solo admin y gestores de Ppto. por Áreas descargan todo; los demás solo su propia área
     var _verTodo = (typeof paGestor==='function') ? paGestor() : (CU && CU.rol==='admin');
@@ -8596,7 +8754,7 @@ function exportarExcel(tipo) {
 
   // Nombre del archivo con fecha
   var hoy = new Date().toISOString().split('T')[0];
-  var nombre = 'ILUMAX_' + tipo + '_' + hoy + '.xlsx';
+  var nombre = 'ILUMAX_' + tipo.replace('_basico','') + '_' + hoy + '.xlsx';
   XLSX.writeFile(wb, nombre);
   toast('✅ Excel exportado: ' + nombre, 'ok');
   registrarAuditoria(tipo, 'export', 'exportar_excel', { nuevo: nombre });
@@ -10084,6 +10242,36 @@ function cblFaseBL(b){ const fs = (b.items||[]).map(it=>ceFaseLinea(it.estado||'
 function cblEstadoBL(b){ const f = cblFaseBL(b); return f===-1 ? 'Cancelado' : f==null ? '—' : (CBL_FASE_TXT[f] || '—'); }
 function cblDeOC(numero){ return CBL.bls.some(b=>(b.items||[]).some(it=>ceNum(it.oc)===ceNum(numero))); }
 // Cantidad ya asignada a algún BL por OC y referencia
+// ── Ingresado por OC+referencia: Seguimiento (líneas INGRESADA) + llegadas confirmadas. Se descuenta de "en camino" en todo el módulo ──
+var ING_C = null;
+function ingMapa(){
+  const sig = (CE._blsBase||[]).length+'|'+(CE.bls||[]).length+'|'+(CBL.bls||[]).length+'|'+(typeof INF_ING!=='undefined'?Object.keys(INF_ING.conf||{}).length:0);
+  if(ING_C && ING_C.sig===sig) return ING_C.m;
+  const erp = new Set((REABAST.ordenesCompra||[]).map(o=>ceNum(o.numero_oc))), seg = {}, m = {};
+  const res = oc => { oc = ceNum(oc); return erp.has(oc) ? oc : oc.replace(/-\d+$/,''); };
+  (CE._blsBase||[]).concat(CE.bls||[]).forEach(x=>{ if(x.f!==9) return; const k = res(x.oc)+'|'+ceRefKey(x.r), kb = (x.bl||'')+'|'+ceNum(x.oc);
+    const g = seg[k] || (seg[k] = {}); g[kb] = Math.max(g[kb]||0, Number(x.c)||0); });
+  Object.keys(seg).forEach(k=>{ m[k] = Object.values(seg[k]).reduce((a,v)=>a+v,0); });
+  if(typeof INF_ING!=='undefined') Object.values(INF_ING.conf||{}).forEach(c=>{ const o = (REABAST.ordenesCompra||[]).find(x=>String(x.id)===String(c.oc_id)); if(!o) return;
+    const k = ceNum(o.numero_oc)+'|'+ceRefKey(c.referencia), q = parseFloat(c.cantidad_ingresada)||0; if(q>(m[k]||0)) m[k] = q; });
+  ING_C = {sig, m}; return m;
+}
+function ingDe(o, ref){ return ingMapa()[ceNum(o.numero_oc)+'|'+ceRefKey(ref)]||0; }
+// Pendiente de un ítem de OC = pedido − ya ingresado (si la referencia se repite en la OC, se reparte proporcional)
+function ocPendItem(o, it){
+  const k = ceRefKey(it.referencia), ing = ingDe(o, it.referencia), cant = Number(it.cantidad)||0; if(!ing) return cant;
+  const tot = (REABAST.ocItems[o.id]||[]).filter(x=>ceRefKey(x.referencia)===k).reduce((a,x)=>a+(Number(x.cantidad)||0),0);
+  return tot>0 ? Math.max(0, cant*Math.max(0, tot-ing)/tot) : cant;
+}
+// ETD/ETA/planta de los BL que ya existen en el ERP vs el Excel actual
+function cblFechasExcel(){
+  const out = [], base = CE._blsBase||[];
+  CBL.bls.forEach(b=>{ const ls = base.filter(x=>x.bl && String(x.bl).toUpperCase()===String(b.bl).toUpperCase() && x.f!==-1); if(!ls.length) return;
+    const mx = k => ls.map(x=>x[k]).filter(Boolean).sort().pop()||'', d1 = mx('d1'), d2 = mx('d2'), pl = mx('pl'), c = [];
+    if(d1 && d1!==b.etd) c.push(['etd',b.etd||'',d1]); if(d2 && d2!==b.eta) c.push(['eta',b.eta||'',d2]); if(pl && pl!==b.planta) c.push(['planta',b.planta||'',pl]);
+    if(c.length) out.push({id:b.id, bl:b.bl, c, ls}); });
+  return out;
+}
 function cblPendientes(o){
   const asg = {}; CBL.bls.forEach(b=>(b.items||[]).forEach(it=>{ if(ceNum(it.oc)!==ceNum(o.numero_oc) || ceFaseLinea(it.estado||'','').fase===-1) return; const k = ceRefKey(it.ref); asg[k] = (asg[k]||0) + (Number(it.cant)||0); }));
   return (REABAST.ocItems[o.id]||[]).map((it,ix)=>{ const k = ceRefKey(it.referencia), cant = Number(it.cantidad)||0, usa = Math.min(cant, asg[k]||0); asg[k] = (asg[k]||0) - usa;
@@ -10262,7 +10450,7 @@ function cblHtmlCE(){
       ${f.vista==='oc'?`<label style="font-size:11.5px;font-weight:600;display:flex;gap:5px;align-items:center;"><input type="checkbox" ${f.agrupar?'checked':''} onchange="CBL.f.agrupar=this.checked;reabastPintar()"> Agrupar por BL</label>`:''}
       <input class="inp" placeholder="🔎 Buscar BL, OC, referencia, agente…" value="${reabastEsc(f.q)}" style="flex:1;min-width:220px;max-width:400px;" oninput="CBL.f.q=this.value;clearTimeout(window.__cblT);window.__cblT=setTimeout(()=>{ const c=document.getElementById('cbl-tabla'); if(c) c.innerHTML = CBL.f.vista==='oc' ? cblHtmlTablaOC() : cblHtmlTabla(); },250)">
       <select class="inp" style="width:auto;" onchange="CBL.f.estado=this.value;reabastPintar()"><option value="activos" ${sel(f.estado,'activos')}>Activos (sin ingresar)</option><option value="todos" ${sel(f.estado,'todos')}>Todos</option>${f.vista==='oc'?`<option value="3" ${sel(f.estado,'3')}>Producción</option>`:''}<option value="5" ${sel(f.estado,'5')}>Embarque</option><option value="6" ${sel(f.estado,'6')}>Tránsito</option><option value="7" ${sel(f.estado,'7')}>Nacionalización</option><option value="ingresados" ${sel(f.estado,'ingresados')}>Ingreso a bodega</option></select>
-      ${cblPuede() && (CE._blsBase||[]).length ? `<button class="btn btn-g btn-sm" onclick="cblMigrarExcel()" title="Crea BL en el ERP a partir de los BL del último Excel de Comercio Exterior (una sola vez)">📥 Cargar BL del Excel actual</button>`:''}
+      ${cblPuede() && (CE._blsBase||[]).length ? `<button class="btn btn-g btn-sm" onclick="cblMigrarExcel()" title="Crea los BL nuevos del último Excel de Comercio Exterior y actualiza ETD/ETA/planta de los que ya existen">📥 Cargar BL / fechas del Excel</button><span class="arte-mu" style="font-size:10.5px;" title="Para usar el de hoy, súbelo primero en Órdenes de compra → 🚢 Seguimiento comercio exterior">Excel: ${CE.meta?reabastEsc(CE.meta.archivo||'—')+' · '+new Date(CE.meta.fecha).toLocaleDateString('es-CO')+' · '+reabastEsc(CE.meta.usuario||''):'sin cargar'}</span>`:''}
       <span class="arte-mu" style="font-size:11px;margin-left:auto;">${f.vista==='oc'?cblFilasOC().length+' OC':lista.length+' BL'}</span></div>
     <div id="cbl-tabla">${f.vista==='oc'?cblHtmlTablaOC():cblHtmlTabla()}</div></div>`;
 }
@@ -10374,6 +10562,7 @@ function cblPintarDetalle(){
       <td><input type="date" class="inp" style="font-size:11px;" value="${it.ingreso||''}" ${dis} onchange="cblItemFecha('${b.id}',${ix},'ingreso',this.value)"></td>
       <td>${puede?`<button class="btn btn-g btn-xs" title="Sacar este ítem del BL (vuelve a 'por embarcar')" onclick="cblQuitarItem('${b.id}',${ix})">✕</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>
+    ${cblIngHtml(b)}
     <div style="border:1px solid var(--b1);border-radius:10px;padding:10px 12px;margin-top:14px;${aduana?'':'opacity:.75;'}">
       <div style="font-weight:800;font-size:12.5px;margin-bottom:4px;">🛃 Registro de importación</div>
       <div class="arte-mu" style="font-size:11px;margin-bottom:6px;">${aduana?'Cuando cuentes con la aprobación, relaciona aquí el número del registro de importación oficial.':'Es el trámite de la etapa de Nacionalización (puedes adelantarlo si ya tienes la aprobación).'}</div>
@@ -10384,6 +10573,48 @@ function cblPintarDetalle(){
     ${(b.hist||[]).length?`<details style="margin-top:10px;"><summary class="arte-mu" style="cursor:pointer;font-size:11px;">Historial (${b.hist.length})</summary><div style="font-size:11px;margin-top:4px;">${[...b.hist].reverse().map(h=>`<div>${new Date(h.t).toLocaleString('es-CO')} · <b>${reabastEsc(h.quien||'')}</b> · ${reabastEsc(h.accion||'')}</div>`).join('')}</div></details>`:''}
     ${puede?`<div style="margin-top:10px;"><button class="btn btn-rd btn-sm" onclick="cblEliminarBL('${b.id}')" title="Borra el BL; sus ítems vuelven a 'por embarcar'">🗑 Eliminar este BL</button></div>`:''}
   </div>`;
+}
+function cblIngOc(n){ return (REABAST.ordenesCompra||[]).find(o=>String(o.numero_oc)===String(n)); }
+function cblIngHtml(b){
+  if(typeof INF_ING==='undefined') return '';
+  if(!INF_ING.cargado){ infIngCargar(typeof infDatos==='function'?infDatos():[]); return '<div class="arte-mu" style="font-size:11px;margin-top:12px;">Cargando inventario…</div>'; }
+  const fd = s => s ? new Date(s+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}) : '';
+  const base = b.etd || '';
+  const filas = (b.items||[]).map((it,ix)=>{
+    const oc = cblIngOc(it.oc), id = oc ? oc.id : null, k = id+'|'+pvClaveRef(it.ref), cb = INF_ING.confBL[k+'|'+b.bl];
+    const st = id ? infIngEstado(id, it.ref, base, it.cant) : {ing:null}, i = st.ing, tot = INF_ING.conf[k];
+    let det = '<span class="arte-mu">—</span>', val = it.cant;
+    if(i){ val = Math.round(i.suma); det = '<b>'+infFmt(i.suma)+'</b> <span style="color:var(--mu);font-size:10px;">'+i.mejor.map(x=>reabastEsc(x.bod)+' '+fd(x.fecha)).join(' + ')+' · '+Math.round(i.ratio*100)+'%</span>'; }
+    const est = cb ? '<span style="color:#16a34a;font-weight:700;">✅ '+infFmt(cb.cantidad_ingresada)+'</span><div style="font-size:10px;color:var(--mu);">'+reabastEsc(cb.confirmado_por||'')+'</div>'
+      : !id ? '<span class="arte-mu">OC no encontrada</span>'
+      : '<input type="number" id="cbli-'+ix+'" class="inp" style="width:90px;font-size:11px;" value="'+val+'" min="0">';
+    const sal = tot && parseFloat(tot.cantidad_esperada)>parseFloat(tot.cantidad_ingresada) ? '<span style="color:#b45309;font-size:10px;">saldo OC: '+infFmt(parseFloat(tot.cantidad_esperada)-parseFloat(tot.cantidad_ingresada))+'</span>' : '';
+    return '<tr><td><b>'+reabastEsc(it.oc)+'</b></td><td>'+reabastEsc(it.ref||'')+'</td><td style="text-align:right;">'+infFmt(it.cant)+'</td><td>'+det+'</td><td>'+est+'</td><td>'+sal+'</td></tr>';
+  }).join('');
+  const pend = (b.items||[]).some(it=>{ const o = cblIngOc(it.oc); return o && !INF_ING.confBL[o.id+'|'+pvClaveRef(it.ref)+'|'+b.bl]; });
+  return '<div style="border:1px solid var(--b1);border-radius:10px;padding:10px 12px;margin-top:14px;"><div style="font-weight:800;font-size:12.5px;margin-bottom:4px;">📦 Ingreso a inventario de este BL</div><div class="arte-mu" style="font-size:11px;margin-bottom:6px;">Compara lo del BL con lo que ya entró a bodega. Ajusta las cantidades y confirma: cada línea queda asociada a su orden y a este BL; el saldo pendiente pasa al siguiente BL.</div><div class="tw" style="max-height:260px;"><table class="cbl-t"><thead><tr><th>OC</th><th>Ref.</th><th style="text-align:right;">En este BL</th><th>Detectado en inventario</th><th>Ingresó</th><th></th></tr></thead><tbody>'+filas+'</tbody></table></div>'
+    + (cblPuede()&&pend?'<div style="margin-top:8px;"><button class="btn btn-gr btn-sm" onclick="cblIngConfirmar(\''+b.id+'\')">✅ Confirmar BL ingresado</button></div>':'')+'</div>';
+}
+async function cblIngConfirmar(id){
+  const b = CBL.bls.find(x=>x.id===id); if(!b || !cblPuede()) return;
+  const lin = [];
+  (b.items||[]).forEach((it,ix)=>{
+    const o = cblIngOc(it.oc); if(!o) return;
+    const k = o.id+'|'+pvClaveRef(it.ref); if(INF_ING.confBL[k+'|'+b.bl]) return;
+    const el = document.getElementById('cbli-'+ix), q = el ? parseFloat(el.value) : NaN;
+    if(isNaN(q) || q<=0) return;
+    const st = infIngEstado(o.id, it.ref, b.etd||'', it.cant);
+    lin.push({ o:o, it:it, q:q, f:(st.ing&&st.ing.fecha)||new Date().toISOString().slice(0,10) });
+  });
+  if(!lin.length){ toast('No hay cantidades por confirmar','wa'); return; }
+  const nota = prompt('Nota para el BL '+b.bl+' (opcional):','') ; if(nota===null) return;
+  let n = 0;
+  for(const l of lin){
+    const row = { oc_id:String(l.o.id), numero_oc:l.o.numero_oc||'', referencia:l.it.ref, cantidad_esperada:l.it.cant, cantidad_ingresada:l.q, fecha_ingreso:l.f, confirmado_por:(CU&&CU.nombre)||'', confirmado_email:(CU&&CU.email)||'', nota:nota, bl:b.bl };
+    try{ await sbReabast.post('llegadas_confirmadas', row); row.confirmado_en = new Date().toISOString(); infIngAcum(row); n++; }catch(e){ toast('No se pudo guardar '+l.it.ref+': '+e.message,'er'); }
+  }
+  if(n){ cblMutar(id, bb=>{ cblLog(bb,'Confirmó ingreso a inventario: '+n+' línea(s)'+(nota?' · '+nota:'')); }, '✅ BL confirmado: '+n+' línea(s)'); }
+  else cblPintarDetalle();
 }
 function cblLog(b, accion){ b.hist = [...(b.hist||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion}]; }
 async function cblMutar(id, fn, msg){
@@ -10436,7 +10667,16 @@ async function cblMigrarExcel(soloBl){
   if(!cblPuede()) return; const lin = (CE._blsBase||[]).filter(x=>x.bl && x.f!==-1 && x.f!==9 && (!soloBl || String(x.bl).toUpperCase()===String(soloBl).toUpperCase())); if(!lin.length){ if(typeof toast==='function') toast('El Excel actual no trae BL en camino','wa'); return; }
   const ya = new Set(CBL.bls.map(b=>String(b.bl).toUpperCase())), g = new Map();
   lin.forEach(x=>{ const k = String(x.bl).toUpperCase(); if(ya.has(k)) return; (g.get(k) || g.set(k,[]).get(k)).push(x); });
-  if(!g.size){ if(typeof toast==='function') toast('Todos los BL del Excel ya están en el ERP','wa'); return; }
+  const fch = soloBl ? cblFechasExcel().filter(x=>String(x.bl).toUpperCase()===String(soloBl).toUpperCase()) : cblFechasExcel();
+  if(!g.size && !fch.length){ if(typeof toast==='function') toast('Todos los BL del Excel ya están en el ERP y con las mismas fechas','wa'); return; }
+  if(fch.length){ const ET = {etd:'ETD',eta:'ETA',planta:'Planta'};
+    if(confirm('Se actualizarán fechas de '+fch.length+' BL según el Excel del '+((CE.meta&&CE.meta.fecha)?new Date(CE.meta.fecha).toLocaleDateString('es-CO'):'último')+':\n\n'+fch.slice(0,12).map(x=>x.bl+': '+x.c.map(c=>ET[c[0]]+' '+(c[1]||'—')+' → '+c[2]).join(', ')).join('\n')+(fch.length>12?'\n…':'')+'\n\n¿Aplicar?')){
+      const cam = []; fch.forEach(x=>{ const b = JSON.parse(JSON.stringify(CBL.bls.find(y=>y.id===x.id))); x.c.forEach(c=>{ b[c[0]] = c[2]; });
+        (b.items||[]).forEach(it=>{ const l = x.ls.find(z=>ceNum(z.oc)===ceNum(it.oc) && ceRefKey(z.r)===ceRefKey(it.ref)); if(l && l.pl && it.planta) it.planta = l.pl; });
+        cblLog(b, 'Fechas actualizadas desde el Excel: '+x.c.map(c=>ET[c[0]]+' '+(c[1]||'—')+' → '+c[2]).join(', ')); cam.push(b); });
+      try{ await cblGuardar(cam); if(typeof toast==='function') toast('🗓️ Fechas de '+cam.length+' BL actualizadas','ok'); }catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); return; }
+      if(!g.size){ await cblSincronizar(cam.flatMap(b=>(b.items||[]).map(i=>i.oc))); reabastPintar(); return; } } }
+  if(!g.size){ return; }
   const t = new Date().toISOString(), quien = (CU&&CU.nombre)||'', nuevos = [], r = CE.resumen || {};
   g.forEach((ls, k)=>{ const items = []; ls.forEach(x=>{ const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===ceNum(x.oc)); if(!oc) return;
       const it = (REABAST.ocItems[oc.id]||[]).find(i=>ceRefKey(i.referencia)===ceRefKey(x.r)), inf = cbmRefInfo(x.r), M = (REABAST.referenciasMaestro||{})[x.r] || {};
@@ -10458,7 +10698,7 @@ function infSemNum(iso){ const d = new Date(iso+'T12:00:00'); d.setDate(d.getDat
 const INF_MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 function infCbmOc(o){
   let t = 0, sin = 0, n = 0;
-  (REABAST.ocItems[o.id]||[]).forEach(it=>{ n++; const v = cbmDe(it.cantidad, cbmRefInfo(it.referencia).cbm); if(v==null) sin++; else t += v; });
+  (REABAST.ocItems[o.id]||[]).forEach(it=>{ n++; const v = cbmDe(ocPendItem(o,it), cbmRefInfo(it.referencia).cbm); if(v==null) sin++; else t += v; });
   return {cbm:t, sin, n};
 }
 function infDatos(){
@@ -10470,6 +10710,7 @@ function infDatos(){
     if(f.prov && o.proveedor!==f.prov) return;
     if(f.q){ const tk = f.q.toLowerCase().split(/[\s,;]+/).filter(Boolean); const base = (o.numero_oc+' '+(o.proveedor||'')).toLowerCase(); const its = REABAST.ocItems[o.id]||[]; if(!its.some(it=>{ const t = base+' '+String(it.referencia||'')+' '+String(it.descripcion||'')+' '+(((REABAST.referenciasMaestro||{})[String(it.referencia||'').trim()]||{}).descripcion_en||''); return tk.every(k=>t.toLowerCase().includes(k)); })) return; }
     const c = infCbmOc(o);
+    { const its = REABAST.ocItems[o.id]||[]; if(its.length && its.reduce((a,it)=>a+ocPendItem(o,it),0)<=0) return; }
     const fecha = L ? L.fecha : null;
     const iso = fecha ? fecha.toISOString().slice(0,10) : '';
     if(f.desde && (!iso || iso < f.desde)) return;
@@ -10504,7 +10745,7 @@ function infHtmlShell(){
       <div class="fg" style="margin:0;"><div class="fl">Hasta</div><input type="date" class="inp" value="${INF.hasta}" onchange="INF.hasta=this.value;infPintar()"></div>
       <div class="fg" style="margin:0;flex:1;min-width:230px;"><div class="fl">🔎 Buscar ítem (referencia, descripción, OC, proveedor)</div><input class="inp" autocomplete="off" placeholder="ej: 2664 panel led" value="${reabastEsc(INF.q)}" oninput="INF.q=this.value;clearTimeout(INF._t);INF._t=setTimeout(infPintar,250)"></div>
       <div class="fg" style="margin:0;"><div class="fl">Proveedor</div><select class="inp" onchange="INF.prov=this.value;infPintar()"><option value="">Todos</option>${provs.map(p=>`<option ${INF.prov===p?'selected':''}>${reabastEsc(p)}</option>`).join('')}</select></div>
-      <div style="display:flex;gap:4px;"><button class="btn btn-sm ${INF.modo!=='ref'?'btn-p':'btn-g'}" onclick="INF.modo='oc';reabastPintar()">📦 Por OC</button><button class="btn btn-sm ${INF.modo==='ref'?'btn-p':'btn-g'}" onclick="INF.modo='ref';reabastPintar()">🧮 Por referencia (tabla dinámica)</button></div>
+      <div style="display:flex;gap:4px;"><button class="btn btn-sm ${INF.modo!=='ref'?'btn-p':'btn-g'}" onclick="INF.modo='oc';reabastPintar()">📦 Por OC</button><button class="btn btn-sm ${INF.modo==='ref'?'btn-p':'btn-g'}" onclick="INF.modo='ref';reabastPintar()">🧮 Por referencia (tabla dinámica)</button><button class="btn btn-sm ${INF.modo==='ing'?'btn-p':'btn-g'}" onclick="INF.modo='ing';reabastPintar()">📥 Ingresos recientes</button></div>
       <div style="display:flex;gap:4px;"><button class="btn btn-sm ${INF.vista==='mes'?'btn-p':'btn-g'}" onclick="INF.vista='mes';INF.abierto={};reabastPintar()">Por mes</button><button class="btn btn-sm ${INF.vista==='semana'?'btn-p':'btn-g'}" onclick="INF.vista='semana';INF.abierto={};reabastPintar()">Por semana</button></div>
       <button class="btn btn-g btn-sm" onclick="INF.desde='';INF.hasta='';INF.prov='';INF.q='';reabastPintar()">Limpiar</button>
       <button class="btn btn-gr btn-sm" onclick="infExcel()">⬇️ Excel</button>
@@ -10526,54 +10767,74 @@ async function infIngCargar(d){
     const periodo = per && per[0] ? per[0].periodo : null;
     const by = {};
     if(periodo){
-      for(let off=0; off<30000; off+=1000){
-        const rows = await sb.get('inventario','select=referencia,bodega,existencia,fecha_ult_entrada&periodo=eq.'+encodeURIComponent(periodo)+'&fecha_ult_entrada=gte.'+desde+'&order=id.asc&limit=1000&offset='+off);
+      for(let off=0; off<60000; off+=1000){
+        const rows = await sb.get('inventario','select=id,referencia,bodega,existencia,fecha_ult_entrada&periodo=eq.'+encodeURIComponent(periodo)+'&order=id.asc&limit=1000&offset='+off);
         (rows||[]).forEach(r=>{
-          const k = pvClaveRef(r.referencia), g = by[k] || (by[k] = { fecha:'', bodegas:{}, exist:0 });
-          if(r.fecha_ult_entrada > g.fecha){ g.fecha = r.fecha_ult_entrada; g.bodegas = {}; g.exist = 0; }
-          if(r.fecha_ult_entrada === g.fecha){ g.bodegas[r.bodega||''] = 1; g.exist += parseFloat(r.existencia)||0; }
+          const k = pvClaveRef(r.referencia), g = by[k] || (by[k] = { bod:{} }), bd = String(r.bodega||'').trim().toUpperCase(), x = g.bod[bd];
+          if(!x || r.id > x.id) g.bod[bd] = { id:r.id, fecha:(r.fecha_ult_entrada && r.fecha_ult_entrada>=desde)?r.fecha_ult_entrada:'', exist:parseFloat(r.existencia)||0 };
         });
         if(!rows || rows.length<1000) break;
       }
     }
     INF_ING.byRef = by;
     const cf = await sbReabast.get('llegadas_confirmadas','select=*&order=id.desc&limit=1000').catch(()=>[]);
-    INF_ING.conf = {}; (cf||[]).forEach(c=>{ const k=c.oc_id+'|'+pvClaveRef(c.referencia); if(!INF_ING.conf[k]) INF_ING.conf[k]=c; });
+    INF_ING.conf = {}; INF_ING.confBL = {}; (cf||[]).slice().reverse().forEach(infIngAcum);
     INF_ING.cargado = true;
-  }catch(e){ console.warn('Llegadas↔inventario:', e); }
+  }catch(e){ console.warn('Llegadas↔inventario:', e); INF_ING.cargado = true; }
   INF_ING.cargando = false;
   infPintar();
+  if(typeof CBL!=='undefined' && CBL.det && document.getElementById('cbl-det')) cblPintarDetalle();
+}
+function infIngAcum(c){
+  ING_C = null;
+  const k = c.oc_id+'|'+pvClaveRef(c.referencia), p = INF_ING.conf[k], q = parseFloat(c.cantidad_ingresada)||0;
+  INF_ING.conf[k] = Object.assign({}, c, { cantidad_ingresada: (p?parseFloat(p.cantidad_ingresada)||0:0)+q, cantidad_esperada: c.cantidad_esperada, bls: (p&&p.bls||[]).concat(c.bl?[c.bl]:[]) });
+  if(c.bl) (INF_ING.confBL = INF_ING.confBL||{})[k+'|'+c.bl] = c;
 }
 function infIngEstado(ocId, ref, orden, q){
-  const k = pvClaveRef(ref), conf = INF_ING.conf[ocId+'|'+k], ing = INF_ING.byRef[k];
+  const k = pvClaveRef(ref), conf = INF_ING.conf[ocId+'|'+k], g = INF_ING.byRef[k];
   const fo = orden ? String(orden).slice(0,10) : '';
-  const pos = !!(ing && ing.fecha && (!fo || ing.fecha >= fo));
+  let ing = null, pos = false;
+  if(g){
+    const det = Object.keys(g.bod).map(b=>({bod:b, fecha:g.bod[b].fecha, exist:g.bod[b].exist})).filter(x=>x.fecha && (!fo || x.fecha>=fo) && x.exist>0).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    if(det.length){
+      const tot = det.reduce((a,x)=>a+x.exist,0), cands = det.map(x=>({det:[x], suma:x.exist})).concat(det.length>1 ? [{det:det, suma:tot}] : []);
+      const dif = c => q>0 ? Math.abs(c.suma-q)/q : 0;
+      cands.sort((a,b)=>dif(a)-dif(b));
+      const mejor = cands[0], ratio = q>0 ? mejor.suma/q : 1;
+      pos = !q || (ratio>=0.85 && ratio<=1.15);
+      ing = { det:det, mejor:mejor.det, suma:mejor.suma, ratio:ratio, fecha:mejor.det.map(x=>x.fecha).sort().pop() };
+    }
+  }
   return { conf, ing, pos };
 }
 function infIngCelda(ocId, ref, q, st){
   const fd = s => s ? new Date(s+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}) : '';
   if(st.conf){
     const c = st.conf;
-    return '<span style="color:#16a34a;font-weight:700;" title="'+reabastEsc((c.nota||''))+'">✅ Confirmado</span><div style="font-size:10px;color:var(--mu);">'+reabastEsc(c.confirmado_por||'')+' · '+fd(String(c.confirmado_en||'').slice(0,10))+' · ingresó '+infFmt(c.cantidad_ingresada)+(c.nota?' · «'+reabastEsc(c.nota)+'»':'')+'</div>';
+    return '<span style="color:#16a34a;font-weight:700;" title="'+reabastEsc((c.nota||''))+'">✅ Confirmado</span><div style="font-size:10px;color:var(--mu);">'+reabastEsc(c.confirmado_por||'')+' · '+fd(String(c.confirmado_en||'').slice(0,10))+' · ingresó '+infFmt(c.cantidad_ingresada)+(parseFloat(c.cantidad_esperada)>parseFloat(c.cantidad_ingresada)?' · <b style="color:#b45309;">saldo pendiente: '+infFmt(parseFloat(c.cantidad_esperada)-parseFloat(c.cantidad_ingresada))+'</b>':'')+(c.bls&&c.bls.length?' · BL '+reabastEsc(c.bls.join(', ')):'')+(c.nota?' · «'+reabastEsc(c.nota)+'»':'')+'</div>';
   }
   if(st.pos){
-    return '<span style="color:#b45309;font-weight:700;">📦 Posible ingreso '+fd(st.ing.fecha)+'</span><div style="font-size:10px;color:var(--mu);">Bodega(s): '+reabastEsc(Object.keys(st.ing.bodegas).join(', '))+' · existencia ahí: '+infFmt(st.ing.exist)+' · esperado: '+infFmt(q)+'</div>'
-      + '<button class="btn btn-gr btn-xs" style="margin-top:3px;" onclick="event.stopPropagation();infIngConfirmar(\''+ocId+'\',\''+String(ref).replace(/\\/g,'').replace(/\'/g,'')+'\','+q+',\''+st.ing.fecha+'\')">Confirmar llegada</button>';
+    const i = st.ing, pct = Math.round(i.ratio*100);
+    const lin = i.mejor.map(x=>'<b>'+reabastEsc(x.bod)+'</b> '+infFmt(x.exist)+' <span style="color:var(--mu);">('+fd(x.fecha)+')</span>').join(' + ');
+    return '<span style="color:#b45309;font-weight:700;">📦 Ingresó en inventario: '+infFmt(i.suma)+'</span>'
+      + '<div style="font-size:10px;color:var(--mu);">'+lin+' · esperado '+infFmt(q)+' · <b style="color:'+(pct>=97&&pct<=103?'#16a34a':'#b45309')+';">'+pct+'% de lo esperado</b>'+(i.suma<q?' · <b style="color:#b45309;">faltarían '+infFmt(q-i.suma)+'</b>':'')+'</div>'
+      + '<button class="btn btn-gr btn-xs" style="margin-top:3px;" onclick="event.stopPropagation();infIngConfirmar(\''+ocId+'\',\''+String(ref).replace(/\\/g,'').replace(/\'/g,'')+'\','+q+',\''+i.fecha+'\','+i.suma+')">¿Es de esta orden? Confirmar</button>';
   }
   return '<span class="arte-mu">—</span>';
 }
-async function infIngConfirmar(ocId, ref, qEsp, fecha){
+async function infIngConfirmar(ocId, ref, qEsp, fecha, qDet){
   const oc = (REABAST.ordenesCompra||[]).find(o=>String(o.id)===String(ocId)) || {};
-  const qs = prompt('¿Qué cantidad ingresó realmente de '+ref+'? (esperado: '+qEsp+')', qEsp);
+  const qs = prompt('¿Qué cantidad ingresó realmente de '+ref+'? (esperado: '+qEsp+(qDet?' · detectado en inventario: '+qDet:'')+')', qDet||qEsp);
   if(qs===null) return;
   const q = parseFloat(String(qs).replace(/[^0-9.-]/g,''));
   if(isNaN(q)){ toast('Cantidad no válida','wa'); return; }
-  const nota = prompt('Nota (opcional) — ej. llegó completo / faltaron unidades:', '') || '';
+  const nota = prompt('Nota (opcional) — ej. llegó completo / faltaron unidades:', q<qEsp ? 'Llegó parcial; saldo pendiente '+(qEsp-q) : '') || '';
   const row = { oc_id:String(ocId), numero_oc:oc.numero_oc||'', referencia:ref, cantidad_esperada:qEsp, cantidad_ingresada:q, fecha_ingreso:fecha||null, confirmado_por:(CU&&CU.nombre)||'', confirmado_email:(CU&&CU.email)||'', nota:nota };
   try{
     await sbReabast.post('llegadas_confirmadas', row);
     row.confirmado_en = new Date().toISOString();
-    INF_ING.conf[String(ocId)+'|'+pvClaveRef(ref)] = row;
+    infIngAcum(row);
     toast('✅ Llegada confirmada: '+ref,'ok');
     infPintar();
   }catch(e){ toast('No se pudo guardar: '+e.message,'er'); }
@@ -10582,6 +10843,7 @@ function infPintar(){
   const b = document.getElementById('inf-body'); if(!b) return;
   const d = infDatos();
   if(!INF_ING.cargado && !INF_ING.cargando) infIngCargar(d);
+  if(INF.modo==='ing'){ infIngRecientes(b); return; }
   if(INF.modo==='ref'){ infRefShell(b, d); return; }
   const cap = (typeof CBM_CAPAS!=='undefined' ? CBM_CAPAS[2].cap : 68);
   const tot = d.reduce((a,x)=>a+x.cbm,0), sin = d.reduce((a,x)=>a+x.sin,0);
@@ -10629,13 +10891,75 @@ function infPintar(){
   b.innerHTML = h;
 }
 
+// Detalle de un ingreso: lo del Seguimiento (BL/DIM/RIM/fechas) + lo que hay en Siesa (inventario por bodega)
+async function infIngDetalle(oc, ref){
+  arteInjectCss(); const E = reabastEsc, fn = infFmt, fd = s => s ? new Date(String(s).slice(0,10)+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  let ov = document.getElementById('ing-ov'); if(!ov){ ov = document.createElement('div'); ov.className = 'ov'; ov.id = 'ing-ov'; document.body.appendChild(ov); }
+  const k = ceRefKey(ref), base = ceNum(oc).replace(/-\d+$/,'');
+  const ls = (CE._blsBase||[]).filter(x=>ceRefKey(x.r)===k && ceNum(x.oc).replace(/-\d+$/,'')===base).sort((a,b)=>(a.ing||a.d2||'').localeCompare(b.ing||b.d2||''));
+  const marco = body => `<div class="mo" style="max-width:min(1100px,96vw);width:96vw;"><div class="mh"><div class="mt">🔎 ${E(oc)} · ref. ${E(ref)} — detalle del ingreso</div><div class="mx" onclick="document.getElementById('ing-ov').remove()">✕</div></div><div style="padding:14px;font-size:12px;">${body}</div></div>`;
+  const tSeg = `<div style="font-weight:800;margin-bottom:4px;">🚢 Seguimiento comercio exterior ${CE.meta?'<span class="arte-mu" style="font-weight:400;">('+E(CE.meta.archivo||'')+' · '+new Date(CE.meta.fecha).toLocaleDateString('es-CO')+')</span>':''}</div>
+    <div class="tw"><table style="font-size:11.5px;"><thead><tr><th>Estado</th><th style="text-align:right;">Cantidad</th><th>BL</th><th>Contenedor</th><th>DIM</th><th>RIM</th><th>ETD</th><th>ETA</th><th>Planta</th><th>Ingreso inventario</th><th>Nota</th></tr></thead><tbody>${ls.map(x=>`<tr><td>${E(x.e||'')}</td><td style="text-align:right;font-weight:700;">${fn(x.c)}</td><td style="font-family:monospace;">${E(x.bl||'—')}</td><td>${E(x.ct||'')}</td><td>${E(x.dm||'—')}</td><td style="font-size:10.5px;">${E(x.rm||'')}</td><td>${fd(x.d1)}</td><td>${fd(x.d2)}</td><td>${fd(x.pl)}</td><td>${fd(x.ing)}</td><td style="max-width:220px;">${E(x.cm||'')}</td></tr>`).join('')||'<tr><td colspan="11" class="arte-mu">Sin líneas en el Seguimiento</td></tr>'}</tbody></table></div>
+    ${ls.some(x=>x.f===9&&!x.dm)?'<div class="arte-mu" style="font-size:10.5px;margin-top:4px;">DIM/RIM/notas salen al volver a subir el Seguimiento actual.</div>':''}`;
+  ov.innerHTML = marco(tSeg+'<div class="arte-mu" style="margin-top:12px;">Consultando Siesa (inventario)…</div>');
+  let inv = [], cfg = {}, SC = null;
+  try{ const r = await sb.get('configuracion','clave=eq.siesa_compras'); const v = r && r[0] ? r[0].valor : null; SC = typeof v==='string' ? JSON.parse(v) : v; }catch(e){}
+  try{ inv = await sb.get('inventario','select=*&referencia=eq.'+encodeURIComponent(String(ref).trim())+'&order=periodo.desc,id.desc&limit=60'); }catch(e){}
+  try{ const r = await sb.get('configuracion','clave=in.(inv_ultima_actualizacion,siesa_auto_ultimo)'); (r||[]).forEach(x=>{ cfg[x.clave] = x.valor; }); }catch(e){}
+  const per = inv[0] ? inv[0].periodo : null, m = new Map(); inv.filter(r=>r.periodo===per).forEach(r=>{ const b = String(r.bodega||'').trim().toUpperCase(); if(!m.has(b)) m.set(b, r); });
+  const filas = [...m.values()], tot = filas.reduce((a,r)=>a+(parseFloat(r.existencia)||0),0);
+  const tSie = `<div style="font-weight:800;margin:14px 0 4px;">📦 Siesa · inventario de ${E(ref)} <span class="arte-mu" style="font-weight:400;">(periodo ${E(per||'—')}${cfg.inv_ultima_actualizacion?' · última sincronización '+E(String(typeof cfg.inv_ultima_actualizacion==='string'?cfg.inv_ultima_actualizacion:JSON.stringify(cfg.inv_ultima_actualizacion)).slice(0,25)):''})</span></div>
+    <div class="tw"><table style="font-size:11.5px;"><thead><tr><th>Bodega</th><th style="text-align:right;">Existencia</th><th style="text-align:right;">Costo prom.</th><th>Lote</th><th>Ubicación</th><th>UM</th><th>Última entrada</th><th>Actualizado</th></tr></thead><tbody>${filas.map(r=>`<tr><td><b>${E(r.bodega||'')}</b></td><td style="text-align:right;font-weight:700;">${fn(r.existencia)}</td><td style="text-align:right;">${r.costo_prom?'$'+Math.round(r.costo_prom).toLocaleString('es-CO'):'—'}</td><td>${E(r.lote||'')}</td><td>${E(r.ubicacion||'')}</td><td>${E(r.um||'')}</td><td>${fd(r.fecha_ult_entrada)}</td><td style="font-size:10.5px;">${E(String(r.actualizado||'').slice(0,16).replace('T',' '))}</td></tr>`).join('')||'<tr><td colspan="8" class="arte-mu">Sin inventario cargado para esta referencia</td></tr>'}<tr style="font-weight:800;border-top:2px solid var(--b1);"><td>Total</td><td style="text-align:right;">${fn(tot)}</td><td colspan="6"></td></tr></tbody></table></div>
+    <div class="arte-mu" style="font-size:11px;margin-top:8px;">El costo de la importación y el DIM como documento no los entrega Siesa en las consultas disponibles; falta la consulta de importaciones.</div>`;
+  let tCom = '';
+  if(SC && SC.filas){
+    const rs = SC.filas.filter(x=>ceRefKey(x.ref)===k).sort((a,b)=>(a.f||'').localeCompare(b.f||'')), liga = x => ceNum(x.rd).replace(/-\d+$/,'')===base;
+    const entSie = rs.filter(liga).reduce((a,x)=>a+x.ent,0), ingSeg = ls.filter(x=>x.f===9).reduce((a,x)=>a+(Number(x.c)||0),0);
+    const al = !rs.filter(liga).length ? '<span style="color:#b45309;">⚠️ Siesa no tiene una OCI que refiera a '+E(oc)+' para esta referencia.</span>' : Math.abs(entSie-ingSeg)<1 ? '<span style="color:#16a34a;">✅ Siesa y el Seguimiento coinciden: '+fn(entSie)+' und ingresadas.</span>' : '<span style="color:#b45309;">⚠️ Siesa tiene '+fn(entSie)+' und entradas y el Seguimiento '+fn(ingSeg)+' ingresadas.</span>';
+    tCom = `<div style="font-weight:800;margin:14px 0 4px;">🧾 Siesa · órdenes de compra de esta referencia <span class="arte-mu" style="font-weight:400;">(sincronizado ${E(String(SC.fecha||'').slice(0,16).replace('T',' '))})</span></div><div style="margin-bottom:4px;">${al}</div>
+    <div class="tw"><table style="font-size:11.5px;"><thead><tr><th>Doc. Siesa</th><th>Refiere a (OC portal)</th><th>Fecha</th><th>Estado</th><th style="text-align:right;">Pedida</th><th style="text-align:right;">Entrada</th><th style="text-align:right;">Importación</th><th>Bod.</th><th style="text-align:right;">US$ unit.</th><th>Proveedor</th></tr></thead><tbody>${rs.map(x=>`<tr style="${liga(x)?'background:#fef9c3;':''}${x.est==='Anulado'?'opacity:.5;':''}"><td><b>${E(x.t)}-${x.c}</b></td><td>${E(x.rd||'—')}</td><td>${fd(x.f)}</td><td>${E(x.est)}</td><td style="text-align:right;">${fn(x.ped)}</td><td style="text-align:right;font-weight:700;">${fn(x.ent)}</td><td style="text-align:right;">${fn(x.imp)}</td><td>${E(x.bod)}</td><td style="text-align:right;">${x.pu?x.pu.toFixed(4):'—'}</td><td style="font-size:10.5px;">${E(x.pv)}</td></tr>`).join('')||'<tr><td colspan="10" class="arte-mu">Sin órdenes de esta referencia</td></tr>'}</tbody></table></div>`;
+  }
+  ov.innerHTML = marco(tSeg+tSie+tCom);
+}
+// ═══ Informes: ingresos recientes (qué entró, cuándo, con BL / DIM / notas) ═══
+function infIngRecientes(b){
+  INF.ingDias = INF.ingDias || 45;
+  if(!INF_ING.cargado && !INF_ING.cargando) infIngCargar(infDatos());
+  const E = reabastEsc, fn = infFmt, fd = s => s ? new Date(s+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}) : '—';
+  const corte = new Date(Date.now()-INF.ingDias*86400000).toISOString().slice(0,10), tk = (INF.q||'').toLowerCase().split(/[\s,;]+/).filter(Boolean);
+  const g = new Map();
+  (CE._blsBase||[]).filter(x=>x.f===9 && x.ing && x.ing>=corte).forEach(x=>{ const key = ceNum(x.oc)+'|'+ceRefKey(x.r)+'|'+(x.bl||'');
+    const r = g.get(key) || {oc:x.oc, ref:x.r, bl:x.bl||'', ing:x.ing, c:0, dm:'', rm:'', cm:'', f:x.d2}; r.c += Number(x.c)||0; r.dm = r.dm||x.dm||''; r.rm = r.rm||x.rm||''; r.cm = r.cm||x.cm||''; if(x.ing>r.ing) r.ing = x.ing; g.set(key,r); });
+  let L = [...g.values()].map(r=>{ const o = (REABAST.ordenesCompra||[]).find(z=>ceNum(z.numero_oc)===ceNum(r.oc)) || (REABAST.ordenesCompra||[]).find(z=>ceNum(z.numero_oc)===ceNum(r.oc).replace(/-\d+$/,''));
+    const M = (REABAST.referenciasMaestro||{})[String(r.ref).trim()]||{}, conf = o ? INF_ING.conf[o.id+'|'+pvClaveRef(r.ref)] : null;
+    return {...r, o, desc:M.descripcion_en||M.descripcion||'', conf}; }).filter(r=>!tk.length || tk.every(k=>(r.oc+' '+r.ref+' '+r.desc+' '+r.bl+' '+r.dm+' '+r.cm).toLowerCase().includes(k))).sort((a,c)=>c.ing.localeCompare(a.ing));
+  const refsSeg = new Set(L.map(r=>pvClaveRef(r.ref)));
+  const inv = []; Object.keys(INF_ING.byRef||{}).forEach(k=>{ if(refsSeg.has(k)) return; Object.keys(INF_ING.byRef[k].bod).forEach(bd=>{ const x = INF_ING.byRef[k].bod[bd]; if(x.fecha && x.fecha>=corte && x.exist>0) inv.push({ref:k, bd, fecha:x.fecha, exist:x.exist}); }); });
+  const invF = inv.filter(r=>!tk.length || tk.every(k=>r.ref.toLowerCase().includes(k))).sort((a,c)=>c.fecha.localeCompare(a.fecha)).slice(0,150);
+  const filas = L.map(r=>{ const q = r.conf ? parseFloat(r.conf.cantidad_ingresada)||0 : 0, ok = r.conf && q>=r.c*0.99;
+    const est = r.conf ? `<span style="color:#16a34a;font-weight:700;">✅ ${ok?'Confirmado':'Confirmado parcial'}</span><div style="font-size:10px;color:var(--mu);">${E(r.conf.confirmado_por||'')} · ${fn(q)} und${r.conf.nota?' · «'+E(r.conf.nota)+'»':''}</div>`
+      : (r.o ? `<button class="btn btn-gr btn-xs" onclick="infIngConfirmar('${r.o.id}','${E(String(r.ref).replace(/['\\]/g,''))}',${r.c},'${r.ing}',${r.c})">Confirmar ingreso</button>` : '<span class="arte-mu">sin OC en ERP</span>');
+    return `<tr><td style="white-space:nowrap;font-weight:700;">${fd(r.ing)}</td><td><b>${E(r.oc)}</b> <a style="cursor:pointer;color:var(--bl);font-size:11px;" onclick="infIngDetalle('${E(r.oc)}','${E(String(r.ref).replace(/['\\]/g,''))}')">🔎 detalle</a></td><td style="font-family:monospace;">${E(r.ref)}</td><td>${E(r.desc)}</td><td style="text-align:right;font-weight:800;">${fn(r.c)}</td>
+      <td style="font-family:monospace;font-size:11px;">${E(r.bl||'—')}</td><td>${E(r.dm||'—')}</td><td style="font-size:10.5px;">${E(r.rm||'')}</td><td style="font-size:11px;max-width:260px;">${E(r.cm||'')}</td><td>${est}</td></tr>`; }).join('');
+  b.innerHTML = `<div class="card" style="margin-bottom:12px;"><div class="cb">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px;"><div style="font-weight:800;font-size:14px;">📥 Ingresos recientes</div>
+      <select class="inp" style="width:auto;" onchange="INF.ingDias=Number(this.value);infPintar()">${[15,30,45,90,180].map(n=>`<option value="${n}" ${INF.ingDias===n?'selected':''}>Últimos ${n} días</option>`).join('')}</select>
+      <span class="arte-mu" style="font-size:11px;">Seguimiento: ${CE.meta?E(CE.meta.archivo||'')+' · '+new Date(CE.meta.fecha).toLocaleDateString('es-CO'):'sin cargar'} · DIM/RIM/notas aparecen al volver a subir el Seguimiento</span></div>
+    <div class="arte-mu" style="font-size:11.5px;margin-bottom:8px;">Aquí confirmas que lo ingresado es correcto (botón «Confirmar ingreso»). También puedes hacerlo en el detalle del BL (📦 Ingreso a inventario de este BL) o en Por OC → «¿Es de esta orden? Confirmar». Lo ingresado se descuenta de «en camino» en todo el módulo.</div>
+    ${L.length?`<div class="tw"><table style="font-size:12px;"><thead><tr><th>Ingreso</th><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th>BL</th><th>DIM</th><th>RIM</th><th>Notas OC / BL</th><th>Confirmación</th></tr></thead><tbody>${filas}</tbody></table></div>`:'<div class="empty">Sin ingresos en el Seguimiento para ese periodo.</div>'}
+  </div></div>
+  <div class="card"><div class="cb"><div style="font-weight:800;font-size:13px;margin-bottom:6px;">📦 Entradas detectadas en inventario (Siesa) que no están en el Seguimiento</div>
+    ${invF.length?`<div class="tw"><table style="font-size:12px;"><thead><tr><th>Fecha</th><th>Ref.</th><th>Bodega</th><th style="text-align:right;">Existencia</th></tr></thead><tbody>${invF.map(r=>`<tr><td>${fd(r.fecha)}</td><td style="font-family:monospace;">${E(r.ref)}</td><td>${E(r.bd)}</td><td style="text-align:right;">${fn(r.exist)}</td></tr>`).join('')}</tbody></table></div>`:`<div class="arte-mu">${INF_ING.cargado?'Ninguna en el periodo.':'Cargando inventario…'}</div>`}
+  </div></div>`;
+}
 // ═══ Informes: tabla dinámica por referencia (qué llega, cuánto y cuándo) ═══
 function infItemsFilas(d){
   const out = [];
   d.forEach(x=>{
     (REABAST.ocItems[x.o.id]||[]).forEach(it=>{
       const ref = String(it.referencia||'').trim(), M = (REABAST.referenciasMaestro||{})[ref] || {};
-      const q = Number(it.cantidad)||0, cu = cbmRefInfo(ref).cbm, fobU = it.precio_fob_usd!=null ? Number(it.precio_fob_usd) : null;
+      if(ocPendItem(x.o,it)<=0) return;
+      const q = Math.round(ocPendItem(x.o,it)), cu = cbmRefInfo(ref).cbm, fobU = it.precio_fob_usd!=null ? Number(it.precio_fob_usd) : null;
       out.push({ref, desc: it.descripcion || M.descripcion_en || M.descripcion || '', cat: M.categoria || '(sin categoría)', prov: x.o.proveedor||'', oc: x.o.numero_oc, per: x.mes, iso: x.iso, fecha: x.fecha, est: x.estimada, etapa: x.etapa, qty: q, cbm: cu ? q*cu : 0, sinCbm: !cu, fob: fobU!=null ? q*fobU : 0 });
     });
   });
@@ -11411,7 +11735,7 @@ function ocHtmlInventarioRefs(refs){
   const filas = refs.slice(0,8).map(r=>{
     const inv = ocInvDeRef(r); const m = (REABAST.referenciasMaestro||{})[r]||{};
     const desc = (inv && inv.descripcion) || m.descripcion || m.nombre || '';
-    const enOC = []; (REABAST.ordenesCompra||[]).forEach(o=>{ if((o.estado_general!=='activa' && o.estado_general) || ocIngresada(o)) return; const n = (REABAST.ocItems[o.id]||[]).filter(it=>String(it.referencia||'').trim()===r).reduce((a,it)=>a+(Number(it.cantidad)||0),0); if(n>0){ const K = typeof segFechaClave==='function' ? segFechaClave(o) : null; enOC.push({num:o.numero_oc, n, k: K ? K.etq+' '+K.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short'}) : ''}); } });
+    const enOC = []; (REABAST.ordenesCompra||[]).forEach(o=>{ if((o.estado_general!=='activa' && o.estado_general) || ocIngresada(o)) return; const n = Math.round((REABAST.ocItems[o.id]||[]).filter(it=>String(it.referencia||'').trim()===r).reduce((a,it)=>a+ocPendItem(o,it),0)); if(n>0){ const K = typeof segFechaClave==='function' ? segFechaClave(o) : null; enOC.push({num:o.numero_oc, n, k: K ? K.etq+' '+K.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short'}) : ''}); } });
     enOC.sort((a,b)=>ocComparar(a.num,b.num));
     return `<div data-r="${reabastEsc(r)}" onclick="ocAbrirRefDetalle(this.dataset.r)" title="Clic para ver el detalle de la referencia" style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:6px 4px;border-bottom:1px solid var(--b1);font-size:12px;border-radius:6px;" onmouseover="this.style.background='var(--s1)'" onmouseout="this.style.background=''">
       <span><strong style="font-family:monospace;">${reabastEsc(r)}</strong> <span class="arte-mu">${reabastEsc(desc)}</span> <span style="color:var(--bl);font-size:10.5px;">· ver detalle ›</span></span>
@@ -14440,7 +14764,7 @@ function ceCompactarBL(lineas){
   const iso = d => d ? new Date(d).toISOString().slice(0,10) : null;
   return lineas.filter(l=>l.ref!=null && String(l.ref).trim()!=='').map(l=>{
     const sub = (l.tokens||[]).find(t=>t!==l.orden && t.startsWith(l.orden+'-') && /^-\d+$/.test(t.slice(l.orden.length)));
-    return {o:l.orden, oc: sub||l.orden, r:String(l.ref).trim(), c: l.cantEnv>0 ? l.cantEnv : l.cantOrd, env:l.cantEnv, co:l.cantOrd, bl: l.bl?String(l.bl).trim():'', ct: l.cont?String(l.cont).trim():'',
+    return {o:l.orden, oc: sub||l.orden, r:String(l.ref).trim(), c: l.cantEnv>0 ? l.cantEnv : l.cantOrd, env:l.cantEnv, co:l.cantOrd, bl: l.bl?String(l.bl).trim():'', ct: l.cont?String(l.cont).trim():'', dm: l.dim!=null&&String(l.dim).trim()?String(l.dim).trim():'', cm: l.comentario?String(l.comentario).slice(0,200):'', rm: l.rim?String(l.rim).trim():'',
       e:l.estado||'', f:ceFaseLinea(l.estado, l.comentario).fase, d1:iso(l.etd), d2:iso(l.eta), pl:iso(l.planta), ing:iso(l.ingreso)};
   });
 }
@@ -14453,7 +14777,7 @@ function ocEnCaminoRef(ref){
   m.forEach(g=>filas.push({...g, e:[...g.e].join(' / '), ct:[...g.ct].join(', ')}));
   const conLineas = new Set(bls.map(x=>ceNum(x.oc)));
   (REABAST.ordenesCompra||[]).forEach(o=>{ if((o.estado_general!=='activa' && o.estado_general) || ocIngresada(o)) return; if(conLineas.has(ceNum(o.numero_oc))) return;
-    const n = (REABAST.ocItems[o.id]||[]).filter(it=>ceRefKey(it.referencia||it.sku||it.codigo)===k).reduce((a,it)=>a+(Number(it.cantidad)||0),0);
+    const n = Math.round((REABAST.ocItems[o.id]||[]).filter(it=>ceRefKey(it.referencia||it.sku||it.codigo)===k).reduce((a,it)=>a+ocPendItem(o,it),0));
     if(n>0){ const K = typeof segFechaClave==='function' ? segFechaClave(o) : null; filas.push({oc:o.numero_oc, bl:'', cant:n, e:'', f:null, d2: K&&K.fecha ? new Date(K.fecha).toISOString().slice(0,10) : null, fuente:'ERP'}); } });
   filas.sort((a,b)=> (a.d2||'9999').localeCompare(b.d2||'9999') || ocComparar(a.oc,b.oc));
   return {filas, total: filas.reduce((a,x)=>a+x.cant,0), hayBL: bls.length>0};
@@ -14553,7 +14877,7 @@ function ceLeerLibro(wb){
   const col = (...nombres)=>{ for(const n of nombres){ const i = H.findIndex(h=>h===n || h.startsWith(n)); if(i>=0) return i; } return -1; };
   const C = { com:col('comentarios'), impo:col('no. impo'), sigla:col('siglas proveedor'), orden:col('orden'), ref:col('ref'), desc:col('descripcion'), cantOrd:col('cantidad ordenada'),
     cantEnv:col('cantidad enviada'), pend:col('pendiente enviar'), cbm:col('cbm'), puerto:col('puerto'), carga:col('fecha estimada de carga'), aci:col('aci'),
-    cont:col('contenedor'), bl:col('bl numero','bl'), estado:col('estado'), etd:col('etd'), eta:col('eta'), rim:col('rim'), planta:col('fecha llegada a planta'), ingreso:col('ingresada al inventario') };
+    cont:col('contenedor'), bl:col('bl numero','bl'), dim:col('dim'), estado:col('estado'), etd:col('etd'), eta:col('eta'), rim:col('rim'), planta:col('fecha llegada a planta'), ingreso:col('ingresada al inventario') };
   const v = (f,k)=> C[k]>=0 ? f[C[k]] : null;
   const lineas = []; let ultOrden = null, ultImpo = null, ultCom = null;
   crudas.slice(hIdx+1).forEach(f=>{
@@ -14564,7 +14888,7 @@ function ceLeerLibro(wb){
     const com = v(f,'com'); if(com!=null && String(com).trim()) ultCom = String(com).trim();
     lineas.push({ orden, impo: ultImpo, tokens: String(ultImpo||'').split(/[\n\/,;]+|\s{2,}/).map(ceNum).filter(Boolean),
       comentario: ultCom, sigla: v(f,'sigla'), ref: v(f,'ref'), desc: v(f,'desc'), cantOrd: Number(v(f,'cantOrd'))||0, cantEnv: Number(v(f,'cantEnv'))||0, pend: Number(v(f,'pend'))||0,
-      puerto: v(f,'puerto'), carga: pciFecha(v(f,'carga')), aci: v(f,'aci'), cont: v(f,'cont'), bl: v(f,'bl'), estado: String(v(f,'estado')||'').trim(),
+      puerto: v(f,'puerto'), carga: pciFecha(v(f,'carga')), aci: v(f,'aci'), cont: v(f,'cont'), bl: v(f,'bl'), dim: v(f,'dim'), estado: String(v(f,'estado')||'').trim(),
       etd: pciFecha(v(f,'etd')), eta: pciFecha(v(f,'eta')), rim: v(f,'rim'), planta: pciFecha(v(f,'planta')), ingreso: pciFecha(v(f,'ingreso')) });
   });
   return {hoja:nombre, lineas};
@@ -18556,8 +18880,9 @@ function reabastHtmlDocOC(ocId, variante){
   const balance = totalAmount + extraUsd - deposito;
   // Mismo cálculo pero en pesos colombianos (costo landeado: FOB × factor × TRM), para que se vea
   // cuánto hay que pagar de anticipo y de saldo en ambas monedas.
-  const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*(Number(it.cantidad)||0),0);
-  const depositoCop = (totalCop + extraCop) * depositoPct;
+  const totalCopBase = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*(Number(it.cantidad)||0),0);
+  const totalCop = (esInter && totalFob>0) ? totalCopBase*(totalAmount/totalFob) : totalCopBase;   // intercompañía: el COP también lleva el 1.015
+  const depositoCop = (totalCopBase + extraCop) * depositoPct;   // anticipo igual en las dos órdenes (como en USD)
   const balanceCop = totalCop + extraCop - depositoCop;
   const fmtCop = n => n==null ? '' : Math.round(n).toLocaleString('es-CO');
   const celda = 'padding:4px 6px;border:1px solid #999;font-size:10.5px;vertical-align:middle;';
@@ -18744,8 +19069,9 @@ async function reabastExcelOCBlob(ocId, variante){
   const extraUsd = Number(o.costo_extra_usd)||0, extraCop = extraUsd*(Number(o.trm)||0), extraMotivo = String(o.costo_extra_motivo||'').trim();
   const deposito = (totalFob + extraUsd) * depositoPct;
   const balance = totalAmount + extraUsd - deposito;
-  const totalCop = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*(Number(it.cantidad)||0),0);
-  const depositoCop = (totalCop + extraCop) * depositoPct;
+  const totalCopBase = items.reduce((a,it)=>a+(it.costo_unitario_cop||0)*(Number(it.cantidad)||0),0);
+  const totalCop = (esInter && totalFob>0) ? totalCopBase*(totalAmount/totalFob) : totalCopBase;   // intercompañía: el COP también lleva el 1.015
+  const depositoCop = (totalCopBase + extraCop) * depositoPct;   // anticipo igual en las dos órdenes (como en USD)
   const balanceCop = totalCop + extraCop - depositoCop;
 
   // ── Colores (mismos que la plantilla impresa: rótulos naranjas, encabezado de tabla gris) ──
@@ -22338,7 +22664,7 @@ function reabastCantidadEnCamino(referencia){
   (REABAST.ordenesCompra||[]).forEach(o=>{
     if(o.estado_general!=='activa') return;
     (REABAST.ocItems[o.id]||[]).forEach(it=>{
-      if(it.referencia===referencia) total += Number(it.cantidad)||0;
+      if(it.referencia===referencia) total += ocPendItem(o,it);
     });
   });
   return total;
@@ -24339,7 +24665,7 @@ function tiGenerarHtmlActa(entrega) {
 //  SIESA_BASE_URL  → dominio real que reemplaza {baseUrl} en el portal SIESA
 //                    ejemplo: 'https://erp.ilumax.com.co'
 //
-const SIESA_BASE_URL = 'https://serviciosqa.siesacloud.com/api/connekta';   // Adatec — SIESA Cloud QA
+const SIESA_BASE_URL = 'https://servicios.siesacloud.com/api/connekta';   // SIESA Cloud producción (las consultas pasan por la Edge Function consulta-siesa)
 
 const SIESA_CONFIG = {
   // Endpoint con paginación dinámica — se construye en _siesaFetchPaginas()
@@ -24354,8 +24680,7 @@ const SIESA_CONFIG = {
   },
   headers: {
     'Content-Type': 'application/json',
-    'ConniKey':   'a5c2f1f36a3542b19a930bea9414faec',
-    'ConniToken': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1laWRlbnRpZmllciI6IjNjN2ZjNzlhLWY2NGMtNDE2Ni05MDIxLTYxNmRkNzk5OTI4YiIsImh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vd3MvMjAwOC8wNi9pZGVudGl0eS9jbGFpbXMvcHJpbWFyeXNpZCI6ImExMDk5ODk2LTNmYTMtNGQ5NS05ZDIwLTQ2YTlkODQwZjgwZSJ9.0KCRSHmoaoedwyFalBJVvvWPe7UhjA2y-BOlMvtshos',
+    // Las llaves de SIESA viven en los secrets de Supabase (nunca en este archivo)
   },
   // arrayPath: ruta al array dentro del JSON de respuesta.
   // Ajusta si SIESA devuelve algo como { data: [...] } → 'data'
@@ -24508,131 +24833,25 @@ async function actualizarDesdeSiesa() {
   setStatus('🔌 Conectando con SIESA...', '#60a5fa');
 
   try {
-    // ── 1. Recorrer todas las páginas de SIESA ────────────────────
-    const items = await _siesaFetchPaginas(setStatus);
-
-    if(!items.length) {
-      toast('SIESA no devolvió registros. Verifica el endpoint o arrayPath.', 'er');
-      setStatus('Sin registros en la respuesta de SIESA', '#ef4444');
-      setBtnState(false);
-      return;
-    }
-
-    setStatus('📊 ' + items.length + ' registros recibidos — mapeando...', '#60a5fa');
-
-    // ── 2. Mapear al formato de Supabase ──────────────────────────
-    const registrosCrudos = items
-      .map(SIESA_CONFIG.mapeo)
-      .filter(r => r.referencia); // descartar filas sin referencia
-
-    // SIESA devuelve normalmente 2 filas por combinación ítem+bodega (variantes de
-    // lote: una con f400_id_lote=null y otra con f400_id_lote=""). Como no rastreamos
-    // lote por separado, deduplicamos por referencia+bodega para no insertar el mismo
-    // registro dos veces (bug confirmado en producción el 2026-09-17).
-    const registrosPorClave = {};
-    registrosCrudos.forEach(r => {
-      registrosPorClave[r.referencia + '_' + (r.bodega||'')] = r;
-    });
-    const registros = Object.values(registrosPorClave);
-
-    if(!registros.length) {
-      toast('Ningún registro válido tras el mapeo. Revisa SIESA_CONFIG.mapeo', 'er');
-      setBtnState(false);
-      return;
-    }
-
-    // ── 3. Sincronizar en Supabase (mismo algoritmo que Excel) ────
-    setStatus('🔍 Comparando con inventario anterior...', '#60a5fa');
-    toast('🔍 Comparando con inventario anterior...', 'inf');
-
-    let existentes = {}, categoriaPorRef = {};
-    try {
-      const rows = await invTodasLasFilas('referencia,bodega,existencia,costo_prom,categoria');
-      (rows||[]).forEach(r => {
-        existentes[r.referencia + '_' + (r.bodega||'')] = r;
-        // Categoría ya asignada a esa referencia en OTRA bodega — se conserva al crear filas
-        // nuevas (p. ej. cuando el ítem se mueve o aparece en una bodega distinta).
-        if(r.categoria && String(r.categoria).trim() && !categoriaPorRef[r.referencia]) categoriaPorRef[r.referencia] = r.categoria;
-      });
-    } catch(e) { console.warn('No se pudo cargar anterior:', e); }
-
-    const nuevos = [], actualizados = [];
-    let sinCambio = 0;
-
-    registros.forEach(r => {
-      const key = r.referencia + '_' + (r.bodega||'');
-      const ant = existentes[key];
-      if(!ant) {
-        // Fila nueva (referencia+bodega no existía) — si esa referencia ya tiene categoría en
-        // otra bodega, se la asignamos de una vez para no dejarla en "General" sin necesidad.
-        if(categoriaPorRef[r.referencia]) r.categoria = categoriaPorRef[r.referencia];
-        nuevos.push(r);
-      } else {
-        const existCambio = Math.abs(parseFloat(r.existencia||0) - parseFloat(ant.existencia||0)) > 0.01;
-        const costoCambio = Math.abs(parseFloat(r.costo_prom||0) - parseFloat(ant.costo_prom||0)) > 1;
-        if(existCambio || costoCambio) actualizados.push(r);
-        else sinCambio++;
-      }
-    });
-
-    toast('📊 ' + nuevos.length + ' nuevos · ' + actualizados.length + ' actualizados · ' + sinCambio + ' sin cambio', 'inf');
-    setStatus('⬆️ Guardando en Supabase...', '#f59e0b');
-
-    // Insertar nuevos en lotes de 200
+    // ── 1-4. El inventario lo sincroniza la función de la nube (producción): aquí se dispara y se espera ──
     const LOTE = 200;
-    for(let i = 0; i < nuevos.length; i += LOTE) {
-      await sb.post('inventario', nuevos.slice(i, i + LOTE));
+    setStatus('☁️ Sincronizando inventario en la nube...', '#60a5fa');
+    const _cfgInv = async () => { const c = await sb.get('configuracion', 'clave=eq.inv_ultima_actualizacion&select=valor').catch(()=>null); return c && c[0] ? c[0].valor : ''; };
+    const antes = await _cfgInv();
+    const rr = await fetch(SB_URL + '/functions/v1/sync-siesa-auto', { method:'POST', headers:{'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY}, body: JSON.stringify({modo:'inventario'}) });
+    if(!rr.ok) throw new Error('No se pudo iniciar la sincronización (' + rr.status + ')');
+    let listo = false;
+    for(let i = 0; i < 50; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const v = await _cfgInv();
+      if(v && v !== antes) { listo = true; INV_ACTUALIZADO = v; break; }
+      setStatus('☁️ Sincronizando inventario en la nube... ' + ((i+1)*3) + ' s', '#60a5fa');
     }
-
-    // Actualizar los que cambiaron
-    for(let i = 0; i < actualizados.length; i++) {
-      const r = actualizados[i];
-      try {
-        await sb.patch(
-          'inventario',
-          'referencia=eq.' + encodeURIComponent(r.referencia) + '&bodega=eq.' + encodeURIComponent(r.bodega||''),
-          { existencia: r.existencia, costo_prom: r.costo_prom, periodo: r.periodo, subido_por: r.subido_por }
-        );
-      } catch(e) { console.warn('Error actualizando', r.referencia, e); }
-      if(i % 50 === 0 && i > 0) setStatus('Actualizando ' + i + '/' + actualizados.length + '...', '#f59e0b');
-    }
-
-    // ── 4. Actualizar vista ───────────────────────────────────────
-    INV_DATA = registros;
-    INV_PERIODO = registros[0]?.periodo || new Date().toISOString().split('T')[0];
-    INV_SUBIDO_POR = 'SIESA (automático)';
-
-    // Resaltar en la tabla los registros nuevos/actualizados durante 3 minutos
-    // (clave por referencia sola: la tabla ahora consolida una fila por SKU)
-    INV_RESALTADOS = new Set(
-      nuevos.concat(actualizados).map(r => r.referencia)
-    );
-    if(INV_RESALTADOS_TIMER) clearTimeout(INV_RESALTADOS_TIMER);
-    if(INV_RESALTADOS.size > 0) {
-      INV_RESALTADOS_TIMER = setTimeout(function(){
-        INV_RESALTADOS = new Set();
-        filtrarInvMod();
-      }, 3 * 60 * 1000); // 3 minutos
-    }
-
-    const resumen = nuevos.length + ' nuevos · ' + actualizados.length + ' actualizados · ' + sinCambio + ' sin cambio';
-    toast('✅ Inventario sincronizado — ' + resumen, 'ok');
-
-    // Guardar la fecha/hora de esta sincronización en Supabase (visible para
-    // todos, no solo en este navegador) — es lo que se muestra en el header.
-    {
-      const tsSync = new Date().toISOString();
-      try {
-        await sb.upsert('configuracion', {clave:'inv_ultima_actualizacion', valor: tsSync, tipo:'texto'}, 'clave');
-        INV_ACTUALIZADO = tsSync;
-      } catch(e) { console.warn('No se pudo guardar la fecha de última actualización:', e); }
-    }
-    setStatus('✅ Inventario listo · ' + resumen, '#16a34a');
-
-    // NOTA: el paso de descripciones (API_v2_Items) se quitó del sync automático a
-    // partir del 2026-09-17 — ya se corrió una vez y las descripciones no cambian con
-    // frecuencia. De aquí en adelante el sync solo actualiza existencia/costo
-    // (inventario) y precio (precios_lista), y solo lo que realmente cambió.
+    if(!listo) throw new Error('La sincronización está tardando más de lo normal; revisa en unos minutos');
+    await cargarInventarioSupa();
+    const resumen = 'inventario actualizado desde SIESA';
+    toast('✅ Inventario sincronizado', 'ok');
+    setStatus('✅ Inventario listo', '#16a34a');
 
     // ── 5. Traer precios por lista desde API_v2_ItemsPrecios ───────
     try {
