@@ -1199,6 +1199,7 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
 
 <div class="page" id="pg-reabast"><div id="reabast-content"></div></div>
 <div class="page" id="pg-tesoreria"><div id="teso-mod"></div></div>
+<div class="page" id="pg-compras"><div id="compras-mod"></div></div>
 <div class="page" id="pg-inv-ti">
   <div id="inv-ti-content"></div>
 </div>
@@ -2624,7 +2625,7 @@ async function vaAbrir(){
   m.innerHTML='<div style="background:var(--s1,#fff);color:var(--tx,#111);border:1px solid var(--b1,#ccc);border-radius:12px;width:min(460px,92vw);max-height:78vh;display:flex;flex-direction:column;padding:16px;gap:10px;">'
    +'<div style="display:flex;justify-content:space-between;align-items:center;"><b>👁️ Ver como usuario</b><button class="btn btn-sm" onclick="document.getElementById(\'va-modal\').remove()">✕</button></div>'
    +'<input id="va-q" type="text" placeholder="Buscar por nombre, correo, área o rol…" autocomplete="off" style="padding:9px 11px;border:1px solid var(--b1,#ccc);border-radius:8px;background:var(--s2,#fff);color:inherit;">'
-   +'<div id="va-list" style="overflow:auto;flex:1;min-height:80px;font-size:13px;">Cargando…</div>'
+   +cargaHtml('Cargando')
    +'<div style="font-size:10px;opacity:.7;">Vista de solo lectura: no se guarda nada mientras estés viendo como otro usuario. Al refrescar vuelves a tu usuario.</div></div>';
   m.addEventListener('click',e=>{ if(e.target===m) m.remove(); });
   document.body.appendChild(m);
@@ -2847,6 +2848,7 @@ function buildNav(){
       { id:'inv-ti', lbl:'Inventario TI', ico:'💻' },
       { id:'reabast', lbl:'Abastecimiento', ico:'🔁' },
       { id:'tesoreria', lbl:'Tesorería', ico:'💸' },
+      { id:'compras', lbl:'Módulo de compras', ico:'🛒' },
     ]},
 
     { tipo:'grupo', id:'g-comercial', lbl:'🛒 Comercial', header:'Ventas', items:[
@@ -2885,7 +2887,7 @@ function buildNav(){
   const idsCatalogo = new Set(AC_MODULOS_DISP.map(m=>m.id));
   grupos.forEach(g => { if(g.tipo==='grupo') g.items = g.items.filter(it => !idsCatalogo.has(it.id) || tieneModulo(it.id)); });
   let gruposVisibles = grupos.filter(g => g.tipo!=='grupo' || g.items.length>0);
-  if(MODO_ABAST){ gruposVisibles = gruposVisibles.filter(g=>g.id==='g-ops'); gruposVisibles.forEach(g=>{ g.lbl='🔁 Abastecimiento'; g.items = g.items.filter(it=>['reabast','tesoreria'].includes(it.id)); }); }
+  if(MODO_ABAST){ gruposVisibles = gruposVisibles.filter(g=>g.id==='g-ops'); gruposVisibles.forEach(g=>{ g.lbl='🔁 Abastecimiento'; g.items = g.items.filter(it=>['reabast','tesoreria','compras'].includes(it.id)); }); }
 
   // Mapa de todos los ítems navegables visibles para este usuario (para pintar los chips de favoritos)
   NAV_ITEMS_MAP = {};
@@ -3059,7 +3061,7 @@ function renderNavFav() {
       }).join('');
 }
 
-const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'inv-ti':renderInvTiMod,reabast:renderReabastMod,tesoreria:renderTesoreriaMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas,centro:renderCentro,'reporte-ventas':renderReporteVentas,'margen-cliente':function(){renderMargenCliente();},'ppto-areas':renderPptoAreas,'admin-center':renderAdminCenter,'mi-equipo':renderMiEquipo};
+const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'inv-ti':renderInvTiMod,reabast:renderReabastMod,tesoreria:renderTesoreriaMod,compras:renderComprasMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas,centro:renderCentro,'reporte-ventas':renderReporteVentas,'margen-cliente':function(){renderMargenCliente();},'ppto-areas':renderPptoAreas,'admin-center':renderAdminCenter,'mi-equipo':renderMiEquipo};
 // ── Recordar la última vista (módulo + pestaña) para restaurarla al refrescar el navegador ──
 function ultimaVistaKey(){ return 'ilx_ultima_vista_' + (typeof CU!=='undefined' && CU ? CU.email : 'default'); }
 function guardarUltimaVista(pageId){
@@ -3074,7 +3076,7 @@ function leerUltimaVista(){
 }
 function goPage(id, el){
   setTimeout(function(){ try{ ilxLatAjustar(); }catch(e){} }, 80); setTimeout(function(){ try{ ilxLatAjustar(); }catch(e){} }, 600);
-  if(MODO_ABAST && !['reabast','tesoreria'].includes(id)) id = 'reabast';
+  if(MODO_ABAST && !['reabast','tesoreria','compras'].includes(id)) id = 'reabast';
   // Candado real, no solo cosmético: si el módulo está en el catálogo de 🧩 Módulos por Rol
   // y el usuario no tiene acceso, no lo dejamos entrar aunque lo invoque directo (consola, etc.)
   if(id!=='inicio' && typeof AC_MODULOS_DISP!=='undefined' && AC_MODULOS_DISP.some(m=>m.id===id) && !moduloPermitido(id)) {
@@ -9032,34 +9034,45 @@ async function renderInventarioMod() {
   const el = document.getElementById('inv-content');
   if(!el) return;
 
-  el.innerHTML = '<div style="padding:14px;" id="inv-inner"><div style="text-align:center;padding:20px;color:var(--mu);">⏳ Cargando inventario...</div></div>';
+  el.innerHTML = '<div style="padding:14px;" id="inv-inner"><div style="max-width:460px;margin:40px auto;text-align:center;"><div id="inv-pb-txt" style="font-size:13px;color:var(--mu);margin-bottom:8px;">Cargando inventario… 0%</div><div style="height:14px;background:var(--s1);border:1px solid var(--b1);border-radius:8px;overflow:hidden;"><div id="inv-pb-bar" style="width:0%;height:100%;background:var(--bl);transition:width .2s;"></div></div></div></div>';
 
   // Cargar desde Supabase
   await cargarInventarioSupa();
   renderInvVista();
 }
 
+function invProgreso(p, txt){
+  p = Math.max(0, Math.min(100, Math.round(p)));
+  const b = document.getElementById('inv-pb-bar'), t = document.getElementById('inv-pb-txt');
+  if(b) b.style.width = p+'%'; if(t) t.textContent = (txt||'Cargando inventario…')+' '+p+'%';
+}
 async function cargarInventarioSupa() {
   if(MODO_OFFLINE) return;
   try {
     const PAGE = 1000;
     let offset = 0;
     let todas = [];
+    let totalFilas = 0;
+    try{ const rc = await fetch(SB_URL+'/rest/v1/inventario?select=id&limit=1', {headers:{...sb.headers, 'Prefer':'count=exact'}}); const cr = rc.headers.get('content-range')||''; totalFilas = Number(cr.split('/')[1])||0; }catch(e){}
+    invProgreso(2);
     while(true) {
       const rows = await sb.get('inventario',
         'order=referencia.asc&limit=' + PAGE + '&offset=' + offset);
       if(!rows || !rows.length) break;
       todas = todas.concat(rows);
+      invProgreso(totalFilas ? 2 + 88*Math.min(1, todas.length/totalFilas) : Math.min(88, 2 + todas.length/1000), 'Descargando inventario…');
       if(rows.length < PAGE) break; // última página
       offset += PAGE;
       if(offset > 200000) { console.warn('Inventario: límite de seguridad 200k filas'); break; }
     }
+    invProgreso(92, 'Procesando referencias…');
     if(todas.length > 0) {
       INV_DATA = invDedup(todas);
       try{ const mrp = await pvCatRPCargar(); INV_DATA.forEach(r=>{ if(!r.categoria) r.categoria = mrp[pvClaveRef(r.referencia)] || r.categoria; }); }catch(e){}
       INV_PERIODO = todas[0].periodo || '';
       INV_SUBIDO_POR = todas[0].subido_por || '';
     }
+    invProgreso(96, 'Cargando bodegas…');
   } catch(e) {
     console.warn('Error cargando inventario:', e.message);
   }
@@ -9067,6 +9080,7 @@ async function cargarInventarioSupa() {
     await invCargarBodegasCuentan();
     const cfg = await sb.get('configuracion', 'clave=eq.inv_ultima_actualizacion');
     if(cfg && cfg[0]) INV_ACTUALIZADO = cfg[0].valor;
+    invProgreso(100, 'Listo');
   } catch(e) {
     console.warn('Error cargando fecha de última actualización del inventario:', e.message);
   }
@@ -10070,7 +10084,7 @@ async function renderReabastMod(){
   const el = document.getElementById('reabast-content');
   if(!el) return;
   const fresco = REABAST._cargadoEn && (Date.now()-REABAST._cargadoEn) < 60000; // 60s
-  if(!fresco) el.innerHTML = '<div style="padding:14px;text-align:center;color:var(--mu);">⏳ Cargando…</div>';
+  if(!fresco) el.innerHTML = cargaHtml('Cargando');
   if(!INV_DATA || !INV_DATA.length){ try{ await cargarInventarioSupa(); }catch(e){} }
   if(!fresco){
     await cargarReabast();
@@ -10242,19 +10256,58 @@ function cblFaseBL(b){ const fs = (b.items||[]).map(it=>ceFaseLinea(it.estado||'
 function cblEstadoBL(b){ const f = cblFaseBL(b); return f===-1 ? 'Cancelado' : f==null ? '—' : (CBL_FASE_TXT[f] || '—'); }
 function cblDeOC(numero){ return CBL.bls.some(b=>(b.items||[]).some(it=>ceNum(it.oc)===ceNum(numero))); }
 // Cantidad ya asignada a algún BL por OC y referencia
+// Confirmaciones de llegada: se cargan al abrir el módulo para que el tablero las use (no solo Informes)
+async function ingCargarConf(){
+  if(typeof INF_ING==='undefined' || INF_ING.cargado) return;
+  const cf = await sbReabast.get('llegadas_confirmadas','select=*&order=id.desc&limit=1000').catch(()=>null); if(!cf) return;
+  INF_ING.conf = {}; INF_ING.confBL = {}; cf.slice().reverse().forEach(infIngAcum); ING_C = null;
+}
+// Inventario hoy (Siesa) de una referencia
+function infInvHoy(ref){
+  const i = typeof ocInvDeRef==='function' ? ocInvDeRef(ref) : null; if(i) return i.existencia;
+  const g = (typeof INF_ING!=='undefined' && INF_ING.byRef) ? INF_ING.byRef[pvClaveRef(ref)] : null; if(!g) return null;
+  return ['B2','BA','BB','BS','RE','RI'].reduce((a,b)=>a+((g.bod[b]&&g.bod[b].exist)||0),0);
+}
+// Al confirmar un ingreso completo, la referencia queda marcada como ingresada en el tablero (columna «Ingreso»)
+async function ingMarcarTablero(ocId, ref, fechaIso){
+  try{ const items = REABAST.ocItems[ocId]||[];
+    for(let ix=0; ix<items.length; ix++){ if(ceRefKey(items[ix].referencia)!==ceRefKey(ref)) continue;
+      if(((REFCHK.datos[ocId]||{})[refchkKey(items[ix])]||{}).recepcion_bodega) continue;
+      await refchkToggle(ocId, ix, 'recepcion_bodega', true, null, fechaIso ? new Date(String(fechaIso).slice(0,10)+'T12:00:00').toISOString() : null); }
+  }catch(e){ console.warn('ingMarcarTablero', e); }
+}
+// Cantidad de un ítem en el tablero: pedido + lo ya ingresado + saldo pendiente (con opción de cerrarlo)
+function ingCantHtml(o, it){
+  const c = Number(it.cantidad)||0, ing = ingDe(o, it.referencia), fn = n=>Number(n).toLocaleString('es-CO'); if(!(ing>0)) return fn(c);
+  const s = c-ing; if(s<=0.5) return fn(c)+'<div style="font-size:9.5px;color:#16a34a;line-height:1.2;">✅ ingresó todo</div>';
+  const r = String(it.referencia||'').replace(/[\\']/g,'');
+  return fn(c)+'<div style="font-size:9.5px;line-height:1.25;white-space:nowrap;">✅ ingresó '+fn(Math.round(ing))+'<br><b style="color:#b45309;">saldo pendiente '+fn(Math.round(s))+'</b> <a href="javascript:void(0)" style="color:var(--bl);" onclick="event.stopPropagation();ingCerrarSaldo(\''+o.id+'\',\''+r+'\')">cerrar saldo</a></div>';
+}
+// Cierra el saldo pendiente de una referencia (no se espera): queda como ingresada
+async function ingCerrarSaldo(ocId, ref){
+  const o = (REABAST.ordenesCompra||[]).find(x=>String(x.id)===String(ocId)); if(!o) return;
+  const k = ceRefKey(ref), esp = (REABAST.ocItems[o.id]||[]).filter(x=>ceRefKey(x.referencia)===k).reduce((a,x)=>a+(Number(x.cantidad)||0),0), s = esp-ingDe(o, ref);
+  if(!confirm('¿Cerrar el saldo de '+Math.round(s)+' und de '+ref+' en '+o.numero_oc+'?\n\nQuiere decir que ese saldo NO se espera (no va a llegar) y la referencia queda como ingresada.')) return;
+  const nota = prompt('Motivo (opcional):','') || '';
+  const row = { oc_id:String(o.id), numero_oc:o.numero_oc||'', referencia:ref, cantidad_esperada:esp, cantidad_ingresada:0, fecha_ingreso:new Date().toISOString().slice(0,10), confirmado_por:(CU&&CU.nombre)||'', confirmado_email:(CU&&CU.email)||'', nota:'[SALDO CERRADO] '+(nota||'saldo no se espera') };
+  try{ await sbReabast.post('llegadas_confirmadas', row); row.confirmado_en = new Date().toISOString(); infIngAcum(row); toast('✅ Saldo cerrado: '+ref,'ok'); await ingMarcarTablero(o.id, ref, row.fecha_ingreso); }
+  catch(e){ toast('No se pudo cerrar el saldo: '+e.message,'er'); }
+  if(typeof reabastPintar==='function') reabastPintar();
+}
 // ── Ingresado por OC+referencia: Seguimiento (líneas INGRESADA) + llegadas confirmadas. Se descuenta de "en camino" en todo el módulo ──
 var ING_C = null;
 function ingMapa(){
   const sig = (CE._blsBase||[]).length+'|'+(CE.bls||[]).length+'|'+(CBL.bls||[]).length+'|'+(typeof INF_ING!=='undefined'?Object.keys(INF_ING.conf||{}).length:0);
   if(ING_C && ING_C.sig===sig) return ING_C.m;
-  const erp = new Set((REABAST.ordenesCompra||[]).map(o=>ceNum(o.numero_oc))), seg = {}, m = {};
+  const erp = new Set((REABAST.ordenesCompra||[]).map(o=>ceNum(o.numero_oc))), seg = {}, m = {}, ord = {};
   const res = oc => { oc = ceNum(oc); return erp.has(oc) ? oc : oc.replace(/-\d+$/,''); };
   (CE._blsBase||[]).concat(CE.bls||[]).forEach(x=>{ if(x.f!==9) return; const k = res(x.oc)+'|'+ceRefKey(x.r), kb = (x.bl||'')+'|'+ceNum(x.oc);
     const g = seg[k] || (seg[k] = {}); g[kb] = Math.max(g[kb]||0, Number(x.c)||0); });
+  (CE._blsBase||[]).forEach(x=>{ if(x.f===-1) return; const k = res(x.oc)+'|'+ceRefKey(x.r), v = Number(x.co)||0; if(v>(ord[k]||0)) ord[k] = v; });
   Object.keys(seg).forEach(k=>{ m[k] = Object.values(seg[k]).reduce((a,v)=>a+v,0); });
   if(typeof INF_ING!=='undefined') Object.values(INF_ING.conf||{}).forEach(c=>{ const o = (REABAST.ordenesCompra||[]).find(x=>String(x.id)===String(c.oc_id)); if(!o) return;
-    const k = ceNum(o.numero_oc)+'|'+ceRefKey(c.referencia), q = parseFloat(c.cantidad_ingresada)||0; if(q>(m[k]||0)) m[k] = q; });
-  ING_C = {sig, m}; return m;
+    const k = ceNum(o.numero_oc)+'|'+ceRefKey(c.referencia), q = parseFloat(c.cantidad_ingresada)||0, cer = /^\[SALDO CERRADO\]/.test(String(c.nota||'')), qq = cer ? Math.max(q, parseFloat(c.cantidad_esperada)||0) : q; if(qq>(m[k]||0)) m[k] = qq; });
+  ING_C = {sig, m, o:ord}; return m;
 }
 function ingDe(o, ref){ return ingMapa()[ceNum(o.numero_oc)+'|'+ceRefKey(ref)]||0; }
 // Pendiente de un ítem de OC = pedido − ya ingresado (si la referencia se repite en la OC, se reparte proporcional)
@@ -10577,7 +10630,7 @@ function cblPintarDetalle(){
 function cblIngOc(n){ return (REABAST.ordenesCompra||[]).find(o=>String(o.numero_oc)===String(n)); }
 function cblIngHtml(b){
   if(typeof INF_ING==='undefined') return '';
-  if(!INF_ING.cargado){ infIngCargar(typeof infDatos==='function'?infDatos():[]); return '<div class="arte-mu" style="font-size:11px;margin-top:12px;">Cargando inventario…</div>'; }
+  if(!INF_ING.cargado){ infIngCargar(typeof infDatos==='function'?infDatos():[]); return cargaHtml('Cargando inventario'); }
   const fd = s => s ? new Date(s+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}) : '';
   const base = b.etd || '';
   const filas = (b.items||[]).map((it,ix)=>{
@@ -10611,7 +10664,7 @@ async function cblIngConfirmar(id){
   let n = 0;
   for(const l of lin){
     const row = { oc_id:String(l.o.id), numero_oc:l.o.numero_oc||'', referencia:l.it.ref, cantidad_esperada:l.it.cant, cantidad_ingresada:l.q, fecha_ingreso:l.f, confirmado_por:(CU&&CU.nombre)||'', confirmado_email:(CU&&CU.email)||'', nota:nota, bl:b.bl };
-    try{ await sbReabast.post('llegadas_confirmadas', row); row.confirmado_en = new Date().toISOString(); infIngAcum(row); n++; }catch(e){ toast('No se pudo guardar '+l.it.ref+': '+e.message,'er'); }
+    try{ await sbReabast.post('llegadas_confirmadas', row); row.confirmado_en = new Date().toISOString(); infIngAcum(row); n++; if(l.q>=(parseFloat(l.it.cant)||0)-0.5) await ingMarcarTablero(l.o.id, l.it.ref, l.f); }catch(e){ toast('No se pudo guardar '+l.it.ref+': '+e.message,'er'); }
   }
   if(n){ cblMutar(id, bb=>{ cblLog(bb,'Confirmó ingreso a inventario: '+n+' línea(s)'+(nota?' · '+nota:'')); }, '✅ BL confirmado: '+n+' línea(s)'); }
   else cblPintarDetalle();
@@ -10812,7 +10865,7 @@ function infIngCelda(ocId, ref, q, st){
   const fd = s => s ? new Date(s+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}) : '';
   if(st.conf){
     const c = st.conf;
-    return '<span style="color:#16a34a;font-weight:700;" title="'+reabastEsc((c.nota||''))+'">✅ Confirmado</span><div style="font-size:10px;color:var(--mu);">'+reabastEsc(c.confirmado_por||'')+' · '+fd(String(c.confirmado_en||'').slice(0,10))+' · ingresó '+infFmt(c.cantidad_ingresada)+(parseFloat(c.cantidad_esperada)>parseFloat(c.cantidad_ingresada)?' · <b style="color:#b45309;">saldo pendiente: '+infFmt(parseFloat(c.cantidad_esperada)-parseFloat(c.cantidad_ingresada))+'</b>':'')+(c.bls&&c.bls.length?' · BL '+reabastEsc(c.bls.join(', ')):'')+(c.nota?' · «'+reabastEsc(c.nota)+'»':'')+'</div>';
+    return '<span style="color:#16a34a;font-weight:700;" title="'+reabastEsc((c.nota||''))+'">✅ Confirmado</span><div style="font-size:10px;color:var(--mu);">'+reabastEsc(c.confirmado_por||'')+' · '+fd(String(c.confirmado_en||'').slice(0,10))+' · ingresó '+infFmt(c.cantidad_ingresada)+(parseFloat(c.cantidad_esperada)>parseFloat(c.cantidad_ingresada)?(/^\[SALDO CERRADO\]/.test(String(c.nota||''))?' · <b style="color:#16a34a;">saldo cerrado: '+infFmt(parseFloat(c.cantidad_esperada)-parseFloat(c.cantidad_ingresada))+'</b>':' · <b style="color:#b45309;">saldo pendiente: '+infFmt(parseFloat(c.cantidad_esperada)-parseFloat(c.cantidad_ingresada))+'</b> <a href="javascript:void(0)" style="font-size:10px;" onclick="event.stopPropagation();ingCerrarSaldo(\''+ocId+'\',\''+String(c.referencia||'').replace(/[\\\']/g,'')+'\')">cerrar saldo</a>'):'')+(c.bls&&c.bls.length?' · BL '+reabastEsc(c.bls.join(', ')):'')+(c.nota?' · «'+reabastEsc(c.nota)+'»':'')+'</div>';
   }
   if(st.pos){
     const i = st.ing, pct = Math.round(i.ratio*100);
@@ -10829,14 +10882,18 @@ async function infIngConfirmar(ocId, ref, qEsp, fecha, qDet){
   if(qs===null) return;
   const q = parseFloat(String(qs).replace(/[^0-9.-]/g,''));
   if(isNaN(q)){ toast('Cantidad no válida','wa'); return; }
-  const nota = prompt('Nota (opcional) — ej. llegó completo / faltaron unidades:', q<qEsp ? 'Llegó parcial; saldo pendiente '+(qEsp-q) : '') || '';
+  let cerrar = false;
+  if(q < qEsp-0.5) cerrar = confirm('Llegaron '+q+' de '+qEsp+'. Saldo: '+(qEsp-q)+'.\n\nAceptar = el saldo NO se espera (ej. la PI decía '+q+'): se cierra y la referencia queda ingresada.\nCancelar = el saldo sigue pendiente.');
+  let nota = prompt('Nota (opcional) — ej. llegó completo / faltaron unidades:', q<qEsp ? (cerrar ? 'Saldo '+(qEsp-q)+' cerrado: no se espera' : 'Llegó parcial; saldo pendiente '+(qEsp-q)) : '') || '';
+  if(cerrar) nota = '[SALDO CERRADO] '+nota;
   const row = { oc_id:String(ocId), numero_oc:oc.numero_oc||'', referencia:ref, cantidad_esperada:qEsp, cantidad_ingresada:q, fecha_ingreso:fecha||null, confirmado_por:(CU&&CU.nombre)||'', confirmado_email:(CU&&CU.email)||'', nota:nota };
   try{
     await sbReabast.post('llegadas_confirmadas', row);
     row.confirmado_en = new Date().toISOString();
     infIngAcum(row);
     toast('✅ Llegada confirmada: '+ref,'ok');
-    infPintar();
+    if(cerrar || q>=(parseFloat(qEsp)||0)-0.5) await ingMarcarTablero(ocId, ref, fecha);
+    if(typeof reabastPintar==='function') reabastPintar(); else infPintar();
   }catch(e){ toast('No se pudo guardar: '+e.message,'er'); }
 }
 function infPintar(){
@@ -10885,7 +10942,7 @@ function infPintar(){
         const pre = x.emb ? (x.emb.estado==='embarcada'?'🚢 Embarcada':x.emb.estado==='en_gestion'?'✋ En gestión':'🔔 Por gestionar') : '<span class="arte-mu">—</span>';
         const tk = INF.q ? INF.q.toLowerCase().split(/[\s,;]+/).filter(Boolean) : [];
         const itsOc = (REABAST.ocItems[x.o.id]||[]).map(it=>{ const ref = String(it.referencia||'').trim(), M = (REABAST.referenciasMaestro||{})[ref]||{}, desc = it.descripcion||M.descripcion_en||'', cu = cbmRefInfo(ref).cbm, q = Number(it.cantidad)||0; return {ref, desc, q, st: infIngEstado(x.o.id, ref, x.o.fecha_orden, q), cbm: cu ? q*cu : null, hit: tk.length && tk.every(k=>(x.o.numero_oc+' '+(x.o.proveedor||'')+' '+ref+' '+desc).toLowerCase().includes(k))}; });
-        const subf = abOc ? `<tr><td colspan="8" style="background:var(--s1);padding:6px 14px;"><table style="font-size:11px;width:100%;"><thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th style="text-align:right;">CBM</th><th>Llega</th><th>Ingreso a inventario</th></tr></thead><tbody>${itsOc.map(i=>`<tr style="${i.hit?'background:#fef9c3;':''}"><td><b>${reabastEsc(i.ref)}</b></td><td>${reabastEsc(i.desc)}</td><td style="text-align:right;font-weight:700;">${infFmt(i.q)}</td><td style="text-align:right;">${i.cbm==null?'<span style="color:#b45309;">sin CBM</span>':infFmt(i.cbm,2)+' m³'}</td><td style="white-space:nowrap;">${x.fecha?x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}):'—'}${x.estimada?' ≈':''}</td><td>${infIngCelda(x.o.id, i.ref, i.q, i.st)}</td></tr>`).join('')}</tbody></table></td></tr>` : '';
+        const subf = abOc ? `<tr><td colspan="8" style="background:var(--s1);padding:6px 14px;"><table style="font-size:11px;width:100%;"><thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th style="text-align:right;">CBM</th><th>Llega</th><th style="text-align:right;">Inventario hoy</th><th>Ingreso a inventario</th></tr></thead><tbody>${itsOc.map(i=>`<tr style="${i.hit?'background:#fef9c3;':''}"><td><b>${reabastEsc(i.ref)}</b></td><td>${reabastEsc(i.desc)}</td><td style="text-align:right;font-weight:700;">${infFmt(i.q)}</td><td style="text-align:right;">${i.cbm==null?'<span style="color:#b45309;">sin CBM</span>':infFmt(i.cbm,2)+' m³'}</td><td style="white-space:nowrap;">${x.fecha?x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}):'—'}${x.estimada?' ≈':''}</td><td style="text-align:right;font-weight:700;">${(()=>{ const v = infInvHoy(i.ref); return v==null?'<span class="arte-mu">—</span>':infFmt(v); })()}</td><td>${infIngCelda(x.o.id, i.ref, i.q, i.st)}</td></tr>`).join('')}</tbody></table></td></tr>` : '';
         return `<tr onclick="INF.ocAb['${x.o.id}']=!INF.ocAb['${x.o.id}'];infPintar()" style="cursor:pointer;"><td><b>${abOc?'▾':'▸'} ${reabastEsc(x.o.numero_oc)}</b>${(()=>{ const its=itsOc, pend=its.filter(i=>i.st.pos&&!i.st.conf).length, ok=its.length&&its.every(i=>i.st.conf); return ok?' <span style="color:#16a34a;font-size:10px;font-weight:700;">✅ ingresó</span>':pend?' <span style="color:#b45309;font-size:10px;font-weight:700;" title="Ítems con ingreso a inventario por confirmar">📦 '+pend+'</span>':''; })()}</td><td>${reabastEsc(x.o.proveedor||'')}</td><td style="white-space:nowrap;">${x.fecha?x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short'}):'—'}${x.estimada?' <span class="arte-mu" title="Fecha estimada/recalculada">≈</span>':''}</td><td>${reabastEsc(x.etapa||'')}</td><td style="text-align:right;">${x.nItems}</td><td style="text-align:right;font-weight:700;">${infFmt(x.cbm)} m³${x.sin?` <span style="color:#b45309;" title="${x.sin} ítem(s) sin CBM">⚠️</span>`:''}</td><td>${reabastEsc(cont)}</td><td>${pre}</td></tr>`+subf; }).join('')}</tbody></table></div>`:''}
     </div>`; }).join('');
   b.innerHTML = h;
@@ -10921,6 +10978,12 @@ async function infIngDetalle(oc, ref){
   }
   ov.innerHTML = marco(tSeg+tSie+tCom);
 }
+// Barra de carga con porcentaje para todas las vistas que "cargan"
+function cargaHtml(txt){
+  const t = String(txt||'Cargando').replace(/[<>"]/g,'');
+  return '<div class="ld-pb" data-t0="'+Date.now()+'" data-txt="'+t+'" style="max-width:460px;margin:30px auto;text-align:center;"><div class="ld-t" style="font-size:13px;color:var(--mu);margin-bottom:8px;">'+t+'… 0%</div><div style="height:14px;background:var(--s1);border:1px solid var(--b1);border-radius:8px;overflow:hidden;"><div class="ld-b" style="width:0%;height:100%;background:var(--bl);"></div></div></div>';
+}
+setInterval(function(){ try{ document.querySelectorAll('.ld-pb').forEach(function(e){ const p = Math.round(Math.min(95, 95*(1-Math.exp(-(Date.now()-Number(e.dataset.t0))/3500)))); const b = e.querySelector('.ld-b'), t = e.querySelector('.ld-t'); if(b) b.style.width = p+'%'; if(t) t.textContent = e.dataset.txt+'… '+p+'%'; }); }catch(x){} }, 150);
 // ═══ Informes: ingresos recientes (qué entró, cuándo, con BL / DIM / notas) ═══
 function infIngRecientes(b){
   INF.ingDias = INF.ingDias || 45;
@@ -10936,17 +10999,17 @@ function infIngRecientes(b){
   const refsSeg = new Set(L.map(r=>pvClaveRef(r.ref)));
   const inv = []; Object.keys(INF_ING.byRef||{}).forEach(k=>{ if(refsSeg.has(k)) return; Object.keys(INF_ING.byRef[k].bod).forEach(bd=>{ const x = INF_ING.byRef[k].bod[bd]; if(x.fecha && x.fecha>=corte && x.exist>0) inv.push({ref:k, bd, fecha:x.fecha, exist:x.exist}); }); });
   const invF = inv.filter(r=>!tk.length || tk.every(k=>r.ref.toLowerCase().includes(k))).sort((a,c)=>c.fecha.localeCompare(a.fecha)).slice(0,150);
-  const filas = L.map(r=>{ const q = r.conf ? parseFloat(r.conf.cantidad_ingresada)||0 : 0, ok = r.conf && q>=r.c*0.99;
+  const filas = L.map(r=>{ const q = r.conf ? parseFloat(r.conf.cantidad_ingresada)||0 : 0, ok = r.conf && q>=r.c-0.5;
     const est = r.conf ? `<span style="color:#16a34a;font-weight:700;">✅ ${ok?'Confirmado':'Confirmado parcial'}</span><div style="font-size:10px;color:var(--mu);">${E(r.conf.confirmado_por||'')} · ${fn(q)} und${r.conf.nota?' · «'+E(r.conf.nota)+'»':''}</div>`
       : (r.o ? `<button class="btn btn-gr btn-xs" onclick="infIngConfirmar('${r.o.id}','${E(String(r.ref).replace(/['\\]/g,''))}',${r.c},'${r.ing}',${r.c})">Confirmar ingreso</button>` : '<span class="arte-mu">sin OC en ERP</span>');
-    return `<tr><td style="white-space:nowrap;font-weight:700;">${fd(r.ing)}</td><td><b>${E(r.oc)}</b> <a style="cursor:pointer;color:var(--bl);font-size:11px;" onclick="infIngDetalle('${E(r.oc)}','${E(String(r.ref).replace(/['\\]/g,''))}')">🔎 detalle</a></td><td style="font-family:monospace;">${E(r.ref)}</td><td>${E(r.desc)}</td><td style="text-align:right;font-weight:800;">${fn(r.c)}</td>
+    return `<tr><td style="white-space:nowrap;font-weight:700;">${fd(r.ing)}</td><td><b>${E(r.oc)}</b> <a style="cursor:pointer;color:var(--bl);font-size:11px;" onclick="infIngDetalle('${E(r.oc)}','${E(String(r.ref).replace(/['\\]/g,''))}')">🔎 detalle</a></td><td style="font-family:monospace;">${E(r.ref)}</td><td>${E(r.desc)}</td><td style="text-align:right;font-weight:800;">${fn(r.c)}</td><td style="text-align:right;">${(()=>{ const v = infInvHoy(r.ref); return v==null?'—':fn(v); })()}</td>
       <td style="font-family:monospace;font-size:11px;">${E(r.bl||'—')}</td><td>${E(r.dm||'—')}</td><td style="font-size:10.5px;">${E(r.rm||'')}</td><td style="font-size:11px;max-width:260px;">${E(r.cm||'')}</td><td>${est}</td></tr>`; }).join('');
   b.innerHTML = `<div class="card" style="margin-bottom:12px;"><div class="cb">
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px;"><div style="font-weight:800;font-size:14px;">📥 Ingresos recientes</div>
       <select class="inp" style="width:auto;" onchange="INF.ingDias=Number(this.value);infPintar()">${[15,30,45,90,180].map(n=>`<option value="${n}" ${INF.ingDias===n?'selected':''}>Últimos ${n} días</option>`).join('')}</select>
       <span class="arte-mu" style="font-size:11px;">Seguimiento: ${CE.meta?E(CE.meta.archivo||'')+' · '+new Date(CE.meta.fecha).toLocaleDateString('es-CO'):'sin cargar'} · DIM/RIM/notas aparecen al volver a subir el Seguimiento</span></div>
     <div class="arte-mu" style="font-size:11.5px;margin-bottom:8px;">Aquí confirmas que lo ingresado es correcto (botón «Confirmar ingreso»). También puedes hacerlo en el detalle del BL (📦 Ingreso a inventario de este BL) o en Por OC → «¿Es de esta orden? Confirmar». Lo ingresado se descuenta de «en camino» en todo el módulo.</div>
-    ${L.length?`<div class="tw"><table style="font-size:12px;"><thead><tr><th>Ingreso</th><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th>BL</th><th>DIM</th><th>RIM</th><th>Notas OC / BL</th><th>Confirmación</th></tr></thead><tbody>${filas}</tbody></table></div>`:'<div class="empty">Sin ingresos en el Seguimiento para ese periodo.</div>'}
+    ${L.length?`<div class="tw"><table style="font-size:12px;"><thead><tr><th>Ingreso</th><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th style="text-align:right;">Inventario hoy</th><th>BL</th><th>DIM</th><th>RIM</th><th>Notas OC / BL</th><th>Confirmación</th></tr></thead><tbody>${filas}</tbody></table></div>`:'<div class="empty">Sin ingresos en el Seguimiento para ese periodo.</div>'}
   </div></div>
   <div class="card"><div class="cb"><div style="font-weight:800;font-size:13px;margin-bottom:6px;">📦 Entradas detectadas en inventario (Siesa) que no están en el Seguimiento</div>
     ${invF.length?`<div class="tw"><table style="font-size:12px;"><thead><tr><th>Fecha</th><th>Ref.</th><th>Bodega</th><th style="text-align:right;">Existencia</th></tr></thead><tbody>${invF.map(r=>`<tr><td>${fd(r.fecha)}</td><td style="font-family:monospace;">${E(r.ref)}</td><td>${E(r.bd)}</td><td style="text-align:right;">${fn(r.exist)}</td></tr>`).join('')}</tbody></table></div>`:`<div class="arte-mu">${INF_ING.cargado?'Ninguna en el periodo.':'Cargando inventario…'}</div>`}
@@ -11121,6 +11184,7 @@ function acToggleMenu(){
 }
 
 function reabastPintar(){
+  try{ const pc = document.getElementById('pg-compras'); if(pc && pc.classList.contains('on') && typeof comprasPintar==='function') comprasPintar(); }catch(e){}
   const el = document.getElementById('reabast-content');
   if(!el) return;
   const esApro = reabastPuedeAprobar();
@@ -11194,7 +11258,7 @@ function reabastPintar(){
   else if(REABAST.tab==='proveedores'){ body.innerHTML = reabastHtmlProveedores(); reabastRepintarProveedores(); }
   else if(REABAST.tab==='panelcompras'){ body.innerHTML = reabastHtmlPanelCompras(); reabastCargarPanelCompras(); }
   else if(REABAST.tab==='referencias'){ body.innerHTML = reabastHtmlReferenciasShell(); reabastRepintarReferencias(); }
-  else if(REABAST.tab==='embarquebl' || REABAST.tab==='comext'){ const tb = REABAST.tab; body.innerHTML = '<div class="arte-mu" style="padding:20px;">Cargando…</div>'; cblCargar().then(()=>{ if(REABAST.tab!==tb) return; body.innerHTML = tb==='embarquebl' ? cblHtmlEmbarque() : cblHtmlCE(); if(tb==='embarquebl') cblPintarResumen(); }); }
+  else if(REABAST.tab==='embarquebl' || REABAST.tab==='comext'){ const tb = REABAST.tab; body.innerHTML = cargaHtml('Cargando'); cblCargar().then(()=>{ if(REABAST.tab!==tb) return; body.innerHTML = tb==='embarquebl' ? cblHtmlEmbarque() : cblHtmlCE(); if(tb==='embarquebl') cblPintarResumen(); }); }
   else if(REABAST.tab==='informes'){ body.innerHTML = infHtmlShell(); infPintar(); }
   else if(REABAST.tab==='dashboard') body.innerHTML = reabastHtmlDashboard();
   else if(REABAST.tab==='politica'){ REABAST._combinados = null; body.innerHTML = reabastHtmlPolitica(); reabastRepintarPolitica(); }
@@ -12271,7 +12335,7 @@ function lotesHtmlItemsFila(o){
   const filasIt = items.map((it,ix)=>`<tr class="seg-it" tabindex="0" title="Ver ficha del ítem" onclick="event.stopPropagation();itfAbrir('${o.id}',${ix})" onkeydown="if(event.key==='Enter')itfAbrir('${o.id}',${ix})">
       <td style="padding:3px 8px;font-family:monospace;">${reabastEsc(it.referencia||it.sku||it.codigo||'—')}</td>
       <td style="padding:3px 8px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${reabastEsc(it.descripcion||'—')}</td>
-      <td style="padding:3px 8px;text-align:right;">${Number(it.cantidad)||0}</td>
+      <td style="padding:3px 8px;text-align:right;">${ingCantHtml(o,it)}</td>
       <td style="padding:3px 8px;text-align:right;">${it.precio_fob_usd!=null?'US$ '+Number(it.precio_fob_usd).toFixed(2):'—'}</td>
       <td style="padding:3px 8px;">${reabastEsc(it.lote||'—')}</td>
       <td style="padding:3px 8px;"><span class="bdg bp" style="font-size:9.5px;">${reabastEsc(estadoCE)}</span></td>
@@ -12706,7 +12770,7 @@ function segRepintar(repintarTodo){
 
 // ── Confirmación por referencia (artes / producción / embarque) ──
 const REFCHK_QUIEN = 'Confirmación por referencia';
-const REFCHK = { datos:{}, cols:[{id:'arte',lbl:'Artes'},{id:'produccion',lbl:'Prod.'},{id:'embarque',lbl:'Emb.'}] };
+const REFCHK = { datos:{}, cols:[{id:'arte',lbl:'Artes'},{id:'produccion',lbl:'Prod.'},{id:'embarque',lbl:'Emb.'},{id:'recepcion_bodega',lbl:'Ingreso'}] };
 async function refchkCargar(){
   try{ const r = await sb.get('configuracion','clave=eq.oc_ref_checks'); REFCHK.datos = (r && r[0] && r[0].valor) ? (JSON.parse(r[0].valor)||{}) : {}; }
   catch(e){ console.warn('Confirmación por referencia:', e.message); return; }
@@ -12722,6 +12786,7 @@ function refchkEtapaOk(o, colId){
 function refchkEstado(o, it, colId){
   if(refchkEtapaOk(o, colId)) return {on:true, todo:true};
   const x = ((REFCHK.datos[o.id]||{})[refchkKey(it)]||{})[colId];
+  if(!x && colId==='recepcion_bodega'){ const c = Number(it.cantidad)||0; if(c>0 && ingDe(o, it.referencia)>=c-0.5) return {on:true, todo:false, x:{t:new Date().toISOString(), q:'según ingresos registrados (Seguimiento / confirmación)'}}; }
   return {on:!!x, todo:false, x};
 }
 function refchkConteo(o, colId){
@@ -12734,7 +12799,7 @@ async function refchkSincEtapa(ocId, colId){
   const o = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId); if(!o) return;
   const items = REABAST.ocItems[ocId]||[]; if(!items.length) return;
   const es = (REABAST.ocEtapas[ocId]||[]).filter(e=> colId==='arte' ? /^arte_/.test(e.etapa_id) : e.etapa_id===colId); if(!es.length) return;
-  const marcas = items.map(it=>((REFCHK.datos[ocId]||{})[refchkKey(it)]||{})[colId]);
+  const marcas = items.map(it=>{ const x = ((REFCHK.datos[ocId]||{})[refchkKey(it)]||{})[colId]; if(x) return x; const c = Number(it.cantidad)||0; return (colId==='recepcion_bodega' && c>0 && ingDe(o, it.referencia)>=c-0.5) ? {t:new Date().toISOString()} : null; });
   const todas = marcas.every(Boolean);
   try{
     if(todas){
@@ -12749,7 +12814,7 @@ async function refchkSincEtapa(ocId, colId){
         await sbReabast.patch('oc_etapas','id=eq.'+e.id, patch); Object.assign(e, patch); cambio = true;
       }
       if(cambio){ try{ await ocActivarDependientes(ocId, (REABAST.ocEtapas[ocId]||[])); }catch(x){}
-        if(typeof toast==='function') toast('Etapa '+(colId==='arte'?'Artes':colId==='produccion'?'Producción':'Embarque')+' terminada: todas las referencias confirmadas','ok'); }
+        if(typeof toast==='function') toast('Etapa '+(colId==='arte'?'Artes':colId==='produccion'?'Producción':colId==='recepcion_bodega'?'Ingreso a bodega':'Embarque')+' terminada: todas las referencias confirmadas','ok'); }
     } else {
       let cambio = false;
       for(const e of es){
@@ -13173,7 +13238,7 @@ function segHtmlItemsFila(o){
   const filasIt = items.map((it,ix)=>[it,ix]).filter(([it])=>!hayBus || esBus(it)).map(([it,ix])=>{ const abierto = ARTEPASOS.abiertos.has(o.id+'|'+ix), nA = artepasosListos(o.id,it), pA = artepasosPct(o,it), abiertoI = INSPP.abiertos.has(o.id+'|'+ix), nI = insppListos(o.id,it), pI = insppPct(o,it); return `<tr class="seg-it" style="${hayBus?'background:#fef9c3;box-shadow:inset 4px 0 0 #f59e0b;font-weight:700;':''}" tabindex="0" title="Ver ficha del ítem" onclick="event.stopPropagation();itfAbrir('${o.id}',${ix})" onkeydown="if(event.key==='Enter')itfAbrir('${o.id}',${ix})">
       <td style="padding:3px 8px;font-family:monospace;">${reabastEsc(it.referencia||it.sku||it.codigo||'—')}</td>
       <td style="padding:3px 8px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${reabastEsc(it.descripcion||'—')}</td>
-      <td style="padding:3px 8px;text-align:right;">${Number(it.cantidad)||0}</td>
+      <td style="padding:3px 8px;text-align:right;">${ingCantHtml(o,it)}</td>
       <td style="padding:3px 8px;text-align:right;">${it.precio_fob_usd!=null?'US$ '+Number(it.precio_fob_usd).toFixed(2):'—'}</td>
       <td style="padding:3px 8px;">${reabastEsc(it.lote||'—')}</td>
       <td style="padding:3px 8px;"><span class="bdg bp" style="font-size:9.5px;">${reabastEsc(estadoCE)}</span></td>
@@ -14210,10 +14275,484 @@ function tesoMarcarPagado(ocId){
 }
 
 // ═══ MÓDULO TESORERÍA (menú Operaciones → Tesorería) ═══
+// ═══ Módulo de compras (Luis): órdenes, confirmar PI, artes (con «todas») y resumen de anticipos / trading ×1.015 ═══
+const COMP = { tab:'ordenes', q:'', ab:{} };
+const COMP_USD = n => Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
+async function renderComprasMod(){
+  const el = document.getElementById('compras-mod'); if(!el) return;
+  arteInjectCss(); comprasEnvolverTodo();
+  el.innerHTML = cargaHtml('Cargando órdenes de compra');
+  try{
+    if(!REABAST.ordenesCompra || !REABAST.ordenesCompra.length || !REABAST._ocCargadasEn || Date.now()-REABAST._ocCargadasEn>60000){ await cargarOC(); REABAST._ocCargadasEn = Date.now(); }
+    if(!COMP._chk){ try{ await refchkCargar(); }catch(e){} COMP._chk = true; }
+    if(typeof ceCargarResumen==='function'){ try{ await ceCargarResumen(); }catch(e){} }
+    try{ await ingCargarConf(); }catch(e){}
+    try{ await tesoCargar(true); }catch(e){}
+  }catch(e){ el.innerHTML = '<div style="padding:20px;">No se pudieron cargar los datos: '+reabastEsc(e.message)+'</div>'; return; }
+  comprasPintar();
+}
+function comprasOCs(){
+  const tk = (COMP.q||'').toLowerCase().split(/[\s,;]+/).filter(Boolean);
+  return (REABAST.ordenesCompra||[]).filter(o=>{
+    if((o.estado_general||'activa')!=='activa' || ocIngresada(o)) return false;
+    if(!comprasFilOk(o)) return false;
+    if(!tk.length) return true;
+    const base = (o.numero_oc+' '+(o.proveedor||'')+' '+(REABAST.ocItems[o.id]||[]).map(i=>(i.referencia||'')+' '+(i.descripcion||'')).join(' ')).toLowerCase();
+    return tk.every(k=>base.includes(k));
+  }).sort((a,b)=>ocComparar(b.numero_oc, a.numero_oc));
+}
+function comprasEtapa(o, id){ return (REABAST.ocEtapas[o.id]||[]).find(e=>e.etapa_id===id); }
+function comprasBadge(e, txtOk){
+  if(!e) return '<span class="arte-mu">—</span>';
+  if(e.estado==='completada') return '<span style="color:#16a34a;font-weight:700;">✅ '+(txtOk||'Listo')+'</span><div style="font-size:10px;color:var(--mu);">'+(e.fecha_fin?new Date(e.fecha_fin).toLocaleDateString('es-CO',{day:'2-digit',month:'short'}):'')+'</div>';
+  return e.estado==='en_curso' ? '<span style="color:#b45309;font-weight:700;">⏳ En curso</span>' : '<span class="arte-mu">Pendiente</span>';
+}
+function comprasResumenOC(o){
+  const its = REABAST.ocItems[o.id]||[]; let fob = 0, inter = 0, cant = 0;
+  const det = its.map(it=>{ const c = Number(it.cantidad)||0, f = it.precio_fob_usd!=null ? Number(it.precio_fob_usd) : 0, pi = ocPrecioIntercompania(f); fob += c*f; inter += c*pi.valor; cant += c; return {it, c, f, pi:pi.valor, txt:pi.txt}; });
+  const pct = o.deposito_pct!=null ? Number(o.deposito_pct) : 0, extra = Number(o.costo_extra_usd)||0, dep = (fob+extra)*pct;
+  return {fob, inter, cant, pct, extra, dep, saldo:inter+extra-dep, det};
+}
+function comprasPintar(){
+  const el = document.getElementById('compras-mod'); if(!el) return;
+  const E = reabastEsc, T = COMP.tab, L0 = comprasOCs(), kT = COMP_TABK[T], soloP = !!kT && !COMP.todas[T], L1 = soloP ? L0.filter(o=>!comprasListo(o,kT)) : L0, L = (COMP.venc && T==='produccion') ? L1.filter(comprasVencida) : L1, bt = (id,t)=>`<button class="btn btn-sm ${T===id?'btn-bl':'btn-g'}" style="border-radius:0;" onclick="COMP.tab='${id}';comprasPintar()">${t}</button>`;
+  let body = '';
+  const tabF = LL => T==='pi' ? comprasTabPI(LL) : T==='artes' ? comprasTabArtes(LL) : T==='produccion' ? comprasTabProduccion(LL) : T==='embarque' ? comprasTabEmbarque(LL) : T==='inspeccion' ? comprasTabInspeccion(LL) : T==='trading' ? comprasTabTrading(LL) : T==='anticipos' ? comprasTabAnticipos(LL) : comprasTabOrdenes(LL);
+  const fo = COMP.foco ? (REABAST.ordenesCompra||[]).find(x=>String(x.id)===String(COMP.foco)) : null, Lr = fo ? L.filter(o=>o.id!==fo.id) : L;
+  body = (fo ? `<div style="border:2px solid var(--acc);background:#fffbeb;border-radius:12px;padding:10px;margin-bottom:14px;"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><span style="font-size:14px;">🎯 Estás trabajando en <b>${E(fo.numero_oc)}</b></span><span class="arte-mu">${E(fo.proveedor||'')}</span><button class="btn btn-g btn-xs" style="margin-left:auto;" onclick="comprasFoco(null)">✕ Dejar de trabajar en esta</button></div>${tabF([fo])}</div>`+(Lr.length?'<div class="arte-mu" style="margin:4px 2px 8px;font-weight:700;">Demás órdenes</div>':'') : '') + (Lr.length ? tabF(Lr) : (fo ? '' : tabF(L)));
+  el.innerHTML = `<div style="padding:14px;">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+      <div style="font-weight:800;font-size:16px;">🛒 Módulo de compras</div>
+      <div style="display:inline-flex;border:1px solid var(--b2);border-radius:8px;overflow:hidden;flex-wrap:wrap;">${bt('ordenes','📝 Órdenes')}${bt('pi','📑 PI')}${bt('artes','🎨 Artes')}${bt('anticipos','💸 Anticipos')}${bt('produccion','🏭 Producción')}${bt('inspeccion','🔍 Inspección')}${bt('embarque','🚢 Embarque')}${bt('trading','🏷️ Factura trading')}</div>
+      <input class="inp" id="comp-q" placeholder="🔎 Buscar OC, proveedor o referencia…" value="${E(COMP.q)}" style="flex:1;min-width:220px;max-width:380px;" oninput="COMP.q=this.value;clearTimeout(COMP._t);COMP._t=setTimeout(()=>{comprasPintar();const i=document.getElementById('comp-q');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},300)">
+      ${reabastEsAdmin()?'<button class="btn btn-bl btn-sm" onclick="abrirModalOC()">+ Nueva OC</button>':''}
+      ${comprasFiltroUI()}
+      <button class="btn btn-g btn-sm" onclick="comprasExcel()" title="Descargar las órdenes activas con su estado por etapa">⬇ Excel</button>
+      ${kT?`<label style="font-size:12px;display:flex;gap:5px;align-items:center;cursor:pointer;"><input type="checkbox" ${soloP?'checked':''} onchange="COMP.todas['${T}']=!this.checked;comprasPintar()">⏳ Solo pendientes de esta etapa</label>`:''}
+      <span class="arte-mu" style="font-size:11px;margin-left:auto;">${soloP?L.length+' pendientes de '+L0.length:L.length+' OC activas'}</span>
+    </div>${comprasPanel()}${body}</div>${comprasBarraDeshacer()}`;
+}
+COMP.ord = {};
+function comprasTh(tab, k, lbl, num, extra){
+  const o = COMP.ord[tab]||{}, fl = o.k===k ? (o.d>0?' ▲':' ▼') : ' <span style="opacity:.3;">↕</span>';
+  return `<th style="cursor:pointer;user-select:none;white-space:nowrap;${num?'text-align:right;':''}${extra||''}" title="Ordenar por esta columna" onclick="comprasSort('${tab}','${k}',${num?1:0})">${lbl}${fl}</th>`;
+}
+function comprasSort(tab, k, num){ const o = COMP.ord[tab]||{}; COMP.ord[tab] = (o.k===k) ? {k, d:-o.d, num} : {k, d: num?-1:1, num}; comprasPintar(); }
+function comprasOrdenar(tab, arr, G){
+  const o = COMP.ord[tab]; if(!o || !G[o.k]) return arr;
+  return arr.slice().sort((a,b)=>{ const x = G[o.k](a), y = G[o.k](b); let r = (typeof x==='number'&&typeof y==='number') ? x-y : String(x==null?'':x).localeCompare(String(y==null?'':y),'es',{numeric:true}); return r*o.d; });
+}
+function comprasStKey(e){ return !e ? 0 : e.estado==='completada' ? 2+(e.fecha_fin?+new Date(e.fecha_fin)/1e14:0) : e.estado==='en_curso' ? 1 : 0.5; }
+function comprasItemOk(o, it){
+  const tk = (COMP.q||'').toLowerCase().split(/[\s,;]+/).filter(Boolean); if(!tk.length) return true;
+  const t = (o.numero_oc+' '+(o.proveedor||'')+' '+(it.referencia||'')+' '+(it.descripcion||'')).toLowerCase();
+  return tk.every(k=>t.includes(k));
+}
+function comprasAb(o){ return COMP.q ? COMP.ab[o.id]!==false : !!COMP.ab[o.id]; }
+function comprasTogg(id){ const o = (REABAST.ordenesCompra||[]).find(x=>x.id===id); COMP.ab[id] = o ? !comprasAb(o) : !COMP.ab[id]; comprasPintar(); }
+function comprasItemsDet(o, cols){
+  const its = (REABAST.ocItems[o.id]||[]).filter(it=>comprasItemOk(o,it)), E = reabastEsc, fn = n=>Number(n||0).toLocaleString('es-CO');
+  const rows = its.map(it=>{
+    const c = Number(it.cantidad)||0, ing = ingDe(o, it.referencia), sal = ocPendItem(o, it), inv = infInvHoy(it.referencia), r = String(it.referencia||'').replace(/[\\']/g,'');
+    const salC = ing>0 ? (sal<=0.5 ? '<span style="color:#16a34a;font-weight:700;">✅ completa</span>' : `<b style="color:#b45309;">${fn(Math.round(sal))}</b> <a href="javascript:void(0)" style="color:var(--bl);font-size:10.5px;" onclick="event.stopPropagation();ingCerrarSaldo('${o.id}','${r}')">cerrar saldo</a>`) : `<span class="arte-mu">${fn(c)} (sin ingresos)</span>`;
+    return `<tr><td style="font-family:monospace;"><b>${E(it.referencia||'')}</b></td><td>${E(it.descripcion||'')}</td><td style="text-align:right;">${fn(c)}</td><td style="text-align:right;color:#16a34a;font-weight:700;">${ing>0?fn(Math.round(ing)):'—'}</td><td style="text-align:right;">${salC}</td><td style="text-align:right;">${it.precio_fob_usd!=null?COMP_USD(it.precio_fob_usd):'—'}</td><td style="text-align:right;">${inv==null?'—':fn(Math.round(inv))}</td></tr>`; }).join('');
+  return `<tr><td colspan="${cols}" style="background:var(--s1);padding:6px 14px;"><table style="font-size:11.5px;width:100%;"><thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Pedida</th><th style="text-align:right;">Ingresada</th><th style="text-align:right;">Saldo pendiente</th><th style="text-align:right;">FOB unit. US$</th><th style="text-align:right;">Inventario hoy</th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="arte-mu">Ningún ítem coincide con el filtro</td></tr>'}</tbody></table></td></tr>`;
+}
+function comprasTabOrdenes(L){
+  const E = reabastEsc, ed = reabastEsAdmin();
+  if(!L.length) return '<div class="empty">No hay órdenes activas con ese filtro.</div>';
+  const cant = o=>(REABAST.ocItems[o.id]||[]).filter(i=>comprasItemOk(o,i)).reduce((a,i)=>a+(Number(i.cantidad)||0),0);
+  L = comprasOrdenar('ordenes', L, {oc:o=>ocNumKeyC(o), prov:o=>o.proveedor||'', fecha:o=>o.fecha_orden?+new Date(o.fecha_orden):0, items:o=>(REABAST.ocItems[o.id]||[]).length, cant, oci:o=>comprasStKey(comprasEtapa(o,'oc_creada')), pi:o=>comprasStKey(comprasEtapa(o,'pi_confirmada')), ant:o=>comprasStKey(comprasEtapa(o,'anticipo_pagado'))});
+  const T = (k,l,n)=>comprasTh('ordenes',k,l,n);
+  return `<div class="tw"><table style="font-size:12px;"><thead><tr>${T('oc','OC')}${T('prov','Proveedor')}${T('fecha','Fecha')}${T('items','Ítems',1)}${T('cant','Cantidad',1)}${T('oci','Enviar OCI')}${T('pi','PI confirmada')}${T('ant','Anticipo')}<th></th></tr></thead><tbody>${L.map(o=>{
+    const its = REABAST.ocItems[o.id]||[], pi = comprasEtapa(o,'pi_confirmada'), oci = comprasEtapa(o,'oc_creada'), an = comprasEtapa(o,'anticipo_pagado'), ab = comprasAb(o), nv = its.filter(i=>comprasItemOk(o,i)).length;
+    const piCel = pi && pi.estado!=='completada' ? (pi.estado==='pendiente' ? '<span class="arte-mu">Falta enviar la OCI</span>' : ed ? `<button class="btn btn-gr btn-xs" onclick="event.stopPropagation();comprasConfirmarPI('${o.id}')">Subir y confirmar PI</button>` : '<span class="arte-mu">Pendiente</span>') : comprasBadge(pi,'Confirmada');
+    const ociCel = oci && oci.estado!=='completada' && ed ? `${comprasBadge(oci,'Enviada')}<button class="btn btn-gr btn-xs" onclick="event.stopPropagation();comprasEnviarOCI('${o.id}')">Enviar OCI</button>` : comprasBadge(oci,'Enviada');
+    const anCel = comprasBadge(an,'Pagado') + (an && an.estado!=='completada' ? '<a href="javascript:void(0)" style="font-size:10.5px;color:var(--bl);" onclick="event.stopPropagation();goPage(\'tesoreria\')">Tesorería ›</a>' : '');
+    return `<tr style="cursor:pointer;" onclick="comprasTogg('${o.id}')"><td><b>${ab?'▾':'▸'} ${E(o.numero_oc)}</b></td><td>${E(o.proveedor||'')}</td><td style="white-space:nowrap;">${o.fecha_orden?new Date(o.fecha_orden+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}):'—'}</td><td style="text-align:right;">${nv<its.length?nv+' de '+its.length:its.length}</td><td style="text-align:right;">${infFmt(cant(o))}</td><td>${ociCel}</td><td>${piCel}</td><td>${anCel}</td><td style="white-space:nowrap;"><button class="btn btn-bl btn-xs" onclick="event.stopPropagation();comprasFoco('${o.id}')">🎯 Trabajar</button> <button class="btn btn-g btn-xs" onclick="event.stopPropagation();reabastAbrirDetalleOC('${o.id}')">Ver OC</button></td></tr>`+(ab?comprasItemsDet(o,9):''); }).join('')}</tbody></table></div>`;
+}
+function ocNumKeyC(o){ const m = String(o.numero_oc||'').match(/(\d+)\s*$/); return (m?+m[1]:0) + (/^OCI/i.test(o.numero_oc)?0.5:0); }
+async function comprasConfirmarPI(ocId){
+  const o = (REABAST.ordenesCompra||[]).find(x=>String(x.id)===String(ocId)); if(!o) return; const e = comprasEtapa(o,'pi_confirmada'); if(!e) return;
+  const oci = comprasEtapa(o,'oc_creada'); if(oci && oci.estado!=='completada'){ if(typeof toast==='function') toast('Primero hay que enviar la OCI al proveedor','wa'); return; }
+  await ocMarcarEtapaCompleta(o.id, e.id);   // abre la misma tarjeta del tablero: PI sellada, adjunto y comentario
+  comprasPintar();
+}
+async function comprasEnviarOCI(ocId){
+  const o = (REABAST.ordenesCompra||[]).find(x=>String(x.id)===String(ocId)); if(!o) return; const e = comprasEtapa(o,'oc_creada'); if(!e) return;
+  await ocMarcarEtapaCompleta(o.id, e.id);
+  comprasPintar();
+}
+function comprasAvisoProd(o){ const p = comprasEtapa(o,'produccion'); return p && p.estado!=='completada' ? '<span style="color:#b45309;font-size:11px;font-weight:700;">⚠ Producción aún no terminada</span>' : ''; }
+function comprasRequisitos(o){
+  const ok = (id)=>{ const e = comprasEtapa(o,id); return !e || e.estado==='completada'; };
+  const k = refchkConteo(o,'arte'), arteOk = refchkEtapaOk(o,'arte') || (k.t>0 && k.n===k.t);
+  const ch = (t,v)=>`<span style="display:inline-block;margin:1px 3px 1px 0;padding:1px 6px;border-radius:99px;font-size:10.5px;font-weight:700;background:${v?'#dcfce7':'#fef3c7'};color:${v?'#166534':'#92400e'};">${v?'✅':'⏳'} ${t}</span>`;
+  return ch('PI',ok('pi_confirmada'))+ch('Anticipo',ok('anticipo_pagado'))+ch('Artes'+(arteOk?'':' '+k.n+'/'+k.t),arteOk);
+}
+function comprasOCBloque(o, extraHead, thead, rows){
+  const E = reabastEsc;
+  return `<div class="card" style="margin-bottom:10px;"><div style="padding:8px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--b1);"><b>${E(o.numero_oc)}</b><span class="arte-mu">${E(o.proveedor||'')}</span>${extraHead||''}</div><div class="tw"><table style="font-size:12px;"><thead><tr>${thead}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+function comprasTabArtes(L){
+  const E = reabastEsc, ed = reabastEsAdmin(); if(!L.length) return '<div class="empty">No hay órdenes activas con ese filtro.</div>';
+  const pend = L.filter(o=>{ const k = refchkConteo(o,'arte'); return k.t && k.n<k.t && !refchkEtapaOk(o,'arte'); });
+  const th = ARTEPASOS_DEF.map(p=>`<th style="text-align:center;font-size:10px;max-width:84px;white-space:normal;" title="${E(p.area+': '+p.det)}">${p.n}. ${E(p.t)}<div class="arte-mu" style="font-size:9px;">${E(p.area)}</div></th>`).join('');
+  return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">${ed?`<button class="btn btn-gr btn-sm" ${pend.length?'':'disabled'} onclick="comprasArtesTodas()">✔ Confirmar todas las artes de las OC visibles (${pend.length})</button>`:''}<span class="arte-mu" style="font-size:11px;">Cada referencia pasa por los 7 pasos del arte (en orden). El paso 7 deja la referencia con el arte terminado; al quedar todas, la etapa de Artes de la OC se termina sola.</span></div>`
+  + L.map(o=>{ const k = refchkConteo(o,'arte'), todo = refchkEtapaOk(o,'arte'), its = REABAST.ocItems[o.id]||[];
+    const head = `<span style="font-weight:700;color:${k.n===k.t&&k.t?'#16a34a':'var(--mu)'};">${k.n}/${k.t} artes</span>` + (ed&&!todo&&k.t&&k.n<k.t?`<button class="btn btn-gr btn-xs" style="margin-left:auto;" onclick="refchkTodas('${o.id}','arte',true,event)">✔ Seleccionar todas</button>`:'');
+    const rows = its.map((it,ix)=>{ if(!comprasItemOk(o,it)) return ''; const d = artepasosDe(o.id,it), st = refchkEstado(o,it,'arte');
+      const cel = ARTEPASOS_DEF.map((p,i)=>{ const x = d[p.n], ok = !!x || st.on, prevOk = i===0 || !!d[ARTEPASOS_DEF[i-1].n] || st.on, dis = (!x && !prevOk) || !artepasosPuede(p) || st.todo || (st.on && !x);
+        return `<td style="text-align:center;" title="${x?E((x.q||'')+' · '+new Date(x.t).toLocaleDateString('es-CO')):''}"><input type="checkbox" ${ok?'checked':''} ${dis?'disabled':''} style="width:16px;height:16px;accent-color:#16a34a;cursor:pointer;" onchange="artepasosMarcar('${o.id}',${ix},${p.n},this.checked,event)"></td>`; }).join('');
+      const hechos = ARTEPASOS_DEF.filter(p=>d[p.n]).length, sig = ARTEPASOS_DEF.find(p=>!d[p.n]), puede = hechos===7 ? false : (sig && artepasosPuede(sig));
+      const bt = hechos===7||(st.on&&!hechos) ? '<span class="arte-mu">✅</span>' : puede ? `<button class="btn btn-gr btn-xs" style="white-space:nowrap;" onclick="comprasArteItem('${o.id}',${ix},true)">✔ Seleccionar todas</button>` : '';
+      return `<tr><td style="font-family:monospace;"><b>${E(it.referencia||'')}</b></td><td>${E(it.descripcion||'')}</td><td style="text-align:right;">${infFmt(it.cantidad)}</td>${cel}<td style="text-align:center;">${bt}</td></tr>`; }).join('');
+    return comprasOCBloque(o, head, `<th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th>${th}<th style="text-align:center;font-size:10px;">Todos los pasos<div class="arte-mu" style="font-size:9px;">de la referencia</div></th>`, rows); }).join('');
+}
+async function comprasArteItem(ocId, ix, on){
+  const it = (REABAST.ocItems[ocId]||[])[ix]; if(!it) return;
+  if(!on){ await artepasosMarcar(ocId, ix, 1, false, null); return; }
+  const k = refchkKey(it), quien = (CU && CU.nombre) || '', t = new Date().toISOString(), d0 = artepasosDe(ocId, it);
+  const lista = []; for(const p of ARTEPASOS_DEF){ if(d0[p.n]) continue; if(!artepasosPuede(p)) break; lista.push(p.n); }
+  if(!lista.length) return;
+  const aplicar = d => { d[ocId] = d[ocId]||{}; d[ocId][k] = d[ocId][k]||{}; lista.forEach(n=>{ d[ocId][k][n] = {t, q:quien}; }); };
+  aplicar(ARTEPASOS.datos); reabastPintar();
+  try{
+    let remoto = {}; try{ const r = await sb.get('configuracion','clave=eq.oc_arte_pasos'); if(r && r[0] && r[0].valor) remoto = JSON.parse(r[0].valor)||{}; }catch(e){}
+    aplicar(remoto); ARTEPASOS.datos = remoto;
+    await sb.upsert('configuracion', {clave:'oc_arte_pasos', valor:JSON.stringify(remoto), tipo:'json'}, 'clave');
+  }catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); return; }
+  if(lista.includes(7)){ try{ await refchkToggle(ocId, ix, 'arte', true, null, t); }catch(e){} }
+}
+// ── Deshacer (Módulo de compras): cada acción guarda cómo estaba la OC antes y se puede revertir ──
+COMP.undo = null; COMP._d = 0;
+const COMP_ETF = ['estado','fecha_inicio','fecha_fin','dias_reales','completado_por'];
+const COMP_CFG = [['ref',()=>REFCHK,'oc_ref_checks'],['arte',()=>ARTEPASOS,'oc_arte_pasos'],['insp',()=>INSPP,'oc_insp_pasos']];
+function comprasNumOC(id){ const o = (REABAST.ordenesCompra||[]).find(x=>String(x.id)===String(id)); return o ? o.numero_oc : ''; }
+function comprasSnap(ids){
+  const cfg = {}, et = {};
+  COMP_CFG.forEach(([k,g])=>{ cfg[k] = {}; ids.forEach(id=>{ const v = (g().datos||{})[id]; cfg[k][id] = v===undefined ? null : JSON.stringify(v); }); });
+  ids.forEach(id=>{ et[id] = (REABAST.ocEtapas[id]||[]).map(e=>{ const r = {id:e.id}; COMP_ETF.forEach(f=>{ r[f] = e[f]===undefined ? null : e[f]; }); return r; }); });
+  return {cfg, et};
+}
+function comprasEnvolver(nombre, etq, idsFn){
+  const orig = window[nombre]; if(typeof orig!=='function' || orig._w) return;
+  const w = async function(...a){
+    const pg = document.getElementById('pg-compras');
+    if(!pg || !pg.classList.contains('on') || COMP._d>0) return orig.apply(this,a);
+    const ids = idsFn(a).filter(Boolean), antes = comprasSnap(ids); COMP._d++;
+    try{ return await orig.apply(this,a); }
+    finally{ COMP._d--; if(JSON.stringify(antes)!==JSON.stringify(comprasSnap(ids))){ let t = ''; try{ t = etq(a); }catch(e){} COMP.undo = {txt:t, ids, antes}; if(ids.length===1) comprasFoco0(ids[0]); } comprasPintar(); }
+  };
+  w._w = 1; window[nombre] = w;
+}
+function comprasEnvolverTodo(){
+  if(COMP._env) return; COMP._env = true;
+  try{ COMP.foco = localStorage.getItem('ilx_comp_foco') || null; }catch(e){}
+  const ref = (a)=>{ const it = (REABAST.ocItems[a[0]]||[])[a[1]]; return (it?it.referencia:'')+' · '+comprasNumOC(a[0]); };
+  const col = {arte:'Arte', produccion:'Producción', embarque:'Embarque', recepcion_bodega:'Ingreso'};
+  comprasEnvolver('refchkToggle', a=>(a[3]?'Marcaste ':'Quitaste ')+(col[a[2]]||a[2])+' de '+ref(a), a=>[a[0]]);
+  comprasEnvolver('refchkTodas', a=>(a[2]?'Marcaste todas las referencias (':'Quitaste todas (')+(col[a[1]]||a[1])+') de '+comprasNumOC(a[0]), a=>[a[0]]);
+  comprasEnvolver('artepasosMarcar', a=>(a[3]?'Marcaste':'Quitaste')+' el paso '+a[2]+' del arte de '+ref(a), a=>[a[0]]);
+  comprasEnvolver('comprasArteItem', a=>(a[2]?'Marcaste todos los pasos del arte de ':'Quitaste los pasos del arte de ')+ref(a), a=>[a[0]]);
+  comprasEnvolver('insppMarcar', a=>(a[3]?'Marcaste':'Quitaste')+' el paso '+a[2]+' de inspección de '+ref(a), a=>[a[0]]);
+  comprasEnvolver('comprasConfirmarPI', a=>'Confirmaste la PI de '+comprasNumOC(a[0]), a=>[a[0]]);
+  comprasEnvolver('comprasArtesTodas', a=>'Confirmaste las artes de varias OC', a=>comprasOCs().map(o=>o.id));
+}
+async function comprasDeshacer(){
+  const u = COMP.undo; if(!u) return; COMP.undo = null; comprasPintar();
+  try{
+    for(const [k,g,clave] of COMP_CFG){
+      const mem = g().datos = g().datos||{}; let cambio = false;
+      u.ids.forEach(id=>{ const a = u.antes.cfg[k][id], h = mem[id]===undefined ? null : JSON.stringify(mem[id]); if(a!==h){ cambio = true; if(a===null) delete mem[id]; else mem[id] = JSON.parse(a); } });
+      if(!cambio) continue;
+      let remoto = {}; try{ const r = await sb.get('configuracion','clave=eq.'+clave); if(r && r[0] && r[0].valor) remoto = JSON.parse(r[0].valor)||{}; }catch(e){}
+      u.ids.forEach(id=>{ const a = u.antes.cfg[k][id]; if(a===null) delete remoto[id]; else remoto[id] = JSON.parse(a); });
+      g().datos = remoto;
+      await sb.upsert('configuracion', {clave, valor:JSON.stringify(remoto), tipo:'json'}, 'clave');
+    }
+    for(const id of u.ids){
+      for(const r of (u.antes.et[id]||[])){
+        const e = (REABAST.ocEtapas[id]||[]).find(x=>x.id===r.id); if(!e) continue;
+        const patch = {}; COMP_ETF.forEach(f=>{ if((e[f]===undefined?null:e[f])!==r[f]) patch[f] = r[f]; });
+        if(Object.keys(patch).length){ await sbReabast.patch('oc_etapas','id=eq.'+r.id, patch); Object.assign(e, patch); }
+      }
+    }
+    if(typeof toast==='function') toast('↩ Deshecho: '+(u.txt||'última acción'),'ok');
+  }catch(err){ if(typeof toast==='function') toast('No se pudo deshacer: '+err.message,'er'); }
+  try{ reabastPintar(); }catch(e){} comprasPintar();
+}
+function comprasBarraDeshacer(){
+  const u = COMP.undo; if(!u) return '';
+  return `<div style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:900;background:#1e293b;color:#fff;border-radius:10px;padding:9px 14px;display:flex;gap:12px;align-items:center;box-shadow:0 8px 24px rgba(0,0,0,.35);max-width:94vw;font-size:12.5px;"><span>${reabastEsc(u.txt||'Acción realizada')}</span><button class="btn btn-p btn-xs" onclick="comprasDeshacer()">↩ Deshacer</button><span style="cursor:pointer;opacity:.7;" onclick="COMP.undo=null;comprasPintar()">✕</span></div>`;
+}
+function comprasFoco0(id){ COMP.foco = id; try{ localStorage.setItem('ilx_comp_foco', String(id)); }catch(e){} }
+function comprasFoco(id){ COMP.foco = id||null; try{ if(id) localStorage.setItem('ilx_comp_foco', String(id)); else localStorage.removeItem('ilx_comp_foco'); }catch(e){} comprasPintar(); }
+COMP.fil = {}; COMP.filAb = false; COMP.todas = {};
+const COMP_TABK = {pi:'pi', artes:'arte', anticipos:'anticipo', produccion:'produccion', inspeccion:'inspeccion', embarque:'embarque'};
+const COMP_FIL_DEF = [['oci','Enviar OCI'],['pi','PI confirmada'],['anticipo','Anticipo pagado'],['arte','Artes confirmadas'],['produccion','Producción terminada'],['inspeccion','Inspección'],['embarque','Embarque']];
+function comprasListo(o, k){
+  const et = id=>{ const e = comprasEtapa(o,id); return !e || e.estado==='completada'; };
+  if(k==='oci') return et('oc_creada'); if(k==='pi') return et('pi_confirmada'); if(k==='anticipo') return et('anticipo_pagado');
+  if(k==='produccion') return et('produccion'); if(k==='inspeccion') return et('inspeccion_calidad');
+  if(k==='arte'){ const c = refchkConteo(o,'arte'); return refchkEtapaOk(o,'arte') || (c.t>0 && c.n===c.t); }
+  if(k==='embarque'){ const c = refchkConteo(o,'embarque'); return refchkEtapaOk(o,'embarque') || et('embarque') && !!comprasEtapa(o,'embarque') || (c.t>0 && c.n===c.t); }
+  return true;
+}
+function comprasFilOk(o){ return COMP_FIL_DEF.every(([k])=>{ const v = COMP.fil[k]; if(!v) return true; const l = comprasListo(o,k); return v==='pend' ? !l : l; }); }
+function comprasFiltroUI(){
+  const n = COMP_FIL_DEF.filter(([k])=>COMP.fil[k]).length;
+  const sel = ([k,l])=>`<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin:5px 0;"><span style="font-size:12px;">${l}</span><select class="inp" style="width:130px;padding:3px 6px;font-size:12px;" onchange="COMP.fil['${k}']=this.value;comprasPintar()"><option value="">Todas</option><option value="pend" ${COMP.fil[k]==='pend'?'selected':''}>⏳ Pendientes</option><option value="ok" ${COMP.fil[k]==='ok'?'selected':''}>✅ Listas</option></select></div>`;
+  return `<div style="position:relative;"><button class="btn btn-sm ${n?'btn-p':'btn-g'}" onclick="COMP.filAb=!COMP.filAb;comprasPintar()">🎚️ Filtros avanzados${n?' ('+n+')':''}</button>${COMP.filAb?`<div style="position:absolute;top:34px;left:0;z-index:60;background:#fff;border:1px solid var(--b2);border-radius:10px;padding:10px 12px;width:290px;box-shadow:0 10px 28px rgba(0,0,0,.2);"><div style="font-weight:800;font-size:12.5px;margin-bottom:4px;">Filtrar órdenes por estado</div>${COMP_FIL_DEF.map(sel).join('')}<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;"><button class="btn btn-g btn-xs" onclick="COMP.fil={};comprasPintar()">Limpiar</button><button class="btn btn-bl btn-xs" onclick="COMP.filAb=false;comprasPintar()">Cerrar</button></div></div>`:''}</div>`;
+}
+function comprasTabPI(L){
+  const E = reabastEsc, ed = reabastEsAdmin(); if(!L.length) return '<div class="empty">No hay órdenes activas con ese filtro.</div>';
+  const cantF = o=>(REABAST.ocItems[o.id]||[]).filter(i=>comprasItemOk(o,i)).reduce((a,i)=>a+(Number(i.cantidad)||0),0);
+  L = comprasOrdenar('pi', L, {oc:o=>ocNumKeyC(o), prov:o=>o.proveedor||'', fecha:o=>o.fecha_orden?+new Date(o.fecha_orden):0, cant:cantF, fob:o=>comprasResumenOC(o).fob, inter:o=>comprasResumenOC(o).inter, lead:o=>{ const p = comprasEtapa(o,'produccion'); return p&&p.dias_esperado!=null?Number(p.dias_esperado):0; }, est:o=>comprasStKey(comprasEtapa(o,'pi_confirmada'))});
+  const T = (k,l,n)=>comprasTh('pi',k,l,n);
+  const pend = L.filter(o=>{ const e = comprasEtapa(o,'pi_confirmada'); return e && e.estado!=='completada'; }).length;
+  return `<div class="arte-mu" style="font-size:11px;margin-bottom:8px;">${pend} de ${L.length} órdenes con la PI por confirmar. «Subir y confirmar PI» abre la misma tarjeta del tablero (PI del proveedor, sello ILUMAX TRADING, diferencias contra la OC y lead time). Requiere que la OCI ya esté enviada.</div>
+  <div class="tw"><table style="font-size:12px;"><thead><tr>${T('oc','OC')}${T('prov','Proveedor')}${T('fecha','Fecha OC')}${T('cant','Cantidad',1)}${T('fob','Valor FOB US$',1)}${T('inter','Valor ×1,015 US$',1)}${T('lead','Lead time (d)',1)}${T('est','PI')}<th>PI sellada</th><th></th></tr></thead><tbody>${L.map(o=>{
+    const pi = comprasEtapa(o,'pi_confirmada'), oci = comprasEtapa(o,'oc_creada'), prod = comprasEtapa(o,'produccion'), r = comprasResumenOC(o), ab = comprasAb(o);
+    const bot = pi && pi.estado!=='completada' ? (pi.estado==='pendiente' ? '<span class="arte-mu">Falta enviar la OCI</span>' : ed ? `<button class="btn btn-gr btn-xs" onclick="event.stopPropagation();comprasConfirmarPI('${o.id}')">Subir y confirmar PI</button>` : '<span class="arte-mu">Pendiente</span>') : '';
+    const adj = pi && pi.adjunto_url ? `<a href="${pi.adjunto_url}" target="_blank" onclick="event.stopPropagation()" style="color:var(--bl);">📎 Ver PI</a> <button class="btn btn-bl btn-xs" onclick="event.stopPropagation();comprasEnviarPI('${o.id}')">📨 Enviar PI al proveedor</button>` : '<span class="arte-mu">—</span>';
+    const nota = pi && pi.estado==='completada' && pi.comentario_extra ? `<div class="arte-mu" style="font-size:10px;max-width:320px;white-space:normal;">${E(pi.comentario_extra)}</div>` : '';
+    return `<tr style="cursor:pointer;" onclick="comprasTogg('${o.id}')"><td><b>${ab?'▾':'▸'} ${E(o.numero_oc)}</b></td><td>${E(o.proveedor||'')}</td><td style="white-space:nowrap;">${comprasFmtF(o.fecha_orden?o.fecha_orden+'T12:00:00':null)}</td><td style="text-align:right;">${infFmt(cantF(o))}</td><td style="text-align:right;">${COMP_USD(r.fob)}</td><td style="text-align:right;font-weight:700;color:var(--bl);">${COMP_USD(r.inter)}</td><td style="text-align:right;">${prod&&prod.dias_esperado!=null?Number(prod.dias_esperado):'—'}</td><td>${comprasBadge(pi,'Confirmada')}${nota}</td><td>${adj}</td><td style="white-space:nowrap;">${bot} <button class="btn btn-g btn-xs" onclick="event.stopPropagation();reabastAbrirDetalleOC('${o.id}')">Ver OC</button></td></tr>`+(ab?comprasItemsDet(o,10):''); }).join('')}</tbody></table></div>`;
+}
+// Descarga la PI sellada (para adjuntarla en Outlook web: ahí un enlace no puede llevar archivos adjuntos)
+async function comprasBajarPI(ocId){
+  const rows = await sb.get('configuracion','clave=eq.oc_pasos_'+ocId), d = rows && rows[0] && rows[0].valor ? JSON.parse(rows[0].valor) : {}, pi = d.pi||{};
+  if(!pi.sellado_url) return {pi, ok:false};
+  const r = await fetch(pi.sellado_url); if(!r.ok) throw new Error('No pude leer la PI sellada');
+  const n = pi.original_nombre||'PI.xlsx'; let ext = (n.match(/\.(xlsx|xlsm|xls|pdf|docx)$/i)||[,'pdf'])[1].toLowerCase(); if(ext==='xls') ext = 'xlsx';
+  const nombre = n.replace(/\.(xlsx|xlsm|xls|pdf|docx)$/i,'')+'_SELLADA.'+ext;
+  ocpDescargar(await r.blob(), nombre); return {pi, ok:true, nombre};
+}
+async function comprasEnviarPI(ocId){
+  const o = (REABAST.ordenesCompra||[]).find(x=>String(x.id)===String(ocId)); if(!o) return;
+  const prov = (REABAST.proveedores||[]).find(p=>p.nombre===o.proveedor) || {};
+  const para = ocpCorreosProveedor(prov); let cc = []; try{ cc = ocpListaCorreos(((await ocpCargarCC())||[]).join(',')); }catch(e){} comprasCopiarCC(cc);
+  let r; try{ r = await comprasBajarPI(o.id); }catch(e){ if(typeof toast==='function') toast('No se pudo descargar la PI: '+e.message,'er'); return; }
+  if(!r.ok){ if(typeof toast==='function') toast('Esta OC aún no tiene PI sellada','wa'); return; }
+  const pi = r.pi, asunto = 'PI '+(pi.pi_no||'')+' / PO '+o.numero_oc+' – signed and stamped';
+  const cuerpo = `Dear ${prov.nombre_contacto||'supplier'},\n\nPlease find attached the Proforma Invoice ${pi.pi_no||''} for our PO ${o.numero_oc}, signed and stamped by ILUMAX TRADING CORP.\n${pi.nota?'\nNotes: '+pi.nota+'\n':''}\nPlease proceed accordingly and keep us updated on artwork and production timing.\n\nBest regards,\n${typeof arteQuien==='function'?arteQuien():''}\nILUMAX TRADING CORP`;
+  window.open('https://outlook.office.com/mail/deeplink/compose?to='+encodeURIComponent(para.join(','))+(cc.length?'&cc='+encodeURIComponent(cc.join(',')):'')+'&subject='+encodeURIComponent(asunto)+'&body='+encodeURIComponent(cuerpo),'_blank');
+  if(typeof toast==='function') toast('📎 PI descargada ('+r.nombre+'). En Outlook web pulsa «Adjuntar» y elígela, o arrástrala desde Descargas.'+comprasCCAviso(cc)+(para.length?'':' · el proveedor no tiene correo en su ficha'),'ok');
+}
+function comprasCopiarCC(cc){ try{ if(cc && cc.length && navigator.clipboard) navigator.clipboard.writeText(cc.join('; ')).catch(()=>{}); }catch(e){} }
+function comprasCCAviso(cc){ return cc && cc.length ? ' CC: '+cc.join(', ')+' (también quedaron copiadas: si no aparecen en Outlook, pégalas con Ctrl+V en el campo CC).' : ''; }
+function comprasFmtF(d){ return d ? new Date(d).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}) : '—'; }
+function comprasProdDatos(o){
+  const e = comprasEtapa(o,'produccion'); let ini = null, fin = null, fuente = '', ajust = false;
+  if(e){ try{ ini = ocInicioEfectivo(e); }catch(x){ ini = e.fecha_inicio; } }
+  try{ const v = ceFinProduccion(o); if(v&&v.fecha){ fin = v.fecha; fuente = v.fuente||''; ajust = !!v.ajustada; } }catch(x){}
+  if(e && e.estado==='completada' && e.fecha_fin){ fin = e.fecha_fin; fuente = 'producción terminada'; }
+  return {o, e, ini, fin, fuente, ajust, cant:(REABAST.ocItems[o.id]||[]).reduce((a,i)=>a+(Number(i.cantidad)||0),0)};
+}
+function comprasTabProduccion(L){
+  const E = reabastEsc, ed = reabastEsAdmin(), pe = prodfPuedeEditar(); if(!L.length) return '<div class="empty">No hay órdenes activas con ese filtro.</div>';
+  let R = L.map(comprasProdDatos);
+  R = comprasOrdenar('produccion', R, {oc:x=>ocNumKeyC(x.o), prov:x=>x.o.proveedor||'', cant:x=>x.cant, est:x=>comprasStKey(x.e), ini:x=>x.ini?+new Date(x.ini):0, fin:x=>x.fin?+new Date(x.fin):0, fuente:x=>x.fuente});
+  const T = (k,l,n)=>comprasTh('produccion',k,l,n);
+  return `<div class="tw"><table style="font-size:12px;"><thead><tr>${T('oc','OC')}${T('prov','Proveedor')}${T('cant','Cantidad',1)}${T('est','Estado')}${T('ini','Fecha de inicio')}${T('fin','Fecha fin')}${T('fuente','Origen de la fecha fin')}<th>Requisitos</th><th></th></tr></thead><tbody>${R.map(x=>{ const {o,e,ini,fin,fuente,ajust} = x, ab = comprasAb(o);
+    return `<tr style="cursor:pointer;" onclick="comprasTogg('${o.id}')"><td><b>${ab?'▾':'▸'} ${E(o.numero_oc)}</b></td><td>${E(o.proveedor||'')}</td><td style="text-align:right;">${infFmt(x.cant)}</td><td>${comprasBadge(e,'Terminada')}</td><td style="white-space:nowrap;">${comprasFmtF(ini)}</td><td style="white-space:nowrap;font-weight:700;color:${comprasVencida(o)?'#dc2626':ajust?'#b45309':'var(--tx)'};">${comprasVencida(o)?'🔴 ':''}${comprasFmtF(fin)}${e&&e.estado!=='completada'?' <span class="arte-mu" style="font-weight:400;">(est.)</span>':''}</td><td class="arte-mu" style="font-size:11px;">${E(fuente)}</td><td>${comprasRequisitos(o)}</td><td style="white-space:nowrap;">${e&&ed?`<button class="btn btn-g btn-xs" onclick="event.stopPropagation();ocEditarFechasEtapa('${o.id}','${e.id}')">📅 Fechas</button> `:''}${pe&&e&&e.estado!=='completada'?`<button class="btn btn-gr btn-xs" onclick="event.stopPropagation();prodfAbrir('${o.id}')">Nueva fecha entrega</button>`:''}</td></tr>`+(ab?comprasItemsDet(o,9):''); }).join('')}</tbody></table></div>
+  <div class="arte-mu" style="font-size:11px;margin-top:8px;">La fecha fin respeta la configuración actual de producción: entrega del proveedor (Base compras), nueva fecha registrada por Compras (en naranja) o vencimiento de la etapa en el ERP.</div>`;
+}
+function comprasTabChecks(L, colId, tit, sig){
+  const E = reabastEsc, ed = reabastEsAdmin(); if(!L.length) return '<div class="empty">No hay órdenes activas con ese filtro.</div>';
+  return `<div class="arte-mu" style="font-size:11px;margin-bottom:10px;">Marca cada referencia ${tit}. Cuando todas están marcadas se termina la etapa y se habilita ${sig}.</div>` + L.map(o=>{
+    const k = refchkConteo(o,colId), todo = refchkEtapaOk(o,colId), its = REABAST.ocItems[o.id]||[];
+    const head = `<span style="font-weight:700;color:${k.n===k.t&&k.t?'#16a34a':'var(--mu)'};">${k.n}/${k.t}</span>${comprasAvisoProd(o)}${todo?'<span style="color:#16a34a;font-weight:700;">✅ habilitada la siguiente etapa</span>':''}` + (ed&&!todo&&k.t&&k.n<k.t?`<button class="btn btn-gr btn-xs" style="margin-left:auto;" onclick="refchkTodas('${o.id}','${colId}',true,event)">✔ Seleccionar todas</button>`:'');
+    const rows = its.map((it,ix)=>{ if(!comprasItemOk(o,it)) return ''; const st = refchkEstado(o,it,colId); return `<tr><td style="font-family:monospace;"><b>${E(it.referencia||'')}</b></td><td>${E(it.descripcion||'')}</td><td style="text-align:right;">${infFmt(it.cantidad)}</td><td style="text-align:center;"><input type="checkbox" ${st.on?'checked':''} ${(st.todo||!ed)?'disabled':''} style="width:16px;height:16px;accent-color:#16a34a;cursor:pointer;" onchange="refchkToggle('${o.id}',${ix},'${colId}',this.checked,event)"></td></tr>`; }).join('');
+    return comprasOCBloque(o, head, `<th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th style="text-align:center;">Embarcada</th>`, rows); }).join('');
+}
+function comprasTabEmbarque(L){ const n = comprasOCs().filter(o=>{ const k = refchkConteo(o,"embarque"); return k.t && k.n<k.t && !refchkEtapaOk(o,"embarque"); }).length; return (reabastEsAdmin()&&n?`<div style="margin-bottom:8px;"><button class="btn btn-gr btn-sm" onclick="comprasEmbarqueTodas()">✔ Marcar como embarcadas las ${n} orden(es) con embarque pendiente</button></div>`:'') + comprasTabChecks(L,'embarque','como embarcada','Tránsito marítimo'); }
+function comprasTabInspeccion(L){
+  const E = reabastEsc; if(!L.length) return '<div class="empty">No hay órdenes activas con ese filtro.</div>';
+  const th = INSPP_DEF.map(p=>`<th style="text-align:center;font-size:10px;max-width:110px;white-space:normal;" title="${E(p.det)}">${p.n}. ${E(p.t)}<div class="arte-mu" style="font-size:9px;">${E(p.area)}</div></th>`).join('');
+  return `<div class="arte-mu" style="font-size:11px;margin-bottom:10px;">Cada referencia pasa por 2 pasos. Cuando Calidad responde en todas, la inspección se termina y se habilita el embarque.</div>` + L.map(o=>{
+    const its = REABAST.ocItems[o.id]||[], n = its.filter(it=>insppListos(o.id,it)===INSPP_DEF.length).length, e = comprasEtapa(o,'inspeccion_calidad');
+    const head = `<span style="font-weight:700;color:${n===its.length&&its.length?'#16a34a':'var(--mu)'};">${n}/${its.length} inspeccionadas</span>${comprasAvisoProd(o)}${e&&e.estado==='completada'?'<span style="color:#16a34a;font-weight:700;">✅ habilitado el embarque</span>':''}`;
+    const rows = its.map((it,ix)=>{ if(!comprasItemOk(o,it)) return ''; const d = insppDe(o.id,it);
+      const cel = INSPP_DEF.map((p,i)=>{ const x = d[p.n], prevOk = i===0 || !!d[INSPP_DEF[i-1].n], dis = (!x && !prevOk) || !insppPuede(p);
+        return `<td style="text-align:center;" title="${x?E((x.q||'')+' · '+new Date(x.t).toLocaleDateString('es-CO')):''}"><input type="checkbox" ${x?'checked':''} ${dis?'disabled':''} style="width:16px;height:16px;accent-color:#16a34a;cursor:pointer;" onchange="insppMarcar('${o.id}',${ix},${p.n},this.checked,event)"></td>`; }).join('');
+      return `<tr><td style="font-family:monospace;"><b>${E(it.referencia||'')}</b></td><td>${E(it.descripcion||'')}</td><td style="text-align:right;">${infFmt(it.cantidad)}</td>${cel}</tr>`; }).join('');
+    return comprasOCBloque(o, head, `<th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th>${th}`, rows); }).join('');
+}
+function comprasTabTrading(L){
+  const E = reabastEsc; if(!L.length) return '<div class="empty">No hay órdenes activas con ese filtro.</div>';
+  return `<div class="arte-mu" style="font-size:11px;margin-bottom:10px;">Factura de la Trading a ILUMAX: cada ítem a precio FOB ×1,015 (cuatro decimales truncados). Abajo de cada orden, el resumen de anticipos.</div>` + L.map(o=>{
+    const r = comprasResumenOC(o), an = comprasEtapa(o,'anticipo_pagado');
+    const rows = r.det.map(d=>!comprasItemOk(o,d.it)?'':`<tr><td style="font-family:monospace;"><b>${E(d.it.referencia||'')}</b></td><td>${E(d.it.descripcion||'')}</td><td style="text-align:right;">${infFmt(d.c)}</td><td style="text-align:right;">${COMP_USD(d.f)}</td><td style="text-align:right;">${d.pi.toFixed ? d.pi.toFixed(4) : d.pi}</td><td style="text-align:right;font-weight:700;color:var(--bl);">${COMP_USD(d.c*d.pi)}</td></tr>`).join('')
+      + `<tr style="border-top:2px solid var(--b1);font-weight:800;"><td colspan="2">Total factura</td><td style="text-align:right;">${infFmt(r.cant)}</td><td style="text-align:right;">${COMP_USD(r.fob)}</td><td></td><td style="text-align:right;color:var(--bl);">${COMP_USD(r.inter)}</td></tr>`
+      + `<tr><td colspan="6" style="background:var(--s1);font-size:11.5px;">💸 Anticipo <b>${Math.round(r.pct*1000)/10}%</b> sobre FOB${r.extra?' + extra':''}: <b>US$ ${COMP_USD(r.dep)}</b> · Saldo sobre factura: <b>US$ ${COMP_USD(r.saldo)}</b> · ${comprasBadge(an,'Pagado').replace(/<div[\s\S]*?<\/div>/,'')}</td></tr>`;
+    return comprasOCBloque(o, '', `<th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th style="text-align:right;">FOB unit.</th><th style="text-align:right;">×1,015 unit.</th><th style="text-align:right;">Valor US$</th>`, rows); }).join('');
+}
+// ── Panel "Qué hacer hoy", vencidas, embarque masivo y exportación ──
+COMP.venc = false;
+function comprasVencida(o){
+  const e = comprasEtapa(o,'produccion'); if(!e || e.estado==='completada') return false;
+  const d = comprasProdDatos(o); if(!d.fin) return false;
+  const t = new Date(); t.setHours(0,0,0,0); return new Date(d.fin) < t;
+}
+function comprasIr(tab, venc){ COMP.tab = tab; COMP.todas[tab] = false; COMP.venc = !!venc; comprasPintar(); }
+function comprasPanel(){
+  const B = comprasOCs(), E = reabastEsc;
+  const defs = [['pi','📑','sin PI confirmada','pi'],['anticipos','💸','sin anticipo pagado','anticipo'],['artes','🎨','con artes por confirmar','arte'],['produccion','🏭','en producción','produccion'],['inspeccion','🔍','por inspeccionar','inspeccion'],['embarque','🚢','por embarcar','embarque']];
+  const chip = (tab,ico,txt,n,venc,rojo)=>`<button class="btn btn-sm ${rojo?'btn-rd':'btn-g'}" style="border-radius:20px;${n?'':'opacity:.5;'}" onclick="comprasIr('${tab}',${venc?'true':'false'})">${ico} <b>${n}</b> ${txt}</button>`;
+  const venc = B.filter(comprasVencida).length;
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:8px 10px;background:var(--s1);border-radius:10px;"><span style="font-weight:800;font-size:12px;">📌 Qué hacer hoy:</span>${venc?chip('produccion','🔴','con producción vencida',venc,true,true):''}${defs.map(([t,i,x,k])=>chip(t,i,x,B.filter(o=>!comprasListo(o,k)).length,false,false)).join('')}${COMP.venc?`<button class="btn btn-p btn-xs" onclick="COMP.venc=false;comprasPintar()">✖ Quitar filtro de vencidas</button>`:''}</div>`;
+}
+async function comprasEmbarqueTodas(){
+  const L = comprasOCs().filter(o=>{ const k = refchkConteo(o,'embarque'); return k.t && k.n<k.t && !refchkEtapaOk(o,'embarque'); });
+  if(!L.length) return; if(!confirm('¿Marcar como embarcadas TODAS las referencias de '+L.length+' orden(es)?')) return;
+  for(const o of L) await refchkTodas(o.id,'embarque',true,null);
+  comprasPintar();
+}
+function comprasExcelBasico(){
+  if(typeof XLSX==='undefined'){ if(typeof toast==='function') toast('Excel no está disponible','er'); return; }
+  const est = (o,id)=>{ const e = comprasEtapa(o,id); return !e ? '' : e.estado==='completada' ? 'Listo' : e.estado==='en_curso' ? 'En curso' : 'Pendiente'; };
+  const rows = comprasOCs().map(o=>{ const r = comprasResumenOC(o), p = comprasProdDatos(o); return {OC:o.numero_oc, Proveedor:o.proveedor||'', 'Fecha OC':o.fecha_orden||'', Cantidad:r.cant, 'FOB US$':+r.fob.toFixed(2), '×1,015 US$':+r.inter.toFixed(2), OCI:est(o,'oc_creada'), PI:est(o,'pi_confirmada'), Anticipo:est(o,'anticipo_pagado'), Artes:comprasListo(o,'arte')?'Listo':'Pendiente', Producción:est(o,'produccion'), 'Fin producción':p.fin?String(p.fin).slice(0,10):'', Vencida:comprasVencida(o)?'Sí':'', Inspección:est(o,'inspeccion_calidad'), Embarque:comprasListo(o,'embarque')?'Listo':'Pendiente'}; });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Compras');
+  XLSX.writeFile(wb, 'Compras_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
+
+function comprasCargarExcelJS(){
+  return new Promise((ok,ko)=>{
+    if(typeof ExcelJS!=='undefined') return ok();
+    const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    s.onload = ()=>ok(); s.onerror = ()=>ko(new Error('No se pudo cargar ExcelJS')); document.head.appendChild(s);
+  });
+}
+async function comprasExcel(){
+  try{ await comprasCargarExcelJS(); }catch(e){ if(typeof toast==='function') toast('Excel avanzado no disponible, bajo el básico','wa'); return comprasExcelBasico(); }
+  try{
+    const est = (o,id)=>{ const e = comprasEtapa(o,id); return !e ? 'N/A' : e.estado==='completada' ? 'Listo' : e.estado==='en_curso' ? 'En curso' : 'Pendiente'; };
+    const L = comprasOCs(), hoy = new Date(); hoy.setHours(0,0,0,0);
+    const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX'; wb.calcProperties = {fullCalcOnLoad:true};
+    const hdr = ws=>{ const r = ws.getRow(1); r.height = 30; r.alignment = {vertical:'middle', wrapText:true}; };
+    const fillC = (c)=>({type:'pattern',pattern:'solid',bgColor:{argb:c}});
+    const cf = (ws, ref)=>ws.addConditionalFormatting({ref, rules:[
+      {type:'cellIs',operator:'equal',formulae:['"Listo"'],style:{fill:fillC('FFDCFCE7'),font:{color:{argb:'FF166534'}}}},
+      {type:'cellIs',operator:'equal',formulae:['"En curso"'],style:{fill:fillC('FFFEF3C7'),font:{color:{argb:'FF92400E'}}}},
+      {type:'cellIs',operator:'equal',formulae:['"Pendiente"'],style:{fill:fillC('FFFEE2E2'),font:{color:{argb:'FF991B1B'}}}}]});
+    // ── Hoja Órdenes (tabla con fórmulas) ──
+    const w1 = wb.addWorksheet('Órdenes', {views:[{state:'frozen',xSplit:1,ySplit:1}]});
+    const cols1 = ['OC','Proveedor','Fecha OC','Cantidad','FOB US$','Valor ×1,015 US$','Costo extra US$','Anticipo %','Anticipo US$','Saldo sobre factura US$','OCI','PI','Anticipo (estado)','Artes','Producción','Fin producción','Días al fin','Vencida','Inspección','Embarque'];
+    const rows1 = [], res = [];
+    L.forEach((o,i)=>{ const r = comprasResumenOC(o), p = comprasProdDatos(o), fin = p.fin ? new Date(p.fin) : null, prod = est(o,'produccion');
+      const ant = (r.fob+r.extra)*r.pct, dias = fin ? Math.round((fin-hoy)/864e5) : '', venc = (fin && prod!=='Listo' && fin<hoy) ? 'Sí' : 'No';
+      res.push({ant, sal:r.inter+r.extra-ant, dias, venc});
+      rows1.push([o.numero_oc, o.proveedor||'', o.fecha_orden?new Date(o.fecha_orden+'T12:00:00'):null, r.cant, +r.fob.toFixed(2), +r.inter.toFixed(2), +r.extra.toFixed(2), r.pct, 0, 0, est(o,'oc_creada'), est(o,'pi_confirmada'), est(o,'anticipo_pagado'), comprasListo(o,'arte')?'Listo':'Pendiente', prod, fin, '', '', est(o,'inspeccion_calidad'), comprasListo(o,'embarque')?'Listo':'Pendiente']); });
+    if(!rows1.length) rows1.push(new Array(cols1.length).fill(null));
+    w1.addTable({name:'tblCompras', ref:'A1', headerRow:true, style:{theme:'TableStyleMedium2', showRowStripes:true}, columns:cols1.map(n=>({name:n, filterButton:true})), rows:rows1});
+    L.forEach((o,i)=>{ const n = i+2, x = res[i];
+      w1.getCell('I'+n).value = {formula:`(E${n}+G${n})*H${n}`, result:x.ant};
+      w1.getCell('J'+n).value = {formula:`F${n}+G${n}-I${n}`, result:x.sal};
+      w1.getCell('Q'+n).value = {formula:`IF(P${n}="","",P${n}-TODAY())`, result:x.dias};
+      w1.getCell('R'+n).value = {formula:`IF(AND(P${n}<>"",O${n}<>"Listo",P${n}<TODAY()),"Sí","No")`, result:x.venc}; });
+    const N1 = Math.max(L.length+1,2);
+    [['C','dd-mmm-yy',12],['D','#,##0',11],['E','#,##0.00',14],['F','#,##0.00',16],['G','#,##0.00',13],['H','0.0%',10],['I','#,##0.00',14],['J','#,##0.00',16],['P','dd-mmm-yy',13],['Q','0',9]].forEach(([c,f,w])=>{ w1.getColumn(c).numFmt = f; w1.getColumn(c).width = w; });
+    w1.getColumn('A').width = 12; w1.getColumn('B').width = 30; ['K','L','M','N','O','R','S','T'].forEach(c=>w1.getColumn(c).width = 12);
+    cf(w1, `K2:O${N1}`); cf(w1, `S2:T${N1}`);
+    w1.addConditionalFormatting({ref:`R2:R${N1}`, rules:[{type:'cellIs',operator:'equal',formulae:['"Sí"'],style:{fill:fillC('FFDC2626'),font:{color:{argb:'FFFFFFFF'},bold:true}}}]});
+    w1.addConditionalFormatting({ref:`Q2:Q${N1}`, rules:[{type:'cellIs',operator:'lessThan',formulae:['0'],style:{font:{color:{argb:'FFDC2626'},bold:true}}}]});
+    hdr(w1);
+    // ── Hoja Ítems (tabla con fórmulas) ──
+    const w2 = wb.addWorksheet('Ítems', {views:[{state:'frozen',xSplit:3,ySplit:1}]});
+    const cols2 = ['OC','Proveedor','Referencia','Descripción','Pedida','Ingresada','Saldo cerrado','Saldo pendiente','FOB unit. US$','×1,015 unit. US$','Valor FOB US$','Valor ×1,015 US$'];
+    const rows2 = [];
+    L.forEach(o=>(REABAST.ocItems[o.id]||[]).forEach(it=>{ const c = Number(it.cantidad)||0, f = it.precio_fob_usd!=null?Number(it.precio_fob_usd):0, ing = ingDe(o,it.referencia), cerr = ing>0 && ing<c && ocPendItem(o,it)<=0.5;
+      rows2.push([o.numero_oc, o.proveedor||'', it.referencia||'', it.descripcion||'', c, Math.round(ing), cerr?'Sí':'No', 0, f, ocPrecioIntercompania(f).valor, 0, 0]); }));
+    if(!rows2.length) rows2.push(new Array(cols2.length).fill(null));
+    w2.addTable({name:'tblItems', ref:'A1', headerRow:true, style:{theme:'TableStyleMedium9', showRowStripes:true}, columns:cols2.map(n=>({name:n, filterButton:true})), rows:rows2});
+    rows2.forEach((r,i)=>{ const n = i+2;
+      w2.getCell('H'+n).value = {formula:`IF(G${n}="Sí",0,MAX(E${n}-F${n},0))`, result:r[6]==='Sí'?0:Math.max(r[4]-r[5],0)};
+      w2.getCell('K'+n).value = {formula:`E${n}*I${n}`, result:r[4]*r[8]};
+      w2.getCell('L'+n).value = {formula:`E${n}*J${n}`, result:r[4]*r[9]}; });
+    [['E','#,##0',11],['F','#,##0',11],['H','#,##0',13],['I','#,##0.00',13],['J','#,##0.0000',15],['K','#,##0.00',15],['L','#,##0.00',16]].forEach(([c,f,w])=>{ w2.getColumn(c).numFmt = f; w2.getColumn(c).width = w; });
+    w2.getColumn('A').width = 12; w2.getColumn('B').width = 28; w2.getColumn('C').width = 16; w2.getColumn('D').width = 42; w2.getColumn('G').width = 12;
+    w2.addConditionalFormatting({ref:`H2:H${Math.max(rows2.length+1,2)}`, rules:[{type:'cellIs',operator:'greaterThan',formulae:['0'],style:{font:{color:{argb:'FFB45309'},bold:true}}}]});
+    hdr(w2);
+    // ── Hoja Resumen (fórmulas que se recalculan solas, como una tabla dinámica) ──
+    const w3 = wb.addWorksheet('Resumen', {views:[{showGridLines:false}]}), O = "'Órdenes'!", rng = c=>`${O}$${c}:$${c}`;
+    w3.getColumn('A').width = 34; 'BCDEFG'.split('').forEach(c=>w3.getColumn(c).width = 17);
+    const tit = (cell,t)=>{ w3.getCell(cell).value = t; w3.getCell(cell).font = {bold:true,size:13,color:{argb:'FF0F172A'}}; };
+    const cab = (row, arr)=>arr.forEach((t,i)=>{ const c = w3.getCell(row, i+1); c.value = t; c.font = {bold:true,color:{argb:'FFFFFFFF'}}; c.fill = {type:'pattern',pattern:'solid',fgColor:{argb:'FF1E293B'}}; c.alignment = {horizontal:i?'center':'left',wrapText:true}; });
+    w3.getCell('A1').value = 'Resumen de compras — ' + new Date().toLocaleDateString('es-CO'); w3.getCell('A1').font = {bold:true,size:16};
+    w3.getCell('A2').value = 'Todo se calcula con fórmulas sobre la hoja «Órdenes»: edita o agrega filas y se actualiza. Filtra las tablas con las flechas del encabezado.'; w3.getCell('A2').font = {italic:true,color:{argb:'FF64748B'}};
+    tit('A4','Indicadores');
+    [['Órdenes activas',`=COUNTA(${rng('A')})-1`,'#,##0'],['Valor FOB total US$',`=SUM(${rng('E')})`,'#,##0.00'],['Valor ×1,015 total US$',`=SUM(${rng('F')})`,'#,##0.00'],['Anticipos totales US$',`=SUM(${rng('I')})`,'#,##0.00'],['Saldo sobre factura US$',`=SUM(${rng('J')})`,'#,##0.00'],['Órdenes con producción vencida',`=COUNTIF(${rng('R')},"Sí")`,'#,##0']].forEach(([l,f,nf],i)=>{ const r = 5+i; w3.getCell('A'+r).value = l; w3.getCell('B'+r).value = {formula:f.slice(1)}; w3.getCell('B'+r).numFmt = nf; w3.getCell('B'+r).font = {bold:true}; });
+    tit('A12','Estado por etapa'); cab(13, ['Etapa','Pendiente','En curso','Listo','N/A','% listo']);
+    [['OCI enviada','K'],['PI confirmada','L'],['Anticipo pagado','M'],['Artes','N'],['Producción','O'],['Inspección','S'],['Embarque','T']].forEach(([l,c],i)=>{ const r = 14+i; w3.getCell('A'+r).value = l;
+      ['Pendiente','En curso','Listo','N/A'].forEach((e,j)=>{ w3.getCell(r,2+j).value = {formula:`COUNTIF(${rng(c)},"${e}")`}; w3.getCell(r,2+j).alignment = {horizontal:'center'}; });
+      w3.getCell('F'+r).value = {formula:`IFERROR(D${r}/(B${r}+C${r}+D${r}),0)`}; w3.getCell('F'+r).numFmt = '0%'; w3.getCell('F'+r).alignment = {horizontal:'center'}; });
+    tit('A23','Por proveedor'); cab(24, ['Proveedor','Órdenes','FOB US$','×1,015 US$','Anticipos US$','Saldo US$','Vencidas']);
+    const provs = [...new Set(L.map(o=>o.proveedor||'(sin proveedor)'))].sort((a,b)=>a.localeCompare(b,'es'));
+    provs.forEach((p,i)=>{ const r = 25+i; w3.getCell('A'+r).value = p; const A = `$A${r}`;
+      w3.getCell('B'+r).value = {formula:`COUNTIF(${rng('B')},${A})`};
+      [['C','E'],['D','F'],['E','I'],['F','J']].forEach(([d,s])=>{ w3.getCell(d+r).value = {formula:`SUMIFS(${rng(s)},${rng('B')},${A})`}; w3.getCell(d+r).numFmt = '#,##0.00'; });
+      w3.getCell('G'+r).value = {formula:`COUNTIFS(${rng('B')},${A},${rng('R')},"Sí")`}; });
+    const rt = 25+provs.length; w3.getCell('A'+rt).value = 'TOTAL'; 'BCDEFG'.split('').forEach(c=>{ w3.getCell(c+rt).value = {formula:`SUM(${c}25:${c}${rt-1})`}; w3.getCell(c+rt).numFmt = c==='B'||c==='G'?'#,##0':'#,##0.00'; });
+    w3.getRow(rt).font = {bold:true}; w3.getRow(rt).border = {top:{style:'medium'}};
+    for(let r=25;r<=rt;r++) 'BG'.split('').forEach(c=>w3.getCell(c+r).alignment = {horizontal:'center'});
+    wb.views = [{activeTab:2}];
+    const buf = await wb.xlsx.writeBuffer();
+    ocpDescargar(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), 'Compras_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  }catch(e){ console.error(e); if(typeof toast==='function') toast('Excel avanzado falló ('+e.message+'), bajo el básico','wa'); comprasExcelBasico(); }
+}
+async function comprasArtesTodas(){
+  const L = comprasOCs().filter(o=>{ const k = refchkConteo(o,'arte'); return k.t && k.n<k.t && !refchkEtapaOk(o,'arte'); });
+  if(!L.length) return; if(!confirm('¿Confirmar las artes de TODAS las referencias de '+L.length+' orden(es)?')) return;
+  for(const o of L) await refchkTodas(o.id,'arte',true,null);
+  comprasPintar();
+}
+// ── Autorizar anticipos desde el módulo de compras (mismo flujo de Tesorería: corte del martes → pago) ──
+function comprasAntInfo(o){
+  const reg = tesoRegDe(o.id), an = comprasEtapa(o,'anticipo_pagado'), pi = comprasEtapa(o,'pi_confirmada'), a = tesoCalcularAnticipo(o);
+  if((an && an.estado==='completada') || (reg && reg.estado==='pagado')) return {k:'pagado', reg, a};
+  if(reg) return {k:'aut', reg, a};
+  if(!an) return {k:'na', a};
+  if(!(a.pct>0 && a.usd)) return {k:'sinpct', a};
+  if(pi && pi.estado!=='completada') return {k:'sinpi', a};
+  return {k:'pend', a};
+}
+function comprasAntCeldas(o){
+  const i = comprasAntInfo(o), pa = tesoPuedeAutorizar(), E = reabastEsc;
+  const num = i.k==='pend' ? tesoInputNumeral(TESO.num[o.id]||TESO_NUMERAL_DEF, `TESO.num['${o.id}']=this.value.trim()`, pa) : (i.reg ? `<span style="font-family:monospace;font-weight:700;">${E(tesoNumeral(i.reg))}</span>` : '<span class="arte-mu">—</span>');
+  let acc = '<span class="arte-mu">—</span>';
+  if(i.k==='pend') acc = pa ? `<label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer;"><input type="checkbox" ${TESO.sel[o.id]?'checked':''} style="width:16px;height:16px;accent-color:#16a34a;" onchange="TESO.sel['${o.id}']=this.checked;comprasPintar()"><span style="font-size:11px;">US$ ${COMP_USD(i.a.usd)}</span></label>` : '<span class="arte-mu">Solo Abastecimiento autoriza</span>';
+  else if(i.k==='aut') acc = `<div style="color:#16a34a;font-weight:700;">🟢 Autorizado</div><div class="arte-mu" style="font-size:10px;">corte ${tesoFmt(i.reg.corte,true)} → paga ${tesoFmt(i.reg.pago_programado)}</div>${pa?`<button class="btn btn-g btn-xs" onclick="tesoAnular('${o.id}')">Quitar</button>`:''}`;
+  else if(i.k==='pagado') acc = '<span style="color:#16a34a;font-weight:700;">✅ Pagado</span>';
+  else if(i.k==='sinpi') acc = '<span class="arte-mu">Falta confirmar la PI</span>';
+  else if(i.k==='sinpct') acc = '<span class="arte-mu">Sin % de anticipo</span>';
+  return `<td onclick="event.stopPropagation()">${num}</td><td style="text-align:center;" onclick="event.stopPropagation()">${acc}</td>`;
+}
+function comprasAntBarra(R){
+  const pa = tesoPuedeAutorizar(), pend = R.filter(x=>comprasAntInfo(x.o).k==='pend'), sel = pend.filter(x=>TESO.sel[x.o.id]);
+  const hdr = pa && pend.length ? `<input type="checkbox" title="Seleccionar todas las pendientes" ${sel.length===pend.length?'checked':''} onchange="${pend.map(x=>`TESO.sel['${x.o.id}']=this.checked;`).join('')}comprasPintar()"> ` : '';
+  const tot = sel.reduce((a,x)=>a+comprasAntInfo(x.o).a.usd,0);
+  const bar = pa ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;"><button class="btn btn-p btn-sm" ${sel.length?'':'disabled'} onclick="tesoAutorizar([${sel.map(x=>"'"+x.o.id+"'").join(',')}])">✅ Autorizar ${sel.length||''} anticipo(s)${sel.length?' · US$ '+COMP_USD(tot):''}</button><span class="arte-mu" style="font-size:11px;">${pend.length} por autorizar · entran al corte del ${tesoFmt(tesoCorteDe(new Date()),true)} y pasan a Tesorería. Requiere la PI confirmada.</span></div>` : '<div class="arte-mu" style="font-size:11px;margin-bottom:10px;">Solo Abastecimiento o un administrador puede autorizar anticipos.</div>';
+  return {hdr, bar};
+}
+function comprasTabAnticipos(L){
+  const E = reabastEsc; if(!L.length) return '<div class="empty">No hay órdenes activas con ese filtro.</div>';
+  let R = L.map(o=>({o, r:comprasResumenOC(o), an:comprasEtapa(o,'anticipo_pagado')}));
+  R = comprasOrdenar('anticipos', R, {oc:x=>ocNumKeyC(x.o), prov:x=>x.o.proveedor||'', cant:x=>x.r.cant, fob:x=>x.r.fob, inter:x=>x.r.inter, pct:x=>x.r.pct, dep:x=>x.r.dep, saldo:x=>x.r.saldo, est:x=>comprasStKey(x.an)});
+  const AB = comprasAntBarra(R);
+  const T = R.reduce((a,x)=>({fob:a.fob+x.r.fob, inter:a.inter+x.r.inter, dep:a.dep+x.r.dep, saldo:a.saldo+x.r.saldo}),{fob:0,inter:0,dep:0,saldo:0});
+  const tile = (v,l,c)=>`<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;min-width:150px;"><div style="font-size:19px;font-weight:800;color:${c||'var(--tx)'};">${v}</div><div style="font-size:10px;color:var(--mu);">${l}</div></div>`;
+  return `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">${tile('US$ '+COMP_USD(T.fob),'Total FOB (orden al proveedor)')}${tile('US$ '+COMP_USD(T.inter),'Total ×1,015 (ILUMAX–TRADING)','var(--bl)')}${tile('US$ '+COMP_USD(T.dep),'Anticipos (sobre FOB)','#16a34a')}${tile('US$ '+COMP_USD(T.saldo),'Saldos (sobre ×1,015)','#b45309')}</div>
+  ${AB.bar}<div class="tw"><table style="font-size:12px;"><thead><tr>${comprasTh('anticipos','oc','OC')}${comprasTh('anticipos','prov','Proveedor')}${comprasTh('anticipos','cant','Cantidad',1)}${comprasTh('anticipos','fob','Valor FOB US$',1)}${comprasTh('anticipos','inter','Valor ×1,015 US$',1)}${comprasTh('anticipos','pct','Anticipo %',1)}${comprasTh('anticipos','dep','Anticipo US$',1)}${comprasTh('anticipos','saldo','Saldo US$',1)}${comprasTh('anticipos','est','Estado anticipo')}<th>Numeral</th><th style="text-align:center;">${AB.hdr}Autorizar anticipo</th></tr></thead><tbody>${R.map(({o,r,an})=>{ const ab = comprasAb(o);
+    return `<tr style="cursor:pointer;" onclick="comprasTogg('${o.id}')"><td><b>${ab?'▾':'▸'} ${E(o.numero_oc)}</b></td><td>${E(o.proveedor||'')}</td><td style="text-align:right;">${infFmt(r.cant)}</td><td style="text-align:right;">${COMP_USD(r.fob)}</td><td style="text-align:right;font-weight:700;color:var(--bl);">${COMP_USD(r.inter)}</td><td style="text-align:right;">${r.pct?Math.round(r.pct*100)+'%':'—'}</td><td style="text-align:right;">${COMP_USD(r.dep)}</td><td style="text-align:right;">${COMP_USD(r.saldo)}</td><td>${comprasBadge(an,'Pagado')}</td>${comprasAntCeldas(o)}</tr>`
+    + (ab ? `<tr><td colspan="11" style="background:var(--s1);padding:6px 14px;"><table style="font-size:11.5px;width:100%;"><thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th style="text-align:right;">FOB unit.</th><th style="text-align:right;">×1,015 unit.</th><th style="text-align:right;">Valor FOB</th><th style="text-align:right;">Valor ×1,015</th></tr></thead><tbody>${r.det.map(d=>!comprasItemOk(o,d.it)?'':`<tr><td style="font-family:monospace;"><b>${E(d.it.referencia||'')}</b></td><td>${E(d.it.descripcion||'')}</td><td style="text-align:right;">${infFmt(d.c)}</td><td style="text-align:right;">${d.f.toFixed(4)}</td><td style="text-align:right;">${d.txt}</td><td style="text-align:right;">${COMP_USD(d.c*d.f)}</td><td style="text-align:right;font-weight:700;">${COMP_USD(d.c*d.pi)}</td></tr>`).join('')}${r.extra?`<tr><td colspan="6" style="text-align:right;">Costo extra${o.costo_extra_motivo?' ('+E(o.costo_extra_motivo)+')':''}</td><td style="text-align:right;">${COMP_USD(r.extra)}</td></tr>`:''}</tbody></table></td></tr>` : ''); }).join('')}
+  <tr style="border-top:2px solid var(--b1);font-weight:800;"><td colspan="3">Total</td><td style="text-align:right;">${COMP_USD(T.fob)}</td><td style="text-align:right;">${COMP_USD(T.inter)}</td><td></td><td style="text-align:right;">${COMP_USD(T.dep)}</td><td style="text-align:right;">${COMP_USD(T.saldo)}</td><td></td><td></td><td></td></tr></tbody></table></div>
+  <div class="arte-mu" style="font-size:11px;margin-top:8px;">El anticipo se calcula sobre el valor FOB (igual en las dos órdenes); el saldo, sobre el valor ×1,015 de la orden intercompañía. <a href="javascript:void(0)" onclick="goPage('tesoreria')">Ir a Tesorería (pago de anticipos) ›</a></div>`;
+}
 async function renderTesoreriaMod(){
   const el = document.getElementById('teso-mod'); if(!el) return;
   arteInjectCss(); tesoInjectCss();
-  el.innerHTML = '<div style="padding:20px;color:var(--mu);">⏳ Cargando anticipos…</div>';
+  el.innerHTML = cargaHtml('Cargando anticipos');
   try{
     if(!REABAST.ordenesCompra || !REABAST.ordenesCompra.length || !REABAST._ocCargadasEn || Date.now()-REABAST._ocCargadasEn>60000){ await cargarOC(); REABAST._ocCargadasEn = Date.now(); }
     await tesoCargar(true);
@@ -14328,8 +14867,8 @@ async function tesoEnviarCorte(corteIso){
 }
 
 // ── Pestaña "💰 Anticipos" ──
-function reabastHtmlTesoreriaShell(){ return `<div id="teso-body"><div class="arte-mu" style="padding:20px;">⏳ Cargando anticipos…</div></div>`; }
-function tesoRepintar(){ if(document.getElementById('teso-body')) tesoPintar(); if(document.getElementById('teso-mod')) tesoPintarModulo(); const d = document.getElementById('ocd-teso'); if(d && d.dataset.oc) tesoPintarEnDetalle(d.dataset.oc); }
+function reabastHtmlTesoreriaShell(){ return `<div id="teso-body">${cargaHtml('Cargando anticipos')}</div>`; }
+function tesoRepintar(){ try{ if(document.getElementById('compras-mod') && typeof comprasPintar==='function') comprasPintar(); }catch(e){} if(document.getElementById('teso-body')) tesoPintar(); if(document.getElementById('teso-mod')) tesoPintarModulo(); const d = document.getElementById('ocd-teso'); if(d && d.dataset.oc) tesoPintarEnDetalle(d.dataset.oc); }
 async function tesoPintar(forzar){
   const el = document.getElementById('teso-body'); if(!el) return;
   try{ await tesoCargar(forzar); }catch(e){ el.innerHTML = `<div class="arte-mu" style="padding:20px;">No se pudieron cargar los anticipos: ${reabastEsc(e.message)}</div>`; return; }
@@ -14756,6 +15295,7 @@ async function ceCargarResumen(forzar){
   }catch(e){ CE.resumen = CE.resumen || {}; }
   try{ const rb = await sb.get('configuracion','clave=eq.ce_bl'); const vb = rb && rb[0] ? rb[0].valor : null; const jb = typeof vb==='string' ? JSON.parse(vb) : vb; if(jb && jb.lineas){ CE.bls = jb.lineas; CE._blsBase = jb.lineas; CE._blsSrc = null; } }catch(e){}
   try{ await cblCargar(forzar); cblOverlay(); }catch(e){ console.warn('BL del ERP:', e); }
+  try{ await ingCargarConf(); }catch(e){}
   return CE.resumen;
 }
 // ── Despachos por documento de transporte (BL) ─────────────────────────────────────────────────
@@ -16916,7 +17456,7 @@ function reabastRepintarPanelComprasDashboard(){
 }
 async function reabastCargarPanelCompras(){
   const wrap = document.getElementById('pc-wrap'); if(!wrap) return;
-  wrap.innerHTML = '<div class="empty"><div class="empty-t">Cargando…</div></div>';
+  wrap.innerHTML = cargaHtml('Cargando');
   try{
     const [filas, meta] = await Promise.all([
       sbReabast.get('panel_compras', 'select=*&order=fila_num.asc.nullslast&limit=5000'),
@@ -19948,16 +20488,57 @@ function arteHtmlEnvio(tipo){
     <textarea class="inp arte-msg" id="arte-msg" data-tipo="${tipo}" rows="9" oninput="this.dataset.editado='1'">${arteEsc(arteMensajeProveedor(tipo))}</textarea>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
       <button class="btn btn-bl btn-sm" onclick="arteCopiarTexto(document.getElementById('arte-msg').value)">📋 Copiar mensaje</button>
-      <button class="btn btn-g btn-sm" onclick="arteAbrirCorreo('${base}')">✉️ Abrir en correo</button>
+      <button class="btn btn-bl btn-sm" onclick="arteAbrirOutlookWeb('${base}')">🌐 Abrir en Outlook web (y bajar la PI)</button>
+      <button class="btn btn-g btn-sm" onclick="arteAbrirCorreo('${base}')">✉️ Borrador .eml (PI adjunta)</button>
       <button class="btn btn-g btn-sm" onclick="document.getElementById('arte-msg').dataset.editado='';arteRefrescarMensaje()">↻ Regenerar</button>
     </div>
   </div>`;
 }
-function arteAbrirCorreo(base){
-  const cfg = ARTE.d[base]; const to = /@/.test(cfg.contacto||'') ? cfg.contacto : '';
+// Borrador .eml: se abre en Outlook ya redactado (Para, CC, asunto, mensaje) y con la PI sellada adjunta — un .eml sí puede llevar adjuntos, un enlace mailto: no.
+function arteB64(buf){ const b = new Uint8Array(buf); let s = ''; for(let i=0;i<b.length;i+=0x8000) s += String.fromCharCode.apply(null, b.subarray(i,i+0x8000)); return btoa(s); }
+function arteB64Lineas(b64){ return b64.replace(/(.{76})/g,'$1\r\n'); }
+// Outlook web (sin descargar nada): redacta el mensaje con Para, CC, asunto y texto; la PI sellada va como enlace dentro del cuerpo.
+async function arteAbrirOutlookWeb(base){
+  const cfg = ARTE.d[base], msg = document.getElementById('arte-msg').value;
+  const prov = (REABAST.proveedores||[]).find(p=>p.nombre===ARTE.oc.proveedor) || {};
+  const lista = t=>String(t||'').split(/[\s,;\/]+/).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+  let para = lista(cfg.contacto); if(!para.length) para = lista(prov.correo||prov.email);
+  let cc = []; try{ cc = lista(((await ocpCargarCC())||[]).join(',')); }catch(e){} comprasCopiarCC(cc);
   const asunto = (cfg.idioma==='es' ? 'Artes OC ' : 'Artwork PO ') + ARTE.d.numero_oc;
-  window.open('mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(asunto)+'&body='+encodeURIComponent(document.getElementById('arte-msg').value));
+  let bajo = null; try{ bajo = await comprasBajarPI(ARTE.ocId); }catch(e){ if(typeof toast==='function') toast('No se pudo descargar la PI: '+e.message,'er'); }
+  const cuerpo = msg;
+  if(bajo && bajo.ok){ if(typeof toast==='function') toast('📎 PI descargada ('+bajo.nombre+'). En Outlook web pulsa «Adjuntar» y elígela, o arrástrala desde Descargas.'+comprasCCAviso(cc),'ok'); }
+  else if(typeof toast==='function') toast('Esta OC aún no tiene PI sellada para adjuntar','wa');
   if(!cfg.medio){ cfg.medio = 'Correo'; arteMarcarCambio(); }
+  window.open('https://outlook.office.com/mail/deeplink/compose?to='+encodeURIComponent(para.join(','))+(cc.length?'&cc='+encodeURIComponent(cc.join(',')):'')+'&subject='+encodeURIComponent(asunto)+'&body='+encodeURIComponent(cuerpo),'_blank');
+}
+async function arteAbrirCorreo(base){
+  const cfg = ARTE.d[base], msg = document.getElementById('arte-msg').value;
+  const prov = (REABAST.proveedores||[]).find(p=>p.nombre===ARTE.oc.proveedor) || {};
+  const lista = t=>String(t||'').split(/[\s,;\/]+/).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+  let para = lista(cfg.contacto); if(!para.length) para = lista(prov.correo||prov.email);
+  let cc = []; try{ cc = lista(((await ocpCargarCC())||[]).join(',')); }catch(e){} comprasCopiarCC(cc);
+  const asunto = (cfg.idioma==='es' ? 'Artes OC ' : 'Artwork PO ') + ARTE.d.numero_oc;
+  if(!cfg.medio){ cfg.medio = 'Correo'; arteMarcarCambio(); }
+  let adj = null;
+  try{
+    const rows = await sb.get('configuracion','clave=eq.oc_pasos_'+ARTE.ocId);
+    const d = rows && rows[0] && rows[0].valor ? JSON.parse(rows[0].valor) : {}, pi = d.pi||{};
+    const url = pi.sellado_url; if(url){ const r = await fetch(url); if(!r.ok) throw new Error('No pude leer la PI sellada'); 
+      let nom = decodeURIComponent(String(url).split('/').pop()||'').replace(/^\d+_/,'') || ('PI_'+ARTE.d.numero_oc+'_SELLADA.pdf'); adj = {nombre:nom, b64:arteB64(await r.arrayBuffer())}; }
+  }catch(err){ if(typeof toast==='function') toast('No se pudo adjuntar la PI sellada: '+err.message,'wa'); }
+  if(!adj){
+    if(typeof toast==='function') toast('Sin PI sellada para adjuntar: se abre el correo sin archivo','wa');
+    window.open('mailto:'+para.join(',')+'?'+(cc.length?'cc='+cc.join(',')+'&':'')+'subject='+encodeURIComponent(asunto)+'&body='+encodeURIComponent(msg)); return;
+  }
+  const enc = t=>'=?UTF-8?B?'+btoa(unescape(encodeURIComponent(t)))+'?=', bd = '----=_ilumax_'+Date.now().toString(36);
+  const eml = ['X-Unsent: 1','To: '+para.join(', '), cc.length?'Cc: '+cc.join(', '):null, 'Subject: '+enc(asunto), 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="'+bd+'"','',
+    '--'+bd,'Content-Type: text/plain; charset="utf-8"','Content-Transfer-Encoding: base64','', arteB64Lineas(btoa(unescape(encodeURIComponent(msg.replace(/\r?\n/g,'\r\n'))))),'',
+    '--'+bd,'Content-Type: application/pdf; name="'+enc(adj.nombre)+'"','Content-Transfer-Encoding: base64','Content-Disposition: attachment; filename="'+enc(adj.nombre)+'"','', arteB64Lineas(adj.b64),'',
+    '--'+bd+'--',''].filter(x=>x!==null).join('\r\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([eml],{type:'message/rfc822'})); a.download = 'Borrador '+asunto.replace(/[^\w\- ]/g,'')+'.eml';
+  document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },3000);
+  if(typeof toast==='function') toast('📨 Borrador descargado: ábrelo (clic en «Abrir archivo») y sale en Outlook con la PI adjunta'+(para.length?'':' · el proveedor no tiene correo en su ficha'),'ok');
 }
 
 // ── etapa 5: el proveedor aprueba o pide cambios ──
@@ -20212,7 +20793,7 @@ async function arteAbrir(oc, e, tpl, items){
   arteInjectCss(); arteInjectCssGuia(); ARTE.guiaAbierta = undefined;
   const mo = document.querySelector('#modal-etapa-adjunto .mo'); if(mo) mo.classList.add('arte-mo');
   document.getElementById('ea-com-wrap').style.display = 'none';
-  document.getElementById('ea-contenido').innerHTML = '<div class="arte-mu" style="padding:30px;text-align:center;">⏳ Cargando expediente de arte…</div>';
+  document.getElementById('ea-contenido').innerHTML = cargaHtml('Cargando expediente de arte');
   const ui = ARTE_ETAPAS_UI[tpl.id];
   document.getElementById('ea-file-wrap').style.display = (ui.archivo && ARTE.editable) ? 'block' : 'none';
   const lbl = document.getElementById('ea-file-lbl'); if(lbl) lbl.textContent = ui.archivo || 'Foto o comprobante (obligatorio)';
@@ -20761,7 +21342,7 @@ function ocpHtmlEnvio(){
     <textarea class="inp arte-msg" id="ocp-cuerpo" rows="10" ${ed} oninput="ocpSet('envio.cuerpo',this.value)">${ocpEsc(ocpLimpiarCuerpo(e.cuerpo) || ocpMensajeOCI())}</textarea>
     <div id="ocp-adj-zona">${ocpHtmlAdjuntosCorreo()}</div>
     ${OCP.editable?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center;">
-      <button class="btn btn-p btn-sm" style="padding:9px 16px;" id="ocp-btn-enviar" onclick="ocpEnviarOCI()">📨 ${e.enviado_por_erp?'Reenviar':'Enviar'} correo con los adjuntos</button>
+      <button class="btn btn-p btn-sm" style="padding:9px 16px;" id="ocp-btn-enviar" onclick="ocpEnviarOCI()">📨 ${ocpCorreoListo()?(e.enviado_por_erp?'Reenviar':'Enviar')+' correo con los adjuntos':'Abrir correo (y bajar la OC en PDF)'}</button>
       <button class="btn btn-g btn-sm" onclick="OCP.d.envio.cuerpo='';document.getElementById('ocp-cuerpo').value=ocpMensajeOCI();ocpCambio()">↻ Regenerar mensaje</button>
     </div>`:''}
     ${e.enviado_por_erp?`<div class="arte-mu" style="margin-top:8px;color:var(--gr);">✅ Enviado desde el ERP ${arteFmtFecha(e.enviado_erp_en)} a ${ocpEsc(e.enviado_a||'')}${e.enviado_cc?' · CC '+ocpEsc(e.enviado_cc):''}</div>`:''}
@@ -20984,8 +21565,22 @@ async function ocpEnviarOCI(){
   const para = ocpListaCorreos(document.getElementById('ocp-para').value);
   const cc = ocpListaCorreos(ocpCCActual('envio').join(','));
   if(!para.length){ if(typeof toast==='function') toast('Escribe el correo del proveedor','wa'); return; }
-  if(!ocpCorreoListo()){ if(typeof toast==='function') toast('Primero conecta el correo (una sola vez, abajo)','wa'); const d = document.getElementById('ocp-cfg-correo'); if(d){ d.open = true; d.scrollIntoView({behavior:'smooth'}); } return; }
   const btn = document.getElementById('ocp-btn-enviar'); const txt0 = btn.textContent; btn.disabled = true;
+  if(!ocpCorreoListo()){
+    // Sin el correo conectado (Entra): baja la OC (PDF / Excel) y abre Outlook web ya redactado para adjuntarla
+    const win = window.open('about:blank','_blank'); comprasCopiarCC(cc); const env = OCP.d.envio, bajados = [];
+    try{
+      if(env.incluir_pdf!==false){ btn.textContent = '⏳ Generando PDF…'; await ocpGenerarPdf(); if(env.pdf_nombre) bajados.push(env.pdf_nombre); }
+      if(env.incluir_excel){ btn.textContent = '⏳ Generando Excel…'; const x = await reabastExcelOCBlob(OCP.ocId, 'china'); if(x){ ocpDescargar(x.blob, x.nombre); bajados.push(x.nombre); } }
+      for(const a of (env.adjuntos_extra||[])){ try{ const r = await fetch(a.url); if(r.ok){ ocpDescargar(await r.blob(), a.nombre); bajados.push(a.nombre); } }catch(e){} }
+      const asunto = document.getElementById('ocp-asunto').value, cuerpo = ocpLimpiarCuerpo(document.getElementById('ocp-cuerpo').value);
+      const url = 'https://outlook.office.com/mail/deeplink/compose?to='+encodeURIComponent(para.join(','))+(cc.length?'&cc='+encodeURIComponent(cc.join(',')):'')+'&subject='+encodeURIComponent(asunto)+'&body='+encodeURIComponent(cuerpo);
+      if(win) win.location.href = url; else window.open(url,'_blank');
+      ocpLog('correo','Se abrió Outlook web para enviar la OCI a '+para.join(', ')+' · archivos descargados: '+bajados.join(', '));
+      if(typeof toast==='function') toast('📎 Descargado: '+(bajados.join(', ')||'—')+'. En Outlook web pulsa «Adjuntar» y elígelo (o arrástralo desde Descargas). Cuando lo envíes, marca «Enviar el correo» aquí.'+comprasCCAviso(cc),'ok');
+    }catch(err){ if(win) win.close(); if(typeof toast==='function') toast('No se pudo preparar el correo: '+err.message,'er'); }
+    btn.disabled = false; btn.textContent = txt0; return;
+  }
   try{
     const env = OCP.d.envio; const adjuntos = [];
     if(env.incluir_pdf!==false){
@@ -21357,7 +21952,7 @@ function ocpHtmlPI(){
     ${p.sellado_url ? `<div class="arte-adj" style="margin-top:8px;"><span class="arte-adj-t">✅ PI sellada</span><a href="${ocpEsc(p.sellado_url)}" target="_blank" rel="noopener">${ocpEsc(ocpNombreSellado())}</a><span class="arte-mu">${arteFmtFecha(p.sellado_en)}</span></div>`:''}
     ${ed ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
       <button class="btn btn-p btn-sm" style="padding:9px 14px;" onclick="ocpSellarPI()">🖊 ${p.sellado_url?'Volver a sellar':'Poner sello y descargar'}</button>
-      ${p.sellado_url?`<button class="btn btn-bl btn-sm" onclick="ocpCorreoPI()">📨 ${p.enviada_en?'Reenviar':'Enviar'} PI sellada al proveedor (adjunta)</button>`:''}
+      ${p.sellado_url?`<button class="btn btn-bl btn-sm" onclick="ocpCorreoPI()">📨 ${p.enviada_en?'Reenviar':'Enviar'} PI sellada al proveedor</button>`:''}
       ${p.enviada_en?`<span class="arte-mu" style="color:var(--gr);align-self:center;">✅ Enviada ${arteFmtFecha(p.enviada_en)}</span>`:''}
     </div>` : ''}
   </div>`;
@@ -21480,8 +22075,9 @@ async function ocpCorreoPI(){
   const cc = ocpListaCorreos((OCP_CC_DEFAULT||[]).join(','));
   const asunto = 'PI '+(p.pi_no||'')+' / PO '+OCP.oc.numero_oc+' – signed and stamped';
   const cuerpo = `Dear ${OCP.prov.nombre_contacto||'supplier'},\n\nPlease find attached the Proforma Invoice ${p.pi_no||''} for our PO ${OCP.oc.numero_oc}, signed and stamped by ILUMAX TRADING CORP.\n${p.nota?'\nNotes: '+p.nota+'\n':''}\nPlease proceed accordingly and keep us updated on artwork and production timing.\n\nBest regards,\n${arteQuien()}\nILUMAX TRADING CORP`;
+  // Sin el correo conectado (Entra): baja la PI sellada y abre Outlook web ya redactado para adjuntarla
+  if(!ocpCorreoListo()){ await comprasEnviarPI(OCP.ocId); return; }
   if(!para.length){ if(typeof toast==='function') toast('El proveedor no tiene correo en su ficha','wa'); return; }
-  if(!ocpCorreoListo()){ if(typeof toast==='function') toast('Conecta el correo en el paso "Enviar OCI" (una sola vez)','wa'); return; }
   if(!confirm('¿Enviar la PI sellada a '+para.join(', ')+(cc.length?'\nCC: '+cc.join(', '):'')+'?')) return;
   try{
     await ocpEnviarCorreoServidor({para:para.join(','), cc:cc.join(','), asunto, cuerpo, adjuntos:[{url:p.sellado_url, nombre:ocpNombreSellado()}]});
@@ -22057,7 +22653,7 @@ async function ocnGuardarManual(ocId){
 }
 
 // ── Pestaña global: todas las novedades de todas las OC ──
-function reabastHtmlNovedadesShell(){ return `<div id="ocn-global"><div class="arte-mu" style="padding:20px;">⏳ Cargando novedades…</div></div>`; }
+function reabastHtmlNovedadesShell(){ return `<div id="ocn-global">${cargaHtml('Cargando novedades')}</div>`; }
 async function ocnPintarGlobal(forzar){
   const cont = document.getElementById('ocn-global'); if(!cont) return;
   if(!OCN.global || forzar){
@@ -22485,7 +23081,7 @@ async function ocpAbrir(oc, e, tpl, items){
   document.getElementById('ea-file-wrap').style.display = 'none';
   document.getElementById('ea-devolver').style.display = 'none';
   const btn = document.getElementById('ea-confirmar'); btn.textContent = tpl.id==='oc_creada' ? '📤 OCI enviada al proveedor' : '✅ PI confirmada y sellada'; btn.style.display = OCP.editable ? 'inline-flex' : 'none';
-  document.getElementById('ea-contenido').innerHTML = '<div class="arte-mu" style="padding:30px;text-align:center;">⏳ Cargando…</div>';
+  document.getElementById('ea-contenido').innerHTML = cargaHtml('Cargando');
   const [d] = await Promise.all([ocpCargar(oc.id), ocpCargarCC()]); if(OCP.ocId!==oc.id) return;
   OCP.d = d;
   if(tpl.id==='pi_confirmada' && ocpRecomparar()) ocpCambio();
@@ -23751,7 +24347,7 @@ function tiFechaCO(iso){
 async function renderInvTiMod() {
   const el = document.getElementById('inv-ti-content');
   if(!el) return;
-  el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--mu);">⏳ Cargando inventario TI...</div>';
+  el.innerHTML = cargaHtml('Cargando inventario TI');
   await cargarInvTiSupa();
   renderInvTiVista();
 }
@@ -25448,7 +26044,7 @@ function lblColTooltip(codigo) {
 async function renderPreciosLista() {
   const el = document.getElementById('precios-lista-content');
   if(!el) return;
-  el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--mu);">⏳ Cargando precios...</div>';
+  el.innerHTML = cargaHtml('Cargando precios');
   if(!PRECIOS_LOADED) {
     await Promise.all([cargarCatalogo(), cargarPreciosPivote()]);
   }
@@ -25835,7 +26431,7 @@ const MESES_CORTOS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct
 async function renderMiEquipo() {
   const el = document.getElementById('mi-equipo-content');
   if(!el) return;
-  el.innerHTML = '<div style="padding:30px;text-align:center;color:var(--mu);">⏳ Cargando módulo...</div>';
+  el.innerHTML = cargaHtml('Cargando módulo');
 
   const esAdminGlobal = CU?.rol==='admin';
   const esAprob = pvEsAprobador();
@@ -25960,7 +26556,7 @@ async function meCambiarLider(email) {
   ME.liderEmail = email;
   ME.liderNombre = l ? l.nombre : email;
   const el = document.getElementById('mi-equipo-content');
-  if(el) el.innerHTML = '<div style="padding:30px;text-align:center;color:var(--mu);">⏳ Cargando equipo...</div>';
+  if(el) el.innerHTML = cargaHtml('Cargando equipo');
   await meCargarEquipoYPresupuesto();
   if(el) meRender(el);
 }
@@ -26135,7 +26731,7 @@ window.addEventListener('beforeunload', function(e){
 async function renderPresupuestoVentas() {
   const el = document.getElementById('pv-content');
   if(!el) return;
-  el.innerHTML = '<div style="padding:30px;text-align:center;color:var(--mu);">⏳ Cargando módulo...</div>';
+  el.innerHTML = cargaHtml('Cargando módulo');
 
   // Cada usuario elige su propio año (queda guardado en su navegador) — así cada quien puede
   // estar viendo/trabajando el año que le corresponda sin que se lo pise el valor por defecto.
@@ -29752,7 +30348,7 @@ async function pvRenderResumenDash() {
   const el = document.getElementById('pv-resumen-content');
   if(!el) return;
 
-  el.innerHTML = '<div style="padding:30px;text-align:center;"><span class="spin-sm spin-bl"></span><div style="margin-top:10px;font-size:11px;color:var(--mu);">Cargando datos de todos los canales...</div></div>';
+  el.innerHTML = cargaHtml('Cargando datos de todos los canales');
 
   let canales = [...CANALES_DEFAULT];
   try {
@@ -30103,7 +30699,7 @@ var VCM = { data: [], anio: new Date().getFullYear(), cargado: false };
 async function renderDashVentas() {
   const el = document.getElementById('pv-dash-ventas');
   if(!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--mu);">⏳ Cargando datos...</div>';
+  el.innerHTML = cargaHtml('Cargando datos');
   try {
     const rows = await sb.get('ventas_canal_mes',
       `anio=eq.${VCM.anio}&order=canal.asc,mes.asc`);
@@ -30318,7 +30914,7 @@ var CT = {
 async function renderCentro() {
   const el = document.getElementById('centro-content');
   if(!el) return;
-  el.innerHTML = '<div style="padding:30px;text-align:center;color:var(--mu);">⏳ Cargando Centro de Trabajo...</div>';
+  el.innerHTML = cargaHtml('Cargando Centro de Trabajo');
   if(!CT.cargado) await cargarCentro();
   renderCentroShell(el);
 }
@@ -31560,6 +32156,7 @@ const AC_MODULOS_DISP = [
   { id:'inv',                lbl:'📦 Inventario' },
   { id:'inv-ti',             lbl:'💻 Inventario TI' },
   { id:'tesoreria',          lbl:'💸 Tesorería (pago de anticipos)' },
+  { id:'compras',            lbl:'🛒 Módulo de compras' },
   { id:'centro',             lbl:'⚡ Mi Centro de Trabajo' },
   { id:'pres',               lbl:'📒 Presupuestos (legacy)' },
   { id:'adelanto',           lbl:'💰 Adelanto' },
@@ -31569,7 +32166,7 @@ const AC_MODULOS_DISP = [
   { id:'reabast',            lbl:'🔁 Abastecimiento' },
 ];
 // Módulos agregados después: en permisos guardados antes (sin la marca '_v2') se siguen viendo, para no esconderlos de golpe.
-const AC_MODULOS_NUEVOS = ['adelanto','gastos','descuento','rendicion','reabast'];
+const AC_MODULOS_NUEVOS = ['adelanto','gastos','descuento','rendicion','reabast','compras'];
 
 // Acceso efectivo a un módulo del catálogo (🧩 Módulos por Rol), para el usuario logueado.
 // Mismo criterio en todo el sistema: admin siempre puede; sin permisos configurados para
@@ -31581,7 +32178,7 @@ function moduloPermitido(id) {
   // los admin entran por defecto) — se asigna en Admin Center → Módulos por Rol / por persona.
   if(id==='ppto-areas') return !!(CU.modulos && CU.modulos.includes('ppto-areas'));
   if(CU.rol==='admin') return true;
-  if((id==='reabast' || id==='tesoreria') && typeof reabastEsEditor==='function' && reabastEsEditor()) return true;
+  if((id==='reabast' || id==='tesoreria' || id==='compras') && typeof reabastEsEditor==='function' && reabastEsEditor()) return true;
   if(!CU.modulos || !CU.modulos.length) return true;
   if(AC_MODULOS_NUEVOS.includes(id) && !CU.modulos.includes('_v2')) return true;
   return CU.modulos.includes(id);
