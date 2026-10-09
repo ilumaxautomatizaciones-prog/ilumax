@@ -36288,7 +36288,7 @@ async function rvActualizarDesdeSiesa() {
     toast('✅ ' + RV.datos.length + ' facturas sincronizadas desde SIESA', 'ok');
     await rvGuardarSnapshot();
     // Deja tambien al dia la tabla de la nube (correo automatico y reporte.html leen de ahi); no espera la respuesta
-    try{ fetch(SB_URL + '/functions/v1/sync-siesa-auto', { method:'POST', headers:{'Content-Type':'application/json', apikey:SB_KEY, Authorization:'Bearer ' + SB_KEY}, body: JSON.stringify({modo:'ventas'}) }).catch(()=>{}); }catch(_){}
+    try{ fetch(SB_URL + '/functions/v1/sync-ventas-ahora', { method:'POST', headers:{'Content-Type':'application/json', apikey:SB_KEY, Authorization:'Bearer ' + SB_KEY}, body: '{}' }).catch(()=>{}); }catch(_){}
   } catch(e) {
     console.error('Error sync ventas SIESA:', e);
     toast('❌ Error consultando SIESA: ' + e.message, 'er');
@@ -36708,6 +36708,8 @@ const RV_CANAL_COD_DEF = {'0011':'CANAL MODERNO','0012':'CANAL MIXTO','0013':'CA
 async function rvVentasDesdeNube(){
   const last = await sb.get('ventas_facturas_siesa','select=fecha&estado=neq.9&order=fecha.desc&limit=1');
   if(!last || !last[0]) return false;
+  // Gana lo mas reciente: si el snapshot (boton Actualizar desde SIESA) es posterior a la ultima sync automatica de la nube, se conserva el snapshot
+  try{ const c0 = await sb.get('configuracion','clave=eq.ventas_siesa_ultima_actualizacion&select=valor'), tN = c0 && c0[0] ? Date.parse(c0[0].valor) : 0, tS = RV.snapMeta && RV.snapMeta.actualizado ? Date.parse(RV.snapMeta.actualizado) : 0; if(tS && tN && tS > tN) return false; }catch(e){}
   const serial = iso => { const p=String(iso||'').slice(0,10).split('-').map(Number); return p.length===3&&p[0] ? Math.round((Date.UTC(p[0],p[1]-1,p[2])-Date.UTC(1899,11,30))/86400000) : 0; };
   if(RV.fechas && RV.fechas.length && Math.max(...RV.fechas) > serial(last[0].fecha)) return false; // el snapshot ya trae días más recientes
   let cod = Object.assign({}, RV_CANAL_COD_DEF); try{ const c = await sb.get('configuracion','clave=eq.rv_canal_codigos&select=valor'); if(c && c[0] && c[0].valor) Object.assign(cod, JSON.parse(c[0].valor)); }catch(e){}
