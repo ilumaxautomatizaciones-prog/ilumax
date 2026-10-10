@@ -1179,6 +1179,7 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
 </div>
 
 <!-- ═══ CENTRO DE TRABAJO — DUVIER ═══ -->
+<div class="page" id="pg-comisiones"><div id="comisiones-content" style="padding:14px;"></div></div>
 <div class="page" id="pg-centro">
   <div id="centro-content"></div>
 </div>
@@ -2889,6 +2890,7 @@ function buildNav(){
   // Centro de trabajo — líder automatizaciones
   const esDuvier = CU.email === 'duduwxo50@gmail.com' || CU.email === 'liderautomatizaciones@ilumax.com.co' || CU.cargo?.toLowerCase().includes('automatiz') || CU.nombre?.toLowerCase().includes('duvier');
   if(esDuvier || esAdmin) adminItems.push({ id:'centro', lbl:'Mi Centro', ico:'⚡' });
+  if(typeof cmEsEditor==='function' && cmEsEditor()) adminItems.push({ id:'comisiones', lbl:'Comisiones', ico:'💰' });
   if(adminItems.length) grupos.push({ tipo:'grupo', id:'g-admin', lbl:'⚙️ Admin', header:'Sistema', items: adminItems });
 
   // Ocultar del menú los módulos a los que este usuario no tiene acceso, según lo configurado
@@ -3073,7 +3075,7 @@ function renderNavFav() {
       }).join('');
 }
 
-const pgMap={inicio:renderInicio,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'inv-ti':renderInvTiMod,reabast:renderReabastMod,tesoreria:renderTesoreriaMod,compras:renderComprasMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas,centro:renderCentro,'reporte-ventas':renderReporteVentas,'margen-cliente':function(){renderMargenCliente();},'ppto-areas':renderPptoAreas,'admin-center':renderAdminCenter,'mi-equipo':renderMiEquipo};
+const pgMap={inicio:renderInicio,comisiones:renderComisionesPg,mis:renderMis,notif:renderNotif,apro:renderApro,admin:renderAdmin,rrhh:renderRrhh,pres:renderPres,inv:renderInventarioMod,'inv-ti':renderInvTiMod,reabast:renderReabastMod,tesoreria:renderTesoreriaMod,compras:renderComprasMod,'precios-lista':renderPreciosLista,'presupuesto-ventas':renderPresupuestoVentas,centro:renderCentro,'reporte-ventas':renderReporteVentas,'margen-cliente':function(){renderMargenCliente();},'ppto-areas':renderPptoAreas,'admin-center':renderAdminCenter,'mi-equipo':renderMiEquipo};
 // ── Recordar la última vista (módulo + pestaña) para restaurarla al refrescar el navegador ──
 function ultimaVistaKey(){ return 'ilx_ultima_vista_' + (typeof CU!=='undefined' && CU ? CU.email : 'default'); }
 function guardarUltimaVista(pageId){
@@ -10059,6 +10061,47 @@ async function reabastRefConFoto(c){
     r._fotoPend = false;
   }
   return r;
+}
+// ── Fotos de referencias: de base64 dentro de la tabla a archivos en el almacenamiento ──
+// Cada foto guardada como base64 se descargaba completa en cada carga de Abastecimiento (≈19 MB por carga: lo que agotó el tráfico de salida de Supabase).
+// Aquí se reduce a JPEG de máx. 900 px, se sube al bucket público y la tabla guarda solo el enlace.
+function reabastFotoAStorage(dataUrl, ref){
+  return new Promise((ok,ko)=>{
+    const img = new Image();
+    img.onload = async()=>{
+      try{
+        const k = Math.min(1, 900/Math.max(img.width,img.height)), c = document.createElement('canvas');
+        c.width = Math.max(1,Math.round(img.width*k)); c.height = Math.max(1,Math.round(img.height*k));
+        const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0,0,c.width,c.height); g.drawImage(img,0,0,c.width,c.height);
+        const blob = await new Promise(r=>c.toBlob(r,'image/jpeg',0.82));
+        if(!blob) throw new Error('No se pudo convertir la foto');
+        ok(await ocSubirAdjunto(new File([blob], 'ref_'+String(ref||'foto').replace(/[^a-zA-Z0-9-]/g,'_')+'.jpg', {type:'image/jpeg'})));
+      }catch(e){ ko(e); }
+    };
+    img.onerror = ()=>ko(new Error('Foto ilegible'));
+    img.src = dataUrl;
+  });
+}
+async function reabastMigrarFotos(){
+  const est = document.getElementById('ref-import-estado');
+  const lista = await sbReabast.get('referencias_maestro','select=id,referencia&foto_url=like.data*&limit=10000') || [];
+  if(!lista.length){ toast('✅ Todas las fotos ya están en el almacenamiento','ok'); return; }
+  if(!confirm('Hay '+lista.length+' fotos guardadas dentro de la base. Se van a reducir (máx. 900 px) y mover al almacenamiento. Es una sola vez y puede tardar un par de minutos. ¿Continuar?')) return;
+  let ok = 0, fallo = 0;
+  for(const [i,x] of lista.entries()){
+    if(est) est.textContent = '🗜️ Moviendo fotos… '+(i+1)+' de '+lista.length;
+    try{
+      const rows = await sbReabast.get('referencias_maestro','select=foto_url&id=eq.'+x.id), src = rows && rows[0] ? rows[0].foto_url : '';
+      if(!src || !String(src).startsWith('data:')) continue;
+      const url = await reabastFotoAStorage(src, x.referencia);
+      await sbReabast.patch('referencias_maestro','id=eq.'+x.id,{foto_url:url});
+      const r = (REABAST.referenciasMaestro||{})[x.referencia]; if(r){ r.foto_url = url; REF_FOTOS.cache[x.referencia] = {url, act:r.actualizado}; }
+      ok++;
+    }catch(e){ fallo++; console.warn('Foto '+x.referencia+':', e.message); }
+  }
+  if(est) est.textContent = '';
+  toast((fallo?'⚠️ ':'✅ ')+ok+' fotos movidas'+(fallo?' · '+fallo+' fallaron (se pueden reintentar)':''), fallo?'wa':'ok');
+  reabastRefrescarFotosUI();
 }
 async function reabastVerDetalleReferenciaPorCodigo(c){ const r = await reabastRefConFoto(c); if(r) reabastVerDetalleReferencia(r); }
 async function reabastEditarReferenciaPorCodigo(c){ const r = await reabastRefConFoto(c); if(r) abrirModalReferencia(r); }
@@ -17819,6 +17862,7 @@ function reabastHtmlReferenciasShell(){
         <label class="btn btn-g btn-sm" style="cursor:pointer;margin:0;">📤 Importar desde Excel<input type="file" accept=".xlsx,.xls,.csv" style="display:none;" onchange="refImportarExcel(this)"></label>
         ${reabastEsAdmin()?`<button class="btn btn-g btn-sm" onclick="refCompletarDesdePanelCompras()" title="Refresca el FOB US$ de TODAS las referencias con el precio de la última compra real (Panel de compras), y completa el Proveedor solo donde esté vacío">🔄 Actualizar precios/proveedor</button>`:''}
         ${reabastEsAdmin()?`<button class="btn btn-g btn-sm" onclick="cbmAplicarArchivoIncluido()" title="Fuerza el CBM por unidad de las ${Object.keys(CBM_ARCHIVO).length} referencias del archivo CBM_2.xlsx">📦 Reaplicar CBM (CBM_2.xlsx)</button><label class="btn btn-g btn-sm" style="cursor:pointer;margin:0;" title="Excel con columnas referencia y CBM">📦 CBM desde Excel<input type="file" accept=".xlsx,.xls" style="display:none;" onchange="cbmAplicarExcel(this)"></label>`:''}
+        ${reabastEsAdmin()?`<button class="btn btn-g btn-sm" onclick="reabastMigrarFotos()" title="Mueve las fotos guardadas dentro de la base al almacenamiento (más rápido y gasta mucho menos tráfico)">🗜️ Mover fotos al almacenamiento</button>`:''}
         <button class="btn btn-bl btn-sm" onclick="abrirModalReferencia()">+ Nueva referencia</button>
       </div>
     </div>
@@ -18881,6 +18925,7 @@ async function guardarReferencia(){
   payload.ean14_adicionales = document.getElementById('rf-ean14-adicionales').value.trim() || null;
   const fotoPrev = document.getElementById('rf-foto-preview');
   payload.foto_url = (fotoPrev && fotoPrev.dataset.valor) ? fotoPrev.dataset.valor : null;
+  if(payload.foto_url && String(payload.foto_url).startsWith('data:')){ try{ payload.foto_url = await reabastFotoAStorage(payload.foto_url, payload.referencia); }catch(e){ console.warn('Foto al almacenamiento falló, se guarda dentro de la base:', e.message); } }
   if(!payload.foto_url && REFERENCIA_EDIT_ID){ const ex = Object.values(REABAST.referenciasMaestro||{}).find(x=>String(x.id)===String(REFERENCIA_EDIT_ID)); if(ex && ex.foto_url===undefined) delete payload.foto_url; }   // foto aún sin cargar: no la borres
   try{
     if(REFERENCIA_EDIT_ID){
@@ -31202,6 +31247,7 @@ const CM_REGLAS_DEF = {
     {id:'dis',  n:'Desarrollo distribuidor',      tipo:'cuenta', pct:5}
   ]
 };
+const CM_CANAL = {'0011':'Canal Moderno','0012':'Canal Mixto','0013':'Homecenter','0014':'Hard Discount','0021':'Especializado','0022':'Proyectos','0023':'Distribuidor','0040':'Online','0042':'Empleados','0001':'Constructoras','0002':'Institucional'};
 const CM_V65 = ()=>[{n:'Venta',peso:65,f:'venta'},{n:'Recaudo',peso:35,f:'manual'}];
 const CM_PERS_DEF = [
   ['Cindy Castañeda','coord',2261800],['Katherine Sanchez','vendedor',2500000],['Sergio Parra','vendedor',2415000],['Jaime Ferreira','vendedor',2415000],['Carmelina Florez','vendedor',2500000],
@@ -31225,16 +31271,25 @@ async function cmCargarBase(){
 }
 async function cmCargarMes(){
   const [a,m] = CM.mes.split('-').map(Number), sig = new Date(a, m, 1), hasta = sig.getFullYear()+'-'+String(sig.getMonth()+1).padStart(2,'0')+'-01';
+  const hoy = new Date(), esActual = CM.mes===hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0');
   CM.datos = [];
+  const leer = async (tabla, extra)=>{ const out = []; for(let off=0; ; off+=1000){ const rows = await sb.get(tabla,'select=fecha,nro_documento,cliente,vendedor,canal,subtotal'+extra+'&fecha=gte.'+CM.mes+'-01&fecha=lt.'+hasta+'&order=fecha.asc&limit=1000&offset='+off) || []; out.push(...rows); if(rows.length<1000) break; } return out; };
   try{
-    for(let off=0; ; off+=1000){
-      const rows = await sb.get('ventas_facturas_excel','select=fecha,nro_documento,vendedor,subtotal&fecha=gte.'+CM.mes+'-01&fecha=lt.'+hasta+'&order=fecha.asc&limit=1000&offset='+off) || [];
-      rows.forEach(r=>CM.datos.push({vend:String(r.vendedor||'').trim(), val:parseFloat(r.subtotal)||0}));
-      if(rows.length<1000) break;
-    }
-    CM.fuente = '📅 Facturas guardadas ('+CM.datos.length+')';
+    // Fuente principal: facturas de Siesa sincronizadas (subtotal sin IVA, sin anuladas). Para meses cerrados que no estén completas ahí, las facturas guardadas del Excel.
+    let rs = await leer('ventas_facturas_siesa','&estado=neq.9'), org = 'Siesa';
+    if(!esActual && rs.length<200){ const rx = await leer('ventas_facturas_excel',''); if(rx.length>rs.length){ rs = rx; org = 'facturas guardadas'; } }
+    rs.forEach(r=>CM.datos.push({fecha:r.fecha, doc:String(r.nro_documento||'').trim(), cli:String(r.cliente||'').trim(), vend:String(r.vendedor||'').trim(), canal:CM_CANAL[String(r.canal||'').trim()]||String(r.canal||'').trim(), val:parseFloat(r.subtotal)||0}));
+    CM.fuente = '📅 Ventas del mes · '+org+' ('+CM.datos.length+' facturas, sin IVA)';
   }catch(e){ toast('No pude leer las facturas del mes: '+e.message,'er'); }
-  CM.pptoRows = []; try{ CM.pptoRows = await sb.get('presupuesto_vendedor','anio=eq.'+a+'&mes=eq.'+m) || []; }catch(e){}
+  CM.pptoRows = []; CM.pptoFuente = 'Mi equipo'; try{ CM.pptoRows = await sb.get('presupuesto_vendedor','anio=eq.'+a+'&mes=eq.'+m) || []; }catch(e){}
+  if(!CM.pptoRows.length){
+    // Sin presupuesto en «Mi equipo»: se toma el del reporte diario (mismo de la matriz de ejecutivos por canal)
+    const mp = {}, G5 = ['ESP','MIX','PRO','ONL','HOM'];
+    try{ if(esActual){ const s = await sb.get('ventas_diarias_snapshots','select=consolidado:payload->consolidado&order=fecha.desc&limit=1'), c = (s && s[0] && s[0].consolidado) || {}; Object.entries(c).forEach(([n,v])=>{ mp[n] = (+v.pptoEsp||0)+(+v.pptoMix||0)+(+v.pptoPro||0)+(+v.pptoOnl||0)+(+v.pptoHom||0); }); } }catch(e){}
+    try{ const e = await cmCfg('rv_ppto_ejecutivo'), mm = e && e.meses && e.meses[CM.mes]; if(mm) Object.entries(mm).forEach(([n,v])=>{ mp[n] = G5.reduce((x,g)=>x+(+v[g]||0),0); }); }catch(e){}
+    CM.pptoRows = Object.entries(mp).filter(x=>x[1]>0).map(([n,p])=>({vendedor_nombre:n, presupuesto:p}));
+    CM.pptoFuente = CM.pptoRows.length ? 'presupuesto del reporte diario' : 'SIN presupuesto cargado para este mes';
+  }
   CM.man = (await cmCfg('com_manual_'+CM.mes)) || {};
 }
 async function cmSiesa(){
@@ -31243,7 +31298,7 @@ async function cmSiesa(){
   toast('🔌 Consultando Siesa…','inf');
   try{
     const items = await _siesaFetchPaginas(()=>{}, 'API_v2_Ventas_Facturas_DesdePedido', "f350_id_cia = 1 AND f350_fecha >= ''"+CM.mes+"-01''", 100), por = {};
-    items.forEach(it=>{ if(Number(it.f350_ind_estado)===9) return; const id = it.f350_rowid; if(id==null || por[id]) return; por[id] = {vend:String(it.f200_razon_social_vendedor||'').trim(), val:((parseFloat(it.f461_vlr_bruto||0)||0)-(parseFloat(it.f461_vlr_dscto||0)||0))}; });
+    items.forEach(it=>{ if(Number(it.f350_ind_estado)===9) return; const id = it.f350_rowid; if(id==null || por[id]) return; por[id] = {fecha:String(it.f350_fecha||'').slice(0,10), doc:String(it.f350_prefijo||it.f350_id_tipo_docto||'').trim()+String(it.f350_consec_docto||''), cli:String(it.f200_razon_social_fact||'').trim(), canal:CM_CANAL[String(it.f461_id_tipo_cli_fact||'').trim()]||String(it.f461_id_tipo_cli_fact||'').trim(), vend:String(it.f200_razon_social_vendedor||'').trim(), val:((parseFloat(it.f461_vlr_bruto||0)||0)-(parseFloat(it.f461_vlr_dscto||0)||0))}; });
     CM.datos = Object.values(por); CM.fuente = '📡 Siesa en vivo ('+CM.datos.length+' facturas) · '+new Date().toLocaleTimeString('es-CO');
     toast('✅ '+CM.datos.length+' facturas desde Siesa','ok'); cmPintar();
   }catch(e){ toast('Siesa: '+e.message,'er'); }
@@ -31287,7 +31342,7 @@ async function renderCtComisiones(el){
   await cmCargarMes(); cmPintar();
 }
 function cmPintar(){
-  const el = document.getElementById('ct-tab-content'); if(!el || CT.tabActivo!=='comisiones') return;
+  const el = document.getElementById(CM.dest||'ct-tab-content'); if(!el || (!CM.dest && CT.tabActivo!=='comisiones')) return;
   const R = CM.reglas, F = cmCalcular(), E = reabastEsc, jq = s=>JSON.stringify(s).replace(/"/g,'&quot;');
   const TB = F.reduce((a,x)=>a+(Number(x.p.base)||0),0), TP = F.reduce((a,x)=>a+x.pagoFin,0);
   const inp = (w,id,v)=>`<input class="inp" type="number" step="any" id="${id}" value="${v}" style="width:${w}px;padding:3px 6px;font-size:12px;">`;
@@ -31308,7 +31363,7 @@ function cmPintar(){
   const filas = F.map(x=>{ const p = x.p, ab = !!CM.abierto[p.id], q = jq(p.id), k = x.man;
     const mi = (a,b,c,v,ph,w)=>`<input class="inp" type="number" step="any" value="${v}" placeholder="${ph}" style="width:${w||115}px;padding:3px 5px;font-size:12px;text-align:right;" onchange="cmSet(${q},'${a}',${b==null?'null':jq(b)},'${c||''}',this.value)">`;
     const cc = c=>`<span style="font-weight:700;color:${c>=1?'#16a34a':c>=R.minPago/100?'#b45309':'#dc2626'};">${cmPct(c)}</span>`;
-    const det = ab ? `<tr><td colspan="9" style="background:var(--s1);padding:8px 14px;">
+    const det = ab ? `<tr><td colspan="10" style="background:var(--s1);padding:8px 14px;">
       <table style="font-size:12px;width:auto;"><thead><tr><th>Ítem</th><th>Fuente</th><th style="text-align:right;">Peso</th><th style="text-align:right;">Presupuesto</th><th style="text-align:right;">Real</th><th style="text-align:right;">% cumpl.</th><th style="text-align:right;">Resultado</th></tr></thead><tbody>${x.items.map((it,i)=>`<tr><td><b>${E(it.n)}</b></td><td class="arte-mu">${it.f==='venta'?'Siesa (propio)':it.f==='equipo'?'suma del equipo':it.f==='total'?'total compañía':'manual'}</td><td style="text-align:right;">${it.peso}%</td><td style="text-align:right;">${mi('it',i,'p',it.ovP?it.ppto:'',it.autoP?cmNum(it.autoP):'0')}</td><td style="text-align:right;">${mi('it',i,'r',it.ovR?it.real:'',it.autoR?cmNum(it.autoR):'0')}</td><td style="text-align:right;">${cc(it.cump)}</td><td style="text-align:right;">${cmPct(it.res)}</td></tr>`).join('')}<tr style="font-weight:800;border-top:2px solid var(--b1);"><td colspan="6">Cumplimiento ponderado</td><td style="text-align:right;">${cmPct(x.cum)}</td></tr></tbody></table>
       <div class="arte-mu" style="font-size:10.5px;margin:3px 0 8px;">Los campos vacíos usan el valor automático (en gris). Escribe un número para sobrescribirlo; bórralo para volver al automático.</div>
       <div style="font-weight:700;margin-bottom:4px;">Puntos adicionales ${x.ptsAct?'<span style="color:#16a34a;">✔ activos</span>':'<span style="color:#b45309;">(inactivos: se activan desde '+R.umbralPuntos+'% de cumplimiento)</span>'}</div>
@@ -31317,7 +31372,7 @@ function cmPintar(){
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;align-items:end;">
         <label style="font-size:11.5px;">Ajuste ± ($)<br>${mi('ajuste',null,'',k.ajuste||'','0',110)}</label>
         <label style="font-size:11.5px;">Observación<br><input class="inp" value="${E(k.nota||'')}" style="width:300px;padding:3px 6px;font-size:12px;" onchange="cmSet(${q},'nota',null,'',this.value)"></label></div>
-      <details style="margin-top:10px;"><summary style="cursor:pointer;font-weight:700;font-size:12px;">⚙️ Configurar colaborador</summary>
+      <details ${CM.cfg&&CM.cfg[p.id]?'open':''} style="margin-top:10px;"><summary style="cursor:pointer;font-weight:700;font-size:12px;">⚙️ Configurar colaborador</summary>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0;align-items:end;">
           <label style="font-size:11.5px;">Nombre<br><input class="inp" value="${E(p.nombre)}" style="width:170px;padding:3px 6px;font-size:12px;" onchange="cmPers(${q},'nombre',this.value)"></label>
           <label style="font-size:11.5px;">Cargo<br><select class="inp" style="padding:3px 6px;font-size:12px;" onchange="cmPers(${q},'cargo',this.value)">${[['vendedor','Vendedor'],['lider','Líder de canal'],['coord','Coordinador (equipo)']].map(([v,l])=>`<option value="${v}" ${p.cargo===v?'selected':''}>${l}</option>`).join('')}</select></label>
@@ -31327,19 +31382,19 @@ function cmPintar(){
         ${p.items.map((it,i)=>`<div style="display:flex;gap:6px;align-items:center;margin:3px 0;"><input class="inp" value="${E(it.n)}" style="width:130px;padding:3px 6px;font-size:12px;" onchange="cmItem(${q},${i},'n',this.value)"><input class="inp" type="number" value="${it.peso}" style="width:60px;padding:3px 6px;font-size:12px;" onchange="cmItem(${q},${i},'peso',this.value)">%<select class="inp" style="padding:3px 6px;font-size:12px;" onchange="cmItem(${q},${i},'f',this.value)">${[['venta','Siesa (ventas propias)'],['equipo','Suma del equipo'],['total','Total compañía'],['manual','Manual']].map(([v,l])=>`<option value="${v}" ${it.f===v?'selected':''}>${l}</option>`).join('')}</select><button class="btn btn-g btn-xs" onclick="cmItemDel(${q},${i})">✕</button></div>`).join('')}
         <button class="btn btn-g btn-xs" onclick="cmItemAdd(${q})">+ ítem</button> <button class="btn btn-rd btn-xs" onclick="cmPersDel(${q})">Quitar colaborador</button></details>
     </td></tr>` : '';
-    return `<tr style="cursor:pointer;" onclick="CM.abierto[${q}]=!CM.abierto[${q}];cmPintar()"><td><b>${ab?'▾':'▸'} ${E(p.nombre)}</b></td><td class="arte-mu">${p.cargo==='coord'?'Coordinador':p.cargo==='lider'?'Líder':'Vendedor'}</td><td style="text-align:right;">${cmMoney(p.base)}</td><td style="text-align:center;">${cc(x.cum)}</td><td style="text-align:center;">${x.prem?cmPct(x.prem,0):'—'}</td><td style="text-align:center;">${(x.ptsAp+x.extra)?cmPct(x.ptsAp+x.extra,0):'—'}</td><td style="text-align:center;font-weight:700;">${cmPct(x.tot)}</td><td style="text-align:right;font-weight:800;color:var(--bl);" title="${E(x.nota)}">${cmMoney(x.pagoFin)}${x.aj?' <span class="arte-mu" title="Incluye ajuste">±</span>':''}</td><td class="arte-mu" style="font-size:10.5px;">${E(x.nota)}</td></tr>`+det; }).join('');
+    return `<tr style="cursor:pointer;" onclick="CM.abierto[${q}]=!CM.abierto[${q}];cmPintar()"><td><b>${ab?'▾':'▸'} ${E(p.nombre)}</b></td><td class="arte-mu">${p.cargo==='coord'?'Coordinador':p.cargo==='lider'?'Líder':'Vendedor'}</td><td style="text-align:right;">${cmMoney(p.base)}</td><td style="text-align:center;">${cc(x.cum)}</td><td style="text-align:center;">${x.prem?cmPct(x.prem,0):'—'}</td><td style="text-align:center;">${(x.ptsAp+x.extra)?cmPct(x.ptsAp+x.extra,0):'—'}</td><td style="text-align:center;font-weight:700;">${cmPct(x.tot)}</td><td style="text-align:right;font-weight:800;color:var(--bl);" title="${E(x.nota)}">${cmMoney(x.pagoFin)}${x.aj?' <span class="arte-mu" title="Incluye ajuste">±</span>':''}</td><td class="arte-mu" style="font-size:10.5px;">${E(x.nota)}</td><td style="white-space:nowrap;"><button class="btn btn-g btn-xs" title="Editar colaborador" onclick="event.stopPropagation();cmPersEdit(${q})">✏️</button> <button class="btn btn-rd btn-xs" title="Quitar colaborador" onclick="event.stopPropagation();cmPersDel(${q})">🗑️</button></td></tr>`+det; }).join('');
   const meses = cmMesLista().map(m=>`<option value="${m}" ${m===CM.mes?'selected':''}>${RV_MESES_L[parseInt(m.slice(5),10)-1]} ${m.slice(0,4)}</option>`).join('');
   el.innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
-      <select class="inp" style="width:auto;" onchange="CM.mes=this.value;renderCtComisiones(document.getElementById('ct-tab-content'))">${meses}</select>
+      <select class="inp" style="width:auto;" onchange="CM.mes=this.value;renderCtComisiones(document.getElementById(CM.dest||'ct-tab-content'))">${meses}</select>
       <button class="btn btn-bl btn-sm" onclick="cmSiesa()">🔄 Actualizar desde Siesa</button>
       <button class="btn btn-g btn-sm" onclick="cmPersAdd()">+ Colaborador</button>
       <button class="btn btn-g btn-sm" onclick="cmExcel()">⬇ Excel</button>
-      <span class="arte-mu" style="font-size:11px;">${E(CM.fuente)} · presupuesto de venta de «Mi equipo»</span></div>
+      <span class="arte-mu" style="font-size:11px;">${E(CM.fuente)} · ppto: ${E(CM.pptoFuente||'Mi equipo')}</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px;">
       ${[['Salario variable base',cmMoney(TB)],['Total a pagar',cmMoney(TP)],['% ejecución real del ppto.',TB?cmPct(TP/TB):'—']].map((a,i)=>`<div style="border:1px solid var(--b2);border-radius:10px;padding:8px 12px;background:#fff;"><div class="arte-mu" style="font-size:10px;text-transform:uppercase;">${a[0]}</div><div style="font-size:17px;font-weight:800;${i===1?'color:var(--bl);':''}">${a[1]}</div></div>`).join('')}</div>
     ${CM.sinMatch.length?`<div class="alert" style="font-size:11.5px;margin-bottom:10px;">⚠️ Facturas de vendedores de Siesa sin colaborador asignado: ${CM.sinMatch.slice(0,6).map(([n,v])=>'<b>'+E(n)+'</b> ('+cmMoney(v)+')').join(' · ')}. Si es el mismo nombre escrito distinto, ponlo en «Nombre(s) en Siesa» del colaborador.</div>`:''}
     ${reglas}
-    <div class="tw"><table style="font-size:12px;"><thead><tr><th>Colaborador</th><th>Cargo</th><th style="text-align:right;">Salario variable base</th><th>Cumplimiento</th><th>Premio</th><th>Puntos</th><th>Total matriz</th><th style="text-align:right;">A pagar</th><th></th></tr></thead><tbody>${filas}<tr style="border-top:2px solid var(--b1);font-weight:800;"><td>TOTAL</td><td></td><td style="text-align:right;">${cmMoney(TB)}</td><td colspan="4"></td><td style="text-align:right;color:var(--bl);">${cmMoney(TP)}</td><td></td></tr></tbody></table></div>
+    <div class="tw"><table style="font-size:12px;"><thead><tr><th>Colaborador</th><th>Cargo</th><th style="text-align:right;">Salario variable base</th><th>Cumplimiento</th><th>Premio</th><th>Puntos</th><th>Total matriz</th><th style="text-align:right;">A pagar</th><th></th><th></th></tr></thead><tbody>${filas}<tr style="border-top:2px solid var(--b1);font-weight:800;"><td>TOTAL</td><td></td><td style="text-align:right;">${cmMoney(TB)}</td><td colspan="4"></td><td style="text-align:right;color:var(--bl);">${cmMoney(TP)}</td><td></td><td></td></tr></tbody></table></div>
     <div class="arte-mu" style="font-size:11px;margin-top:8px;">Pago = total matriz × salario variable base, solo si el cumplimiento ponderado llega al mínimo; sobre el tope se paga base × (tope + premio). Recaudo y puntos se digitan en el detalle de cada colaborador (luego los cargarán Mayra y Omar).</div>`;
 }
 function cmPremioMas(d){ cmLeerReglas(); const t = CM.reglas.premios; if(d>0) t.push({desde:(t.length?Number(t[t.length-1].hasta)+1:95), hasta:999, pct:0}); else t.pop(); cmPintar(); }
@@ -31363,14 +31418,147 @@ function cmPers(id, campo, v){ const p = CM.personas.find(x=>x.id===id); if(!p) 
 function cmItem(id, i, campo, v){ const p = CM.personas.find(x=>x.id===id); if(!p) return; p.items[i][campo] = campo==='peso' ? (parseFloat(v)||0) : v; cmGuardarPers(); }
 function cmItemAdd(id){ const p = CM.personas.find(x=>x.id===id); if(!p) return; p.items.push({n:'Nuevo ítem', peso:0, f:'manual'}); cmGuardarPers(); }
 function cmItemDel(id, i){ const p = CM.personas.find(x=>x.id===id); if(!p) return; p.items.splice(i,1); cmGuardarPers(); }
-function cmPersAdd(){ CM.personas.push({id:'p'+Date.now(), nombre:'Nuevo colaborador', cargo:'vendedor', base:0, alias:'', items:CM_V65()}); CM.abierto[CM.personas[CM.personas.length-1].id] = true; cmGuardarPers(); }
+function cmPersAdd(){ CM.personas.push({id:'p'+Date.now(), nombre:'Nuevo colaborador', cargo:'vendedor', base:0, alias:'', items:CM_V65()}); CM.abierto[CM.personas[CM.personas.length-1].id] = true; (CM.cfg = CM.cfg||{})[CM.personas[CM.personas.length-1].id] = true; cmGuardarPers(); }
+function cmPersEdit(id){ (CM.cfg = CM.cfg||{})[id] = true; CM.abierto[id] = true; cmPintar(); }
+// Quién puede ver y editar Comisiones como módulo propio (además de admin y de quien administra el Centro de Trabajo)
+const CM_EDITORES = ['jefeventasmulticanal@ilumax.com.co','cindy@ilumax.com.co','duduwxo50@gmail.com','liderautomatizaciones@ilumax.com.co'];
+function cmEsEditor(){ if(!CU) return false; const m = String(CU.email||'').toLowerCase(); return CU.rol==='admin' || CM_EDITORES.includes(m) || /automatiz/i.test(CU.cargo||'') || /duvier/i.test(CU.nombre||''); }
+function renderComisionesPg(){
+  const el = document.getElementById('comisiones-content'); if(!el) return;
+  if(!cmEsEditor()){ el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--rd);">⛔ No tienes acceso a Comisiones.</div>'; return; }
+  CM.dest = 'comisiones-content'; renderCtComisiones(el);
+}
 function cmPersDel(id){ const p = CM.personas.find(x=>x.id===id); if(!p || !confirm('¿Quitar a '+p.nombre+' de la liquidación?')) return; CM.personas = CM.personas.filter(x=>x.id!==id); cmGuardarPers(); }
-function cmExcel(){
+function cmExcelBasico(){
   if(typeof XLSX==='undefined') return;
   const rows = cmCalcular().map(x=>{ const o = {Colaborador:x.p.nombre, Cargo:x.p.cargo, 'Salario variable base':x.p.base}; x.items.forEach(it=>{ o[it.n+' ppto']=Math.round(it.ppto*100)/100; o[it.n+' real']=Math.round(it.real*100)/100; o[it.n+' %']=+(it.cump*100).toFixed(1); });
     o['Cumplimiento ponderado %']=+(x.cum*100).toFixed(2); o['Premio %']=+(x.prem*100).toFixed(1); o['Puntos %']=+((x.ptsAp+x.extra)*100).toFixed(1); o['Total matriz %']=+(x.tot*100).toFixed(2); o['A pagar según matriz']=Math.round(x.pago); o['Ajuste']=x.aj; o['A pagar definitivo']=Math.round(x.pagoFin); o['Observación']=(x.man.nota||'')||x.nota; return o; });
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Comisiones '+CM.mes);
   XLSX.writeFile(wb, 'Comisiones_'+CM.mes+'.xlsx');
+}
+
+// ── Excel avanzado de comisiones (ExcelJS): una hoja por colaborador con fórmulas vivas, reglas parametrizadas y facturas del mes conectadas ──
+async function cmExcel(){
+  try{
+    if(!window.ExcelJS) await new Promise((ok,ko)=>{ const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js'; s.onload = ok; s.onerror = ()=>ko(new Error('No se pudo cargar ExcelJS')); document.head.appendChild(s); });
+    toast('Armando el Excel avanzado…','inf');
+    const F = cmCalcular(), R = CM.reglas, wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX'; wb.calcProperties = {fullCalcOnLoad:true};
+    const MONEY = '"$" #,##0', PCT = '0.0%', mesTxt = RV_MESES_L[parseInt(CM.mes.slice(5),10)-1]+' '+CM.mes.slice(0,4);
+    const fill = a=>({type:'pattern',pattern:'solid',fgColor:{argb:a}}), YEL = fill('FFFEF9C3'), DARK = fill('FF0F172A'), GRY = fill('FFF1F5F9');
+    const hdr = (ws,row,c1,c2)=>{ for(let c=c1;c<=c2;c++){ const k = ws.getCell(row,c); k.font = {bold:true,color:{argb:'FFFFFFFF'}}; k.fill = DARK; k.alignment = {horizontal:'center',vertical:'middle',wrapText:true}; } ws.getRow(row).height = 24; };
+    const fx = (f,r)=>({formula:f, result:r});
+    const wsR = wb.addWorksheet('Resumen',{properties:{tabColor:{argb:'FFF5C518'}}}), wsG = wb.addWorksheet('Reglas'), wsF = wb.addWorksheet('Facturas');
+    const usados = new Set(['Resumen','Reglas','Facturas']), nom = {};
+    F.forEach(x=>{ const b = (x.p.nombre.replace(/[\\\/\?\*\[\]:]/g,'').trim().slice(0,28))||'Colaborador'; let n = b, i = 2; while(usados.has(n)) n = b+' '+(i++); usados.add(n); nom[x.p.id] = n; });
+    const S = id=>"'"+nom[id]+"'!";
+
+    // ── Reglas ──
+    wsG.columns = [{width:3},{width:46},{width:16},{width:16},{width:16}];
+    wsG.getCell('B1').value = 'Reglas de la matriz de comisiones (celdas amarillas editables: todas las hojas se recalculan)'; wsG.getCell('B1').font = {bold:true,size:13};
+    [['No se paga si el cumplimiento es menor a',R.minPago/100],['Tope: sobre este % se paga base × (tope + premio)',R.maxPago/100],['Puntos adicionales se activan desde',R.umbralPuntos/100]].forEach((r,i)=>{ wsG.getCell(3+i,2).value = r[0]; const c = wsG.getCell(3+i,3); c.value = r[1]; c.numFmt = '0%'; c.fill = YEL; });
+    const MIN = 'Reglas!$C$3', MAX = 'Reglas!$C$4', UMB = 'Reglas!$C$5';
+    wsG.getCell('B7').value = 'Premio excelencia — de'; wsG.getCell('C7').value = 'hasta'; wsG.getCell('D7').value = 'premio'; hdr(wsG,7,2,4);
+    const np = R.premios.length;
+    R.premios.forEach((t,i)=>{ [[2,t.desde/100],[3,t.hasta/100],[4,t.pct/100]].forEach(([c,v])=>{ const k = wsG.getCell(8+i,c); k.value = v; k.numFmt = '0%'; k.fill = YEL; }); });
+    const prem = g=>{ let f = '0'; for(let i=np-1;i>=0;i--) f = 'IF(AND('+g+'>=Reglas!$B$'+(8+i)+','+g+'<=Reglas!$C$'+(8+i)+'),Reglas!$D$'+(8+i)+','+f+')'; return f; };
+    const pp0 = 10+np; wsG.getCell(pp0-1,2).value = 'Puntos adicionales — concepto'; wsG.getCell(pp0-1,3).value = 'tipo'; wsG.getCell(pp0-1,4).value = '% que suma'; wsG.getCell(pp0-1,5).value = 'umbral / máx.'; hdr(wsG,pp0-1,2,5);
+    R.puntos.forEach((l,i)=>{ const r = pp0+i; wsG.getCell(r,2).value = l.n; wsG.getCell(r,3).value = l.tipo==='umbral'?'solo si ≥ umbral':l.tipo==='max'?'por actividad, con máximo':'por cada uno';
+      const a = wsG.getCell(r,4); a.value = l.pct/100; a.numFmt = '0%'; a.fill = YEL;
+      if(l.tipo==='umbral'){ const u = wsG.getCell(r,5); u.value = l.umbral/100; u.numFmt = '0%'; u.fill = YEL; } else if(l.tipo==='max'){ const u = wsG.getCell(r,5); u.value = Number(l.max)||2; u.fill = YEL; } });
+
+    // ── Facturas ──
+    wsF.columns = [{width:12},{width:16},{width:42},{width:34},{width:26},{width:20},{width:18}];
+    ['Fecha','Documento','Cliente','Vendedor (Siesa)','Colaborador','Canal','Subtotal sin IVA'].forEach((h,i)=>wsF.getCell(1,i+1).value = h); hdr(wsF,1,1,7);
+    const fac = CM.datos.slice().sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha))||String(a.doc).localeCompare(String(b.doc)));
+    fac.forEach((d,i)=>{ const r = i+2, p = cmPersDe(d.vend); wsF.getCell(r,1).value = d.fecha ? new Date(d.fecha+'T12:00:00') : null; wsF.getCell(r,1).numFmt = 'dd/mm/yyyy'; wsF.getCell(r,2).value = d.doc; wsF.getCell(r,3).value = d.cli; wsF.getCell(r,4).value = d.vend; wsF.getCell(r,5).value = p ? p.nombre : '(sin colaborador)'; wsF.getCell(r,6).value = d.canal; wsF.getCell(r,7).value = d.val; wsF.getCell(r,7).numFmt = MONEY; });
+    const LF = Math.max(2, fac.length+1);
+    wsF.autoFilter = {from:'A1',to:'G'+LF}; wsF.views = [{state:'frozen',ySplit:1}];
+    const FV = 'Facturas!$G$2:$G$'+LF, FC = 'Facturas!$E$2:$E$'+LF, FCLI = 'Facturas!$C$2:$C$'+LF;
+
+    // ── Una hoja por colaborador ──
+    const itemRow = {}, r0 = 6;
+    F.forEach(x=>{ itemRow[x.p.id] = {}; x.items.forEach((it,i)=>itemRow[x.p.id][it.n] = r0+i); });
+    const pos = {};
+    F.forEach(x=>{
+      const p = x.p, ws = wb.addWorksheet(nom[p.id]), n = x.items.length, t = r0+n, pts0 = t+13, ptsTot = pts0+R.puntos.length;
+      ws.columns = [{width:2},{width:50},{width:11},{width:19},{width:19},{width:16},{width:18},{width:3},{width:40},{width:10},{width:18}];
+      ws.getCell('B2').value = 'Simulador Remuneración Variable Comercial — '+mesTxt; ws.getCell('B2').font = {bold:true,size:13};
+      ws.getCell('B3').value = p.nombre+' · '+(p.cargo==='coord'?'Coordinador':p.cargo==='lider'?'Líder de canal':'Vendedor'); ws.getCell('B3').font = {bold:true,size:12,color:{argb:'FF1E40AF'}};
+      ws.getCell('B4').value = 'Celdas amarillas = datos que se digitan · las demás se calculan. Reglas y tabla de premio: hoja «Reglas».'; ws.getCell('B4').font = {italic:true,size:9,color:{argb:'FF64748B'}};
+      ['Ítem','Peso','Presupuesto','Real','% Cumplimiento','Resultado'].forEach((h,i)=>ws.getCell(5,i+2).value = h); hdr(ws,5,2,7);
+      x.items.forEach((it,i)=>{ const r = r0+i, mon = it.n.toLowerCase().indexOf('margen')>=0 ? '0.0%' : MONEY;
+        ws.getCell(r,2).value = it.n; const c = ws.getCell(r,3); c.value = it.peso/100; c.numFmt = '0%'; c.fill = YEL;
+        const D = ws.getCell(r,4), Ec = ws.getCell(r,5); D.numFmt = mon; Ec.numFmt = mon;
+        if(it.f==='equipo'){ const vs = F.filter(q=>q.p.cargo==='vendedor' && itemRow[q.p.id][it.n]); const lst = col=>vs.length ? vs.map(q=>S(q.p.id)+col+itemRow[q.p.id][it.n]).join('+') : '0'; D.value = fx(lst('D'),it.ppto); Ec.value = fx(lst('E'),it.real); }
+        else if(it.f==='venta'){ D.value = it.ppto; if(it.ovP) D.fill = YEL;
+          if(it.ovR){ Ec.value = it.real; Ec.fill = YEL; } else Ec.value = fx('SUMIFS('+FV+','+FC+',"'+p.nombre.replace(/"/g,'""')+'")', it.real); }
+        else if(it.f==='total'){ D.value = it.ppto; Ec.value = it.real; }
+        else { D.value = it.ppto; Ec.value = it.real; D.fill = YEL; Ec.fill = YEL; }
+        ws.getCell(r,6).value = fx('IF(D'+r+'>0,E'+r+'/D'+r+',0)', it.cump); ws.getCell(r,6).numFmt = PCT;
+        ws.getCell(r,7).value = fx('F'+r+'*C'+r, it.res); ws.getCell(r,7).numFmt = PCT; });
+      const put = (r,lab,val,fmt,bold,yel)=>{ ws.getCell(r,2).value = lab; const c = ws.getCell(r,7); c.value = val; if(fmt) c.numFmt = fmt; if(yel) c.fill = yel; if(bold){ ws.getCell(r,2).font = {bold:true}; c.font = {bold:true}; } };
+      ws.getCell(t,2).value = 'Total'; ws.getCell(t,3).value = fx('SUM(C'+r0+':C'+(t-1)+')', x.items.reduce((a,i)=>a+i.peso,0)/100); ws.getCell(t,3).numFmt = '0%'; ws.getCell(t,7).value = fx('SUM(G'+r0+':G'+(t-1)+')', x.cum); ws.getCell(t,7).numFmt = PCT; ws.getCell(t,2).font = ws.getCell(t,7).font = {bold:true};
+      for(let c=2;c<=7;c++) ws.getCell(t,c).fill = GRY;
+      put(t+1,'Premio excelencia (según tabla)', fx(prem('G'+t), x.prem), PCT);
+      put(t+2,'Puntos adicionales (solo si cumple el % mínimo de activación)', fx('IF(G'+t+'>='+UMB+',G'+ptsTot+',0)', x.ptsAp), PCT);
+      put(t+3,'Puntos extra manuales (%)', x.extra, PCT, false, YEL);
+      put(t+4,'Total cumplimiento (ponderado + premio + puntos)', fx('G'+t+'+G'+(t+1)+'+G'+(t+2)+'+G'+(t+3), x.tot), PCT, true);
+      put(t+5,'Salario variable base', Number(p.base)||0, MONEY, false, YEL);
+      put(t+6,'Total salario variable según matriz', fx('IF(G'+t+'<'+MIN+',0,IF(G'+t+'<='+MAX+',G'+(t+4)+'*G'+(t+5)+',G'+(t+5)+'*('+MAX+'+G'+(t+1)+')))', x.pago), MONEY, true);
+      put(t+7,'Ajuste ± ($)', x.aj, MONEY, false, YEL);
+      put(t+8,'TOTAL A PAGAR DEFINITIVO', fx('G'+(t+6)+'+G'+(t+7), x.pagoFin), MONEY, true);
+      for(let c=2;c<=7;c++) ws.getCell(t+8,c).fill = fill('FFFDE68A');
+      ws.getCell(t+9,2).value = 'Observación'; ws.getCell(t+9,3).value = x.nota || ''; ws.getCell(t+10,2).value = 'Cuando el total cumplimiento supere el 140% se revisará el incentivo adicional.'; ws.getCell(t+10,2).font = {italic:true,size:9,color:{argb:'FF64748B'}};
+      ['Puntos % adicionales','','','%','#','% Total'].forEach((h,i)=>{ if(h) ws.getCell(pts0-1,i+2).value = h; }); hdr(ws,pts0-1,2,7);
+      x.detPts.forEach((d,i)=>{ const r = pts0+i, rg = pp0+i, l = d.l; ws.getCell(r,2).value = l.n;
+        ws.getCell(r,5).value = fx('Reglas!$D$'+rg, l.pct/100); ws.getCell(r,5).numFmt = '0%';
+        const v = ws.getCell(r,6); v.fill = YEL;
+        if(l.tipo==='umbral'){ v.value = (Number(d.v)||0)/100; v.numFmt = '0.0%'; ws.getCell(r,7).value = fx('IF(F'+r+'>=Reglas!$E$'+rg+',E'+r+',0)', d.x); }
+        else { v.value = Number(d.v)||0; ws.getCell(r,7).value = l.tipo==='max' ? fx('E'+r+'*MIN(F'+r+',Reglas!$E$'+rg+')', d.x) : fx('E'+r+'*F'+r, d.x); }
+        ws.getCell(r,7).numFmt = PCT; });
+      ws.getCell(ptsTot,2).value = 'Total puntos adicionales'; ws.getCell(ptsTot,7).value = fx('SUM(G'+pts0+':G'+(ptsTot-1)+')', x.pts); ws.getCell(ptsTot,7).numFmt = PCT; ws.getCell(ptsTot,2).font = ws.getCell(ptsTot,7).font = {bold:true};
+      ws.addConditionalFormatting({ref:'F'+r0+':F'+(t-1), rules:[{type:'cellIs',operator:'greaterThanOrEqual',formulae:[1],style:{font:{bold:true,color:{argb:'FF16A34A'}}}},{type:'cellIs',operator:'lessThan',formulae:[R.minPago/100],style:{font:{bold:true,color:{argb:'FFDC2626'}}}}]});
+      // Tablita de clientes del mes de este colaborador (conectada a la hoja Facturas)
+      ['Cliente (ventas del mes)','Facturas','Venta sin IVA'].forEach((h,i)=>ws.getCell(5,9+i).value = h); hdr(ws,5,9,11);
+      const mp = {}; CM.datos.forEach(d=>{ const q = cmPersDe(d.vend); if(q && q.id===p.id){ const k = d.cli||'(sin cliente)'; (mp[k] = mp[k]||{n:0,v:0}); mp[k].n++; mp[k].v += d.val; } });
+      const cl = Object.entries(mp).sort((a,b)=>b[1].v-a[1].v).slice(0,60);
+      cl.forEach(([k,v],i)=>{ const r = 6+i; ws.getCell(r,9).value = k; ws.getCell(r,10).value = fx('COUNTIFS('+FCLI+',I'+r+','+FC+',"'+p.nombre.replace(/"/g,'""')+'")', v.n); ws.getCell(r,11).value = fx('SUMIFS('+FV+','+FCLI+',I'+r+','+FC+',"'+p.nombre.replace(/"/g,'""')+'")', v.v); ws.getCell(r,11).numFmt = MONEY; });
+      const rt = 6+cl.length; ws.getCell(rt,9).value = cl.length ? 'Total' : 'Sin ventas en el mes'; if(cl.length){ ws.getCell(rt,10).value = fx('SUM(J6:J'+(rt-1)+')', cl.reduce((a,c)=>a+c[1].n,0)); ws.getCell(rt,11).value = fx('SUM(K6:K'+(rt-1)+')', cl.reduce((a,c)=>a+c[1].v,0)); ws.getCell(rt,11).numFmt = MONEY; ws.getCell(rt,9).font = ws.getCell(rt,10).font = ws.getCell(rt,11).font = {bold:true}; }
+      ws.views = [{state:'frozen',ySplit:5}];
+      pos[p.id] = {t, base:t+5};
+    });
+
+    // ── Resumen ──
+    wsR.columns = [{width:5},{width:26},{width:14},{width:17},{width:15},{width:11},{width:11},{width:14},{width:19},{width:14},{width:19},{width:34}];
+    wsR.getCell('A1').value = 'Resumen comisiones equipo comercial — '+mesTxt; wsR.getCell('A1').font = {bold:true,size:14};
+    wsR.getCell('A2').value = 'Ilumax · '+CM.fuente+' · '+CM.pptoFuente+' · generado '+new Date().toLocaleString('es-CO'); wsR.getCell('A2').font = {italic:true,size:9,color:{argb:'FF64748B'}};
+    ['No.','Colaborador','Cargo','Salario variable','Cumplimiento mes','Premio','Puntos','Total matriz (%)','Total a pagar según matriz','Ajuste','Total a pagar definitivo','Comentario'].forEach((h,i)=>wsR.getCell(4,i+1).value = h); hdr(wsR,4,1,12);
+    F.forEach((x,i)=>{ const r = 5+i, s = S(x.p.id), P = pos[x.p.id];
+      wsR.getCell(r,1).value = i+1; wsR.getCell(r,2).value = {text:x.p.nombre, hyperlink:'#'+s+'A1'}; wsR.getCell(r,2).font = {color:{argb:'FF1D4ED8'},underline:true};
+      wsR.getCell(r,3).value = x.p.cargo==='coord'?'Coordinador':x.p.cargo==='lider'?'Líder':'Vendedor';
+      wsR.getCell(r,4).value = fx(s+'G'+P.base, Number(x.p.base)||0); wsR.getCell(r,5).value = fx(s+'G'+P.t, x.cum); wsR.getCell(r,6).value = fx(s+'G'+(P.t+1), x.prem);
+      wsR.getCell(r,7).value = fx(s+'G'+(P.t+2)+'+'+s+'G'+(P.t+3), x.ptsAp+x.extra); wsR.getCell(r,8).value = fx('E'+r+'+F'+r+'+G'+r, x.tot);
+      wsR.getCell(r,9).value = fx(s+'G'+(P.t+6), x.pago); wsR.getCell(r,10).value = fx(s+'G'+(P.t+7), x.aj); wsR.getCell(r,11).value = fx('I'+r+'+J'+r, x.pagoFin);
+      wsR.getCell(r,12).value = x.nota || '';
+      [4,9,10,11].forEach(c=>wsR.getCell(r,c).numFmt = MONEY); [5,6,7,8].forEach(c=>wsR.getCell(r,c).numFmt = PCT); });
+    const rl = 4+F.length, rT = rl+1, sum = (c)=>'SUM('+c+'5:'+c+rl+')';
+    wsR.getCell(rT,2).value = 'Total'; [[4,F.reduce((a,x)=>a+(Number(x.p.base)||0),0)],[9,F.reduce((a,x)=>a+x.pago,0)],[10,F.reduce((a,x)=>a+x.aj,0)],[11,F.reduce((a,x)=>a+x.pagoFin,0)]].forEach(([c,v])=>{ const L = String.fromCharCode(64+c); wsR.getCell(rT,c).value = fx(sum(L), v); wsR.getCell(rT,c).numFmt = MONEY; });
+    for(let c=1;c<=12;c++){ wsR.getCell(rT,c).font = {bold:true}; wsR.getCell(rT,c).fill = GRY; }
+    wsR.getCell(rT+1,10).value = '% ejecución real del ppto.'; wsR.getCell(rT+1,11).value = fx('IF(D'+rT+'>0,K'+rT+'/D'+rT+',0)', 0); wsR.getCell(rT+1,11).numFmt = PCT; wsR.getCell(rT+1,10).font = wsR.getCell(rT+1,11).font = {bold:true};
+    // Venta del mes por colaborador (conectada a Facturas)
+    const v0 = rT+4; wsR.getCell(v0-1,2).value = 'Venta del mes por colaborador'; wsR.getCell(v0-1,2).font = {bold:true,size:12};
+    ['','Colaborador','Facturas','Presupuesto venta','Venta real (sin IVA)','% cumpl.'].forEach((h,i)=>{ if(h) wsR.getCell(v0,i+1).value = h; }); hdr(wsR,v0,2,6);
+    F.forEach((x,i)=>{ const r = v0+1+i, vr = itemRow[x.p.id]['Venta'], s = S(x.p.id), nm = x.p.nombre.replace(/"/g,'""');
+      wsR.getCell(r,2).value = x.p.nombre; wsR.getCell(r,3).value = fx('COUNTIFS('+FC+',"'+nm+'")', 0);
+      if(vr){ wsR.getCell(r,4).value = fx(s+'D'+vr, 0); wsR.getCell(r,5).value = fx(s+'E'+vr, 0); wsR.getCell(r,6).value = fx('IF(D'+r+'>0,E'+r+'/D'+r+',0)', 0); }
+      wsR.getCell(r,4).numFmt = MONEY; wsR.getCell(r,5).numFmt = MONEY; wsR.getCell(r,6).numFmt = PCT; });
+    wsR.getCell(v0+F.length+1,2).value = 'Ventas sin colaborador asignado'; wsR.getCell(v0+F.length+1,5).value = fx('SUMIFS('+FV+','+FC+',"(sin colaborador)")', CM.sinMatch.reduce((a,x)=>a+x[1],0)); wsR.getCell(v0+F.length+1,5).numFmt = MONEY;
+    wsR.views = [{state:'frozen',ySplit:4}];
+
+    const buf = await wb.xlsx.writeBuffer(), blob = new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'Comisiones_Comerciales_'+CM.mes+'.xlsx'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+    toast('✅ Excel avanzado listo','ok');
+  }catch(e){ console.error(e); toast('Excel avanzado falló ('+e.message+'), bajo el básico','wa'); cmExcelBasico(); }
 }
 
 // ── TABS ──────────────────────────────────────────────────────────────
@@ -31388,7 +31576,7 @@ function ctTab(tab) {
   if(tab==='tramites')  renderCtTramites(el);
   if(tab==='briefing')  renderCtBriefing(el);
   if(tab==='reporte')   renderCtReporte(el);
-  if(tab==='comisiones') renderCtComisiones(el);
+  if(tab==='comisiones'){ CM.dest = null; renderCtComisiones(el); }
 }
 
 // ── TAB TAREAS ─────────────────────────────────────────────────────────
