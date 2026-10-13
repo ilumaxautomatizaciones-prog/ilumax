@@ -128,7 +128,7 @@ tr.xno td{background:#fee2e2!important;color:#991b1b}tr.xno.xp td{background:#fe
 </head>
 <body>
 <div class="hdr"><button class="mnb" onclick="manual(1)">📖 Manual</button><h1>ILU<span>MAX</span> · Reporte Diario de Ventas</h1><div class="sub" id="sub">Cargando…</div></div>
-<div class="wrap"><div class="tabs"><div class="tab on" id="t-res" onclick="verTab('res')">📊 Resumen del equipo</div><div class="tab" id="t-cum" onclick="verTab('cum')">🎯 Cumplimiento</div><div class="tab" id="t-sem" onclick="verTab('sem')">📅 Semana</div><div class="tab" id="t-ase" onclick="verTab('ase')">👤 Por asesor / clientes</div><div class="tab" id="t-per" onclick="verTab('per')">🔎 Ventas perdidas</div></div><div id="app"><div class="err">Cargando reporte…</div></div><div id="cum" style="display:none"></div><div id="sem" style="display:none"></div><div id="det" style="display:none"></div><div id="per" style="display:none"></div></div>
+<div class="wrap"><div class="tabs"><div class="tab on" id="t-res" onclick="verTab('res')">📊 Resumen del equipo</div><div class="tab" id="t-cum" onclick="verTab('cum')">🎯 Cumplimiento</div><div class="tab" id="t-sem" onclick="verTab('sem')">📅 Semana</div><div class="tab" id="t-ase" onclick="verTab('ase')">👤 Por asesor / clientes</div><div class="tab" id="t-mix" onclick="verTab('mix')">🧩 Mix por categoría</div><div class="tab" id="t-per" onclick="verTab('per')">🔎 Ventas perdidas</div></div><div id="app"><div class="err">Cargando reporte…</div></div><div id="cum" style="display:none"></div><div id="sem" style="display:none"></div><div id="det" style="display:none"></div><div id="mix" style="display:none"></div><div id="per" style="display:none"></div></div>
 <div class="dm" id="dm" onclick="if(event.target===this)cerrarDr()"><div class="dmb"><div class="dmh"><div><div class="dmt" id="dmt"></div><div class="dms" id="dms"></div></div><button class="dmx" onclick="cerrarDr()" aria-label="Cerrar">✕</button></div><div class="bar" style="padding:0 14px;margin:10px 0 8px"><input id="dmq" placeholder="🔍 Buscar cliente, documento o asesor…" oninput="DR.q=this.value;pintarDrTabla()"></div><div class="tw" id="dmtw"></div></div></div>
 <div class="mn" id="mn" onclick="if(event.target===this)manual(0)"><div class="mnc" role="dialog" aria-label="Manual de uso"><div class="mnh"><b>ILU<span>MAX</span> · Manual de uso</b><small id="mnn"></small><button class="mnx" onclick="manual(0)" aria-label="Cerrar">✕</button></div><div class="mnp"><i id="mnpb"></i></div><div class="mns" id="mns"><section data-k="Bienvenida"><div class="k">Bienvenida</div><h3>Reporte Diario de Ventas ILUMAX</h3><div class="big">📊</div><p>Esta página muestra, <b>casi en tiempo real</b>, cómo va la venta del equipo comercial contra el presupuesto: por día, por semana, por canal, por ejecutivo y por cliente.</p>
 <div class="g"><div class="b"><b>📊 Resumen del equipo</b>El día, el mes y los canales.</div><div class="b"><b>🎯 Cumplimiento</b>Quién va en ritmo y quién no.</div><div class="b"><b>📅 Semana</b>Venta día por día.</div><div class="b"><b>👤 Por asesor / clientes</b>Detalle y búsqueda de facturas.</div></div>
@@ -289,6 +289,34 @@ function pintarCum() {
     + '<div class="card"><h2>Cumplimiento por ejecutivo — ¿cuánto falta y a qué ritmo?</h2><div class="hint">👆 Toca la venta para ver las facturas · ← → para desplazarte</div><div class="tw"><table class="sticky"><thead><tr><th>Ejecutivo</th><th>Presupuesto</th><th>Venta acum.</th><th>% cumpl.</th><th>Falta por vender</th><th>Venta diaria necesaria</th><th>Proyección al cierre</th><th>Estado</th></tr></thead><tbody>'
     + filas.map(x => fila(x.n, x.p, x.v)).join('') + fila('EQUIPO', tp, tv, true) + '</tbody></table></div><div style="padding:8px 14px;font-size:11px;color:#64748b">Proyección = venta acumulada ÷ días hábiles transcurridos × días hábiles del mes. «En ritmo» si proyecta ≥100% · «Cerca» ≥80% · «Atrasado» menos. Solo aparecen ejecutivos con presupuesto asignado.</div></div>';
 }
+
+// ───────── Mix por categoría (Especializado) ─────────
+const API_MIX = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/reporte-ventas-mix';
+const MIX = { d: null, mes: '', ase: '' };
+async function cargarMix(mes) {
+  const el = document.getElementById('mix'); el.innerHTML = '<div class="err">Cargando mix…</div>';
+  try {
+    const r = await fetch(API_MIX + '?k=' + encodeURIComponent(token()) + (mes ? '&mes=' + mes : ''), { cache: 'no-store' });
+    const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'Error');
+    MIX.d = d; MIX.mes = d.mes; if (!d.ejecutivos.some(e => e.nombre === MIX.ase)) MIX.ase = d.ejecutivos.length ? d.ejecutivos[0].nombre : '';
+    pintarMix();
+  } catch (e) { el.innerHTML = '<div class="err"><b>No se pudo cargar el mix.</b><br>' + esc(e.message) + '</div>'; }
+}
+function setMix(k, v) { MIX[k] = v; if (k === 'mes') { MIX.d = null; cargarMix(v); return; } pintarMix(); }
+function pintarMix() {
+  const el = document.getElementById('mix'), d = MIX.d; if (!d) return;
+  const pc = (x, n) => (x * 100).toFixed(n == null ? 0 : n) + '%', ej = d.ejecutivos, sel = ej.find(e => e.nombre === MIX.ase) || ej[0];
+  const st = t => t >= d.umbral ? ['Gana puntos', 'ok'] : t >= d.umbral * .75 ? ['Cerca', 'mid'] : ['Lejos', 'bad'];
+  let h = '<div class="card"><h2>🧩 Mix por categoría — Especializado (ferroeléctrico)</h2><div style="padding:10px 14px;font-size:12px;color:#475569">Cada ejecutivo tiene una meta de mezcla por categoría (% de su presupuesto Especializado). El <b>cumplimiento ponderado</b> es la suma de (meta × cumplimiento de la categoría, tope 100 %). Con <b>' + pc(d.umbral) + ' o más</b> ganas los puntos de mix. Corte: <b>' + esc(d.corte) + '</b> · mes ' + esc(d.mes) + (d.actualizado ? ' · actualizado ' + esc(String(d.actualizado).slice(0, 16).replace('T', ' ')) : '') + '. Lo que venda en otras categorías no suma al mix.</div></div>';
+  h += '<div class="card"><h2>Resumen por ejecutivo</h2><div class="tw"><table><thead><tr><th>Ejecutivo</th><th>Ppto Especializado</th><th>Venta en categorías del mix</th><th>Mix ponderado</th><th>Estado</th></tr></thead><tbody>' + ej.map(e => { const s = st(e.total); return '<tr style="cursor:pointer" onclick="setMix(\'ase\',this.dataset.n)" data-n="' + esc(e.nombre) + '"><td style="font-weight:600">' + esc(e.nombre) + '</td><td>' + $(e.base) + '</td><td>' + $(e.vtaMix) + '</td><td style="font-weight:700">' + pc(e.total, 1) + '</td><td><span class="pill ' + s[1] + '">' + s[0] + '</span></td></tr>'; }).join('') + '</tbody></table></div><div style="padding:6px 14px;font-size:11px;color:#64748b">Toca un ejecutivo para ver su detalle por categoría.</div></div>';
+  if (sel) {
+    h += '<div class="card"><h2>Detalle de ' + esc(sel.nombre) + '</h2><div class="hint">Elige otro: <select onchange="setMix(\'ase\',this.value)" style="padding:4px 8px;border-radius:8px;border:1px solid #cbd5e1">' + ej.map(e => '<option' + (e.nombre === sel.nombre ? ' selected' : '') + ' value="' + esc(e.nombre) + '">' + esc(e.nombre) + '</option>').join('') + '</select> · ← → para desplazarte</div><div class="tw"><table class="sticky"><thead><tr><th>Categoría</th><th>Meta</th><th>Ppto del mix</th><th>Venta</th><th>Cumpl.</th><th>Cumpl. (tope 100%)</th><th>Ponderado</th><th>Ideal a hoy</th><th>Falta por vender</th></tr></thead><tbody>'
+      + sel.cats.map(c => '<tr><td style="font-weight:600">' + esc(c.n) + '</td><td>' + pc(c.meta, 1) + '</td><td>' + $(c.ppto) + '</td><td style="font-weight:700">' + $(c.vta) + '</td><td class="' + (c.cump >= 1 ? 'up' : c.cump >= .6 ? '' : 'dn') + '">' + pc(c.cump) + '</td><td>' + pc(c.cumpMax) + '</td><td>' + pc(c.pond, 1) + '</td><td>' + $(c.ideal) + '</td><td>' + (c.falta > 0 ? $(c.falta) : '✔') + '</td></tr>').join('')
+      + '<tr class="tot"><td>TOTAL</td><td>' + pc(sel.cats.reduce((a, c) => a + c.meta, 0), 1) + '</td><td>' + $(sel.cats.reduce((a, c) => a + c.ppto, 0)) + '</td><td>' + $(sel.vtaMix) + '</td><td></td><td></td><td style="font-weight:800">' + pc(sel.total, 1) + '</td><td>' + $(sel.cats.reduce((a, c) => a + c.ideal, 0)) + '</td><td>' + $(sel.cats.reduce((a, c) => a + c.falta, 0)) + '</td></tr></tbody></table></div>'
+      + '<div style="padding:8px 14px;font-size:11px;color:#64748b">Presupuesto del mix = meta × presupuesto Especializado del ejecutivo (' + $(sel.base) + '). «Ideal a hoy» = lo que llevaría si vendiera parejo cada día hábil (' + d.habP + ' de ' + d.habT + '). Venta neta de notas crédito, sin IVA' + (sel.otras ? '. Vendió ' + $(sel.otras) + ' en categorías que no cuentan para el mix' : '') + '.</div></div>';
+  }
+  el.innerHTML = h;
+}
 // ───────── Semana (día por día) ─────────
 const SEMW = { l: '' };
 function pintarSem() {
@@ -316,12 +344,14 @@ const mesLbl = m => MESN[+m.slice(5) - 1] + ' ' + m.slice(0, 4);
 let TAB = 'res';
 function verTab(t) {
   TAB = t;
-  ['res', 'cum', 'sem', 'ase', 'per'].forEach(x => { document.getElementById('t-' + x).className = 'tab' + (x === t ? ' on' : ''); });
+  ['res', 'cum', 'sem', 'ase', 'mix', 'per'].forEach(x => { document.getElementById('t-' + x).className = 'tab' + (x === t ? ' on' : ''); });
   document.getElementById('app').style.display = t === 'res' ? '' : 'none';
   document.getElementById('cum').style.display = t === 'cum' ? '' : 'none';
   document.getElementById('sem').style.display = t === 'sem' ? '' : 'none';
   document.getElementById('det').style.display = t === 'ase' ? '' : 'none';
   document.getElementById('per').style.display = t === 'per' ? '' : 'none';
+  document.getElementById('mix').style.display = t === 'mix' ? '' : 'none';
+  if (t === 'mix') { if (!MIX.d) cargarMix(MIX.mes); else pintarMix(); }
   if (t === 'per') { if (!PER.d) cargarPer(PER.mes); else pintarPer(); }
   if (t === 'cum') pintarCum();
   if (t === 'sem') { if (!DET.cargado) cargarDet(DET.mes); else pintarSem(); }

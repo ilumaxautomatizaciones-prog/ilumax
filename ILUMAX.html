@@ -31273,13 +31273,15 @@ async function cmCargarMes(){
   const [a,m] = CM.mes.split('-').map(Number), sig = new Date(a, m, 1), hasta = sig.getFullYear()+'-'+String(sig.getMonth()+1).padStart(2,'0')+'-01';
   const hoy = new Date(), esActual = CM.mes===hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0');
   CM.datos = [];
-  const leer = async (tabla, extra)=>{ const out = []; for(let off=0; ; off+=1000){ const rows = await sb.get(tabla,'select=fecha,nro_documento,cliente,vendedor,canal,subtotal'+extra+'&fecha=gte.'+CM.mes+'-01&fecha=lt.'+hasta+'&order=fecha.asc&limit=1000&offset='+off) || []; out.push(...rows); if(rows.length<1000) break; } return out; };
+  const leer = async (tabla, extra)=>{ const out = []; for(let off=0; ; off+=1000){ const rows = await sb.get(tabla,'select=fecha,nro_documento,cliente,vendedor,canal,subtotal'+(tabla==='ventas_facturas_siesa'?',reintegro_gastos,tipo':'')+extra+'&fecha=gte.'+CM.mes+'-01&fecha=lt.'+hasta+'&order=fecha.asc&limit=1000&offset='+off) || []; out.push(...rows); if(rows.length<1000) break; } return out; };
   try{
     // Fuente principal: facturas de Siesa sincronizadas (subtotal sin IVA, sin anuladas). Para meses cerrados que no estén completas ahí, las facturas guardadas del Excel.
     let rs = await leer('ventas_facturas_siesa','&estado=neq.9'), org = 'Siesa';
     if(!esActual && rs.length<200){ const rx = await leer('ventas_facturas_excel',''); if(rx.length>rs.length){ rs = rx; org = 'facturas guardadas'; } }
-    rs.forEach(r=>CM.datos.push({fecha:r.fecha, doc:String(r.nro_documento||'').trim(), cli:String(r.cliente||'').trim(), vend:String(r.vendedor||'').trim(), canal:CM_CANAL[String(r.canal||'').trim()]||String(r.canal||'').trim(), val:parseFloat(r.subtotal)||0}));
+    rs.forEach(r=>CM.datos.push({fecha:r.fecha, doc:String(r.nro_documento||'').trim(), cli:String(r.cliente||'').trim(), vend:String(r.vendedor||'').trim(), canal:CM_CANAL[String(r.canal||'').trim()]||String(r.canal||'').trim(), tipo:String(r.tipo||'').toUpperCase(), val:r.tipo==='VM'?0:(parseFloat(r.subtotal)||0)-(parseFloat(r.reintegro_gastos)||0), vm:r.tipo==='VM'?(parseFloat(r.subtotal)||0):0, rein:r.tipo==='VM'?0:parseFloat(r.reintegro_gastos)||0}));
     CM.fuente = '📅 Ventas del mes · '+org+' ('+CM.datos.length+' facturas, sin IVA)';
+    await cmCargarMix();
+    CM.nuevos = {}; CM.nuevosMeses = 0; try{ (await sb.post('rpc/clientes_nuevos_mes',{p_mes:CM.mes+'-01'}) || []).forEach(r=>{ CM.nuevos[String(r.cliente||'').trim()] = r; CM.nuevosMeses = r.meses_historia||0; }); }catch(e){ console.warn('clientes nuevos',e); }
   }catch(e){ toast('No pude leer las facturas del mes: '+e.message,'er'); }
   CM.pptoRows = []; CM.pptoFuente = 'Mi equipo'; try{ CM.pptoRows = await sb.get('presupuesto_vendedor','anio=eq.'+a+'&mes=eq.'+m) || []; }catch(e){}
   if(!CM.pptoRows.length){
@@ -31298,15 +31300,21 @@ async function cmSiesa(){
   toast('🔌 Consultando Siesa…','inf');
   try{
     const items = await _siesaFetchPaginas(()=>{}, 'API_v2_Ventas_Facturas_DesdePedido', "f350_id_cia = 1 AND f350_fecha >= ''"+CM.mes+"-01''", 100), por = {};
-    items.forEach(it=>{ if(Number(it.f350_ind_estado)===9) return; const id = it.f350_rowid; if(id==null || por[id]) return; por[id] = {fecha:String(it.f350_fecha||'').slice(0,10), doc:String(it.f350_prefijo||it.f350_id_tipo_docto||'').trim()+String(it.f350_consec_docto||''), cli:String(it.f200_razon_social_fact||'').trim(), canal:CM_CANAL[String(it.f461_id_tipo_cli_fact||'').trim()]||String(it.f461_id_tipo_cli_fact||'').trim(), vend:String(it.f200_razon_social_vendedor||'').trim(), val:((parseFloat(it.f461_vlr_bruto||0)||0)-(parseFloat(it.f461_vlr_dscto||0)||0))}; });
-    CM.datos = Object.values(por); CM.fuente = '📡 Siesa en vivo ('+CM.datos.length+' facturas) · '+new Date().toLocaleTimeString('es-CO');
+    const rein = {}; items.forEach(it=>{ if(/reintegro\s+de\s+gastos?/i.test(cmNorm(it.f120_descripcion))){ const k = it.f350_rowid; rein[k] = (rein[k]||0)+(parseFloat(it.f470_vlr_bruto)||0)-(parseFloat(it.f470_vlr_dscto_linea)||0)-(parseFloat(it.f470_vlr_dscto_global)||0); } });
+    items.forEach(it=>{ if(Number(it.f350_ind_estado)===9) return; const id = it.f350_rowid; if(id==null || por[id]) return; por[id] = {rein:rein[id]||0, fecha:String(it.f350_fecha||'').slice(0,10), doc:String(it.f350_prefijo||it.f350_id_tipo_docto||'').trim()+String(it.f350_consec_docto||''), cli:String(it.f200_razon_social_fact||'').trim(), canal:CM_CANAL[String(it.f461_id_tipo_cli_fact||'').trim()]||String(it.f461_id_tipo_cli_fact||'').trim(), vend:String(it.f200_razon_social_vendedor||'').trim(), tipo:String(it.f350_id_tipo_docto||'').trim().toUpperCase(), vm:String(it.f350_id_tipo_docto||'').trim().toUpperCase()==='VM'?((parseFloat(it.f461_vlr_bruto||0)||0)-(parseFloat(it.f461_vlr_dscto||0)||0)):0, val:String(it.f350_id_tipo_docto||'').trim().toUpperCase()==='VM'?0:((parseFloat(it.f461_vlr_bruto||0)||0)-(parseFloat(it.f461_vlr_dscto||0)||0)-(rein[id]||0))}; });
+    CM.datos = Object.values(por);
+    try{ const hasta = (()=>{ const [y,m]=CM.mes.split('-').map(Number); return new Date(y,m,1).getFullYear()+'-'+String(new Date(y,m,1).getMonth()+1).padStart(2,'0')+'-01'; })();
+      const nv = await sb.get('ventas_facturas_siesa','select=fecha,nro_documento,cliente,vendedor,canal,subtotal,reintegro_gastos,origen&estado=neq.9&subtotal=lt.0&fecha=gte.'+CM.mes+'-01&fecha=lt.'+hasta+'&limit=1000') || [];
+      nv.forEach(r=>CM.datos.push({fecha:r.fecha, doc:String(r.nro_documento||'').trim(), cli:String(r.cliente||'').trim(), vend:String(r.vendedor||'').trim(), canal:CM_CANAL[String(r.canal||'').trim()]||String(r.canal||'').trim(), val:(parseFloat(r.subtotal)||0)-(parseFloat(r.reintegro_gastos)||0), rein:parseFloat(r.reintegro_gastos)||0}));
+    }catch(e){ console.warn('notas crédito',e); }
+    CM.fuente = '📡 Siesa en vivo ('+CM.datos.length+' facturas) · '+new Date().toLocaleTimeString('es-CO');
     toast('✅ '+CM.datos.length+' facturas desde Siesa','ok'); cmPintar();
   }catch(e){ toast('Siesa: '+e.message,'er'); }
 }
 // ── Cálculo ──
 function cmPremio(c){ const t = (CM.reglas.premios||[]).find(x=>c>=Number(x.desde)/100 && c<=Number(x.hasta)/100); return t ? Number(t.pct)/100 : 0; }
 function cmCalcular(){
-  const R = CM.reglas, P = CM.personas||[], ventas = {}, ppto = {}, sin = {};
+  const R = CM.reglas, P = CM.personas||[], ventas = {}, ppto = {}, sin = {}, MX = cmMixCalc();
   CM.datos.forEach(d=>{ const p = cmPersDe(d.vend); if(p) ventas[p.id] = (ventas[p.id]||0)+d.val; else sin[d.vend||'(sin vendedor)'] = (sin[d.vend||'(sin vendedor)']||0)+d.val; });
   CM.pptoRows.forEach(r=>{ const p = cmPersDe(r.vendedor_nombre); if(p) ppto[p.id] = (ppto[p.id]||0)+(Number(r.presupuesto)||0); });
   CM.sinMatch = Object.entries(sin).sort((a,b)=>b[1]-a[1]);
@@ -31321,15 +31329,16 @@ function cmCalcular(){
       return {n:it.n, peso:Number(it.peso)||0, f:it.f, autoP:ap, autoR:ar, ppto:pp, real:rr, cump:cu, res:cu*(Number(it.peso)||0)/100, ovP:mi.p!=null&&mi.p!=='', ovR:mi.r!=null&&mi.r!==''};
     });
     const cum = items.reduce((a,x)=>a+x.res,0), prem = cmPremio(cum);
-    let pts = 0; const detPts = (R.puntos||[]).map(l=>{ const v = Number((man.pts||{})[l.id])||0; let x = 0;
+    let pts = 0; const detPts = (R.puntos||[]).map(l=>{ const mv = (man.pts||{})[l.id], auto = !p.sinPts && (mv==null||mv==='') && l.id==='mix' && !!MX[p.id], v = p.sinPts ? 0 : auto ? Math.round(MX[p.id].total*1000)/10 : (Number(mv)||0); let x = 0;
       if(l.tipo==='umbral') x = v>=Number(l.umbral) ? Number(l.pct)/100 : 0; else if(l.tipo==='max') x = Number(l.pct)/100*Math.min(v, Number(l.max)||2); else x = Number(l.pct)/100*v;
-      pts += x; return {l, v, x}; });
-    const ptsAct = cum >= R.umbralPuntos/100, ptsAp = ptsAct ? pts : 0, extra = (Number(man.extra)||0)/100, tot = cum+prem+ptsAp+extra, base = Number(p.base)||0, aj = Number(man.ajuste)||0;
+      pts += x; return {l, v, x, auto}; });
+    const ptsAct = !p.sinPts && (!cmExig() || cum >= R.umbralPuntos/100), ptsAp = ptsAct ? pts : 0, extra = p.sinPts ? 0 : (Number(man.extra)||0)/100, tot = cum+prem+ptsAp+extra, base = Number(p.base)||0, aj = Number(man.ajuste)||0;
     let pago = 0, nota = '';
     if(cum < R.minPago/100){ pago = 0; nota = 'Bajo el '+R.minPago+'% no se paga'; }
     else if(cum <= R.maxPago/100) pago = tot*base;
-    else { pago = base*(R.maxPago/100+prem); nota = 'Sobre '+R.maxPago+'%: base × ('+R.maxPago+'% + premio)'; }
-    res[p.id] = {p, items, cum, prem, pts, ptsAct, ptsAp, extra, tot, pago, aj, pagoFin:pago+aj, nota, detPts, man};
+    else { pago = base*(R.maxPago/100+prem+ptsAp+extra); nota = 'Sobre '+R.maxPago+'%: base × ('+R.maxPago+'% + premio + puntos adicionales)'; }
+    const mixD = detPts.find(d=>d.l.id==='mix'), mixAp = ptsAct && mixD ? mixD.x : 0, teorico = cum<=R.maxPago/100 ? tot*base : base*(R.maxPago/100+prem+ptsAp+extra);
+    res[p.id] = {p, items, cum, prem, pts, ptsAct, ptsAp, extra, tot, pago, aj, pagoFin:pago+aj, nota, detPts, man, mixAp, mixPct:(mixD?(Number(mixD.v)||0)/100:null), ptsOtro:ptsAp+extra-mixAp, teorico};
   };
   P.filter(p=>p.cargo!=='coord').forEach(hacer); P.filter(p=>p.cargo==='coord').forEach(hacer);
   return P.map(p=>res[p.id]);
@@ -31344,14 +31353,14 @@ async function renderCtComisiones(el){
 function cmPintar(){
   const el = document.getElementById(CM.dest||'ct-tab-content'); if(!el || (!CM.dest && CT.tabActivo!=='comisiones')) return;
   const R = CM.reglas, F = cmCalcular(), E = reabastEsc, jq = s=>JSON.stringify(s).replace(/"/g,'&quot;');
-  const TB = F.reduce((a,x)=>a+(Number(x.p.base)||0),0), TP = F.reduce((a,x)=>a+x.pagoFin,0);
+  const TB = F.reduce((a,x)=>a+(Number(x.p.base)||0),0), TP = F.reduce((a,x)=>a+x.pagoFin,0), TT = F.reduce((a,x)=>a+x.teorico,0);
   const inp = (w,id,v)=>`<input class="inp" type="number" step="any" id="${id}" value="${v}" style="width:${w}px;padding:3px 6px;font-size:12px;">`;
   const reglas = `<div style="border:1px solid var(--b2);border-radius:10px;margin-bottom:12px;background:#fff;">
     <div style="padding:9px 12px;cursor:pointer;font-weight:800;font-size:13px;" onclick="CM.regAb=!CM.regAb;cmPintar()">${CM.regAb?'▾':'▸'} ⚙️ Reglas de la matriz <span class="arte-mu" style="font-weight:400;font-size:11px;">(no paga bajo ${R.minPago}% · tope ${R.maxPago}% · puntos desde ${R.umbralPuntos}%)</span></div>
     ${CM.regAb?`<div style="padding:4px 14px 14px;font-size:12px;">
       <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;">
         <label>No se paga si el cumplimiento es menor a<br>${inp(70,'cmr-min',R.minPago)} %</label>
-        <label>Por encima de este % se paga base × (tope + premio)<br>${inp(70,'cmr-max',R.maxPago)} %</label>
+        <label>Por encima de este % se paga base × (tope + premio + puntos adicionales)<br>${inp(70,'cmr-max',R.maxPago)} %</label>
         <label>Puntos adicionales se activan desde<br>${inp(70,'cmr-up',R.umbralPuntos)} %</label></div>
       <div style="font-weight:700;margin:6px 0 4px;">Premio excelencia (sobre el cumplimiento ponderado)</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">${R.premios.map((t,i)=>`<span style="border:1px solid var(--b2);border-radius:8px;padding:5px 8px;">de ${inp(55,'cmr-pd'+i,t.desde)}% a ${inp(55,'cmr-ph'+i,t.hasta)}% → ${inp(50,'cmr-pp'+i,t.pct)}%</span>`).join('')}<button class="btn btn-g btn-xs" onclick="cmPremioMas(1)">+ rango</button><button class="btn btn-g btn-xs" onclick="cmPremioMas(-1)">− rango</button></div>
@@ -31364,9 +31373,10 @@ function cmPintar(){
     const mi = (a,b,c,v,ph,w)=>`<input class="inp" type="number" step="any" value="${v}" placeholder="${ph}" style="width:${w||115}px;padding:3px 5px;font-size:12px;text-align:right;" onchange="cmSet(${q},'${a}',${b==null?'null':jq(b)},'${c||''}',this.value)">`;
     const cc = c=>`<span style="font-weight:700;color:${c>=1?'#16a34a':c>=R.minPago/100?'#b45309':'#dc2626'};">${cmPct(c)}</span>`;
     const det = ab ? `<tr><td colspan="10" style="background:var(--s1);padding:8px 14px;">
-      <table style="font-size:12px;width:auto;"><thead><tr><th>Ítem</th><th>Fuente</th><th style="text-align:right;">Peso</th><th style="text-align:right;">Presupuesto</th><th style="text-align:right;">Real</th><th style="text-align:right;">% cumpl.</th><th style="text-align:right;">Resultado</th></tr></thead><tbody>${x.items.map((it,i)=>`<tr><td><b>${E(it.n)}</b></td><td class="arte-mu">${it.f==='venta'?'Siesa (propio)':it.f==='equipo'?'suma del equipo':it.f==='total'?'total compañía':'manual'}</td><td style="text-align:right;">${it.peso}%</td><td style="text-align:right;">${mi('it',i,'p',it.ovP?it.ppto:'',it.autoP?cmNum(it.autoP):'0')}</td><td style="text-align:right;">${mi('it',i,'r',it.ovR?it.real:'',it.autoR?cmNum(it.autoR):'0')}</td><td style="text-align:right;">${cc(it.cump)}</td><td style="text-align:right;">${cmPct(it.res)}</td></tr>`).join('')}<tr style="font-weight:800;border-top:2px solid var(--b1);"><td colspan="6">Cumplimiento ponderado</td><td style="text-align:right;">${cmPct(x.cum)}</td></tr></tbody></table>
+      <table style="font-size:12px;width:auto;"><thead><tr><th>Ítem</th><th>Fuente</th><th style="text-align:right;">Peso</th><th style="text-align:right;">Presupuesto</th><th style="text-align:right;">Real</th><th style="text-align:right;">% cumpl.</th><th style="text-align:right;">Resultado</th></tr></thead><tbody>${x.items.map((it,i)=>`<tr><td><b>${E(it.n)}</b></td><td class="arte-mu">${it.f==='venta'?'Siesa (propio)':it.f==='equipo'?'suma del equipo':it.f==='total'?'total compañía':'manual'}</td><td style="text-align:right;">${it.peso}%</td><td style="text-align:right;">${mi('it',i,'p',it.ovP?it.ppto:'',it.autoP?cmNum(it.autoP):'0')}</td><td style="text-align:right;white-space:nowrap;">${it.f==='manual' ? mi('it',i,'r',it.ovR?it.real:'',it.autoR?cmNum(it.autoR):'0') : `<b>${cmMoney(it.real)}</b>${it.f==='venta'?` <button class="btn btn-g btn-xs" title="Ver de dónde sale esta venta" onclick="cmDetFact(1,${q})">🔎 Detalle</button>`:''}${it.ovR?` <span class="bdg bdg-amarillo" title="Editado a mano. Siesa dice ${cmMoney(it.autoR)}">editado (Siesa: ${cmMoney(it.autoR)})</span> <button class="btn btn-g btn-xs" onclick="cmSet(${q},'it',${i},'r','')">↺ Volver a Siesa</button>`:''}`}</td><td style="text-align:right;">${cc(it.cump)}</td><td style="text-align:right;">${cmPct(it.res)}</td></tr>`).join('')}<tr style="font-weight:800;border-top:2px solid var(--b1);"><td colspan="6">Cumplimiento ponderado</td><td style="text-align:right;">${cmPct(x.cum)}</td></tr></tbody></table>
       <div class="arte-mu" style="font-size:10.5px;margin:3px 0 8px;">Los campos vacíos usan el valor automático (en gris). Escribe un número para sobrescribirlo; bórralo para volver al automático.</div>
-      <div style="font-weight:700;margin-bottom:4px;">Puntos adicionales ${x.ptsAct?'<span style="color:#16a34a;">✔ activos</span>':'<span style="color:#b45309;">(inactivos: se activan desde '+R.umbralPuntos+'% de cumplimiento)</span>'}</div>
+      <div style="margin-bottom:8px;">${p.nota?`<div class="alert" style="font-size:11.5px;margin-bottom:6px;">📝 ${E(p.nota)}</div>`:''}<button class="btn btn-g btn-xs" onclick="cmDetFact(1,${q})">🧾 Ver detalle de facturación</button></div>
+      <div style="font-weight:700;margin-bottom:4px;">Puntos adicionales ${p.sinPts?'<span style="color:#b45309;">(no aplica: fuera del canal ferroeléctrico)</span>':''} ${x.ptsAct?'<span style="color:#16a34a;">✔ activos</span>':'<span style="color:#b45309;">(inactivos: se activan desde '+R.umbralPuntos+'% de cumplimiento)</span>'}</div>
       <div style="display:flex;gap:8px 14px;flex-wrap:wrap;">${x.detPts.map(d=>`<label style="font-size:11.5px;">${E(d.l.n)}<br>${mi('pts',d.l.id,'',d.v||'','0',70)} <span class="arte-mu">${d.x?'= '+cmPct(d.x,0):''}</span></label>`).join('')}
         <label style="font-size:11.5px;">Puntos extra manuales (%)<br>${mi('extra',null,'',k.extra||'','0',70)}</label></div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;align-items:end;">
@@ -31377,25 +31387,29 @@ function cmPintar(){
           <label style="font-size:11.5px;">Nombre<br><input class="inp" value="${E(p.nombre)}" style="width:170px;padding:3px 6px;font-size:12px;" onchange="cmPers(${q},'nombre',this.value)"></label>
           <label style="font-size:11.5px;">Cargo<br><select class="inp" style="padding:3px 6px;font-size:12px;" onchange="cmPers(${q},'cargo',this.value)">${[['vendedor','Vendedor'],['lider','Líder de canal'],['coord','Coordinador (equipo)']].map(([v,l])=>`<option value="${v}" ${p.cargo===v?'selected':''}>${l}</option>`).join('')}</select></label>
           <label style="font-size:11.5px;">Salario variable base ($)<br><input class="inp" type="number" value="${p.base||0}" style="width:120px;padding:3px 6px;font-size:12px;" onchange="cmPers(${q},'base',this.value)"></label>
-          <label style="font-size:11.5px;">Nombre(s) en Siesa (si difiere, separa con coma)<br><input class="inp" value="${E(p.alias||'')}" style="width:240px;padding:3px 6px;font-size:12px;" onchange="cmPers(${q},'alias',this.value)"></label></div>
+          <label style="font-size:11.5px;display:flex;gap:6px;align-items:center;"><input type="checkbox" ${p.sinPts?'':'checked'} onchange="cmPers(${q},'sinPts',!this.checked)"> Aplica puntos adicionales<br>(solo canal ferroeléctrico)</label>
+          <label style="font-size:11.5px;">Nombre(s) en Siesa (si difiere, separa con coma)<br><input class="inp" value="${E(p.alias||'')}" style="width:240px;padding:3px 6px;font-size:12px;" onchange="cmPers(${q},'alias',this.value)"></label>
+          <label style="font-size:11.5px;">Nota / recordatorio<br><input class="inp" value="${E(p.nota||'')}" style="width:340px;padding:3px 6px;font-size:12px;" onchange="cmPers(${q},'nota',this.value)"></label></div>
         <div style="font-size:11.5px;font-weight:700;">Ítems de la matriz (los pesos deben sumar 100)</div>
         ${p.items.map((it,i)=>`<div style="display:flex;gap:6px;align-items:center;margin:3px 0;"><input class="inp" value="${E(it.n)}" style="width:130px;padding:3px 6px;font-size:12px;" onchange="cmItem(${q},${i},'n',this.value)"><input class="inp" type="number" value="${it.peso}" style="width:60px;padding:3px 6px;font-size:12px;" onchange="cmItem(${q},${i},'peso',this.value)">%<select class="inp" style="padding:3px 6px;font-size:12px;" onchange="cmItem(${q},${i},'f',this.value)">${[['venta','Siesa (ventas propias)'],['equipo','Suma del equipo'],['total','Total compañía'],['manual','Manual']].map(([v,l])=>`<option value="${v}" ${it.f===v?'selected':''}>${l}</option>`).join('')}</select><button class="btn btn-g btn-xs" onclick="cmItemDel(${q},${i})">✕</button></div>`).join('')}
         <button class="btn btn-g btn-xs" onclick="cmItemAdd(${q})">+ ítem</button> <button class="btn btn-rd btn-xs" onclick="cmPersDel(${q})">Quitar colaborador</button></details>
     </td></tr>` : '';
-    return `<tr style="cursor:pointer;" onclick="CM.abierto[${q}]=!CM.abierto[${q}];cmPintar()"><td><b>${ab?'▾':'▸'} ${E(p.nombre)}</b></td><td class="arte-mu">${p.cargo==='coord'?'Coordinador':p.cargo==='lider'?'Líder':'Vendedor'}</td><td style="text-align:right;">${cmMoney(p.base)}</td><td style="text-align:center;">${cc(x.cum)}</td><td style="text-align:center;">${x.prem?cmPct(x.prem,0):'—'}</td><td style="text-align:center;">${(x.ptsAp+x.extra)?cmPct(x.ptsAp+x.extra,0):'—'}</td><td style="text-align:center;font-weight:700;">${cmPct(x.tot)}</td><td style="text-align:right;font-weight:800;color:var(--bl);" title="${E(x.nota)}">${cmMoney(x.pagoFin)}${x.aj?' <span class="arte-mu" title="Incluye ajuste">±</span>':''}</td><td class="arte-mu" style="font-size:10.5px;">${E(x.nota)}</td><td style="white-space:nowrap;"><button class="btn btn-g btn-xs" title="Editar colaborador" onclick="event.stopPropagation();cmPersEdit(${q})">✏️</button> <button class="btn btn-rd btn-xs" title="Quitar colaborador" onclick="event.stopPropagation();cmPersDel(${q})">🗑️</button></td></tr>`+det; }).join('');
+    return `<tr style="cursor:pointer;" onclick="CM.abierto[${q}]=!CM.abierto[${q}];cmPintar()"><td><b>${ab?'▾':'▸'} ${E(p.nombre)}</b></td><td class="arte-mu">${p.cargo==='coord'?'Coordinador':p.cargo==='lider'?'Líder':'Vendedor'}</td><td style="text-align:right;">${cmMoney(p.base)}</td><td style="text-align:center;">${cc(x.cum)}</td><td style="text-align:center;">${x.prem?cmPct(x.prem,0):'—'}</td><td style="text-align:center;">${x.ptsOtro?cmPct(x.ptsOtro,0):'—'}</td><td style="text-align:center;line-height:1.2;">${x.mixPct==null||x.p.sinPts?'—':`<b>${cmPct(x.mixPct)}</b><div class="arte-mu" style="font-size:10px;">${x.mixAp?'+'+cmPct(x.mixAp,0)+' pts':'sin pts'}</div>`}</td><td style="text-align:center;font-weight:700;">${cmPct(x.tot)}</td><td style="text-align:right;color:#475569;" title="Lo que correspondería según el % real (total matriz × salario variable), sin la regla del mínimo">${cmMoney(x.teorico)}</td><td style="text-align:right;font-weight:800;color:var(--bl);" title="${E(x.nota)}">${cmMoney(x.pagoFin)}${x.aj?' <span class="arte-mu" title="Incluye ajuste">±</span>':''}</td><td class="arte-mu" style="font-size:10.5px;">${E(x.nota)}</td><td style="white-space:nowrap;"><button class="btn btn-g btn-xs" title="Editar colaborador" onclick="event.stopPropagation();cmPersEdit(${q})">✏️</button> <button class="btn btn-rd btn-xs" title="Quitar colaborador" onclick="event.stopPropagation();cmPersDel(${q})">🗑️</button></td></tr>`+det; }).join('');
   const meses = cmMesLista().map(m=>`<option value="${m}" ${m===CM.mes?'selected':''}>${RV_MESES_L[parseInt(m.slice(5),10)-1]} ${m.slice(0,4)}</option>`).join('');
   el.innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
       <select class="inp" style="width:auto;" onchange="CM.mes=this.value;renderCtComisiones(document.getElementById(CM.dest||'ct-tab-content'))">${meses}</select>
       <button class="btn btn-bl btn-sm" onclick="cmSiesa()">🔄 Actualizar desde Siesa</button>
       <button class="btn btn-g btn-sm" onclick="cmPersAdd()">+ Colaborador</button>
       <button class="btn btn-g btn-sm" onclick="cmExcel()">⬇ Excel</button>
-      <span class="arte-mu" style="font-size:11px;">${E(CM.fuente)} · ppto: ${E(CM.pptoFuente||'Mi equipo')}</span></div>
+      <button class="btn btn-g btn-sm" onclick="document.getElementById('cm-imp-file').click()">📥 Subir puntos del mes</button><input type="file" id="cm-imp-file" accept=".xlsx,.xls" style="display:none" onchange="cmImportarPuntos(this)">
+      <span class="arte-mu" style="font-size:11px;">${E(CM.fuente)} · ppto: ${E(CM.pptoFuente||'Mi equipo')}</span>
+      <button class="btn btn-p btn-sm" onclick="cmPtsVer()">🎯 Ver puntos extras${cmExig()?'':' (sin exigir %)'}</button></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px;">
       ${[['Salario variable base',cmMoney(TB)],['Total a pagar',cmMoney(TP)],['% ejecución real del ppto.',TB?cmPct(TP/TB):'—']].map((a,i)=>`<div style="border:1px solid var(--b2);border-radius:10px;padding:8px 12px;background:#fff;"><div class="arte-mu" style="font-size:10px;text-transform:uppercase;">${a[0]}</div><div style="font-size:17px;font-weight:800;${i===1?'color:var(--bl);':''}">${a[1]}</div></div>`).join('')}</div>
-    ${CM.sinMatch.length?`<div class="alert" style="font-size:11.5px;margin-bottom:10px;">⚠️ Facturas de vendedores de Siesa sin colaborador asignado: ${CM.sinMatch.slice(0,6).map(([n,v])=>'<b>'+E(n)+'</b> ('+cmMoney(v)+')').join(' · ')}. Si es el mismo nombre escrito distinto, ponlo en «Nombre(s) en Siesa» del colaborador.</div>`:''}
+    ${CM.sinMatch.length?`<div class="alert" style="font-size:11.5px;margin-bottom:10px;">⚠️ Facturas de vendedores de Siesa sin colaborador asignado: ${CM.sinMatch.slice(0,6).map(([n,v])=>'<button class="btn btn-g btn-xs" title="Ver el detalle de la facturación" onclick="cmDetFact(0,'+jq(n)+')"><b>'+E(n)+'</b> ('+cmMoney(v)+') 🧾</button>').join(' ')}. Si es el mismo nombre escrito distinto, ponlo en «Nombre(s) en Siesa» del colaborador.</div>`:''}
     ${reglas}
-    <div class="tw"><table style="font-size:12px;"><thead><tr><th>Colaborador</th><th>Cargo</th><th style="text-align:right;">Salario variable base</th><th>Cumplimiento</th><th>Premio</th><th>Puntos</th><th>Total matriz</th><th style="text-align:right;">A pagar</th><th></th><th></th></tr></thead><tbody>${filas}<tr style="border-top:2px solid var(--b1);font-weight:800;"><td>TOTAL</td><td></td><td style="text-align:right;">${cmMoney(TB)}</td><td colspan="4"></td><td style="text-align:right;color:var(--bl);">${cmMoney(TP)}</td><td></td><td></td></tr></tbody></table></div>
-    <div class="arte-mu" style="font-size:11px;margin-top:8px;">Pago = total matriz × salario variable base, solo si el cumplimiento ponderado llega al mínimo; sobre el tope se paga base × (tope + premio). Recaudo y puntos se digitan en el detalle de cada colaborador (luego los cargarán Mayra y Omar).</div>`;
+    <div class="tw"><table style="font-size:12px;"><thead><tr><th>Colaborador</th><th>Cargo</th><th style="text-align:right;">Salario variable base</th><th>Cumplimiento</th><th>Premio</th><th>Puntos</th><th title="Mix ponderado del mes y puntos que gana (≥80 %)">Mix (ponderado)</th><th>Total matriz</th><th style="text-align:right;" title="Total matriz × salario variable base, aunque no llegue al mínimo">Según % real</th><th style="text-align:right;">A pagar</th><th></th><th></th></tr></thead><tbody>${filas}<tr style="border-top:2px solid var(--b1);font-weight:800;"><td>TOTAL</td><td></td><td style="text-align:right;">${cmMoney(TB)}</td><td colspan="5"></td><td style="text-align:right;color:#475569;">${cmMoney(TT)}</td><td style="text-align:right;color:var(--bl);">${cmMoney(TP)}</td><td></td><td></td></tr></tbody></table></div>
+    <div class="arte-mu" style="font-size:11px;margin-top:8px;">«Según % real» = total matriz × salario variable base, sin aplicar el mínimo (referencia de lo que correspondería). Pago = total matriz × salario variable base, solo si el cumplimiento ponderado llega al mínimo; sobre el tope se paga base × (tope + premio). Recaudo y puntos se digitan en el detalle de cada colaborador (luego los cargarán Mayra y Omar).</div>`;
 }
 function cmPremioMas(d){ cmLeerReglas(); const t = CM.reglas.premios; if(d>0) t.push({desde:(t.length?Number(t[t.length-1].hasta)+1:95), hasta:999, pct:0}); else t.pop(); cmPintar(); }
 function cmLeerReglas(){
@@ -31409,19 +31423,19 @@ async function cmGuardarReglas(){ cmLeerReglas(); if(await cmSave('com_reglas', 
 async function cmSet(id, a, b, c, v){
   const m = CM.man[id] = CM.man[id]||{};
   if(a==='it'){ m.it = m.it||{}; m.it[b] = m.it[b]||{}; if(v==='') delete m.it[b][c]; else m.it[b][c] = parseFloat(v); }
-  else if(a==='pts'){ m.pts = m.pts||{}; m.pts[b] = parseFloat(v)||0; }
+  else if(a==='pts'){ m.pts = m.pts||{}; if(v===''||v==null) delete m.pts[b]; else m.pts[b] = parseFloat(v)||0; }
   else if(a==='nota') m.nota = v; else m[a] = parseFloat(v)||0;
   await cmSave('com_manual_'+CM.mes, CM.man); cmPintar();
 }
 async function cmGuardarPers(){ await cmSave('com_personas', CM.personas); cmPintar(); }
-function cmPers(id, campo, v){ const p = CM.personas.find(x=>x.id===id); if(!p) return; p[campo] = campo==='base' ? (parseFloat(v)||0) : v; cmGuardarPers(); }
+function cmPers(id, campo, v){ const p = CM.personas.find(x=>x.id===id); if(!p) return; p[campo] = campo==='base' ? (parseFloat(v)||0) : campo==='sinPts' ? !!v : v; cmGuardarPers(); }
 function cmItem(id, i, campo, v){ const p = CM.personas.find(x=>x.id===id); if(!p) return; p.items[i][campo] = campo==='peso' ? (parseFloat(v)||0) : v; cmGuardarPers(); }
 function cmItemAdd(id){ const p = CM.personas.find(x=>x.id===id); if(!p) return; p.items.push({n:'Nuevo ítem', peso:0, f:'manual'}); cmGuardarPers(); }
 function cmItemDel(id, i){ const p = CM.personas.find(x=>x.id===id); if(!p) return; p.items.splice(i,1); cmGuardarPers(); }
 function cmPersAdd(){ CM.personas.push({id:'p'+Date.now(), nombre:'Nuevo colaborador', cargo:'vendedor', base:0, alias:'', items:CM_V65()}); CM.abierto[CM.personas[CM.personas.length-1].id] = true; (CM.cfg = CM.cfg||{})[CM.personas[CM.personas.length-1].id] = true; cmGuardarPers(); }
 function cmPersEdit(id){ (CM.cfg = CM.cfg||{})[id] = true; CM.abierto[id] = true; cmPintar(); }
 // Quién puede ver y editar Comisiones como módulo propio (además de admin y de quien administra el Centro de Trabajo)
-const CM_EDITORES = ['jefeventasmulticanal@ilumax.com.co','cindy@ilumax.com.co','duduwxo50@gmail.com','liderautomatizaciones@ilumax.com.co'];
+const CM_EDITORES = ['jefeventasmulticanal@ilumax.com.co','cindy@ilumax.com.co','talentohumano@ilumax.com.co','duduwxo50@gmail.com','liderautomatizaciones@ilumax.com.co'];
 function cmEsEditor(){ if(!CU) return false; const m = String(CU.email||'').toLowerCase(); return CU.rol==='admin' || CM_EDITORES.includes(m) || /automatiz/i.test(CU.cargo||'') || /duvier/i.test(CU.nombre||''); }
 function renderComisionesPg(){
   const el = document.getElementById('comisiones-content'); if(!el) return;
@@ -31432,12 +31446,155 @@ function cmPersDel(id){ const p = CM.personas.find(x=>x.id===id); if(!p || !conf
 function cmExcelBasico(){
   if(typeof XLSX==='undefined') return;
   const rows = cmCalcular().map(x=>{ const o = {Colaborador:x.p.nombre, Cargo:x.p.cargo, 'Salario variable base':x.p.base}; x.items.forEach(it=>{ o[it.n+' ppto']=Math.round(it.ppto*100)/100; o[it.n+' real']=Math.round(it.real*100)/100; o[it.n+' %']=+(it.cump*100).toFixed(1); });
-    o['Cumplimiento ponderado %']=+(x.cum*100).toFixed(2); o['Premio %']=+(x.prem*100).toFixed(1); o['Puntos %']=+((x.ptsAp+x.extra)*100).toFixed(1); o['Total matriz %']=+(x.tot*100).toFixed(2); o['A pagar según matriz']=Math.round(x.pago); o['Ajuste']=x.aj; o['A pagar definitivo']=Math.round(x.pagoFin); o['Observación']=(x.man.nota||'')||x.nota; return o; });
+    o['Cumplimiento ponderado %']=+(x.cum*100).toFixed(2); o['Premio %']=+(x.prem*100).toFixed(1); o['Puntos %']=+(x.ptsOtro*100).toFixed(1); o['Mix ponderado %']=x.mixPct==null?'':+(x.mixPct*100).toFixed(1); o['Mix puntos %']=+(x.mixAp*100).toFixed(1); o['Total matriz %']=+(x.tot*100).toFixed(2); o['Según % real (sin mínimo)']=Math.round(x.teorico); o['A pagar según matriz']=Math.round(x.pago); o['Ajuste']=x.aj; o['A pagar definitivo']=Math.round(x.pagoFin); o['Observación']=(x.man.nota||'')||x.nota; return o; });
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Comisiones '+CM.mes);
   XLSX.writeFile(wb, 'Comisiones_'+CM.mes+'.xlsx');
 }
 
 // ── Excel avanzado de comisiones (ExcelJS): una hoja por colaborador con fórmulas vivas, reglas parametrizadas y facturas del mes conectadas ──
+// ── Importar puntos del mes desde Excel (resumen de puntos: tomas de punto, convenios, mix, clientes nuevos…) ──
+const CM_IMP_MAP = [['tie',/TOMA/],['mix',/\bMIX\b/],['tri',/TRIMESTRE/],['sem',/SEMESTRE/],['dis',/DISTRIBUIDOR/],['ape',/APERTURA/]];
+function cmImpParse(wb){
+  const out = {}, sin = new Set(), hojas = [];
+  wb.SheetNames.forEach(sn=>{
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, defval:null, raw:true});
+    const hi = rows.findIndex(r=>r && r.some(c=>cmNorm(c)==='EJECUTIVO')); if(hi<0) return;
+    const hdr = rows[hi], up = rows[hi-1]||[], ci = hdr.findIndex(c=>cmNorm(c)==='EJECUTIVO'), cols = [];
+    hdr.forEach((h,j)=>{ const t = cmNorm(h); if(!t || j===ci || /^(REGION|SUBREGION|TOTAL|ACTIVIDAD)/.test(t)) return; const lab = cmNorm(up[j]); let id = null;
+      if(/APERTURA/.test(t) && /ORO|GOLD/.test(lab)) id = 'gol'; else if(/APERTURA/.test(t) && /PLATA/.test(lab)) id = 'pla'; else if(/APERTURA/.test(t) && /BRONCE/.test(lab)) id = 'bro';
+      else { const m = CM_IMP_MAP.find(x=>x[1].test(t)); if(m) id = m[0]; }
+      if(id) cols.push([j,id]); });
+    if(!cols.length) return; hojas.push(sn);
+    rows.slice(hi+1).forEach(r=>{ const nom = r && r[ci]; if(!nom || /^TOTAL/.test(cmNorm(nom))) return; const p = cmPersDe(nom);
+      if(!p){ if(cols.some(([j])=>Number(r[j])>0)) sin.add(String(nom).trim()); return; }
+      cols.forEach(([j,id])=>{ let v = Number(r[j]); if(r[j]==null || r[j]==='' || isNaN(v)) return; if(id==='mix' && v<=1) v = Math.round(v*1000)/10; ((out[p.id] = out[p.id]||{})[id] = out[p.id][id]||{})[sn] = v; }); });
+  });
+  return {out, sin:[...sin], hojas};
+}
+function cmImpElegir(porHoja){ const hs = Object.keys(porHoja), pref = hs.find(h=>/RESUMEN/.test(cmNorm(h))) || hs[0]; return porHoja[pref]; }
+
+// ── Puntos extras: vista, carga mes a mes y regla del % mínimo ──
+const cmExig = ()=>((CM.man||{})._opt||{}).exig!==false;
+async function cmExigSet(v){ CM.man._opt = Object.assign(CM.man._opt||{}, {exig:!!v}); if(await cmSave('com_manual_'+CM.mes, CM.man)){ cmPintar(); cmPtsVer(); toast(v?'Los puntos solo cuentan desde el '+CM.reglas.umbralPuntos+' % de cumplimiento':'Los puntos cuentan sin importar el % de cumplimiento','ok'); } }
+async function cmPtsSet(id, a, b, v){ await cmSet(id, a, b, '', v); cmPtsVer(); }
+function cmPtsVer(){
+  const E = reabastEsc, R = CM.reglas, F = cmCalcular(), exig = cmExig();
+  const th = R.puntos.map(l=>`<th style="text-align:right;font-size:11px;">${E(l.n)}<br><span class="arte-mu">${l.tipo==='umbral'?(l.pct+' % si ≥ '+l.umbral):(l.pct+' % c/u'+(l.max?' (máx '+l.max+')':''))}</span></th>`).join('');
+  const inp = (id,a,b,v,w)=>`<input class="inp" type="number" step="any" value="${v||''}" placeholder="0" onchange="cmPtsSet('${id}','${a}',${b?`'${b}'`:'null'},this.value)" style="width:${w||64}px;padding:3px 5px;font-size:12px;text-align:right;">`;
+  const filas = F.map(x=>{ const p = x.p, k = x.man||{}, est = p.sinPts?'<span class="arte-mu">No aplica (fuera del canal)</span>':x.ptsAct?'<span style="color:#16a34a;font-weight:700;">✔ Cuentan</span>':'<span style="color:#b45309;">Inactivos: cumple '+cmPct(x.cum,1)+' (< '+R.umbralPuntos+' %)</span>';
+    return `<tr><td><b>${E(p.nombre)}</b></td>${x.detPts.map(d=>`<td style="text-align:right;">${p.sinPts?'—':d.auto?`<input class="inp" type="number" step="any" value="" placeholder="${d.v}" title="Calculado desde las ventas de Siesa (mix por categoría). Escribe un número para reemplazarlo." onchange="cmPtsSet('${p.id}','pts','${d.l.id}',this.value)" style="width:64px;padding:3px 5px;font-size:12px;text-align:right;background:#ecfdf5;">`:inp(p.id,'pts',d.l.id,d.v,64)}</td>`).join('')}<td style="text-align:right;">${p.sinPts?'—':inp(p.id,'extra',null,k.extra,56)}</td><td style="text-align:right;font-weight:700;">${p.sinPts?'—':cmPct(x.pts+(Number(k.extra)||0)/100,0)}</td><td>${est}</td></tr>`; }).join('');
+  const o = document.getElementById('cm-pts-ov') || document.body.appendChild(Object.assign(document.createElement('div'), {id:'cm-pts-ov', className:'ov'}));
+  o.innerHTML = `<div class="mo" style="max-width:1100px;"><div class="mh"><div class="mt">🎯 Puntos extras · ${E(CM.mes)}</div><button class="mx" onclick="document.getElementById('cm-pts-ov').classList.remove('on')">✕</button></div>
+    <div class="mb"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+      <button class="btn btn-bl btn-sm" onclick="document.getElementById('cm-pts-ov').classList.remove('on');document.getElementById('cm-imp-file').click()">📥 Subir puntos del mes (Excel de Omar)</button>
+      <button class="btn btn-g btn-sm" onclick="cmMixVer()">🧩 Ver mix por categoría</button>
+      <label style="font-size:12.5px;display:flex;gap:6px;align-items:center;cursor:pointer;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:6px 10px;"><input type="checkbox" ${exig?'checked':''} onchange="cmExigSet(this.checked)"> Exigir cumplimiento ≥ ${R.umbralPuntos} % para que cuenten los puntos este mes</label></div>
+      <div class="arte-mu" style="font-size:11.5px;margin-bottom:8px;">${exig?`Marcado: quien no llegue al ${R.umbralPuntos} % de cumplimiento <b>no</b> recibe los puntos.`:`Sin marcar: los puntos cuentan para todos los que apliquen, sin importar el % de cumplimiento (igual no se paga bajo el ${R.minPago} %).`} Los valores se pueden corregir a mano y se guardan por mes. Subir el Excel mes a mes carga la hoja RESUMEN con el formato de Omar; lo que no venga en el Excel no se toca.</div>
+      <div class="tw" style="max-height:60vh;overflow:auto;"><table style="font-size:12px;"><thead><tr><th>Colaborador</th>${th}<th style="text-align:right;font-size:11px;">Extra manual (%)</th><th style="text-align:right;font-size:11px;">Puntos sumados</th><th>Estado</th></tr></thead><tbody>${filas}</tbody></table></div></div>
+    <div class="mf"><button class="btn btn-g" onclick="document.getElementById('cm-pts-ov').classList.remove('on')">Cerrar</button></div></div>`;
+  o.classList.add('on');
+}
+
+// ── Mix por categoría (canal Especializado): se calcula con las ventas por producto de Siesa ──
+const CM_MIX_META = [['PANELES',0.32],['SOLAR',0.15],['REFLECTORES',0.14],['BOMBILLERIA',0.07],['ALUMBRADO PUBLICO',0.065],['LUMINARIAS LINEALES',0.055],['ALUMBRADO INDUSTRIAL',0.04],['BALAS DE TECHO',0.04],['TUBOS',0.04],['BALAS DE PISO',0.03],['APLIQUES',0.005],['BALAS SUMERGIBLES',0.005],['CINTAS AISLANTES',0.005],['COLGANTES',0.005],['EMERGENCIA',0.005],['ESTACAS',0.005],['LINTERNAS',0.005],['SENSORES',0.005],['TRACK LIGHT',0.005],['ACCESORIOS ILUMINACION',0.00411]];
+async function cmCargarMix(){
+  CM.mixRows = []; CM.mixMapa = CM.mixMapa || null;
+  try{
+    for(let off=0; ; off+=1000){ const r = await sb.get('ventas_mix_siesa','select=vendedor,referencia,valor&mes=eq.'+CM.mes+'&limit=1000&offset='+off) || []; CM.mixRows.push(...r); if(r.length<1000) break; }
+    if(!CM.mixMapa){ CM.mixMapa = {}; for(let off=0; ; off+=1000){ const r = await sb.get('mix_categoria_ref','select=referencia,categoria&limit=1000&offset='+off) || []; r.forEach(x=>{ CM.mixMapa[x.referencia] = x.categoria; }); if(r.length<1000) break; } }
+  }catch(e){ console.warn('mix',e); }
+}
+function cmMixCalc(){
+  const out = {}; if(!CM.mixRows || !CM.mixRows.length) return out;
+  (CM.personas||[]).filter(p=>p.cargo==='vendedor' && !p.sinPts).forEach(p=>{
+    const base = (CM.pptoRows||[]).filter(r=>cmPersDe(r.vendedor_nombre)===p).reduce((a,r)=>a+(Number(r.presupuesto)||0),0), v = {};
+    CM.mixRows.forEach(r=>{ if(cmPersDe(r.vendedor)!==p) return; const c = (CM.mixMapa||{})[r.referencia] || 'OTRAS'; v[c] = (v[c]||0)+(Number(r.valor)||0); });
+    const cats = CM_MIX_META.map(([n,meta])=>{ const ppto = base*meta, vta = v[n]||0, cump = ppto>0 ? vta/ppto : 0, cm = Math.min(1,cump); return {n, meta, ppto, vta, cump, cm, pond:meta*cm}; });
+    out[p.id] = {base, cats, total:cats.reduce((a,c)=>a+c.pond,0), vtaMix:cats.reduce((a,c)=>a+c.vta,0), otras:Object.entries(v).filter(([c])=>!CM_MIX_META.some(m=>m[0]===c)).reduce((a,[,x])=>a+x,0)};
+  });
+  return out;
+}
+function cmMixVer(id){
+  const E = reabastEsc, MX = cmMixCalc(), ids = Object.keys(MX), sel = MX[id] ? id : ids[0], m = MX[sel], R = CM.reglas, mixL = (R.puntos||[]).find(l=>l.id==='mix') || {umbral:80, pct:4};
+  const o = document.getElementById('cm-mix-ov') || document.body.appendChild(Object.assign(document.createElement('div'), {id:'cm-mix-ov', className:'ov'}));
+  if(!m){ o.innerHTML = `<div class="mo" style="max-width:700px;"><div class="mh"><div class="mt">🧩 Mix por categoría</div><button class="mx" onclick="document.getElementById('cm-mix-ov').classList.remove('on')">✕</button></div><div class="mb"><div class="alert">No hay ventas por producto de este mes en la base. Se cargan solas dos veces al día.</div></div></div>`; o.classList.add('on'); return; }
+  const p = CM.personas.find(x=>x.id===sel), tot = m.total*100;
+  o.innerHTML = `<div class="mo" style="max-width:1000px;"><div class="mh"><div class="mt">🧩 Mix por categoría · ${E(CM.mes)}</div><button class="mx" onclick="document.getElementById('cm-mix-ov').classList.remove('on')">✕</button></div>
+    <div class="mb"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px;"><select class="inp" style="width:auto;" onchange="cmMixVer(this.value)">${ids.map(i=>`<option value="${i}" ${i===sel?'selected':''}>${E((CM.personas.find(x=>x.id===i)||{}).nombre||i)}</option>`).join('')}</select>
+      <span style="font-size:13px;">Mix ponderado: <b style="color:${tot>=Number(mixL.umbral)?'#16a34a':'#b45309'}">${tot.toFixed(1)} %</b> · ${tot>=Number(mixL.umbral)?'✔ gana los puntos de mix':'necesita '+mixL.umbral+' % para ganar '+mixL.pct+' puntos'}</span></div>
+      <div class="tw" style="max-height:58vh;overflow:auto;"><table style="font-size:12px;"><thead><tr><th>Categoría</th><th style="text-align:right;">Meta</th><th style="text-align:right;">Ppto del mix</th><th style="text-align:right;">Venta</th><th style="text-align:right;">Cumpl.</th><th style="text-align:right;">Tope 100 %</th><th style="text-align:right;">Ponderado</th></tr></thead><tbody>
+      ${m.cats.map(c=>`<tr><td><b>${E(c.n)}</b></td><td style="text-align:right;">${cmPct(c.meta,1)}</td><td style="text-align:right;">${cmMoney(c.ppto)}</td><td style="text-align:right;">${cmMoney(c.vta)}</td><td style="text-align:right;">${cmPct(c.cump,0)}</td><td style="text-align:right;">${cmPct(c.cm,0)}</td><td style="text-align:right;">${cmPct(c.pond,1)}</td></tr>`).join('')}
+      <tr style="font-weight:800;background:#f8fafc;"><td>TOTAL</td><td style="text-align:right;">${cmPct(m.cats.reduce((a,c)=>a+c.meta,0),1)}</td><td style="text-align:right;">${cmMoney(m.cats.reduce((a,c)=>a+c.ppto,0))}</td><td style="text-align:right;">${cmMoney(m.vtaMix)}</td><td></td><td></td><td style="text-align:right;">${cmPct(m.total,1)}</td></tr></tbody></table></div>
+      <div class="arte-mu" style="font-size:11px;margin-top:8px;">Ppto del mix = meta × presupuesto de ventas de ${E(p?p.nombre:'')} (${cmMoney(m.base)}). Venta = canal Especializado según Siesa, neta de notas crédito y sin VM, clasificada por categoría de producto${m.otras?'; '+cmMoney(m.otras)+' en categorías que no cuentan para el mix':''}. Este % se usa solo si no escribes el Mix a mano ni lo subes en el Excel de Omar.</div></div>
+    <div class="mf"><button class="btn btn-g" onclick="document.getElementById('cm-mix-ov').classList.remove('on')">Cerrar</button></div></div>`;
+  o.classList.add('on');
+}
+async function cmImportarPuntos(inp){
+  const f = inp.files && inp.files[0]; inp.value = ''; if(!f) return;
+  try{
+    if(typeof XLSX==='undefined') throw new Error('No cargó la librería de Excel; revisa la conexión');
+    const res = cmImpParse(XLSX.read(await f.arrayBuffer(), {type:'array'}));
+    if(!Object.keys(res.out).length) return toast('No encontré ejecutivos con puntos en ese Excel (busco una columna «EJECUTIVO»).','er');
+    CM.imp = res; const R = CM.reglas, E = reabastEsc, nm = id=>(R.puntos.find(l=>l.id===id)||{n:id}).n;
+    const ids = R.puntos.map(l=>l.id).filter(id=>Object.values(res.out).some(o=>o[id]));
+    const filas = (CM.personas||[]).filter(p=>res.out[p.id]).map(p=>`<tr><td><b>${E(p.nombre)}</b>${p.sinPts?' <span class="arte-mu">(sin puntos)</span>':''}</td>${ids.map(id=>{ const h = res.out[p.id][id], vs = h ? [...new Set(Object.values(h))] : [], conf = vs.length>1, v = h ? cmImpElegir(h) : '';
+      return `<td style="text-align:right;${conf?'background:#fef3c7;':''}"><input class="inp" type="number" step="any" data-p="${p.id}" data-c="${id}" value="${v}" ${conf?`title="${E(Object.entries(h).map(([k,x])=>k+': '+x).join(' · '))}"`:''} style="width:70px;padding:3px 5px;font-size:12px;text-align:right;"></td>`; }).join('')}</tr>`).join('');
+    const conf = (CM.personas||[]).some(p=>res.out[p.id] && ids.some(id=>res.out[p.id][id] && new Set(Object.values(res.out[p.id][id])).size>1));
+    const o = document.getElementById('cm-imp-ov') || document.body.appendChild(Object.assign(document.createElement('div'), {id:'cm-imp-ov', className:'ov'}));
+    o.innerHTML = `<div class="mo" style="max-width:900px;"><div class="mh"><div class="mt">📥 Puntos del mes desde Excel</div><button class="mx" onclick="document.getElementById('cm-imp-ov').classList.remove('on')">✕</button></div>
+      <div class="mb"><div style="font-size:12px;margin-bottom:8px;">Hojas leídas: <b>${E(res.hojas.join(', '))}</b>. Se aplicará al mes <b>${E(CM.mes)}</b> (cambia el mes arriba si es otro). Puedes corregir cualquier número antes de aplicar.</div>
+      ${conf?'<div class="alert" style="background:#fef3c7;font-size:12px;margin-bottom:8px;">Las celdas amarillas tienen valores distintos entre hojas; se propone el de la hoja RESUMEN (pasa el mouse para ver cada valor).</div>':''}
+      <div class="tw"><table style="font-size:12px;"><thead><tr><th>Ejecutivo</th>${ids.map(id=>`<th style="text-align:right;">${E(nm(id))}</th>`).join('')}</tr></thead><tbody>${filas}</tbody></table></div>
+      ${res.sin.length?`<div class="alert" style="font-size:12px;margin-top:8px;">Sin coincidir con la lista de colaboradores (no se cargan): <b>${E(res.sin.join(', '))}</b>. Si es el mismo ejecutivo con otro nombre, agrégalo en «Nombre(s) en Siesa».</div>`:''}
+      <div class="arte-mu" style="font-size:11px;margin-top:8px;">Los puntos solo cuentan si la persona aplica puntos (canal ferroeléctrico) y la matriz llega al ${R.umbralPuntos} %. Lo que no venga en el Excel no se toca.</div></div>
+      <div class="mf"><button class="btn btn-g" onclick="document.getElementById('cm-imp-ov').classList.remove('on')">Cancelar</button><button class="btn btn-p" onclick="cmImpAplicar()">Aplicar a ${E(CM.mes)}</button></div></div>`;
+    o.classList.add('on');
+  }catch(e){ toast('No se pudo leer el Excel: '+e.message,'er'); }
+}
+async function cmImpAplicar(){
+  const o = document.getElementById('cm-imp-ov'); let n = 0;
+  o.querySelectorAll('input[data-p]').forEach(i=>{ if(i.value==='') return; const m = CM.man[i.dataset.p] = CM.man[i.dataset.p]||{}; m.pts = m.pts||{}; m.pts[i.dataset.c] = parseFloat(i.value)||0; n++; });
+  if(await cmSave('com_manual_'+CM.mes, CM.man)){ o.classList.remove('on'); toast('✅ '+n+' datos de puntos cargados en '+CM.mes,'ok'); cmPintar(); }
+}
+function cmNuevosAct(){ const ex = ((CM.man||{})._noNuevo)||{}, o = {}; Object.keys(CM.nuevos||{}).forEach(k=>{ if(!ex[k]) o[k] = CM.nuevos[k]; }); return o; }
+async function cmNoNuevo(cli, quitar){
+  CM.man = CM.man||{}; CM.man._noNuevo = CM.man._noNuevo||{};
+  if(quitar) delete CM.man._noNuevo[cli];
+  else { const m = prompt('¿Por qué «'+cli+'» NO es cliente nuevo?\n1 = Cambio de razón social\n2 = Reactivación (ya era cliente)\nO escribe otro motivo:','2'); if(m===null) return; CM.man._noNuevo[cli] = m.trim()==='1' ? 'Cambio de razón social' : (m.trim()==='2'||!m.trim()) ? 'Reactivación' : m.trim(); }
+  if(await cmSave('com_manual_'+CM.mes, CM.man)){ toast(quitar?'Vuelve a contar como cliente nuevo':'Marcado como no nuevo','ok'); if(CM.detArgs) cmDetFact(CM.detArgs[0], CM.detArgs[1]); cmPintar(); }
+}
+function cmDetFact(modo, k){
+  CM.detArgs = [modo, k];
+  const E = reabastEsc, p = modo ? (CM.personas||[]).find(x=>x.id===k) : null, tit = modo ? (p?p.nombre:'') : k;
+  const rows = (CM.datos||[]).filter(d=> modo ? (cmPersDe(d.vend)||{}).id===k : (d.vend||'(sin vendedor)')===k).sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha))||String(a.doc).localeCompare(String(b.doc)));
+  const tot = rows.reduce((a,d)=>a+(Number(d.val)||0),0), porC = {}, porCli = {}; rows.forEach(d=>{ const c = CM_CANAL[d.canal]||d.canal||'—'; porC[c] = (porC[c]||0)+(Number(d.val)||0); porCli[d.cli||'—'] = (porCli[d.cli||'—']||0)+(Number(d.val)||0); }); CM.detRows = rows; CM.detTit = tit; const NV = cmNuevosAct(), EXN = ((CM.man||{})._noNuevo)||{}, nvx = {}, nvl = {}; rows.forEach(d=>{ if((CM.nuevos||{})[d.cli] && EXN[d.cli] && d.canal==='Especializado' && d.tipo!=='VM' && !/^(VN|ND)/i.test(d.doc)) nvx[d.cli] = (nvx[d.cli]||0)+(Number(d.val)||0); }); const jc = s=>JSON.stringify(s).replace(/"/g,'&quot;'); rows.forEach(d=>{ if(NV[d.cli] && d.canal==='Especializado' && d.tipo!=='VM' && !/^(VN|ND)/i.test(d.doc)) nvl[d.cli] = (nvl[d.cli]||0)+(Number(d.val)||0); });
+  const tp = d=>d.tipo==='VM'?'VM':/^VN/i.test(d.doc)?'VN':/^ND/i.test(d.doc)?'ND':'FAC', comp = {}, comp0 = ()=>({FAC:0,nFAC:0,REIN:0,VN:0,nVN:0,ND:0,nND:0,VM:0,nVM:0,NET:0});
+  const sumar = (o,d)=>{ const t = tp(d), v = Number(d.val)||0; if(t==='VM'){ o.VM += Number(d.vm)||0; o.nVM++; return; } if(t==='FAC'){ o.FAC += v+(Number(d.rein)||0); o.nFAC++; o.REIN += (Number(d.rein)||0); } else if(t==='VN'){ o.VN += v; o.nVN++; } else { o.ND += v; o.nND++; } o.NET += v; };
+  const T = comp0(); rows.forEach(d=>{ sumar(T,d); const k = d.vend||'(sin vendedor)'; sumar(comp[k] = comp[k]||comp0(), d); });
+  const compHtml = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px;margin-bottom:8px;">
+    <div class="sc"><div class="sv" style="font-size:15px;">${cmMoney(T.FAC)}</div><div class="sl">Facturas VE/VZ (${T.nFAC})</div></div>
+    <div class="sc"><div class="sv" style="font-size:15px;color:var(--rd);">${cmMoney(-T.REIN)}</div><div class="sl">Reintegro de gastos</div></div>
+    <div class="sc"><div class="sv" style="font-size:15px;color:var(--rd);">${cmMoney(T.VN)}</div><div class="sl">Notas crédito VN (${T.nVN})</div></div>
+    <div class="sc"><div class="sv" style="font-size:15px;color:var(--gr);">${cmMoney(T.ND)}</div><div class="sl">Notas débito ND (${T.nND})</div></div>
+    <div class="sc"><div class="sv" style="font-size:15px;">${cmMoney(T.NET)}</div><div class="sl">= Venta neta (Real)</div></div></div>
+    ${T.nVM?`<div class="arte-mu" style="font-size:11.5px;margin-bottom:8px;">ℹ️ Nota: ${T.nVM} factura(s) tipo <b>VM</b> (ventas a empleados) por ${cmMoney(T.VM)} <b>no se suman</b> a la venta del vendedor.</div>`:''}
+    ${Object.keys(comp).length>1?`<div class="tw" style="margin-bottom:8px;"><table style="font-size:11.5px;"><thead><tr><th>Vendedor en Siesa</th><th style="text-align:right;">Facturas</th><th style="text-align:right;">Reintegro</th><th style="text-align:right;">VN</th><th style="text-align:right;">ND</th><th style="text-align:right;">Neto</th></tr></thead><tbody>${Object.entries(comp).sort((a,b)=>b[1].NET-a[1].NET).map(([k,c])=>`<tr><td>${E(k)}</td><td style="text-align:right;">${cmMoney(c.FAC)}</td><td style="text-align:right;">${cmMoney(-c.REIN)}</td><td style="text-align:right;">${cmMoney(c.VN)}</td><td style="text-align:right;">${cmMoney(c.ND)}</td><td style="text-align:right;"><b>${cmMoney(c.NET)}</b></td></tr>`).join('')}</tbody></table></div>`:''}`;
+  const o = document.getElementById('cm-det-ov') || document.body.appendChild(Object.assign(document.createElement('div'), {id:'cm-det-ov', className:'ov'}));
+  o.innerHTML = `<div class="mo" style="max-width:860px;"><div class="mh"><div class="mt">🧾 Facturación de ${E(tit)} · ${E(CM.mes)}</div><button class="mx" onclick="document.getElementById('cm-det-ov').classList.remove('on')">✕</button></div>
+    <div class="mb"><div style="font-size:12px;margin-bottom:8px;"><b>${rows.length}</b> documentos · total sin IVA <b>${cmMoney(tot)}</b></div>${compHtml}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">${Object.entries(porC).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<span class="bdg bdg-gris">${E(c)}: ${cmMoney(v)} (${tot?Math.round(v/tot*100):0}%)</span>`).join('')}</div>
+    ${Object.keys(nvl).length?`<div style="background:#dcfce7;border:1px solid #86efac;border-radius:8px;padding:7px 10px;font-size:11.5px;margin-bottom:8px;"><b>🟢 Clientes nuevos este mes (${Object.keys(nvl).length}):</b> ${Object.entries(nvl).sort((a,b)=>b[1]-a[1]).map(([c,v])=>E(c)+' ('+cmMoney(v)+') <button class="btn btn-g btn-xs" title="Marcar como cambio de razón social o reactivación" onclick="cmNoNuevo('+jc(c)+')">✖ No es nuevo</button>').join(' · ')}<div class="arte-mu" style="font-size:10.5px;margin-top:3px;">Solo canal Especializado (ferroeléctrico). Nuevo = sin facturas en los 12 meses anteriores, en ningún canal (la base tiene ${CM.nuevosMeses||'?'} mes(es) de historia previa).</div></div>`:''}
+    ${Object.keys(nvx).length?`<div class="arte-mu" style="font-size:11.5px;margin-bottom:8px;">Descartados como nuevos: ${Object.entries(nvx).map(([c,v])=>E(c)+' ('+cmMoney(v)+') — '+E(EXN[c])+' <button class="btn btn-g btn-xs" onclick="cmNoNuevo('+jc(c)+',1)">↺ Volver a contar</button>').join(' · ')}</div>`:''}
+    <div style="font-size:11.5px;margin-bottom:6px;"><b>Principales clientes:</b> ${Object.entries(porCli).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([c,v])=>E(c)+' ('+cmMoney(v)+')').join(' · ')||'—'}</div>
+    <div class="arte-mu" style="font-size:11px;margin-bottom:8px;">Suma <b>todas</b> las facturas del vendedor en Siesa (todos los canales), valor antes de IVA y sin anuladas. Se descartan las líneas del ítem «Reintegro de gastos»${CM.datos&&CM.datos.some(d=>d.rein)?' (en este mes: '+cmMoney(CM.datos.reduce((a,d)=>a+(d.rein||0),0))+' en total)':''}. Las <b>notas crédito (VN, devoluciones)</b> se restan: salen en negativo en la lista (Real = facturas − VN + ND; las ND son notas débito que corrigen una VN). ${p?'Presupuesto de este colaborador: '+E(cmMoney(((CM.pptoRows||[]).filter(r=>cmPersDe(r.vendedor_nombre)===p).reduce((a,r)=>a+(Number(r.presupuesto)||0),0)))):''}</div>
+    <div class="tw" style="max-height:55vh;overflow:auto;"><table style="font-size:12px;"><thead><tr><th>Fecha</th><th>Tipo</th><th>Documento</th><th>Cliente</th><th>Vendedor en Siesa</th><th>Canal</th><th style="text-align:right;">Valor</th></tr></thead><tbody>${rows.map(d=>`<tr${NV[d.cli]&&d.canal==='Especializado'&&d.tipo!=='VM'?' style="background:#dcfce7;" title="Cliente nuevo este mes"':''}><td>${E(d.fecha||'')}</td><td>${{VN:'Nota crédito',ND:'Nota débito',VM:'VM empleados (no suma)',FAC:'Factura'}[tp(d)]}</td><td>${E(d.doc||'')}</td><td>${E(d.cli||'')}</td><td>${E(d.vend||'')}</td><td>${E(CM_CANAL[d.canal]||d.canal||'')}</td><td style="text-align:right;">${cmMoney(d.val)}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">Sin facturas este mes</td></tr>'}</tbody></table></div></div>
+    <div class="mf"><button class="btn btn-g" onclick="cmDetXls()">⬇ Excel</button><button class="btn btn-g" onclick="document.getElementById('cm-det-ov').classList.remove('on')">Cerrar</button></div></div>`;
+  o.classList.add('on');
+}
+function cmDetXls(){
+  try{ const rows = (CM.detRows||[]).map(d=>({Fecha:d.fecha, Tipo:d.tipo==='VM'?'VM empleados (no suma)':/^VN/i.test(d.doc)?'Nota crédito':/^ND/i.test(d.doc)?'Nota débito':'Factura', Documento:d.doc, Cliente:d.cli, 'Vendedor en Siesa':d.vend, Canal:CM_CANAL[d.canal]||d.canal, 'Valor sin IVA':d.tipo==='VM'?0:Number(d.val)||0})), wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Facturas'); XLSX.writeFile(wb, 'Facturacion_'+String(CM.detTit||'').replace(/[^A-Za-z0-9]+/g,'_')+'_'+CM.mes+'.xlsx'); }catch(e){ toast('No se pudo exportar: '+e.message,'er'); }
+}
 async function cmExcel(){
   try{
     if(!window.ExcelJS) await new Promise((ok,ko)=>{ const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js'; s.onload = ok; s.onerror = ()=>ko(new Error('No se pudo cargar ExcelJS')); document.head.appendChild(s); });
@@ -31455,7 +31612,7 @@ async function cmExcel(){
     // ── Reglas ──
     wsG.columns = [{width:3},{width:46},{width:16},{width:16},{width:16}];
     wsG.getCell('B1').value = 'Reglas de la matriz de comisiones (celdas amarillas editables: todas las hojas se recalculan)'; wsG.getCell('B1').font = {bold:true,size:13};
-    [['No se paga si el cumplimiento es menor a',R.minPago/100],['Tope: sobre este % se paga base × (tope + premio)',R.maxPago/100],['Puntos adicionales se activan desde',R.umbralPuntos/100]].forEach((r,i)=>{ wsG.getCell(3+i,2).value = r[0]; const c = wsG.getCell(3+i,3); c.value = r[1]; c.numFmt = '0%'; c.fill = YEL; });
+    [['No se paga si el cumplimiento es menor a',R.minPago/100],['Tope: sobre este % se paga base × (tope + premio + puntos adicionales)',R.maxPago/100],['Puntos adicionales se activan desde',R.umbralPuntos/100]].forEach((r,i)=>{ wsG.getCell(3+i,2).value = r[0]; const c = wsG.getCell(3+i,3); c.value = r[1]; c.numFmt = '0%'; c.fill = YEL; });
     const MIN = 'Reglas!$C$3', MAX = 'Reglas!$C$4', UMB = 'Reglas!$C$5';
     wsG.getCell('B7').value = 'Premio excelencia — de'; wsG.getCell('C7').value = 'hasta'; wsG.getCell('D7').value = 'premio'; hdr(wsG,7,2,4);
     const np = R.premios.length;
@@ -31470,7 +31627,7 @@ async function cmExcel(){
     wsF.columns = [{width:12},{width:16},{width:42},{width:34},{width:26},{width:20},{width:18}];
     ['Fecha','Documento','Cliente','Vendedor (Siesa)','Colaborador','Canal','Subtotal sin IVA'].forEach((h,i)=>wsF.getCell(1,i+1).value = h); hdr(wsF,1,1,7);
     const fac = CM.datos.slice().sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha))||String(a.doc).localeCompare(String(b.doc)));
-    fac.forEach((d,i)=>{ const r = i+2, p = cmPersDe(d.vend); wsF.getCell(r,1).value = d.fecha ? new Date(d.fecha+'T12:00:00') : null; wsF.getCell(r,1).numFmt = 'dd/mm/yyyy'; wsF.getCell(r,2).value = d.doc; wsF.getCell(r,3).value = d.cli; wsF.getCell(r,4).value = d.vend; wsF.getCell(r,5).value = p ? p.nombre : '(sin colaborador)'; wsF.getCell(r,6).value = d.canal; wsF.getCell(r,7).value = d.val; wsF.getCell(r,7).numFmt = MONEY; });
+    fac.forEach((d,i)=>{ const r = i+2, p = cmPersDe(d.vend); wsF.getCell(r,1).value = d.fecha ? new Date(d.fecha+'T12:00:00') : null; wsF.getCell(r,1).numFmt = 'dd/mm/yyyy'; wsF.getCell(r,2).value = d.doc; wsF.getCell(r,3).value = d.cli; if(cmNuevosAct()[d.cli] && d.canal==='Especializado' && d.tipo!=='VM') wsF.getCell(r,3).fill = fill('FFBBF7D0'); wsF.getCell(r,4).value = d.vend; wsF.getCell(r,5).value = p ? p.nombre : '(sin colaborador)'; wsF.getCell(r,6).value = d.canal; wsF.getCell(r,7).value = d.val; wsF.getCell(r,7).numFmt = MONEY; });
     const LF = Math.max(2, fac.length+1);
     wsF.autoFilter = {from:'A1',to:'G'+LF}; wsF.views = [{state:'frozen',ySplit:1}];
     const FV = 'Facturas!$G$2:$G$'+LF, FC = 'Facturas!$E$2:$E$'+LF, FCLI = 'Facturas!$C$2:$C$'+LF;
@@ -31500,13 +31657,13 @@ async function cmExcel(){
       ws.getCell(t,2).value = 'Total'; ws.getCell(t,3).value = fx('SUM(C'+r0+':C'+(t-1)+')', x.items.reduce((a,i)=>a+i.peso,0)/100); ws.getCell(t,3).numFmt = '0%'; ws.getCell(t,7).value = fx('SUM(G'+r0+':G'+(t-1)+')', x.cum); ws.getCell(t,7).numFmt = PCT; ws.getCell(t,2).font = ws.getCell(t,7).font = {bold:true};
       for(let c=2;c<=7;c++) ws.getCell(t,c).fill = GRY;
       put(t+1,'Premio excelencia (según tabla)', fx(prem('G'+t), x.prem), PCT);
-      put(t+2,'Puntos adicionales (solo si cumple el % mínimo de activación)', fx('IF(G'+t+'>='+UMB+',G'+ptsTot+',0)', x.ptsAp), PCT);
+      put(t+2,'Puntos adicionales (solo si cumple el % mínimo de activación)', fx(cmExig()?'IF(G'+t+'>='+UMB+',G'+ptsTot+',0)':'G'+ptsTot, x.ptsAp), PCT);
       put(t+3,'Puntos extra manuales (%)', x.extra, PCT, false, YEL);
       put(t+4,'Total cumplimiento (ponderado + premio + puntos)', fx('G'+t+'+G'+(t+1)+'+G'+(t+2)+'+G'+(t+3), x.tot), PCT, true);
       put(t+5,'Salario variable base', Number(p.base)||0, MONEY, false, YEL);
-      put(t+6,'Total salario variable según matriz', fx('IF(G'+t+'<'+MIN+',0,IF(G'+t+'<='+MAX+',G'+(t+4)+'*G'+(t+5)+',G'+(t+5)+'*('+MAX+'+G'+(t+1)+')))', x.pago), MONEY, true);
+      put(t+6,'Total salario variable según matriz (según el % real, sin mínimo)', fx('IF(G'+t+'<='+MAX+',G'+(t+4)+'*G'+(t+5)+',G'+(t+5)+'*('+MAX+'+G'+(t+1)+'+G'+(t+2)+'+G'+(t+3)+'))', x.teorico), MONEY, true);
       put(t+7,'Ajuste ± ($)', x.aj, MONEY, false, YEL);
-      put(t+8,'TOTAL A PAGAR DEFINITIVO', fx('G'+(t+6)+'+G'+(t+7), x.pagoFin), MONEY, true);
+      put(t+8,'TOTAL A PAGAR DEFINITIVO (aplica la regla: bajo el '+R.minPago+' % no se paga)', fx('IF(G'+t+'<'+MIN+',0,G'+(t+6)+')+G'+(t+7), x.pagoFin), MONEY, true);
       for(let c=2;c<=7;c++) ws.getCell(t+8,c).fill = fill('FFFDE68A');
       ws.getCell(t+9,2).value = 'Observación'; ws.getCell(t+9,3).value = x.nota || ''; ws.getCell(t+10,2).value = 'Cuando el total cumplimiento supere el 140% se revisará el incentivo adicional.'; ws.getCell(t+10,2).font = {italic:true,size:9,color:{argb:'FF64748B'}};
       ['Puntos % adicionales','','','%','#','% Total'].forEach((h,i)=>{ if(h) ws.getCell(pts0-1,i+2).value = h; }); hdr(ws,pts0-1,2,7);
@@ -31519,32 +31676,34 @@ async function cmExcel(){
       ws.getCell(ptsTot,2).value = 'Total puntos adicionales'; ws.getCell(ptsTot,7).value = fx('SUM(G'+pts0+':G'+(ptsTot-1)+')', x.pts); ws.getCell(ptsTot,7).numFmt = PCT; ws.getCell(ptsTot,2).font = ws.getCell(ptsTot,7).font = {bold:true};
       ws.addConditionalFormatting({ref:'F'+r0+':F'+(t-1), rules:[{type:'cellIs',operator:'greaterThanOrEqual',formulae:[1],style:{font:{bold:true,color:{argb:'FF16A34A'}}}},{type:'cellIs',operator:'lessThan',formulae:[R.minPago/100],style:{font:{bold:true,color:{argb:'FFDC2626'}}}}]});
       // Tablita de clientes del mes de este colaborador (conectada a la hoja Facturas)
-      ['Cliente (ventas del mes)','Facturas','Venta sin IVA'].forEach((h,i)=>ws.getCell(5,9+i).value = h); hdr(ws,5,9,11);
+      ['Cliente (ventas del mes)','Facturas','Venta sin IVA','¿Nuevo?'].forEach((h,i)=>ws.getCell(5,9+i).value = h); hdr(ws,5,9,12);
       const mp = {}; CM.datos.forEach(d=>{ const q = cmPersDe(d.vend); if(q && q.id===p.id){ const k = d.cli||'(sin cliente)'; (mp[k] = mp[k]||{n:0,v:0}); mp[k].n++; mp[k].v += d.val; } });
       const cl = Object.entries(mp).sort((a,b)=>b[1].v-a[1].v).slice(0,60);
-      cl.forEach(([k,v],i)=>{ const r = 6+i; ws.getCell(r,9).value = k; ws.getCell(r,10).value = fx('COUNTIFS('+FCLI+',I'+r+','+FC+',"'+p.nombre.replace(/"/g,'""')+'")', v.n); ws.getCell(r,11).value = fx('SUMIFS('+FV+','+FCLI+',I'+r+','+FC+',"'+p.nombre.replace(/"/g,'""')+'")', v.v); ws.getCell(r,11).numFmt = MONEY; });
+      const NVX = cmNuevosAct(); ws.getCell(4,9).value = '🟢 Verde = cliente nuevo del canal Especializado (sin compras en los 12 meses previos)'; ws.getCell(4,9).font = {italic:true,size:9,color:{argb:'FF166534'}}; ws.getColumn(12).width = 12;
+      cl.forEach(([k,v],i)=>{ const r = 6+i; ws.getCell(r,9).value = k; if(NVX[k]){ for(let c=9;c<=12;c++) ws.getCell(r,c).fill = fill('FFBBF7D0'); ws.getCell(r,12).value = 'Nuevo'; } ws.getCell(r,10).value = fx('COUNTIFS('+FCLI+',I'+r+','+FC+',"'+p.nombre.replace(/"/g,'""')+'")', v.n); ws.getCell(r,11).value = fx('SUMIFS('+FV+','+FCLI+',I'+r+','+FC+',"'+p.nombre.replace(/"/g,'""')+'")', v.v); ws.getCell(r,11).numFmt = MONEY; });
       const rt = 6+cl.length; ws.getCell(rt,9).value = cl.length ? 'Total' : 'Sin ventas en el mes'; if(cl.length){ ws.getCell(rt,10).value = fx('SUM(J6:J'+(rt-1)+')', cl.reduce((a,c)=>a+c[1].n,0)); ws.getCell(rt,11).value = fx('SUM(K6:K'+(rt-1)+')', cl.reduce((a,c)=>a+c[1].v,0)); ws.getCell(rt,11).numFmt = MONEY; ws.getCell(rt,9).font = ws.getCell(rt,10).font = ws.getCell(rt,11).font = {bold:true}; }
       ws.views = [{state:'frozen',ySplit:5}];
-      pos[p.id] = {t, base:t+5};
+      pos[p.id] = {t, base:t+5, pts0};
     });
 
     // ── Resumen ──
-    wsR.columns = [{width:5},{width:26},{width:14},{width:17},{width:15},{width:11},{width:11},{width:14},{width:19},{width:14},{width:19},{width:34}];
+    wsR.columns = [{width:5},{width:26},{width:14},{width:17},{width:15},{width:11},{width:11},{width:11},{width:11},{width:14},{width:20},{width:19},{width:14},{width:19},{width:34}];
     wsR.getCell('A1').value = 'Resumen comisiones equipo comercial — '+mesTxt; wsR.getCell('A1').font = {bold:true,size:14};
     wsR.getCell('A2').value = 'Ilumax · '+CM.fuente+' · '+CM.pptoFuente+' · generado '+new Date().toLocaleString('es-CO'); wsR.getCell('A2').font = {italic:true,size:9,color:{argb:'FF64748B'}};
-    ['No.','Colaborador','Cargo','Salario variable','Cumplimiento mes','Premio','Puntos','Total matriz (%)','Total a pagar según matriz','Ajuste','Total a pagar definitivo','Comentario'].forEach((h,i)=>wsR.getCell(4,i+1).value = h); hdr(wsR,4,1,12);
+    ['No.','Colaborador','Cargo','Salario variable','Cumplimiento mes','Premio','Puntos','Mix ponderado (%)','Mix (puntos)','Total matriz (%)','Total según matriz (% real, sin mínimo)','Pago aplicando la regla del mínimo','Ajuste','Total a pagar definitivo','Comentario'].forEach((h,i)=>wsR.getCell(4,i+1).value = h); hdr(wsR,4,1,15);
     F.forEach((x,i)=>{ const r = 5+i, s = S(x.p.id), P = pos[x.p.id];
       wsR.getCell(r,1).value = i+1; wsR.getCell(r,2).value = {text:x.p.nombre, hyperlink:'#'+s+'A1'}; wsR.getCell(r,2).font = {color:{argb:'FF1D4ED8'},underline:true};
       wsR.getCell(r,3).value = x.p.cargo==='coord'?'Coordinador':x.p.cargo==='lider'?'Líder':'Vendedor';
       wsR.getCell(r,4).value = fx(s+'G'+P.base, Number(x.p.base)||0); wsR.getCell(r,5).value = fx(s+'G'+P.t, x.cum); wsR.getCell(r,6).value = fx(s+'G'+(P.t+1), x.prem);
-      wsR.getCell(r,7).value = fx(s+'G'+(P.t+2)+'+'+s+'G'+(P.t+3), x.ptsAp+x.extra); wsR.getCell(r,8).value = fx('E'+r+'+F'+r+'+G'+r, x.tot);
-      wsR.getCell(r,9).value = fx(s+'G'+(P.t+6), x.pago); wsR.getCell(r,10).value = fx(s+'G'+(P.t+7), x.aj); wsR.getCell(r,11).value = fx('I'+r+'+J'+r, x.pagoFin);
-      wsR.getCell(r,12).value = x.nota || '';
-      [4,9,10,11].forEach(c=>wsR.getCell(r,c).numFmt = MONEY); [5,6,7,8].forEach(c=>wsR.getCell(r,c).numFmt = PCT); });
+      const mxI = x.detPts.findIndex(d=>d.l.id==='mix'), mxF = mxI<0 ? '0' : (cmExig()?'IF('+s+'G'+P.t+'>='+UMB+','+s+'G'+(P.pts0+mxI)+',0)':s+'G'+(P.pts0+mxI));
+      wsR.getCell(r,8).value = x.mixPct==null ? '' : x.mixPct; wsR.getCell(r,9).value = fx(mxF, x.mixAp); wsR.getCell(r,7).value = fx(s+'G'+(P.t+2)+'+'+s+'G'+(P.t+3)+'-I'+r, x.ptsOtro); wsR.getCell(r,10).value = fx('E'+r+'+F'+r+'+G'+r+'+I'+r, x.tot);
+      wsR.getCell(r,11).value = fx(s+'G'+(P.t+6), x.teorico); wsR.getCell(r,12).value = fx('IF(E'+r+'<'+MIN+',0,K'+r+')', x.pago); wsR.getCell(r,13).value = fx(s+'G'+(P.t+7), x.aj); wsR.getCell(r,14).value = fx('L'+r+'+M'+r, x.pagoFin);
+      wsR.getCell(r,15).value = x.nota || '';
+      [4,11,12,13,14].forEach(c=>wsR.getCell(r,c).numFmt = MONEY); [5,6,7,8,9,10].forEach(c=>wsR.getCell(r,c).numFmt = PCT); });
     const rl = 4+F.length, rT = rl+1, sum = (c)=>'SUM('+c+'5:'+c+rl+')';
-    wsR.getCell(rT,2).value = 'Total'; [[4,F.reduce((a,x)=>a+(Number(x.p.base)||0),0)],[9,F.reduce((a,x)=>a+x.pago,0)],[10,F.reduce((a,x)=>a+x.aj,0)],[11,F.reduce((a,x)=>a+x.pagoFin,0)]].forEach(([c,v])=>{ const L = String.fromCharCode(64+c); wsR.getCell(rT,c).value = fx(sum(L), v); wsR.getCell(rT,c).numFmt = MONEY; });
-    for(let c=1;c<=12;c++){ wsR.getCell(rT,c).font = {bold:true}; wsR.getCell(rT,c).fill = GRY; }
-    wsR.getCell(rT+1,10).value = '% ejecución real del ppto.'; wsR.getCell(rT+1,11).value = fx('IF(D'+rT+'>0,K'+rT+'/D'+rT+',0)', 0); wsR.getCell(rT+1,11).numFmt = PCT; wsR.getCell(rT+1,10).font = wsR.getCell(rT+1,11).font = {bold:true};
+    wsR.getCell(rT,2).value = 'Total'; [[4,F.reduce((a,x)=>a+(Number(x.p.base)||0),0)],[11,F.reduce((a,x)=>a+x.teorico,0)],[12,F.reduce((a,x)=>a+x.pago,0)],[13,F.reduce((a,x)=>a+x.aj,0)],[14,F.reduce((a,x)=>a+x.pagoFin,0)]].forEach(([c,v])=>{ const L = String.fromCharCode(64+c); wsR.getCell(rT,c).value = fx(sum(L), v); wsR.getCell(rT,c).numFmt = MONEY; });
+    for(let c=1;c<=15;c++){ wsR.getCell(rT,c).font = {bold:true}; wsR.getCell(rT,c).fill = GRY; }
+    wsR.getCell(rT+1,13).value = '% ejecución real del ppto.'; wsR.getCell(rT+1,14).value = fx('IF(D'+rT+'>0,N'+rT+'/D'+rT+',0)', 0); wsR.getCell(rT+1,14).numFmt = PCT; wsR.getCell(rT+1,13).font = wsR.getCell(rT+1,14).font = {bold:true};
     // Venta del mes por colaborador (conectada a Facturas)
     const v0 = rT+4; wsR.getCell(v0-1,2).value = 'Venta del mes por colaborador'; wsR.getCell(v0-1,2).font = {bold:true,size:12};
     ['','Colaborador','Facturas','Presupuesto venta','Venta real (sin IVA)','% cumpl.'].forEach((h,i)=>{ if(h) wsR.getCell(v0,i+1).value = h; }); hdr(wsR,v0,2,6);
@@ -32738,6 +32897,7 @@ function moduloPermitido(id) {
   // los admin entran por defecto) — se asigna en Admin Center → Módulos por Rol / por persona.
   if(id==='ppto-areas') return !!(CU.modulos && CU.modulos.includes('ppto-areas'));
   if(CU.rol==='admin') return true;
+  if(id==='comisiones' && typeof cmEsEditor==='function' && cmEsEditor()) return true;
   if((id==='reabast' || id==='tesoreria' || id==='compras') && typeof reabastEsEditor==='function' && reabastEsEditor()) return true;
   if(!CU.modulos || !CU.modulos.length) return true;
   if(AC_MODULOS_NUEVOS.includes(id) && !CU.modulos.includes('_v2')) return true;
