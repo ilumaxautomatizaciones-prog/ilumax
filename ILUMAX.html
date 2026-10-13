@@ -6024,7 +6024,7 @@ function presTblEditarFila(sub){
     presWizardMeses = [new Date().getMonth()+1];
   }
   presWizardAnio = anio;
-  presWizardItemsPorMes = {};
+  presWizardItemsPorMes = {}; if(typeof pwQuick!=='undefined'){ pwQuick.meses={}; pwQuick.borrados=[]; }
   presWizardCamposInvalidos = {};
   presWizardMesActivo = presWizardMeses[0];
   presWizardStep = 3;
@@ -6899,7 +6899,7 @@ function abrirModalPres(catCod, subCod) {
   presWizardAnio = PRES_ANIO_DEFECTO;
   presWizardMeses = [new Date().getMonth() + 1];
   presWizardMesActivo = new Date().getMonth() + 1;
-  presWizardItemsPorMes = {};
+  presWizardItemsPorMes = {}; if(typeof pwQuick!=='undefined'){ pwQuick.meses={}; pwQuick.borrados=[]; }
   presWizardCamposInvalidos = {};
   EMPLEADOS_PRES_FILTRO = '';
 
@@ -7226,7 +7226,7 @@ function renderWizardMeses() {
       + 'background:' + (esActivo ? 'var(--bl)' : 'transparent') + ';'
       + 'border:1px solid ' + (esActivo ? 'var(--bl)' : 'transparent') + ';">'
       + '<div style="display:flex;align-items:center;justify-content:center;gap:4px;font-size:10px;font-weight:' + (esActivo?'800':'600') + ';'
-      + 'color:' + (esActivo ? '#fff' : 'var(--tx)') + ';"><input type="checkbox" title="Marcar para aplicar el ítem rápido" ' + (pwQuick.meses[numMes]?'checked ':'') + 'onclick="event.stopPropagation();pwQuick.meses[' + numMes + ']=this.checked" style="width:12px;height:12px;margin:0;accent-color:var(--gr);cursor:pointer;">' + nom + '</div>'
+      + 'color:' + (esActivo ? '#fff' : 'var(--tx)') + ';"><input type="checkbox" title="Marcar: los ítems se guardan también en este mes" ' + (pwQuick.meses[numMes]?'checked ':'') + 'onclick="event.stopPropagation();pwQuick.meses[' + numMes + ']=this.checked;pwQuickResumen()" style="width:12px;height:12px;margin:0;accent-color:var(--gr);cursor:pointer;">' + nom + '</div>'
       // Punto verde = ya tiene presupuesto guardado este mes; punto rojo = todavía falta.
       // Antes los meses sin datos no mostraban nada, así que al entrar a editar no se
       // distinguía a simple vista qué meses del año quedaban pendientes.
@@ -7286,9 +7286,9 @@ function renderCamposPorMes() {
   if(!presWizardItemsPorMes[numMes]) {
     var exist = getPresupuestosSubMes(presWizardSub ? presWizardSub.codigo : null, numMes, presWizardAnio);
     if(exist && exist.items && exist.items.length) {
-      presWizardItemsPorMes[numMes] = exist.items.map(function(it){ return {cc: it.cc||'', desc: it.desc||'', valor: it.valor||0, nota: it.nota||''}; });
+      presWizardItemsPorMes[numMes] = exist.items.map(function(it){ return {cc: it.cc||'', desc: it.desc||'', valor: it.valor||0, nota: it.nota||'', _k: pwItemKey(it)}; });
     } else if(exist && exist.monto) {
-      presWizardItemsPorMes[numMes] = [{cc: exist.centroCosto||'', desc: exist.obs||'', valor: exist.monto}];
+      presWizardItemsPorMes[numMes] = [{cc: exist.centroCosto||'', desc: exist.obs||'', valor: exist.monto, _k: pwItemKey({cc:exist.centroCosto,desc:exist.obs})}];
     } else {
       presWizardItemsPorMes[numMes] = [{cc:(presWizardSub?presCcSugerido(presWizardSub.codigo):''), desc:'', valor:''}];
     }
@@ -7426,28 +7426,43 @@ function pwQuickLeer(){
   var v=document.getElementById('pw-q-valor'), m=document.getElementById('pw-q-modo'), c=document.getElementById('pw-q-cc'), d=document.getElementById('pw-q-desc');
   if(v) pwQuick.valor=v.value; if(m) pwQuick.modo=m.value; if(c) pwQuick.cc=c.value; if(d) pwQuick.desc=d.value;
 }
+function pwItemKey(it){ return String((it&&it.cc)||'').trim()+'|'+String((it&&it.desc)||'').trim().toLowerCase(); }
+function pwQuickResumen(){
+  var nm=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'], l=[];
+  for(var m=1;m<=12;m++) if(pwQuick.meses[m] && m!==presWizardMesActivo) l.push(nm[m-1]);
+  var el=document.getElementById('pw-q-resumen');
+  if(el) el.innerHTML = l.length ? 'Al guardar, los ítems de este mes también se aplican a: <b>'+l.join(', ')+'</b>' : 'Ningún otro mes marcado: solo se guarda este mes.';
+}
+function pwPropagarMarcados(){
+  var m0 = presWizardMesActivo, src = (presWizardItemsPorMes[m0]||[]).filter(function(it){ return it.cc || it.desc || parseFloat(it.valor)>0; }), borr = pwQuick.borrados||[], n=0;
+  for(var m=1;m<=12;m++){
+    if(m===m0 || !pwQuick.meses[m]) continue;
+    var its = pwItemsMes(m).filter(function(it){ return it.cc || it.desc || parseFloat(it.valor)>0; });
+    its = its.filter(function(t){ return borr.indexOf(pwItemKey(t))<0 && borr.indexOf(t._k)<0; });
+    src.forEach(function(it){
+      var nk = pwItemKey(it), ok = it._k || nk;
+      var t = its.find(function(x){ return pwItemKey(x)===ok; }) || its.find(function(x){ return pwItemKey(x)===nk; });
+      if(t){ t.cc=it.cc; t.desc=it.desc; t.valor=parseFloat(it.valor)||0; if(it.nota!==undefined) t.nota=it.nota; }
+      else its.push({cc:it.cc, desc:it.desc, valor:parseFloat(it.valor)||0, nota:it.nota||''});
+    });
+    presWizardItemsPorMes[m] = its; n++;
+  }
+  pwQuick.borrados = [];
+  if(n) toast('Aplicado también a '+n+' mes(es) marcado(s)','inf');
+}
 function pwQuickHtml(numMes, items, centrosOpc){
-  var it0 = (items&&items[0])||{};
-  var cc = pwQuick.cc!==null ? pwQuick.cc : (siesaResolverCC(it0.cc||'') || (presWizardSub?presCcSugerido(presWizardSub.codigo):''));
-  var desc = pwQuick.desc!==null ? pwQuick.desc : (it0.desc||'');
-  var nm=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   var bs='border:1px solid var(--b1);background:var(--w);border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;';
   var presets=[['anio','Año'],['s1','Sem 1'],['s2','Sem 2'],['q1','T1'],['q2','T2'],['q3','T3'],['q4','T4'],['none','Limpiar']];
+  var nm=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'], l=[];
+  for(var m=1;m<=12;m++) if(pwQuick.meses[m] && m!==numMes) l.push(nm[m-1]);
   return '<div style="background:var(--bld);border:1px solid var(--b1);border-radius:10px;padding:10px 12px;margin-bottom:10px;">'
     + '<div style="font-size:10px;font-weight:800;color:var(--bl);margin-bottom:6px;">⚡ APLICAR A VARIOS MESES</div>'
     + '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">'
     + presets.map(function(p){ return '<button type="button" onclick="pwQuickSel(\''+p[0]+'\')" style="'+bs+'">'+p[1]+'</button>'; }).join('')
     + '</div>'
-    + '<div style="font-size:10px;color:var(--mu);margin-bottom:8px;">Marca los meses con la casilla de la izquierda (o usa los botones) y pulsa Aplicar: se <b>agrega</b> este ítem a cada mes marcado.</div>'
-    + '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">'
-    + '<select id="pw-q-cc" class="inp" style="font-size:11px;flex:1 1 150px;"><option value="">-- Centro de costo --</option>'
-    + (centrosOpc||[]).map(function(c){ return '<option value="'+c.codigo+'"'+(c.codigo===cc?' selected':'')+'>'+c.codigo+' — '+c.nombre+'</option>'; }).join('')
-    + '</select>'
-    + '<input id="pw-q-desc" class="inp" placeholder="Descripción" value="'+String(desc).replace(/"/g,'&quot;')+'" style="font-size:11px;flex:1 1 140px;">'
-    + '<input id="pw-q-valor" class="inp" type="number" min="0" placeholder="Valor" value="'+(pwQuick.valor||'')+'" style="font-size:11px;font-weight:700;width:110px;text-align:right;">'
-    + '<select id="pw-q-modo" class="inp" style="font-size:11px;width:140px;"><option value="mes"'+(pwQuick.modo==='mes'?' selected':'')+'>Valor por mes</option><option value="total"'+(pwQuick.modo==='total'?' selected':'')+'>Total a repartir</option></select>'
-    + '<button type="button" onclick="pwQuickAplicar()" style="background:var(--bl);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">✅ Aplicar</button>'
-    + '</div></div>';
+    + '<div style="font-size:10px;color:var(--mu);">Marca los meses con la casilla de la izquierda (o usa los botones). Lo que agregues, cambies o quites en los <b>ítems de abajo</b> se guarda también en cada mes marcado, al pulsar Guardar.</div>'
+    + '<div id="pw-q-resumen" style="font-size:11px;margin-top:6px;color:var(--tx);">'+(l.length ? 'Al guardar, los ítems de este mes también se aplican a: <b>'+l.join(', ')+'</b>' : 'Ningún otro mes marcado: solo se guarda este mes.')+'</div>'
+    + '</div>';
 }
 function pwQuickSel(k){
   pwQuickLeer();
@@ -7459,8 +7474,8 @@ function pwQuickSel(k){
 function pwItemsMes(m){
   if(!presWizardItemsPorMes[m]){
     var exist = getPresupuestosSubMes(presWizardSub ? presWizardSub.codigo : null, m, presWizardAnio);
-    if(exist && exist.items && exist.items.length) presWizardItemsPorMes[m] = exist.items.map(function(it){ return {cc: it.cc||'', desc: it.desc||'', valor: it.valor||0, nota: it.nota||''}; });
-    else if(exist && exist.monto) presWizardItemsPorMes[m] = [{cc: exist.centroCosto||'', desc: exist.obs||'', valor: exist.monto}];
+    if(exist && exist.items && exist.items.length) presWizardItemsPorMes[m] = exist.items.map(function(it){ return {cc: it.cc||'', desc: it.desc||'', valor: it.valor||0, nota: it.nota||'', _k: pwItemKey(it)}; });
+    else if(exist && exist.monto) presWizardItemsPorMes[m] = [{cc: exist.centroCosto||'', desc: exist.obs||'', valor: exist.monto, _k: pwItemKey({cc:exist.centroCosto,desc:exist.obs})}];
     else presWizardItemsPorMes[m] = [];
   }
   return presWizardItemsPorMes[m];
@@ -7539,7 +7554,8 @@ function pwAgregarItem(mes) {
 
 function pwEliminarItem(mes, idx) {
   if(!presWizardItemsPorMes[mes] || presWizardItemsPorMes[mes].length <= 1) return;
-  presWizardItemsPorMes[mes].splice(idx, 1);
+  var rm = presWizardItemsPorMes[mes].splice(idx, 1)[0];
+  if(rm && rm._k){ pwQuick.borrados = pwQuick.borrados||[]; pwQuick.borrados.push(rm._k); }
   renderCamposPorMes();
 }
 
@@ -7678,7 +7694,7 @@ function leerValoresCamposMes() {
     var obsEl = document.getElementById('pres-obs-'+numMes);
     var obs = obsEl ? obsEl.value : (items.map(function(it){return it.desc;}).filter(Boolean).join('; '));
     if(total > 0 || items.some(function(it){ return it.desc; })) {
-      resultado[numMes] = { monto: total, obs: obs, items: items.filter(function(it){ return it.desc || (parseFloat(it.valor)>0); }) };
+      resultado[numMes] = { monto: total, obs: obs, items: items.filter(function(it){ return it.desc || (parseFloat(it.valor)>0); }).map(function(it){ var o = Object.assign({}, it); delete o._k; return o; }) };
     }
   });
   return resultado;
@@ -7820,6 +7836,7 @@ async function guardarPresupuestoWizard() {
     return;
   }
 
+  pwPropagarMarcados();
   var valores = leerValoresCamposMes();
   var mesesConDatos = Object.keys(valores).map(Number).filter(function(m){ return valores[m].monto > 0; });
 
@@ -7867,7 +7884,7 @@ async function guardarPresupuestoWizard() {
   });
 
   savePresupuestos(presups);
-  presWizardItemsPorMes = {}; // limpiar estado
+  presWizardItemsPorMes = {}; if(typeof pwQuick!=='undefined'){ pwQuick.meses={}; pwQuick.borrados=[]; } // limpiar estado
   presWizardCamposInvalidos = {};
   closeMo('mo-pres');
   renderPres();
@@ -31331,8 +31348,9 @@ function cmCalcular(){
     });
     const cum = items.reduce((a,x)=>a+x.res,0), prem = cmPremio(cum);
     let pts = 0; const detPts = (R.puntos||[]).map(l=>{ const mv = (man.pts||{})[l.id], auto = !p.sinPts && (mv==null||mv==='') && l.id==='mix' && !!MX[p.id], v = p.sinPts ? 0 : auto ? Math.round(MX[p.id].total*1000)/10 : (Number(mv)||0); let x = 0;
-      if(l.tipo==='umbral') x = v>=Number(l.umbral) ? Number(l.pct)/100 : 0; else if(l.tipo==='max') x = Number(l.pct)/100*Math.min(v, Number(l.max)||2); else x = Number(l.pct)/100*v;
-      pts += x; return {l, v, x, auto}; });
+      const pc = (p.ptsPct && p.ptsPct[l.id]!=null && p.ptsPct[l.id]!=='') ? Number(p.ptsPct[l.id]) : Number(l.pct);
+      if(l.tipo==='umbral') x = v>=Number(l.umbral) ? pc/100 : 0; else if(l.tipo==='max') x = pc/100*Math.min(v, Number(l.max)||2); else x = pc/100*v;
+      pts += x; return {l, v, x, auto, pc}; });
     const ptsAct = !p.sinPts && (!cmExig() || cum >= R.umbralPuntos/100), ptsAp = ptsAct ? pts : 0, extra = p.sinPts ? 0 : (Number(man.extra)||0)/100, tot = cum+prem+ptsAp+extra, base = Number(p.base)||0, aj = Number(man.ajuste)||0;
     let pago = 0, nota = '';
     if(cum < R.minPago/100){ pago = 0; nota = 'Bajo el '+R.minPago+'% no se paga'; }
@@ -31378,7 +31396,7 @@ function cmPintar(){
       <div class="arte-mu" style="font-size:10.5px;margin:3px 0 8px;">Los campos vacíos usan el valor automático (en gris). Escribe un número para sobrescribirlo; bórralo para volver al automático.</div>
       <div style="margin-bottom:8px;">${p.nota?`<div class="alert" style="font-size:11.5px;margin-bottom:6px;">📝 ${E(p.nota)}</div>`:''}<button class="btn btn-g btn-xs" onclick="cmDetFact(1,${q})">🧾 Ver detalle de facturación</button></div>
       <div style="font-weight:700;margin-bottom:4px;">Puntos adicionales ${p.sinPts?'<span style="color:#b45309;">(no aplica: fuera del canal ferroeléctrico)</span>':''} ${x.ptsAct?'<span style="color:#16a34a;">✔ activos</span>':'<span style="color:#b45309;">(inactivos: se activan desde '+R.umbralPuntos+'% de cumplimiento)</span>'}</div>
-      <div style="display:flex;gap:8px 14px;flex-wrap:wrap;">${x.detPts.map(d=>`<label style="font-size:11.5px;">${E(d.l.n)}<br>${mi('pts',d.l.id,'',d.v||'','0',70)} <span class="arte-mu">${d.x?'= '+cmPct(d.x,0):''}</span></label>`).join('')}
+      <div style="display:flex;gap:8px 14px;flex-wrap:wrap;">${x.detPts.map(d=>`<label style="font-size:11.5px;">${E(d.l.n)}<br>${mi('pts',d.l.id,'',d.v||'','0',70)} <span class="arte-mu">${d.x?'= '+cmPct(d.x,0):''}</span><br><span class="arte-mu" style="font-size:10px;" title="Déjalo vacío para usar el % general de las reglas (${d.l.pct}%)">% propio: <input class="inp" type="number" step="any" value="${(p.ptsPct&&p.ptsPct[d.l.id]!=null)?p.ptsPct[d.l.id]:''}" placeholder="${d.l.pct}" style="width:48px;padding:1px 4px;font-size:10.5px;${d.pc!==Number(d.l.pct)?'background:#fef9c3;':''}" onchange="cmPtsPct(${q},'${d.l.id}',this.value)"></span></label>`).join('')}
         <label style="font-size:11.5px;">Puntos extra manuales (%)<br>${mi('extra',null,'',k.extra||'','0',70)}</label></div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;align-items:end;">
         <label style="font-size:11.5px;">Ajuste ± ($)<br>${mi('ajuste',null,'',k.ajuste||'','0',110)}</label>
@@ -31434,6 +31452,7 @@ function cmItem(id, i, campo, v){ const p = CM.personas.find(x=>x.id===id); if(!
 function cmItemAdd(id){ const p = CM.personas.find(x=>x.id===id); if(!p) return; p.items.push({n:'Nuevo ítem', peso:0, f:'manual'}); cmGuardarPers(); }
 function cmItemDel(id, i){ const p = CM.personas.find(x=>x.id===id); if(!p) return; p.items.splice(i,1); cmGuardarPers(); }
 function cmPersAdd(){ CM.personas.push({id:'p'+Date.now(), nombre:'Nuevo colaborador', cargo:'vendedor', base:0, alias:'', items:CM_V65()}); CM.abierto[CM.personas[CM.personas.length-1].id] = true; (CM.cfg = CM.cfg||{})[CM.personas[CM.personas.length-1].id] = true; cmGuardarPers(); }
+function cmPtsPct(id, lid, v){ const p = CM.personas.find(x=>x.id===id); if(!p) return; p.ptsPct = p.ptsPct||{}; if(v===''||v==null) delete p.ptsPct[lid]; else p.ptsPct[lid] = parseFloat(v)||0; cmGuardarPers(); }
 function cmPersEdit(id){ (CM.cfg = CM.cfg||{})[id] = true; CM.abierto[id] = true; cmPintar(); }
 // Quién puede ver y editar Comisiones como módulo propio (además de admin y de quien administra el Centro de Trabajo)
 const CM_EDITORES = ['jefeventasmulticanal@ilumax.com.co','cindy@ilumax.com.co','talentohumano@ilumax.com.co','duduwxo50@gmail.com','liderautomatizaciones@ilumax.com.co'];
@@ -31669,7 +31688,7 @@ async function cmExcel(){
       ws.getCell(t+9,2).value = 'Observación'; ws.getCell(t+9,3).value = x.nota || ''; ws.getCell(t+10,2).value = 'Cuando el total cumplimiento supere el 140% se revisará el incentivo adicional.'; ws.getCell(t+10,2).font = {italic:true,size:9,color:{argb:'FF64748B'}};
       ['Puntos % adicionales','','','%','#','% Total'].forEach((h,i)=>{ if(h) ws.getCell(pts0-1,i+2).value = h; }); hdr(ws,pts0-1,2,7);
       x.detPts.forEach((d,i)=>{ const r = pts0+i, rg = pp0+i, l = d.l; ws.getCell(r,2).value = l.n;
-        ws.getCell(r,5).value = fx('Reglas!$D$'+rg, l.pct/100); ws.getCell(r,5).numFmt = '0%';
+        if(d.pc!==Number(l.pct)){ ws.getCell(r,5).value = d.pc/100; ws.getCell(r,5).fill = YEL; } else ws.getCell(r,5).value = fx('Reglas!$D$'+rg, l.pct/100); ws.getCell(r,5).numFmt = '0%';
         const v = ws.getCell(r,6); v.fill = YEL;
         if(l.tipo==='umbral'){ v.value = (Number(d.v)||0)/100; v.numFmt = '0.0%'; ws.getCell(r,7).value = fx('IF(F'+r+'>=Reglas!$E$'+rg+',E'+r+',0)', d.x); }
         else { v.value = Number(d.v)||0; ws.getCell(r,7).value = l.tipo==='max' ? fx('E'+r+'*MIN(F'+r+',Reglas!$E$'+rg+')', d.x) : fx('E'+r+'*F'+r, d.x); }
