@@ -159,9 +159,29 @@ const fh = ts => { try { return new Date(ts).toLocaleString('es-CO', {timeZone:'
 const cls = r => r >= 1 ? 'ok' : r >= .7 ? 'mid' : 'bad';
 function token() {
   const h = new URLSearchParams(location.hash.replace(/^#/, '')), q = new URLSearchParams(location.search);
-  return h.get('k') || q.get('k') || '';
+  const u = h.get('k') || q.get('k') || '';
+  if (u) return u;
+  try { return localStorage.getItem('rv_pin') || ''; } catch (e) { return ''; }
 }
-let LAST = null, RANGO = 'mes';
+function pinForm(msg) {
+  document.getElementById('sub').textContent = '';
+  document.querySelector('.tabs').style.display = 'none';
+  document.getElementById('app').innerHTML = '<div class="card" style="max-width:340px;margin:30px auto;padding:22px;text-align:center"><div style="font-size:34px">🔐</div><h2 style="margin:6px 0 4px">Ingresa tu código</h2><div style="font-size:12px;color:#64748b;margin-bottom:12px">Cada persona tiene su propio código personal.</div>'
+    + '<input id="pinIn" type="password" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="• • • •" style="width:100%;font-size:26px;letter-spacing:8px;text-align:center;padding:10px;border:1.5px solid #cbd5e1;border-radius:10px" onkeydown="if(event.key===\'Enter\')pinOk()">'
+    + (msg ? '<div style="color:#b91c1c;font-size:12.5px;margin-top:8px">' + esc(msg) + '</div>' : '')
+    + '<button class="btn" style="margin-top:12px;width:100%" onclick="pinOk()">Entrar</button></div>';
+  setTimeout(() => { const i = document.getElementById('pinIn'); if (i) i.focus(); }, 50);
+}
+function pinOk() {
+  const v = (document.getElementById('pinIn').value || '').trim();
+  if (!/^\d{4,8}$/.test(v)) { pinForm('El código son 4 a 8 números.'); return; }
+  try { localStorage.setItem('rv_pin', v); } catch (e) {}
+  document.querySelector('.tabs').style.display = '';
+  document.getElementById('app').innerHTML = '<div class="err">Cargando reporte…</div>';
+  cargar();
+}
+function pinSalir() { try { localStorage.removeItem('rv_pin'); } catch (e) {} location.reload(); }
+let LAST = null, RANGO = 'mes', ACC = null;
 const dr = f => ' data-f="' + encodeURIComponent(JSON.stringify(f)) + '"';
 const iso = d => d.toISOString().slice(0, 10);
 const lunesDe = s => { const d = new Date(s + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7); return iso(d); };
@@ -263,13 +283,19 @@ function pintar(d0) {
 }
 async function cargar() {
   const k = token();
-  if (!k) { document.getElementById('sub').textContent = ''; document.getElementById('app').innerHTML = '<div class="err"><b>Falta el código del link.</b><br>Abre el link completo que te compartieron.</div>'; return; }
+  if (!k) { pinForm(''); return; }
   try {
     const r = await fetch(API + '?k=' + encodeURIComponent(k), { cache: 'no-store' });
     const d = await r.json();
+    if (r.status === 401 || r.status === 429) {
+      const url = new URLSearchParams(location.hash.replace(/^#/, '')).get('k') || new URLSearchParams(location.search).get('k');
+      if (!url) { try { localStorage.removeItem('rv_pin'); } catch (e) {} pinForm(d.error || 'Código no válido'); return; }
+    }
     if (!r.ok || d.error) throw new Error(d.error || 'Error');
+    ACC = d.acceso || null;
     if (d.sinHC) { const i = GR.findIndex(g => g[0] === 'HOM'); if (i >= 0) GR.splice(i, 1); }
     pintar(d); if (TAB === 'cum') pintarCum();
+    if (ACC && ACC.rol !== 'admin') { const el = document.getElementById('sub'); if (el && !el.querySelector('.acc')) el.innerHTML += ' · <span class="acc">👤 ' + esc(ACC.nombre) + ' · <a href="#" onclick="pinSalir();return false" style="color:inherit;text-decoration:underline">Salir</a></span>'; }
   } catch (e) {
     if (!document.querySelector('.kpis')) { document.getElementById('sub').textContent = ''; document.getElementById('app').innerHTML = '<div class="err"><b>No se pudo abrir el reporte.</b><br>' + esc(e.message) + '<br><span style="color:#64748b;font-size:12px">Pide el link actualizado a Duvier.</span></div>'; }
   }

@@ -36279,6 +36279,7 @@ function renderReporteVentas() {
           <select id="rv-sel-mes" class="btn btn-g btn-sm" style="display:none;cursor:pointer;" onchange="rvVerMes(this.value)" title="Ver las ventas de otro mes (enero a hoy)"></select>
           <button class="btn btn-gr btn-sm" id="rv-btn-xlsx" style="display:none;" onclick="rvExportarExcelDetallado()" title="Excel con todas las facturas y tablas dinámicas con fórmulas: canal, vendedor, cliente, ciudad y mes a mes">📊 Excel detallado</button>
           <button class="btn btn-g btn-sm" id="rv-btn-config" onclick="rvConfigCorreo()">⚙️ Config correo</button>
+          <button class="btn btn-g btn-sm" id="rv-btn-pins" onclick="rpaAbrir()" title="Códigos personales de acceso a reporte.html y registro de ingresos">🔐 Códigos de acceso</button>
         </div>
       </div>
       <input type="file" id="rv-file-input" accept=".xlsx,.xls" style="display:none;" onchange="rvCargarArchivo(this.files[0])">
@@ -38123,6 +38124,67 @@ function rvFiltrar() {
 }
 
 // ── ENVÍO DE CORREO ───────────────────────────────────────────────────
+
+// ═══ Códigos de acceso del Reporte Diario (reporte.html) ═══
+const RPA = { d:null, tab:'pins', k:'', edit:null };
+async function rpaApi(body){
+  if(!RPA.k){ const r=await sb.get('configuracion','clave=eq.rv_link_token&select=valor'); RPA.k=(r&&r[0]&&r[0].valor)||''; }
+  const x=await fetch(SB_URL+'/functions/v1/reporte-pins-admin?k='+encodeURIComponent(RPA.k),{method:'POST',headers:{'Content-Type':'application/json',apikey:SB_KEY,Authorization:'Bearer '+SB_KEY},body:JSON.stringify(body)});
+  const j=await x.json().catch(()=>({error:'Respuesta inválida'}));
+  if(!x.ok||j.error) throw new Error(j.error||'Error');
+  return j;
+}
+function rpaAbrir(){
+  if(!esAdmin()){ toast('Solo el administrador','er'); return; }
+  let m=document.getElementById('rpa-modal');
+  if(!m){ m=document.createElement('div'); m.id='rpa-modal'; m.className='ov'; m.addEventListener('click',e=>{ if(e.target===m) rpaCerrar(); }); document.body.appendChild(m); }
+  m.classList.add('on'); m.style.display='flex'; RPA.tab='pins'; RPA.edit=null;
+  m.innerHTML='<div class="mo" style="max-width:920px;width:96%"><div class="mh"><div class="mt">🔐 Códigos de acceso · Reporte Diario</div><button class="mx" onclick="rpaCerrar()">✕</button></div><div class="mb" id="rpa-body">Cargando…</div></div>';
+  rpaCargar();
+}
+function rpaCerrar(){ const m=document.getElementById('rpa-modal'); if(m){ m.classList.remove('on'); m.style.display='none'; } }
+async function rpaCargar(){
+  try{ RPA.d=await rpaApi({accion:'listar'}); rpaPintar(); }
+  catch(e){ document.getElementById('rpa-body').innerHTML='<div class="alert" style="color:#b91c1c">'+esc(e.message)+'</div>'; }
+}
+function rpaFecha(ts){ try{ return new Date(ts).toLocaleString('es-CO',{timeZone:'America/Bogota',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',hour12:true}); }catch(e){ return ''; } }
+function rpaDisp(ua){ ua=ua||''; const so=/Android/i.test(ua)?'Android':/iPhone|iPad/i.test(ua)?'iPhone/iPad':/Windows/i.test(ua)?'Windows':/Mac/i.test(ua)?'Mac':/Linux/i.test(ua)?'Linux':'?'; const nv=/Edg\//.test(ua)?'Edge':/Chrome\//.test(ua)?'Chrome':/Firefox\//.test(ua)?'Firefox':/Safari\//.test(ua)?'Safari':''; return so+(nv?' · '+nv:''); }
+function rpaPintar(){
+  const d=RPA.d, el=document.getElementById('rpa-body'); if(!el||!d) return;
+  const uso={}; d.accesos.forEach(a=>{ if(a.pin_id!=null){ const u=uso[a.pin_id]||(uso[a.pin_id]={n:0,ips:new Set()}); u.n++; u.ips.add(a.ip); } });
+  const rolTxt={todos:'Todo el equipo',lider:'Líder de canales',asesor:'Asesor'};
+  const tabs='<div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">'+[['pins','🔑 Códigos'],['log','👁️ Ingresos ('+d.accesos.length+')'],['seg','🛡️ Intentos fallidos ('+d.fallidos.length+')']].map(t=>'<span class="chip'+(RPA.tab===t[0]?' on':'')+'" onclick="RPA.tab=\''+t[0]+'\';RPA.edit=null;rpaPintar()">'+t[1]+'</span>').join('')+'</div>';
+  let h=tabs;
+  if(RPA.tab==='pins'){
+    if(RPA.edit){ h+=rpaForm(); }
+    else{
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap"><div style="font-size:12px;color:var(--mu)">Cada persona entra a reporte.html con su código. El link con clave sigue funcionando como administrador.</div><button class="btn btn-p btn-sm" onclick="RPA.edit={rol:\'asesor\',vendedores:[],activo:true};rpaPintar()">+ Nuevo código</button></div>';
+      h+='<div class="tw"><table style="width:100%;font-size:12px"><thead><tr><th>Persona</th><th>Código</th><th>Ve</th><th>Último ingreso</th><th>Ingresos</th><th></th></tr></thead><tbody>'+d.pins.map(p=>{ const u=uso[p.id]; return '<tr style="'+(p.activo?'':'opacity:.5')+'"><td style="font-weight:700">'+esc(p.nombre)+'</td><td><b style="font-family:monospace;font-size:14px;letter-spacing:2px">'+esc(p.pin)+'</b></td><td>'+rolTxt[p.rol]+(p.rol!=='todos'?'<div style="font-size:10.5px;color:var(--mu)">'+esc((p.vendedores||[]).join(', '))+'</div>':'')+'</td><td>'+(p.ultimo_uso?rpaFecha(p.ultimo_uso):'—')+'</td><td>'+(u?u.n+' · '+u.ips.size+' IP':'—')+'</td><td style="white-space:nowrap"><button class="btn btn-g btn-xs" onclick="rpaEditar('+p.id+')">✏️</button> <button class="btn btn-g btn-xs" onclick="rpaActivo('+p.id+','+(p.activo?0:1)+')">'+(p.activo?'⏸️ Desactivar':'▶️ Activar')+'</button> <button class="btn btn-rd btn-xs" onclick="rpaEliminar('+p.id+')">🗑️</button></td></tr>'; }).join('')+'</tbody></table></div>';
+    }
+  } else if(RPA.tab==='log'){
+    h+='<div style="font-size:12px;color:var(--mu);margin-bottom:8px">Se registra un ingreso por persona y conexión cada 30 minutos. La ciudad es aproximada (según la IP).</div><div class="tw"><table style="width:100%;font-size:12px"><thead><tr><th>Fecha</th><th>Quién</th><th>IP</th><th>Ubicación</th><th>Dispositivo</th></tr></thead><tbody>'+(d.accesos.length?d.accesos.map(a=>'<tr><td>'+rpaFecha(a.ts)+'</td><td style="font-weight:700">'+esc(a.nombre||'?')+'</td><td style="font-family:monospace">'+esc(a.ip||'')+'</td><td>'+esc([a.ciudad,a.pais].filter(Boolean).join(', ')||'—')+'</td><td>'+esc(rpaDisp(a.ua))+'</td></tr>').join(''):'<tr><td colspan="5" class="empty">Aún no hay ingresos registrados</td></tr>')+'</tbody></table></div>';
+  } else {
+    const porIp={}; d.fallidos.forEach(f=>{ const o=porIp[f.ip]||(porIp[f.ip]={n:0,ult:f.ts}); o.n++; });
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap"><div style="font-size:12px;color:var(--mu)">Códigos incorrectos de los últimos 7 días. 8 fallos desde la misma IP bloquean 15 minutos.</div><button class="btn btn-g btn-sm" onclick="rpaDesbloquear()">🔓 Limpiar intentos / desbloquear</button></div><div class="tw"><table style="width:100%;font-size:12px"><thead><tr><th>IP</th><th>Intentos fallidos</th><th>Último</th></tr></thead><tbody>'+(Object.keys(porIp).length?Object.entries(porIp).map(([ip,o])=>'<tr><td style="font-family:monospace">'+esc(ip)+'</td><td style="font-weight:700;color:'+(o.n>=8?'#b91c1c':'inherit')+'">'+o.n+'</td><td>'+rpaFecha(o.ult)+'</td></tr>').join(''):'<tr><td colspan="3" class="empty">Sin intentos fallidos 🎉</td></tr>')+'</tbody></table></div>';
+  }
+  el.innerHTML=h;
+}
+function rpaForm(){
+  const e=RPA.edit, vs=RPA.d.vendedores.slice(); (e.vendedores||[]).forEach(v=>{ if(!vs.includes(v)) vs.push(v); });
+  return '<div class="card" style="padding:14px"><div style="font-weight:800;margin-bottom:10px">'+(e.id?'Editar código':'Nuevo código')+'</div>'
+   +'<div class="fg2"><div class="fg"><label class="fl">Nombre de la persona</label><input class="inp" id="rpa-nom" value="'+esc(e.nombre||'')+'"></div><div class="fg"><label class="fl">Código (4 a 8 números)</label><div style="display:flex;gap:6px"><input class="inp" id="rpa-pin" inputmode="numeric" maxlength="8" value="'+esc(e.pin||'')+'" style="font-family:monospace;letter-spacing:3px;font-weight:800"><button class="btn btn-g btn-sm" onclick="document.getElementById(\'rpa-pin\').value=String(Math.floor(1000+Math.random()*9000))">🎲</button></div></div></div>'
+   +'<div class="fg"><label class="fl">Qué puede ver</label><select class="inp" id="rpa-rol" onchange="document.getElementById(\'rpa-vw\').style.display=this.value===\'todos\'?\'none\':\'block\'"><option value="asesor"'+(e.rol==='asesor'?' selected':'')+'>Asesor · solo sus propias ventas</option><option value="lider"'+(e.rol==='lider'?' selected':'')+'>Líder de canales (Homecenter / Hard Discount / Moderno) + sus vendedores</option><option value="todos"'+(e.rol==='todos'?' selected':'')+'>Todo el equipo (como Cindy)</option></select></div>'
+   +'<div class="fg" id="rpa-vw" style="display:'+(e.rol==='todos'?'none':'block')+'"><label class="fl">Vendedores (nombre como sale en Siesa)</label><div style="max-height:170px;overflow:auto;border:1px solid var(--b1);border-radius:8px;padding:6px">'+vs.map(v=>'<label style="display:block;font-size:12px;padding:2px 0"><input type="checkbox" class="rpa-v" value="'+esc(v)+'"'+((e.vendedores||[]).includes(v)?' checked':'')+'> '+esc(v)+'</label>').join('')+'</div></div>'
+   +'<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn btn-g btn-sm" onclick="RPA.edit=null;rpaPintar()">Cancelar</button><button class="btn btn-p btn-sm" onclick="rpaGuardar()">💾 Guardar</button></div></div>';
+}
+function rpaEditar(id){ const p=RPA.d.pins.find(x=>x.id===id); if(p){ RPA.edit={...p,vendedores:p.vendedores||[]}; rpaPintar(); } }
+async function rpaGuardar(){
+  const e=RPA.edit, body={accion:'guardar',id:e.id,activo:e.activo!==false,nombre:document.getElementById('rpa-nom').value,pin:document.getElementById('rpa-pin').value,rol:document.getElementById('rpa-rol').value,vendedores:[...document.querySelectorAll('.rpa-v:checked')].map(x=>x.value)};
+  try{ await rpaApi(body); toast('Código guardado','ok'); RPA.edit=null; await rpaCargar(); }catch(er){ toast(er.message,'er'); }
+}
+async function rpaActivo(id,a){ try{ await rpaApi({accion:'activo',id,activo:!!a}); await rpaCargar(); }catch(er){ toast(er.message,'er'); } }
+async function rpaEliminar(id){ const p=RPA.d.pins.find(x=>x.id===id); if(!confirm('¿Eliminar el código de '+(p?p.nombre:'esta persona')+'? Dejará de poder entrar.')) return; try{ await rpaApi({accion:'eliminar',id}); await rpaCargar(); }catch(er){ toast(er.message,'er'); } }
+async function rpaDesbloquear(){ try{ await rpaApi({accion:'desbloquear'}); toast('Intentos limpiados','ok'); await rpaCargar(); }catch(er){ toast(er.message,'er'); } }
 function rvConfigCorreo() {
   const m = document.getElementById('rv-modal-correo');
   if(m) m.style.display='flex';
