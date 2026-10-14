@@ -8908,7 +8908,7 @@ function pxeExcelDinamico(){
   var N=det.length, FD=N+1000, D=function(L){ return "Detalle!$"+L+"$2:$"+L+"$"+FD; };
   var listaAnios='"'+anios.join(',')+'"';
 
-  var wsR=hoja('Resumen','FFF5C518'), wsM=hoja('Matriz anual'), wsD=hoja('Detalle'), wsA=hoja('Aprobaciones','FF16A34A');
+  var wsR=hoja('Resumen','FFF5C518'), wsE=hoja('Estado de resultados','FF0EA5E9'), wsM=hoja('Matriz anual'), wsD=hoja('Detalle'), wsA=hoja('Aprobaciones','FF16A34A');
 
   // ══ DETALLE (tabla Excel con filtros y cebra) ══
   titulo(wsD,'Detalle de presupuestos — una fila por ítem y mes');
@@ -8922,6 +8922,46 @@ function pxeExcelDinamico(){
   for(var i=0;i<N;i++){ var r=5+i; wsD.getCell(r,12).value={formula:'IF(K'+r+'="",J'+r+',K'+r+')'}; [10,11,12].forEach(function(c){ wsD.getCell(r,c).numFmt=COP0; }); }
   anchos(wsD,[7,7,11,18,24,28,11,30,34,14,14,14,13,32,22,26]);
   wsD.views=[{state:'frozen',ySplit:4,showGridLines:false}];
+
+
+  // ══ ESTADO DE RESULTADOS (mismo formato contable de Siesa: Cuentas · Descripción · Netos) ══
+  (function(){
+    var FONT = {name:'Courier New', size:9};
+    put(wsE,1,1,'ILUMAX — Presupuesto de gastos por cuenta contable').font={bold:true,size:14,name:'Courier New'};
+    put(wsE,2,1,'Año:').font={bold:true,name:'Courier New'}; var cy=put(wsE,2,2,{formula:"'Matriz anual'!$B$2"}); cy.font={bold:true,name:'Courier New',color:{argb:'FF1D4ED8'}}; cy.alignment={horizontal:'left'};
+    put(wsE,2,4,'← sigue al año elegido en la hoja «Matriz anual». Valores = presupuesto vigente (aprobado si existe, si no el propuesto).').font={italic:true,size:9,color:{argb:'FF64748B'},name:'Courier New'};
+    ['Cuentas','Descripción','Netos del año'].concat(NM).forEach(function(t,i){ var x=put(wsE,4,i+1,t); x.font={bold:true,name:'Courier New',size:9}; x.alignment={horizontal:i<2?'left':'right'}; x.border={bottom:{style:'medium'}}; });
+    var NOM = {'4':'INGRESOS','41':'OPERACIONALES','5':'GASTOS','51':'OPERACIONALES DE ADMINISTRACION','52':'OPERACIONALES DE VENTAS','53':'NO OPERACIONALES','54':'IMPUESTO DE RENTA Y COMPLEMENTARIOS','7':'COSTOS DE PRODUCCION','74':'CONTRATOS DE SERVICIOS'};
+    var nodos = {};   // codigo -> {cod, nivel, nombre}
+    var info = {};    // codigo hoja -> subcategoría
+    det.forEach(function(d){ if(d.cod && !info[d.cod]) info[d.cod] = d; });
+    var g6 = {};      // nombre de la subcuenta de 6 dígitos (de "grupo6")
+    (SUBS_ILUMAX||[]).forEach(function(sb_){ if(sb_.grupo6){ var m=String(sb_.grupo6).match(/^(\d{6})\s*[—-]\s*(.+)$/); if(m) g6[m[1]] = m[2]; } });
+    Object.keys(info).forEach(function(cod){
+      [1,2,4,6].forEach(function(n){
+        if(cod.length<=n) return; var pre = cod.substring(0,n);
+        if(!nodos[pre]){
+          var nom = NOM[pre] || (n===4 ? catDe(pre) : '') || (n===6 ? g6[pre] : '') || '';
+          if(!nom && n===6){ var hijo = Object.keys(info).filter(function(c){ return c.indexOf(pre)===0; }).sort()[0]; nom = hijo ? info[hijo].sub : ''; }
+          nodos[pre] = {cod:pre, nivel:n, nombre:nom};
+        }
+      });
+      nodos[cod] = {cod:cod, nivel:99, nombre:info[cod].sub, hoja:true};
+    });
+    var lista = Object.keys(nodos).sort().map(function(k){ return nodos[k]; });
+    var ra = 5, anioRef = '$B$2';
+    lista.forEach(function(nd,i){
+      var r = ra+i, forma = function(extra){ return 'SUMIFS('+DR('L')+','+DR('A')+','+anioRef+','+DR('G')+',"'+nd.cod+'*"'+(extra||'')+')'; };
+      var lvl = nd.hoja ? 4 : ({1:0,2:1,4:2,6:3})[nd.nivel], fuerte = !nd.hoja;
+      var c1 = put(wsE,r,1,nd.cod); c1.font = {name:'Courier New',size:9,bold:fuerte}; c1.alignment={horizontal:'left',indent:lvl*1};
+      var c2 = put(wsE,r,2,nd.nombre); c2.font = {name:'Courier New',size:9,bold:fuerte}; c2.alignment={horizontal:'left',indent:lvl*1};
+      var t = put(wsE,r,3,{formula:forma()},'"$"#,##0.00'); t.font={name:'Courier New',size:9,bold:fuerte};
+      for(var m=1;m<=12;m++){ var x = put(wsE,r,3+m,{formula:forma(','+DR('B')+','+m)},'"$"#,##0.00;-"$"#,##0.00;"·"'); x.font={name:'Courier New',size:9,bold:fuerte}; }
+      if(lvl<=1) for(var c=1;c<=15;c++) wsE.getCell(r,c).fill = sol(lvl===0?'FFE2E8F0':'FFF1F5F9');
+    });
+    anchos(wsE,[14,46,18,15,15,15,15,15,15,15,15,15,15,15,15]);
+    wsE.views=[{state:'frozen',xSplit:2,ySplit:4,showGridLines:false}];
+  })();
 
   // ══ MATRIZ ANUAL ══
   titulo(wsM,'Matriz anual por ítem — fórmulas vivas');
@@ -16830,7 +16870,7 @@ function ppPintarInterno(el){
       if(p.tipo==='anticipo'){ if(reg && reg.estado==='autorizado' && tesoPuedePagar()) o.push(b('💸 Pagado',`tesoMarcarPagado('${p.ocId}')`,'Registrar el pago del anticipo','btn-gr')); }
       else if(puede) o.push(b('✅ Pagado',`ppMarcarSaldo('${n}')`,'Marcar el saldo como pagado','btn-gr'));
     } else {
-      if(p.tipo==='anticipo' && reg && reg.estado==='pagado' && tesoPuedePagar()) o.push(b('✎ Corregir',`tesoCorregirPago('${p.ocId}','${n}')`,'Corregir valor, fecha o TRM del pago'));
+      if(p.tipo==='anticipo' && reg && reg.estado==='pagado' && tesoPuedePagar()) o.push(b('✎ Corregir',`tesoCorregirPago('${p.ocId}','${n}')`,'Corregir valor, fecha o TRM del pago'), b('↩︎ Devolver',`tesoDevolverPago('${p.ocId}','${n}')`,'Quitar el pago y dejar el anticipo como autorizado'));
       if(p.tipo==='saldo' && puede) o.push(b('✎ Corregir',`ppMarcarSaldo('${n}',true)`,'Corregir el pago del saldo'), b('↩︎',`ppDeshacerSaldo('${n}')`,'Deshacer'));
     }
     o.push(b('🕘',`fcGestionar(${p._i})`,'Historial y ficha del pago'));
@@ -17024,10 +17064,33 @@ function ppMarcarSaldo(num, editar){
       await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Saldo marcado como pagado','ok');
     });
 }
-async function ppDeshacerSaldo(num){
-  if(!confirm('¿Quitar el pago registrado del saldo de '+num+'?')) return;
-  const A = PP.ajustes[ceNum(num)] || {}; if(A.saldo){ ppLog(num,'Deshizo el pago del saldo'+(A.saldo.pagado?' (era US$'+A.saldo.pagado.usd+' del '+A.saldo.pagado.fecha+', marcado por '+(A.saldo.pagado.por||'?')+')':'')); delete A.saldo.pagado; }
-  await ppGuardarAjustes(); ppPintar();
+function ppDeshacerSaldo(num){
+  const A0 = PP.ajustes[ceNum(num)] || {}; const pg = A0.saldo && A0.saldo.pagado;
+  if(!pg){ if(typeof toast==='function') toast('Ese saldo no tiene un pago registrado para deshacer','wa'); return; }
+  ppModal(`↩︎ Devolver pago del saldo · ${reabastEsc(num)}`, `
+    <div style="font-size:12px;margin-bottom:8px;">Se quita el pago registrado: <b>US$${pg.usd}</b> del ${reabastEsc(pg.fecha||'—')} (marcado por ${reabastEsc(pg.por||'?')}). El saldo vuelve a quedar pendiente.</div>
+    <div class="fg"><label class="fl">Motivo (obligatorio)</label><input class="inp" data-n placeholder="¿Por qué se devuelve?"></div>`, async ov=>{
+      const n = ov.querySelector('[data-n]').value.trim(); if(!n){ if(typeof toast==='function') toast('Escribe el motivo','wa'); return false; }
+      const A = PP.ajustes[ceNum(num)] || {}; if(A.saldo){ ppLog(num,'DEVOLVIÓ el pago del saldo (era US$'+pg.usd+' del '+pg.fecha+', marcado por '+(pg.por||'?')+') · motivo: '+n); delete A.saldo.pagado; }
+      await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Pago del saldo devuelto: vuelve a pendiente','ok');
+    });
+}
+// Devolver el pago de un ANTICIPO: vuelve a "autorizado" (pendiente de pago). Solo Tesorería/Cartera o admin.
+function tesoDevolverPago(ocId, num){
+  const r = tesoRegDe(ocId); if(!r){ if(typeof toast==='function') toast('No encontré el registro del anticipo','wa'); return; }
+  if(r.estado!=='pagado'){ if(typeof toast==='function') toast('El anticipo no está marcado como pagado','wa'); return; }
+  if(!tesoPuedePagar()){ if(typeof toast==='function') toast('Solo Tesorería/Cartera o un administrador puede devolver pagos','wa'); return; }
+  const pagos = (r.pagos||[]).map(p=>'US$'+p.usd+' · '+(p.fecha||'')+(p.por?' · '+p.por:'')).join(' | ') || ('US$'+(r.pagado_usd||r.monto_usd));
+  ppModal(`↩︎ Devolver pago del anticipo · ${reabastEsc(r.numero_oc||num)}`, `
+    <div style="font-size:12px;margin-bottom:8px;">Se quita el pago registrado (<b>${reabastEsc(pagos)}</b>) y el anticipo vuelve a <b>autorizado, pendiente de pago</b>. Queda en el historial quién lo devolvió y por qué.</div>
+    <div class="fg"><label class="fl">Motivo (obligatorio)</label><input class="inp" data-n placeholder="¿Por qué se devuelve el pago?"></div>`, async ov=>{
+      const n = ov.querySelector('[data-n]').value.trim(); if(!n){ if(typeof toast==='function') toast('Escribe el motivo','wa'); return false; }
+      r.historial = [...(r.historial||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion:'DEVOLVIÓ el pago del anticipo (era '+pagos+') → vuelve a autorizado', nota:n}];
+      r.estado = 'autorizado'; r.pagos = []; delete r.pagado_usd; delete r.pagado_cop; delete r.fecha_pago; r.manual_usd = false;
+      const A = PP.ajustes[ceNum(num||r.numero_oc)]; if(A && A.anticipo){ delete A.anticipo.usd; }
+      ppLog(num||r.numero_oc,'DEVOLVIÓ el pago del anticipo (era '+pagos+') · motivo: '+n);
+      await tesoGuardar(r); await ppGuardarAjustes(); if(typeof tesoRepintar==='function') tesoRepintar(); ppPintar(); if(typeof toast==='function') toast('Pago devuelto: el anticipo quedó autorizado, pendiente de pago','ok');
+    });
 }
 
 // ── Recalcular fechas de saldo ──
@@ -17659,7 +17722,7 @@ function fcGestionar(i){
   const ac = [btn('🔎 Abrir OC / gestionar tarea','oc','btn-p')];
   if(p.tipo==='anticipo'){
     if(p.estado!=='pagado'){ if(reg && reg.estado==='autorizado' && tesoPuedePagar()) ac.push(btn('💸 Registrar pago del anticipo','pagar','btn-gr')); else if(!reg && tesoPuedeAutorizar()) ac.push(btn('✔ Autorizar anticipo','autorizar','btn-bl')); }
-    else { if(reg && reg.estado==='pagado' && tesoPendienteAnticipo(reg)>0.004 && tesoPuedePagar()) ac.push(btn('💸 Registrar pago adicional','pagar','btn-gr')); if(reg && reg.estado==='pagado' && tesoPuedePagar()) ac.push(btn('✎ Corregir pago (valor / fecha / TRM)','corregir')); }
+    else { if(reg && reg.estado==='pagado' && tesoPendienteAnticipo(reg)>0.004 && tesoPuedePagar()) ac.push(btn('💸 Registrar pago adicional','pagar','btn-gr')); if(reg && reg.estado==='pagado' && tesoPuedePagar()) ac.push(btn('✎ Corregir pago (valor / fecha / TRM)','corregir'), btn('↩︎ Devolver pago (volver a autorizado)','devolver')); }
     if(p.estado!=='pagado' && puede) ac.push(btn('✎ Ajustar fecha / valor','ajustar'));
   } else if(puede){
     if(p.estado!=='pagado'){ ac.push(btn('✅ Marcar saldo pagado','saldo','btn-gr'), btn('✎ Ajustar fecha / valor','ajustar'), btn('👍 Se paga esta semana','rev_ok'), btn('⏳ Aún no se puede','rev_no')); if(p.rev) ac.push(btn('✕ Quitar revisión','rev_x')); }
@@ -17694,7 +17757,7 @@ function fcHistHtml(p){
 }
 function fcAct(i,a){
   const p = (PP.ult||[])[i]; if(!p) return; fcCerrarModal();
-  const m = {oc:()=>reabastAbrirDetalleOC(p.ocId), pagar:()=>tesoMarcarPagado(p.ocId), autorizar:()=>tesoAutorizar([p.ocId]), saldo:()=>ppMarcarSaldo(p.num), deshacer:()=>ppDeshacerSaldo(p.num), corregir:()=>tesoCorregirPago(p.ocId,p.num), corregirs:()=>ppMarcarSaldo(p.num,true), ajustar:()=>ppAjustar(p.num,p.tipo), rev_ok:()=>ppRevision(p.num,'ok'), rev_no:()=>ppRevision(p.num,'no'), rev_x:()=>ppRevision(p.num,'')};
+  const m = {oc:()=>reabastAbrirDetalleOC(p.ocId), pagar:()=>tesoMarcarPagado(p.ocId), autorizar:()=>tesoAutorizar([p.ocId]), saldo:()=>ppMarcarSaldo(p.num), deshacer:()=>ppDeshacerSaldo(p.num), corregir:()=>tesoCorregirPago(p.ocId,p.num), devolver:()=>tesoDevolverPago(p.ocId,p.num), corregirs:()=>ppMarcarSaldo(p.num,true), ajustar:()=>ppAjustar(p.num,p.tipo), rev_ok:()=>ppRevision(p.num,'ok'), rev_no:()=>ppRevision(p.num,'no'), rev_x:()=>ppRevision(p.num,'')};
   if(m[a]) m[a]();
 }
 
