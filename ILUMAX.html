@@ -16734,7 +16734,7 @@ function ppConstruir(){
     // después del corte = proyección, que aquí se recalcula con el ETD/BL de Comercio Exterior.
     const corte = ppCorte();
     const vsLinea = f => ppNum(f['VALOR SALDO USD'])>0 ? ppNum(f['VALOR SALDO USD']) : 0;
-    const lPag = filas.filter(f=>{ const d = pciFecha(f['FECHA PAGO SALDO']); return d && d <= corte; });
+    const lPag = (A.saldo && A.saldo.noPagado) ? [] : filas.filter(f=>{ const d = pciFecha(f['FECHA PAGO SALDO']); return d && d <= corte; });
     const lPend = filas.filter(f=>!lPag.includes(f));
     let salUsd = sumCol('VALOR SALDO USD') ? sumCol('VALOR SALDO USD')+extraOC*(1-pctX) : 0;
     if(!salUsd) salUsd = Math.max(0, calc.fob - (sinAnt ? 0 : antUsd));
@@ -17107,14 +17107,24 @@ function ppMarcarSaldo(num, editar){
       const v = Number(ov.querySelector('[data-v]').value)||0; if(v<=0){ if(typeof toast==='function') toast('Escribe el valor pagado','wa'); return false; }
       if(editar && !ov.querySelector('[data-n]').value.trim()){ if(typeof toast==='function') toast('Escribe en la nota qué se corrige','wa'); return false; }
       const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {};
-      A.saldo = {...(A.saldo||{}), pagado:{fecha: ov.querySelector('[data-f]').value, usd:v, nota: ov.querySelector('[data-n]').value.trim()||null, por:(CU&&CU.nombre)||'', en:new Date().toISOString()}};
+      A.saldo = {...(A.saldo||{}), noPagado:false, pagado:{fecha: ov.querySelector('[data-f]').value, usd:v, nota: ov.querySelector('[data-n]').value.trim()||null, por:(CU&&CU.nombre)||'', en:new Date().toISOString()}};
       ppLog(num,(editar?'CORRIGIÓ el pago del saldo (antes US$'+ant.usd+' del '+ant.fecha+') → ':'Marcó el saldo como PAGADO · ')+'US$'+v+' · fecha de pago '+A.saldo.pagado.fecha+(A.saldo.pagado.nota?' · '+A.saldo.pagado.nota:''));
       await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Saldo marcado como pagado','ok');
     });
 }
 function ppDeshacerSaldo(num){
   const A0 = PP.ajustes[ceNum(num)] || {}; const pg = A0.saldo && A0.saldo.pagado;
-  if(!pg){ if(typeof toast==='function') toast('Ese saldo no tiene un pago registrado para deshacer','wa'); return; }
+  if(!pg){
+    ppModal(`↩︎ Quitar el "pagado" del saldo · ${reabastEsc(num)}`, `
+      <div style="font-size:12px;margin-bottom:8px;">Este saldo figura pagado porque <b>Base compras (col. AT)</b> trae una fecha de pago. Si en realidad <b>no se ha pagado</b>, se marca como pendiente aquí (el Excel no se toca) y vuelve a proyectarse su fecha.</div>
+      <div class="fg"><label class="fl">Motivo (obligatorio)</label><input class="inp" data-n placeholder="¿Por qué no está pagado?"></div>`, async ov=>{
+        const n = ov.querySelector('[data-n]').value.trim(); if(!n){ if(typeof toast==='function') toast('Escribe el motivo','wa'); return false; }
+        const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {}; A.saldo = A.saldo || {}; A.saldo.noPagado = true;
+        ppLog(num,'Quitó el "pagado" del saldo (venía de Base compras) · motivo: '+n);
+        await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Saldo vuelve a pendiente','ok');
+      });
+    return;
+  }
   ppModal(`↩︎ Devolver pago del saldo · ${reabastEsc(num)}`, `
     <div style="font-size:12px;margin-bottom:8px;">Se quita el pago registrado: <b>US$${pg.usd}</b> del ${reabastEsc(pg.fecha||'—')} (marcado por ${reabastEsc(pg.por||'?')}). El saldo vuelve a quedar pendiente.</div>
     <div class="fg"><label class="fl">Motivo (obligatorio)</label><input class="inp" data-n placeholder="¿Por qué se devuelve?"></div>`, async ov=>{
