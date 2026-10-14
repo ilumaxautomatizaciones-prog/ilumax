@@ -1336,7 +1336,7 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
       <div class="fg2">
         <div class="fg"><label class="fl">Tipo</label>
           <select class="inp" id="ti-eq-tipo">
-            <option>Celular</option><option>Laptop</option><option>Tablet</option><option>Monitor</option>
+            <option>Celular</option><option>Portatil</option><option>Laptop</option><option>Tablet</option><option>Monitor</option>
             <option>Teclado</option><option>Mouse</option><option>Impresora</option><option>Accesorio</option><option>Otro</option>
           </select></div>
         <div class="fg"><label class="fl">Estado compra</label>
@@ -1353,6 +1353,20 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
         <div class="fg"><label class="fl">Serial / SN</label><input class="inp" id="ti-eq-serial" placeholder="Serial"></div>
       </div>
       <div class="fg"><label class="fl">Valor del equipo</label><input class="inp" id="ti-eq-valor" type="number" min="0" placeholder="0"></div>
+      <div class="fg"><label class="fl">¿Propio o alquilado?</label>
+        <select class="inp" id="ti-eq-propiedad" onchange="tiTogAlquiler()"><option value="propio">Propio de ILUMAX</option><option value="alquilado">🏷 Alquilado (arriendo)</option></select></div>
+      <div id="ti-eq-alq" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px;margin-bottom:10px;">
+        <div class="fg"><label class="fl">Arrendador (de quién es)</label><input class="inp" id="ti-eq-prov" list="ti-eq-prov-l" placeholder="Ej: Servicios Novotechno SAS BIC">
+          <datalist id="ti-eq-prov-l"><option value="Servicios Novotechno SAS BIC · NIT 900505107"><option value="Servicios Novotechno SAS BIC · NIT 900578416"></datalist></div>
+        <div class="fg2">
+          <div class="fg"><label class="fl">Canon mensual (COP)</label><input class="inp" id="ti-eq-canon" type="number" min="0" placeholder="133125"></div>
+          <div class="fg"><label class="fl">Contrato / referencia</label><input class="inp" id="ti-eq-contrato" placeholder="Ej: Novotechno 1"></div>
+        </div>
+        <div class="fg2">
+          <div class="fg"><label class="fl">Alquilado desde</label><input class="inp" id="ti-eq-desde" type="date"></div>
+          <div class="fg"><label class="fl">Vence</label><input class="inp" id="ti-eq-hasta" type="date"></div>
+        </div>
+      </div>
       <div class="fg"><label class="fl">Notas</label><textarea class="inp" id="ti-eq-notas" rows="2" placeholder="Notas internas (opcional)"></textarea></div>
     </div>
     <div class="mf">
@@ -1421,7 +1435,7 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
         <div class="fg2">
           <div class="fg"><label class="fl">Tipo</label>
             <select class="inp" id="ti-ln-tipo">
-              <option>Celular</option><option>Laptop</option><option>Tablet</option><option>Monitor</option>
+              <option>Celular</option><option>Portatil</option><option>Laptop</option><option>Tablet</option><option>Monitor</option>
               <option>Teclado</option><option>Mouse</option><option>Impresora</option><option>Accesorio</option><option>Otro</option>
             </select></div>
           <div class="fg"><label class="fl">Descripción</label><input class="inp" id="ti-ln-desc" placeholder="Ej: Celular Redmi 14C"></div>
@@ -25003,6 +25017,11 @@ function tiHtmlTabEquipos() {
         <input class="inp" id="srch-ti-eq" placeholder="Buscar descripción, marca, IMEI, serial..."
           style="padding-left:32px;border-radius:22px;" oninput="filtrarTiEquipos()">
       </div>
+      <select class="inp" id="fil-ti-eq-prop" style="width:170px;" onchange="filtrarTiEquipos()">
+        <option value="">Propios y alquilados</option>
+        <option value="propio">Solo propios</option>
+        <option value="alquilado">🏷 Solo alquilados</option>
+      </select>
       <select class="inp" id="fil-ti-eq-estado" style="width:170px;" onchange="filtrarTiEquipos()">
         <option value="">Todos los estados</option>
         <option value="Disponible">Disponible</option>
@@ -25040,17 +25059,21 @@ function filtrarTiEquipos() {
   const q = (document.getElementById('srch-ti-eq')||{value:''}).value.trim().toLowerCase();
   const est = (document.getElementById('fil-ti-eq-estado')||{value:''}).value;
 
+  const prop = (document.getElementById('fil-ti-eq-prop')||{value:''}).value;
   let items = TI.equipos.filter(e => {
     if(est && e.estado_actual !== est) return false;
+    if(prop === 'alquilado' && e.propiedad !== 'alquilado') return false;
+    if(prop === 'propio' && e.propiedad === 'alquilado') return false;
     if(q) {
-      const hay = [e.descripcion,e.marca,e.modelo,e.imei,e.serial,e.codigo_interno].filter(Boolean).join(' ').toLowerCase();
+      const hay = [e.descripcion,e.marca,e.modelo,e.imei,e.serial,e.codigo_interno,e.proveedor_alquiler,e.asignado_a].filter(Boolean).join(' ').toLowerCase();
       if(!hay.includes(q)) return false;
     }
     return true;
   });
 
   const cnt = document.getElementById('ti-eq-cnt');
-  if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' equipo(s)';
+  const nAlq = TI.equipos.filter(e=>e.propiedad==='alquilado').length;
+  if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' equipo(s)' + (nAlq ? ' · 🏷 '+nAlq+' alquilado(s)' : '');
 
   const tbody = document.getElementById('tbody-ti-eq');
   if(!tbody) return;
@@ -25061,7 +25084,7 @@ function filtrarTiEquipos() {
   tbody.innerHTML = items.map(e => `
     <tr style="border-bottom:1px solid var(--b1);">
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${tiEsc(e.tipo||'')}</td>
-      <td style="padding:9px 12px;font-weight:600;font-size:11px;">${tiEsc(e.descripcion||'')}${e.marca||e.modelo?'<div style="font-size:10px;color:var(--mu);font-weight:400;">'+tiEsc([e.marca,e.modelo].filter(Boolean).join(' '))+'</div>':''}</td>
+      <td style="padding:9px 12px;font-weight:600;font-size:11px;">${tiEsc(e.descripcion||'')}${e.marca||e.modelo?'<div style="font-size:10px;color:var(--mu);font-weight:400;">'+tiEsc([e.marca,e.modelo].filter(Boolean).join(' '))+'</div>':''}${e.propiedad==='alquilado'?'<div style="margin-top:3px;"><span style="font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:8px;background:#dbeafe;color:#1d4ed8;" title="'+tiEsc([e.proveedor_alquiler,e.contrato_alquiler,e.canon_mensual?'$'+Math.round(e.canon_mensual).toLocaleString('es-CO')+'/mes':'',e.alquiler_hasta?'vence '+e.alquiler_hasta:''].filter(Boolean).join(' · '))+'">🏷 Alquilado'+(e.proveedor_alquiler?' · '+tiEsc(String(e.proveedor_alquiler).split(' · ')[0].replace(/^Servicios\s+/i,'')):'')+'</span></div>':''}</td>
       <td style="padding:9px 12px;font-family:monospace;font-size:10px;color:var(--mu);">${tiEsc(e.imei||'')}${e.serial?'<br>'+tiEsc(e.serial):''}</td>
       <td style="padding:9px 12px;text-align:right;font-size:11px;">${tiCOPTabla(e.valor_equipo)}</td>
       <td style="padding:9px 12px;"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:${badgeCol[e.estado_actual]||'#64748b'}22;color:${badgeCol[e.estado_actual]||'#64748b'};">${tiEsc(e.estado_actual||'')}</span></td>
@@ -25078,6 +25101,7 @@ function filtrarTiEquipos() {
     </tr>`).join('');
 }
 
+function tiTogAlquiler(){ const a = document.getElementById('ti-eq-propiedad').value==='alquilado'; document.getElementById('ti-eq-alq').style.display = a ? 'block' : 'none'; if(a && !document.getElementById('ti-eq-prov').value) document.getElementById('ti-eq-prov').value = 'Servicios Novotechno SAS BIC · NIT 900505107'; }
 function tiAbrirModalEquipo(id) {
   TI.editEquipoId = id || null;
   const eq = id ? TI.equipos.find(e => e.id === id) : null;
@@ -25092,6 +25116,13 @@ function tiAbrirModalEquipo(id) {
   document.getElementById('ti-eq-valor').value = eq?.valor_equipo || '';
   document.getElementById('ti-eq-compra').value = eq?.estado_compra || 'N';
   document.getElementById('ti-eq-notas').value = eq?.notas || '';
+  document.getElementById('ti-eq-propiedad').value = eq?.propiedad === 'alquilado' ? 'alquilado' : 'propio';
+  document.getElementById('ti-eq-prov').value = eq?.proveedor_alquiler || '';
+  document.getElementById('ti-eq-canon').value = eq?.canon_mensual || '';
+  document.getElementById('ti-eq-contrato').value = eq?.contrato_alquiler || '';
+  document.getElementById('ti-eq-desde').value = eq?.alquiler_desde || '';
+  document.getElementById('ti-eq-hasta').value = eq?.alquiler_hasta || '';
+  tiTogAlquiler();
   const avisoAsig = document.getElementById('ti-eq-aviso-asignado');
   if(avisoAsig) avisoAsig.style.display = eq?.estado_actual === 'Asignado' ? 'block' : 'none';
   openMo('mo-ti-equipo');
@@ -25112,6 +25143,12 @@ async function tiGuardarEquipo() {
     valor_equipo: parseFloat(document.getElementById('ti-eq-valor').value) || 0,
     estado_compra: document.getElementById('ti-eq-compra').value,
     notas: document.getElementById('ti-eq-notas').value.trim(),
+    propiedad: document.getElementById('ti-eq-propiedad').value,
+    proveedor_alquiler: document.getElementById('ti-eq-propiedad').value==='alquilado' ? (document.getElementById('ti-eq-prov').value.trim()||null) : null,
+    canon_mensual: document.getElementById('ti-eq-propiedad').value==='alquilado' ? (parseFloat(document.getElementById('ti-eq-canon').value)||null) : null,
+    contrato_alquiler: document.getElementById('ti-eq-propiedad').value==='alquilado' ? (document.getElementById('ti-eq-contrato').value.trim()||null) : null,
+    alquiler_desde: document.getElementById('ti-eq-propiedad').value==='alquilado' ? (document.getElementById('ti-eq-desde').value||null) : null,
+    alquiler_hasta: document.getElementById('ti-eq-propiedad').value==='alquilado' ? (document.getElementById('ti-eq-hasta').value||null) : null,
   };
 
   try {
