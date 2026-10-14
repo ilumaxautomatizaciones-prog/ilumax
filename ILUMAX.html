@@ -16427,7 +16427,7 @@ function ppReglaSaldo(o){
   if(diasProv!=null && diasProv>0) return ppReglaArma('credito', diasProv, 'ficha del proveedor', texto);
   if((m = t.match(/(\d+|a|one|two|three|un|una|dos|tres)\s*(?:weeks?|semanas?)\s*(?:before|antes)[^.;]*?(?:arriv|llegada)/))) { const n = nums[m[1]] || Number(m[1]) || 1; return {base:'eta', dias:-7*n, txt:`${n} semana(s) antes de la llegada (ETA)`, texto}; }
   if(/before arriv|antes de (la )?llegada/.test(t)) return {base:'eta', dias:-7, txt:'antes de la llegada (ETA − 7 d)', texto};
-  if(/against (copy of )?b\/?l|against bl|shipping doc|after shipment|contra (copia )?(del )?bl|copy of b\/?l/.test(t)) return ppReglaArma('credito', 0, 'contra BL', texto);
+  if(/against (copy of )?b\/?l|against bl|shipping doc|after shipment|contra (copia )?(del )?bl|copy of b\/?l/.test(t)) return ppReglaArma('credito', 8, 'contra BL', texto);
   return ppReglaArma('anticipado', ppAntDiasDefecto(), 'sin días de crédito: anticipado por defecto', texto);
 }
 // ── Desplegable de reglas de saldo (por proveedor y por OC) ──
@@ -31864,8 +31864,8 @@ async function cmExcel(){
     const itemRow = {}, r0 = 6;
     F.forEach(x=>{ itemRow[x.p.id] = {}; x.items.forEach((it,i)=>itemRow[x.p.id][it.n] = r0+i); });
     const pos = {};
-    F.forEach(x=>{
-      const p = x.p, ws = wb.addWorksheet(nom[p.id]), n = x.items.length, t = r0+n, pts0 = t+13, ptsTot = pts0+R.puntos.length;
+    F.forEach((x,ix)=>{
+      const p = x.p, rowR = 5+ix, ws = wb.addWorksheet(nom[p.id]), n = x.items.length, t = r0+n, pts0 = t+13, ptsTot = pts0+R.puntos.length;
       ws.columns = [{width:2},{width:50},{width:11},{width:19},{width:19},{width:16},{width:18},{width:3},{width:40},{width:10},{width:18}];
       ws.getCell('B2').value = 'Simulador Remuneración Variable Comercial — '+mesTxt; ws.getCell('B2').font = {bold:true,size:13};
       ws.getCell('B3').value = p.nombre+' · '+(p.cargo==='coord'?'Coordinador':p.cargo==='lider'?'Líder de canal':'Vendedor'); ws.getCell('B3').font = {bold:true,size:12,color:{argb:'FF1E40AF'}};
@@ -31888,9 +31888,9 @@ async function cmExcel(){
       put(t+2,'Puntos adicionales (solo si cumple el % mínimo de activación)', fx(cmExig()?'IF(G'+t+'>='+UMB+',G'+ptsTot+',0)':'G'+ptsTot, x.ptsAp), PCT);
       put(t+3,'Puntos extra manuales (%)', x.extra, PCT, false, YEL);
       put(t+4,'Total cumplimiento (ponderado + premio + puntos)', fx('G'+t+'+G'+(t+1)+'+G'+(t+2)+'+G'+(t+3), x.tot), PCT, true);
-      put(t+5,'Salario variable base', Number(p.base)||0, MONEY, false, YEL);
+      put(t+5,'Salario variable base (se edita en la hoja Resumen)', fx('Resumen!$D$'+rowR, Number(p.base)||0), MONEY);
       put(t+6,'Total salario variable según matriz (según el % real, sin mínimo)', fx('IF(G'+t+'<='+MAX+',G'+(t+4)+'*G'+(t+5)+',G'+(t+5)+'*('+MAX+'+G'+(t+1)+'+G'+(t+2)+'+G'+(t+3)+'))', x.teorico), MONEY, true);
-      put(t+7,'Ajuste ± ($)', x.aj, MONEY, false, YEL);
+      put(t+7,'Ajuste ± ($) (se edita en la hoja Resumen)', fx('Resumen!$M$'+rowR, x.aj), MONEY);
       put(t+8,'TOTAL A PAGAR DEFINITIVO (aplica la regla: bajo el '+R.minPago+' % no se paga)', fx('IF(G'+t+'<'+MIN+',0,G'+(t+6)+')+G'+(t+7), x.pagoFin), MONEY, true);
       for(let c=2;c<=7;c++) ws.getCell(t+8,c).fill = fill('FFFDE68A');
       ws.getCell(t+9,2).value = 'Observación'; ws.getCell(t+9,3).value = x.nota || ''; ws.getCell(t+10,2).value = 'Cuando el total cumplimiento supere el 140% se revisará el incentivo adicional.'; ws.getCell(t+10,2).font = {italic:true,size:9,color:{argb:'FF64748B'}};
@@ -31917,15 +31917,15 @@ async function cmExcel(){
     // ── Resumen ──
     wsR.columns = [{width:5},{width:26},{width:14},{width:17},{width:15},{width:11},{width:11},{width:11},{width:11},{width:14},{width:20},{width:19},{width:14},{width:19},{width:34}];
     wsR.getCell('A1').value = 'Resumen comisiones equipo comercial — '+mesTxt; wsR.getCell('A1').font = {bold:true,size:14};
-    wsR.getCell('A2').value = 'Ilumax · '+CM.fuente+' · '+CM.pptoFuente+' · generado '+new Date().toLocaleString('es-CO'); wsR.getCell('A2').font = {italic:true,size:9,color:{argb:'FF64748B'}};
+    wsR.getCell('A2').value = 'Ilumax · '+CM.fuente+' · '+CM.pptoFuente+' · generado '+new Date().toLocaleString('es-CO'); wsR.getCell('A2').font = {italic:true,size:9,color:{argb:'FF64748B'}}; wsR.getCell('A3').value = 'Celdas amarillas (Salario variable y Ajuste) se editan AQUÍ: el pago y los totales de esta hoja se calculan con las celdas de esta misma hoja, y la hoja de cada colaborador las lee de aquí.'; wsR.getCell('A3').font = {italic:true,size:9,color:{argb:'FF166534'}};
     ['No.','Colaborador','Cargo','Salario variable','Cumplimiento mes','Premio','Puntos','Mix ponderado (%)','Mix (puntos)','Total matriz (%)','Total según matriz (% real, sin mínimo)','Pago aplicando la regla del mínimo','Ajuste','Total a pagar definitivo','Comentario'].forEach((h,i)=>wsR.getCell(4,i+1).value = h); hdr(wsR,4,1,15);
     F.forEach((x,i)=>{ const r = 5+i, s = S(x.p.id), P = pos[x.p.id];
       wsR.getCell(r,1).value = i+1; wsR.getCell(r,2).value = {text:x.p.nombre, hyperlink:'#'+s+'A1'}; wsR.getCell(r,2).font = {color:{argb:'FF1D4ED8'},underline:true};
       wsR.getCell(r,3).value = x.p.cargo==='coord'?'Coordinador':x.p.cargo==='lider'?'Líder':'Vendedor';
-      wsR.getCell(r,4).value = fx(s+'G'+P.base, Number(x.p.base)||0); wsR.getCell(r,5).value = fx(s+'G'+P.t, x.cum); wsR.getCell(r,6).value = fx(s+'G'+(P.t+1), x.prem);
+      wsR.getCell(r,4).value = Number(x.p.base)||0; wsR.getCell(r,4).fill = YEL; wsR.getCell(r,5).value = fx(s+'G'+P.t, x.cum); wsR.getCell(r,6).value = fx(s+'G'+(P.t+1), x.prem);
       const mxI = x.detPts.findIndex(d=>d.l.id==='mix'), mxF = mxI<0 ? '0' : (cmExig()?'IF('+s+'G'+P.t+'>='+UMB+','+s+'G'+(P.pts0+mxI)+',0)':s+'G'+(P.pts0+mxI));
       wsR.getCell(r,8).value = x.mixPct==null ? '' : x.mixPct; wsR.getCell(r,9).value = fx(mxF, x.mixAp); wsR.getCell(r,7).value = fx(s+'G'+(P.t+2)+'+'+s+'G'+(P.t+3)+'-I'+r, x.ptsOtro); wsR.getCell(r,10).value = fx('E'+r+'+F'+r+'+G'+r+'+I'+r, x.tot);
-      wsR.getCell(r,11).value = fx(s+'G'+(P.t+6), x.teorico); wsR.getCell(r,12).value = fx('IF(E'+r+'<'+MIN+',0,K'+r+')', x.pago); wsR.getCell(r,13).value = fx(s+'G'+(P.t+7), x.aj); wsR.getCell(r,14).value = fx('L'+r+'+M'+r, x.pagoFin);
+      wsR.getCell(r,11).value = fx('IF(E'+r+'<='+MAX+',J'+r+'*D'+r+',D'+r+'*('+MAX+'+F'+r+'+G'+r+'+I'+r+'))', x.teorico); wsR.getCell(r,12).value = fx('IF(E'+r+'<'+MIN+',0,K'+r+')', x.pago); wsR.getCell(r,13).value = x.aj; wsR.getCell(r,13).fill = YEL; wsR.getCell(r,14).value = fx('L'+r+'+M'+r, x.pagoFin);
       wsR.getCell(r,15).value = x.nota || '';
       [4,11,12,13,14].forEach(c=>wsR.getCell(r,c).numFmt = MONEY); [5,6,7,8,9,10].forEach(c=>wsR.getCell(r,c).numFmt = PCT); });
     const rl = 4+F.length, rT = rl+1, sum = (c)=>'SUM('+c+'5:'+c+rl+')';
