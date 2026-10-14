@@ -5828,6 +5828,8 @@ function presQaAgregar(){
 }
 function presTblOrden(col){ if(PRES_TBL.col===col) PRES_TBL.dir=-PRES_TBL.dir; else { PRES_TBL.col=col; PRES_TBL.dir=(col==='cat'||col==='sub'||col==='cc'||col==='desc')?1:-1; } presTblRender(); }
 function presTblEditable(p){ return !p || !p.estado || p.estado==='borrador' || p.estado==='devuelto'; }
+// ¿La subcategoría ya tiene ese mes en revisión/aprobado? (aunque el ítem sea nuevo, el mes completo está bloqueado)
+function presTblBloq(sub, mes){ var anio = presTblAnio(); return getPresupuestos().some(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===sub && !presTblEditable(x); }); }
 function presTblItemsDe(p){ return (Array.isArray(p.items) && p.items.length) ? p.items : [{ cc:p.centroCosto||'', desc:p.obs||'', valor:p.monto }]; }
 function presTblClave(sub, cc, desc){ return sub+'||'+siesaResolverCC(cc||'')+'||'+String(desc||'').trim().toLowerCase(); }
 var PRES_TBL_ROWS = {};
@@ -5871,7 +5873,7 @@ function presTblRender(){
   var body = filas.map(function(f){
     var kk = encodeURIComponent(f.k), cells = '';
     for(var m=1;m<=12;m++){
-      var p=f.p[m], ed=presTblEditable(p), v=f.m[m]||0;
+      var p=f.p[m], ed=presTblEditable(p) && !(!p && presTblBloq(f.sub,m)), v=f.m[m]||0;
       tot[m]=(tot[m]||0)+v;
       var pend = PRES_TBL_PEND[f.k+'@@'+m];
       if(pend!==undefined) v = pend;
@@ -5880,7 +5882,7 @@ function presTblRender(){
         : ed
         ? '<input type="number" min="0" data-k="'+kk+'" data-mes="'+m+'" value="'+(v||'')+'" placeholder="·" onchange="presTblEditar(this)" style="width:100%;box-sizing:border-box;text-align:right;font-size:10px;padding:3px 2px;border:1px solid '+(pend!==undefined?'#f59e0b':'var(--b1)')+';border-radius:6px;background:'+(pend!==undefined?'#fef9c3':'var(--w)')+';">'
           + (function(){ var nt = PRES_TBL_NOTA[f.k+'@@'+m]; if(nt===undefined) nt = (f.n&&f.n[m])||''; var ch = PRES_TBL_NOTA[f.k+'@@'+m]!==undefined; return '<textarea class="pres-nota" rows="1" data-k="'+kk+'" data-mes="'+m+'" placeholder="descripción" title="Descripción de este mes (ej: Alimentación Bogotá)" onchange="presTblNotaSet(this)" oninput="this.style.height=\'auto\';this.style.height=this.scrollHeight+\'px\'" style="width:100%;box-sizing:border-box;resize:none;overflow:hidden;font:inherit;font-size:9px;line-height:1.15;padding:2px 3px;margin-top:2px;border:1px solid '+(ch?'#f59e0b':'var(--b1)')+';border-radius:5px;background:'+(ch?'#fef9c3':'var(--w)')+';color:var(--bl);font-weight:600;text-align:left;">'+String(nt).replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</textarea>'; })()
-        : '<div title="Estado: '+(p.estado||'')+' — no editable" style="text-align:right;font-size:11px;padding:4px 6px;color:var(--mu);">'+fmt(v)+'</div>')+'</td>';
+        : '<div title="'+(p?'Estado: '+(p.estado||'')+' — no editable':'Este mes de la subcategoría ya está en revisión — no se pueden agregar ítems')+'" style="text-align:right;font-size:11px;padding:4px 6px;color:var(--mu);">'+fmt(v)+'</div>')+'</td>';
     }
     totAll += f.total;
     return '<tr class="pres-tbl-fila" data-vacia="'+(f.vacia?1:0)+'" data-q="'+presNorm(f.cat+' '+f.subNombre+' '+f.desc+' '+f.sub+' '+f.cc).replace(/"/g,'')+'" style="border-bottom:1px solid var(--b1);">'
@@ -5889,7 +5891,7 @@ function presTblRender(){
       + '<td style="padding:4px;font-size:9px;color:var(--mu);line-height:1.2;">'+(f.cc||'—')+'</td>'
       + cells
       + '<td style="padding:4px;font-size:10px;font-weight:800;color:var(--bl);text-align:right;">'+fmt(f.total)+'</td>'
-      + '<td style="padding:2px;white-space:nowrap;text-align:center;"><button class="btn btn-g btn-xs" title="Editar (abre el formulario de creación)" onclick="presTblEditarFila(\''+f.sub+'\')">✏️</button>'+(f.vacia?'':' <button class="btn btn-rd btn-xs" title="Borrar este ítem" onclick="presTblEliminarFila(\''+kk+'\')">🗑️</button>')+'</td></tr>';
+      + '<td style="padding:2px;white-space:nowrap;text-align:center;"><button class="btn btn-g btn-xs" title="Editar solo esta fila" onclick="presTblEditarItem(\''+kk+'\')">✏️</button>'+(f.vacia?'':' <button class="btn btn-rd btn-xs" title="Borrar este ítem" onclick="presTblEliminarFila(\''+kk+'\')">🗑️</button>')+'</td></tr>';
   }).join('');
   var foot = '<tr style="background:var(--s1);font-weight:800;"><td colspan="3" style="padding:6px 4px;font-size:10px;">TOTAL '+anio+'</td>'
     + nm.map(function(_,i){ return '<td style="padding:6px 2px;font-size:9px;text-align:right;">'+fmt(tot[i+1]||0)+'</td>'; }).join('')
@@ -5948,7 +5950,7 @@ async function presTblGuardar(){
     if(!f || f.vacia) return;
     if(!(v>0) && PRES_TBL_NOTA[pk]) avisos.push('Descripción sin valor en mes '+mes+' no se guardó');
     var p = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===f.sub; });
-    if(p && !presTblEditable(p)){ avisos.push('Mes '+mes+' ya está en revisión'); return; }
+    if(p && !presTblEditable(p)){ var _t = 'Mes '+mes+' ('+f.subNombre+') ya está en revisión'; if(avisos.indexOf(_t)<0) avisos.push(_t); return; }
     if(!p){
       if(!(v>0)) return;
       var ref = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===f.sub; });
@@ -5974,7 +5976,7 @@ async function presTblGuardar(){
     .concat(Object.keys(borrar).map(function(id){ return presTblApi('eliminarPresupuesto',{id:id}); }));
   var res = await Promise.all(tareas), mal = res.filter(function(r){ return !r; }).length;
   if(mal) toast('⚠️ '+mal+' cambio(s) no se guardaron en Supabase','err');
-  else toast('✅ Cambios guardados'+(avisos.length?' · '+avisos.join('; '):''), avisos.length?'wa':'ok');
+  else toast(avisos.length ? '⚠️ Guardado PARCIAL · NO se guardó: '+avisos.join('; ')+'. Pide que devuelvan ese mes a borrador.' : '✅ Cambios guardados', avisos.length?'wa':'ok');
 }
 async function presTblEliminarFila(kk){
   var k = decodeURIComponent(kk), f = PRES_TBL_ROWS[k]; if(!f) return;
@@ -6002,6 +6004,76 @@ async function presTblEliminarFila(kk){
     .concat(Object.keys(borrar).map(function(id){ return presTblApi('eliminarPresupuesto',{id:id}); }));
   var res = await Promise.all(tareas);
   if(res.some(function(r){ return !r; })) toast('⚠️ Algunos cambios no se guardaron en Supabase','err'); else toast('🗑️ Ítem borrado','ok');
+}
+
+// ── Editar SOLO una fila (ítem): subcategoría, centro de costo, descripción, valor y nota de cada mes ──
+function presTblEditarItem(kk){
+  var k = decodeURIComponent(kk), f = PRES_TBL_ROWS[k]; if(!f) return;
+  if(presTblPendN() && !confirm('Tienes cambios sin guardar en la tabla que se perderán. ¿Continuar?')) return;
+  PRES_TBL_PEND = {}; PRES_TBL_NOTA = {};
+  var esc = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); };
+  var nm = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'], anio = presTblAnio();
+  var subs = (typeof SUBS_ILUMAX!=='undefined' ? SUBS_ILUMAX : []).slice();
+  if(!subs.some(function(s){ return s.codigo===f.sub; })) subs.unshift({codigo:f.sub, nombre:f.subNombre});
+  var ccs = (typeof CENTROS_COSTO_ILUMAX!=='undefined' ? CENTROS_COSTO_ILUMAX : []);
+  var optSub = subs.map(function(s){ return '<option value="'+esc(s.codigo)+'"'+(s.codigo===f.sub?' selected':'')+'>'+esc(s.codigo)+' — '+esc(s.nombre)+'</option>'; }).join('');
+  var optCc = '<option value="">-- Centro de costo --</option>'+ccs.map(function(c){ return '<option value="'+esc(c.codigo)+'"'+(c.codigo===f.ccCod?' selected':'')+'>'+esc(c.codigo)+' — '+esc(c.nombre)+'</option>'; }).join('');
+  var meses = nm.map(function(n,i){ var m=i+1, p=f.p[m], bloq = (p && !presTblEditable(p)) || (!p && presTblBloq(f.sub,m));
+    return '<div style="border:1px solid var(--b1);border-radius:8px;padding:6px;'+(bloq?'opacity:.55;':'')+'"><div style="font-size:10px;font-weight:800;margin-bottom:3px;">'+n+(bloq?' 🔒':'')+'</div>'
+      +'<input class="inp" type="number" min="0" data-m="'+m+'" value="'+(f.m[m]||'')+'" '+(bloq?'disabled ':'')+'style="margin:0;font-size:12px;">'
+      +'<input class="inp" data-n="'+m+'" value="'+esc((f.n&&f.n[m])||'')+'" placeholder="nota" '+(bloq?'disabled ':'')+'style="margin:3px 0 0;font-size:10px;"></div>'; }).join('');
+  var ov = document.createElement('div'); ov.className='ov on'; ov.style.zIndex=960;
+  ov.innerHTML = '<div class="mo" style="max-width:760px;"><div class="mh"><div class="mt">✏️ Editar solo esta fila · '+anio+'</div><div class="mx" data-x>✕</div></div><div class="mb">'
+    +'<div class="fg"><label class="fl">Subcategoría</label><select class="inp" data-sub>'+optSub+'</select></div>'
+    +'<div class="fg2"><div class="fg"><label class="fl">Centro de costo</label><select class="inp" data-cc>'+optCc+'</select></div>'
+    +'<div class="fg"><label class="fl">Ítem / descripción</label><input class="inp" data-desc value="'+esc(f.desc)+'"></div></div>'
+    +'<div class="fl" style="margin:6px 0 4px;">Valor y nota por mes (🔒 = mes ya en revisión, no editable · 0 o vacío = sin valor)</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;">'+meses+'</div>'
+    +'<div data-err style="font-size:11px;color:var(--rd);min-height:14px;margin-top:6px;"></div></div>'
+    +'<div class="mf"><button class="btn btn-g" data-x>Cancelar</button><button class="btn btn-p" data-ok>💾 Guardar esta fila</button></div></div>';
+  document.body.appendChild(ov);
+  var $ = function(q){ return ov.querySelector(q); }; ov.querySelectorAll('[data-x]').forEach(function(b){ b.onclick=function(){ ov.remove(); }; });
+  $('[data-ok]').onclick = async function(){
+    var sub2 = $('[data-sub]').value, cc2 = $('[data-cc]').value, desc2 = $('[data-desc]').value.trim();
+    if(!sub2) return $('[data-err]').textContent = 'Elige la subcategoría';
+    if(!cc2) return $('[data-err]').textContent = 'Elige el centro de costo';
+    var presups = getPresupuestos(), tocados = {}, avisos = [], hubo = false;
+    var subO = subs.find(function(s){ return s.codigo===sub2; }) || {codigo:sub2, nombre:sub2};
+    var catO = (typeof CATS_ILUMAX!=='undefined' ? CATS_ILUMAX : []).find(function(c){ return sub2.indexOf(c.codigo)===0; }) || {codigo:sub2.substring(0,4), nombre:''};
+    for(var m=1;m<=12;m++){
+      var pOld = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===m && x.subCodigo===f.sub; });
+      var inp = $('[data-m="'+m+'"]'); if(!inp || inp.disabled) continue;
+      var v = Math.max(0, parseFloat(inp.value)||0), nota = $('[data-n="'+m+'"]').value.trim();
+      // quitar el ítem del documento anterior
+      if(pOld){
+        var its = presTblItemsDe(pOld).map(function(it){ var o={cc:it.cc,desc:it.desc,valor:it.valor}; if(it.nota) o.nota=it.nota; return o; });
+        var ix = its.findIndex(function(it){ return presTblClave(f.sub, it.cc, it.desc)===k; });
+        if(ix>=0){ its.splice(ix,1); pOld.items = its; presTblRecalc(pOld); tocados[pOld.id] = pOld; hubo = true; }
+      }
+      if(!(v>0)) continue;
+      var pNew = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===m && x.subCodigo===sub2; });
+      if(pNew && !presTblEditable(pNew)){ avisos.push(nm[m-1]+': el mes destino ya está en revisión'); continue; }
+      if(!pNew){
+        var ref = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub2; });
+        pNew = { id:'PRES-'+presAreaSlug(CU.area)+'-'+sub2+'-'+anio+'-'+m, area:CU.area, catCodigo:ref?ref.catCodigo:catO.codigo, catNombre:ref?ref.catNombre:catO.nombre,
+          subCodigo:sub2, subNombre:subO.nombre, mes:m, anio:anio, monto:0, obs:desc2, items:[], centroCosto:cc2,
+          estado:'borrador', autor:CU.nombre, autorEmail:CU.email, fecha:new Date().toLocaleDateString('es-CO'), ts:new Date().toISOString() };
+        presups.push(pNew);
+      }
+      var its2 = presTblItemsDe(pNew).map(function(it){ var o={cc:it.cc,desc:it.desc,valor:it.valor}; if(it.nota) o.nota=it.nota; return o; });
+      if(pNew.monto===0 && !(Array.isArray(pNew.items)&&pNew.items.length)) its2 = [];
+      var ni = {cc:cc2, desc:desc2, valor:v}; if(nota) ni.nota = nota; its2.push(ni);
+      pNew.items = its2; if(!pNew.centroCosto) pNew.centroCosto = cc2; presTblRecalc(pNew); tocados[pNew.id] = pNew; hubo = true;
+    }
+    if(!hubo){ ov.remove(); toast('Sin cambios','wa'); return; }
+    var borrar = {}; Object.keys(tocados).forEach(function(id){ if(!presTblItemsDe(tocados[id]).length || !(Array.isArray(tocados[id].items)&&tocados[id].items.length)){ borrar[id]=1; } });
+    presups = presups.filter(function(x){ return !borrar[x.id]; });
+    savePresupuestos(presups); ov.remove(); presTblRender(); if(typeof renderPres==='function') renderPres();
+    var tareas = Object.keys(tocados).filter(function(id){ return !borrar[id]; }).map(function(id){ return presTblApi('guardarPresupuesto',{presupuesto:tocados[id]}); })
+      .concat(Object.keys(borrar).map(function(id){ return presTblApi('eliminarPresupuesto',{id:id}); }));
+    var res = await Promise.all(tareas);
+    if(res.some(function(r){ return !r; })) toast('⚠️ Algunos cambios no se guardaron en Supabase','err'); else toast('✅ Fila guardada'+(avisos.length?' · '+avisos.join('; '):''), avisos.length?'wa':'ok');
+  };
 }
 function presTblEditarFila(sub){
   var anio=presTblAnio();
