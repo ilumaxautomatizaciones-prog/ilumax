@@ -14366,7 +14366,7 @@ async function tesoCargar(forzar){
   const rows = await sb.get('configuracion','clave=like.teso_anticipo_*&select=clave,valor');
   TESO.lista = (rows||[]).map(r=>{ try{ return JSON.parse(r.valor); }catch(e){ return null; } }).filter(Boolean);
   // Anticipos aún sin pagar: se recalculan con el valor actual de la OC (incluye costo extra)
-  for(const r of TESO.lista){ if(r.estado==='pagado'||r.estado==='anulado') continue; const o = (REABAST.ordenesCompra||[]).find(x=>x.id===r.ocId); if(!o) continue; const a = tesoCalcularAnticipo(o); if(a.usd && (Math.abs(a.fob-(r.fob_total||0))>0.004 || Math.abs(a.usd-(r.monto_usd||0))>0.004)){ Object.assign(r,{pct:a.pct, fob_total:a.fob, monto_usd:a.usd, monto_cop:a.cop, saldo_usd:a.saldo, trm:a.trm}); tesoGuardar(r).catch(()=>{}); } }
+  for(const r of TESO.lista){ if(r.estado==='pagado'||r.estado==='anulado'||r.manual_usd) continue; const o = (REABAST.ordenesCompra||[]).find(x=>x.id===r.ocId); if(!o) continue; const a = tesoCalcularAnticipo(o); if(a.usd && (Math.abs(a.fob-(r.fob_total||0))>0.004 || Math.abs(a.usd-(r.monto_usd||0))>0.004)){ Object.assign(r,{pct:a.pct, fob_total:a.fob, monto_usd:a.usd, monto_cop:a.cop, saldo_usd:a.saldo, trm:a.trm}); tesoGuardar(r).catch(()=>{}); } }
   return TESO.lista;
 }
 async function tesoGuardar(reg){
@@ -16805,22 +16805,49 @@ function ppAjustar(num, tipo){
       const prev = A[tipo] || {};
       A[tipo] = {...prev, fecha: ov.querySelector('[data-f]').value || null, usd: ov.querySelector('[data-v]').value!=='' ? Number(ov.querySelector('[data-v]').value) : null, nota: ov.querySelector('[data-n]').value.trim() || null, por:(CU&&CU.nombre)||'', en:new Date().toISOString()};
       if(Math.abs((A[tipo].usd||0) - p.usd) < 0.005 && !prev.usd) A[tipo].usd = null;
+      ppLog(num,'Ajustó '+(tipo==='anticipo'?'el anticipo':'el saldo')+': valor '+(A[tipo].usd!=null?'US$'+A[tipo].usd:'automático')+' · fecha '+(A[tipo].fecha||'automática')+' (antes US$'+Math.round(p.usd*100)/100+')'+(A[tipo].nota?' · '+A[tipo].nota:''));
+      if(tipo==='anticipo' && A.anticipo.usd!=null && typeof tesoRegDe==='function'){ const rg = tesoRegDe(p.ocId); if(rg && rg.estado==='autorizado'){ const u = A.anticipo.usd; rg.monto_usd = u; rg.monto_cop = Math.round(u*(rg.trm||0)); rg.saldo_usd = Math.round(((rg.fob_total||0)-u)*100)/100; rg.manual_usd = true; rg.historial = [...(rg.historial||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion:'Cambió el valor del anticipo autorizado a US$'+u, nota:A.anticipo.nota||''}]; try{ await tesoGuardar(rg); }catch(e){} } }
       await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Programación actualizada','ok');
     });
   setTimeout(()=>{ const b = document.querySelector('[data-quitar]'); if(b) b.onclick = async()=>{ const A = PP.ajustes[ceNum(num)]||{}; const pag = A[tipo] && A[tipo].pagado; A[tipo] = pag ? {pagado:pag} : undefined; await ppGuardarAjustes(); b.closest('.ov').remove(); ppPintar(); }; }, 0);
 }
+function tesoCorregirPago(ocId, num){
+  const r = tesoRegDe(ocId); if(!r || r.estado!=='pagado' || !(r.pagos||[]).length) return;
+  if(!tesoPuedePagar()){ if(typeof toast==='function') toast('Solo Tesorería/Cartera o un administrador puede corregir pagos','wa'); return; }
+  const u = r.pagos[r.pagos.length-1];
+  ppModal(`✎ Corregir pago del anticipo · ${reabastEsc(r.numero_oc)}`, `
+    <div class="fg"><label class="fl">Valor pagado US$</label><input class="inp" type="number" step="0.01" data-v value="${u.usd}"></div>
+    <div class="fg"><label class="fl">Fecha del pago</label><input class="inp" type="date" data-f value="${u.fecha||''}"></div>
+    <div class="fg"><label class="fl">TRM del pago</label><input class="inp" type="number" step="0.01" data-t value="${u.trm||''}"></div>
+    <div class="fg"><label class="fl">Nota (obligatoria)</label><input class="inp" data-n placeholder="¿Qué se corrige y por qué?"></div>
+    <div style="font-size:11px;color:var(--mu);">El saldo de la OC se recalcula solo (total − anticipo pagado).</div>`, async ov=>{
+      const v = Number(ov.querySelector('[data-v]').value)||0, f = ov.querySelector('[data-f]').value, t = Number(ov.querySelector('[data-t]').value)||null, n = ov.querySelector('[data-n]').value.trim();
+      if(v<=0 || !f){ if(typeof toast==='function') toast('Valor y fecha son obligatorios','wa'); return false; }
+      if(!n){ if(typeof toast==='function') toast('Escribe en la nota qué se corrige','wa'); return false; }
+      const antes = 'US$'+u.usd+' · '+u.fecha+(u.trm?' · TRM '+u.trm:'');
+      Object.assign(u, {usd:v, fecha:f, trm:t, cop: t ? Math.round(v*t) : u.cop, corregido_por:(CU&&CU.nombre)||'', corregido_en:new Date().toISOString()});
+      const totUsd = r.pagos.reduce((a,p)=>a+(Number(p.usd)||0),0), totCop = r.pagos.reduce((a,p)=>a+(Number(p.cop)||0),0);
+      Object.assign(r, {pagado_usd:Math.round(totUsd*100)/100, pagado_cop:totCop, fecha_pago:f, monto_usd:Math.round(totUsd*100)/100, saldo_anticipo_usd:0, saldo_usd:Math.round(((r.fob_total||0)-totUsd)*100)/100, manual_usd:true});
+      r.historial = [...(r.historial||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion:'CORRIGIÓ el pago del anticipo: antes '+antes+' → ahora US$'+v+' · '+f+(t?' · TRM '+t:''), nota:n}];
+      const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {}; A.anticipo = {...(A.anticipo||{}), usd:r.pagado_usd, por:(CU&&CU.nombre)||'', en:new Date().toISOString()};
+      ppLog(num,'Corrigió el valor del anticipo pagado a US$'+r.pagado_usd+' (el saldo se recalculó)');
+      await tesoGuardar(r); await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Pago corregido · saldo recalculado','ok');
+    });
+}
 function ppLog(num, accion){ const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {}; A.hist = [...(A.hist||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion}]; }
-function ppMarcarSaldo(num){
-  const p = (PP.ult||[]).find(x=>x.num===num && x.tipo==='saldo' && x.estado!=='pagado'); if(!p) return;
+function ppMarcarSaldo(num, editar){
+  const A0 = (PP.ajustes||{})[ceNum(num)] || {}; const ant = editar ? (A0.saldo && A0.saldo.pagado) : null; if(editar && !ant) return;
+  const p = editar ? {usd:ant.usd} : (PP.ult||[]).find(x=>x.num===num && x.tipo==='saldo' && x.estado!=='pagado'); if(!p) return;
   { const _rg = typeof tesoRegDe==='function' ? tesoRegDe(p.ocId) : null; if(_rg && _rg.estado!=='pagado'){ if(typeof toast==='function') toast('El anticipo de '+num+' aún no está pagado (solo autorizado). Regístralo con "Registrar pago del anticipo", no como saldo.','wa'); return; } }
-  ppModal(`✅ Saldo pagado · ${reabastEsc(num)}`, `
-    <div class="fg"><label class="fl">Fecha de pago</label><input class="inp" type="date" data-f value="${ppIso(new Date())}"></div>
+  ppModal(`${editar?'✎ Corregir pago del saldo':'✅ Saldo pagado'} · ${reabastEsc(num)}`, `
+    <div class="fg"><label class="fl">Fecha de pago</label><input class="inp" type="date" data-f value="${editar?(ant.fecha||''):ppIso(new Date())}"></div>
     <div class="fg"><label class="fl">Valor pagado US$</label><input class="inp" type="number" step="0.01" data-v value="${Math.round(p.usd*100)/100}"></div>
-    <div class="fg"><label class="fl">Nota</label><input class="inp" data-n placeholder="Opcional"></div>`, async ov=>{
+    <div class="fg"><label class="fl">Nota${editar?' (obligatoria al corregir)':''}</label><input class="inp" data-n value="${editar?reabastEsc(ant.nota||''):''}" placeholder="${editar?'¿Qué se corrige y por qué?':'Opcional'}"></div>`, async ov=>{
       const v = Number(ov.querySelector('[data-v]').value)||0; if(v<=0){ if(typeof toast==='function') toast('Escribe el valor pagado','wa'); return false; }
+      if(editar && !ov.querySelector('[data-n]').value.trim()){ if(typeof toast==='function') toast('Escribe en la nota qué se corrige','wa'); return false; }
       const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {};
       A.saldo = {...(A.saldo||{}), pagado:{fecha: ov.querySelector('[data-f]').value, usd:v, nota: ov.querySelector('[data-n]').value.trim()||null, por:(CU&&CU.nombre)||'', en:new Date().toISOString()}};
-      ppLog(num,'Marcó el saldo como PAGADO · US$'+v+' · fecha de pago '+A.saldo.pagado.fecha+(A.saldo.pagado.nota?' · '+A.saldo.pagado.nota:''));
+      ppLog(num,(editar?'CORRIGIÓ el pago del saldo (antes US$'+ant.usd+' del '+ant.fecha+') → ':'Marcó el saldo como PAGADO · ')+'US$'+v+' · fecha de pago '+A.saldo.pagado.fecha+(A.saldo.pagado.nota?' · '+A.saldo.pagado.nota:''));
       await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Saldo marcado como pagado','ok');
     });
 }
@@ -17459,11 +17486,11 @@ function fcGestionar(i){
   const ac = [btn('🔎 Abrir OC / gestionar tarea','oc','btn-p')];
   if(p.tipo==='anticipo'){
     if(p.estado!=='pagado'){ if(reg && reg.estado==='autorizado' && tesoPuedePagar()) ac.push(btn('💸 Registrar pago del anticipo','pagar','btn-gr')); else if(!reg && tesoPuedeAutorizar()) ac.push(btn('✔ Autorizar anticipo','autorizar','btn-bl')); }
-    else if(reg && reg.estado==='pagado' && tesoPendienteAnticipo(reg)>0.004 && tesoPuedePagar()) ac.push(btn('💸 Registrar pago adicional','pagar','btn-gr'));
+    else { if(reg && reg.estado==='pagado' && tesoPendienteAnticipo(reg)>0.004 && tesoPuedePagar()) ac.push(btn('💸 Registrar pago adicional','pagar','btn-gr')); if(reg && reg.estado==='pagado' && tesoPuedePagar()) ac.push(btn('✎ Corregir pago (valor / fecha / TRM)','corregir')); }
     if(p.estado!=='pagado' && puede) ac.push(btn('✎ Ajustar fecha / valor','ajustar'));
   } else if(puede){
     if(p.estado!=='pagado'){ ac.push(btn('✅ Marcar saldo pagado','saldo','btn-gr'), btn('✎ Ajustar fecha / valor','ajustar'), btn('👍 Se paga esta semana','rev_ok'), btn('⏳ Aún no se puede','rev_no')); if(p.rev) ac.push(btn('✕ Quitar revisión','rev_x')); }
-    else ac.push(btn('↩ Deshacer pago del saldo','deshacer'));
+    else ac.push(btn('✎ Corregir pago del saldo','corregirs'), btn('↩ Deshacer pago del saldo','deshacer'));
   }
   const ov = document.createElement('div'); ov.className = 'ov on'; ov.id = 'fc-modal'; ov.style.zIndex = 900;
   ov.innerHTML = `<div class="mo" style="max-width:660px;">
@@ -17494,7 +17521,7 @@ function fcHistHtml(p){
 }
 function fcAct(i,a){
   const p = (PP.ult||[])[i]; if(!p) return; fcCerrarModal();
-  const m = {oc:()=>reabastAbrirDetalleOC(p.ocId), pagar:()=>tesoMarcarPagado(p.ocId), autorizar:()=>tesoAutorizar([p.ocId]), saldo:()=>ppMarcarSaldo(p.num), deshacer:()=>ppDeshacerSaldo(p.num), ajustar:()=>ppAjustar(p.num,p.tipo), rev_ok:()=>ppRevision(p.num,'ok'), rev_no:()=>ppRevision(p.num,'no'), rev_x:()=>ppRevision(p.num,'')};
+  const m = {oc:()=>reabastAbrirDetalleOC(p.ocId), pagar:()=>tesoMarcarPagado(p.ocId), autorizar:()=>tesoAutorizar([p.ocId]), saldo:()=>ppMarcarSaldo(p.num), deshacer:()=>ppDeshacerSaldo(p.num), corregir:()=>tesoCorregirPago(p.ocId,p.num), corregirs:()=>ppMarcarSaldo(p.num,true), ajustar:()=>ppAjustar(p.num,p.tipo), rev_ok:()=>ppRevision(p.num,'ok'), rev_no:()=>ppRevision(p.num,'no'), rev_x:()=>ppRevision(p.num,'')};
   if(m[a]) m[a]();
 }
 
