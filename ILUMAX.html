@@ -10034,7 +10034,7 @@ async function ocSubirAdjunto(file){
 // ═══ Carga del catálogo de referencias en dos tiempos ═══
 // La tabla referencias_maestro pesa decenas de MB porque guarda las fotos dentro (base64). Pedirla completa con select=*
 // se caía por tiempo y dejaba el catálogo vacío. Ahora: 1) datos sin foto (rápido, aparece ya) y 2) fotos en segundo plano.
-const REF_COLS_LIVIANAS = 'id,referencia,descripcion_en,temperatura_color,fob_usd,tipo_empaque,horas,tipo_tapa,marca_caja,ean13,master_packaging,ean14_master,internal_packaging,ean14_internal,observaciones,actualizado,categoria,referencia_ilumax,cbm,proveedor_predeterminado,nombre_comercial,ficha_tecnica_compra_url,moq,canal,clasificacion_abc_manual,fecha_creacion,fecha_inicio_ventas,quantity,amount,ean14_adicionales,potencia,potencia_cod,linea,linea_cod,categoria_cod,subcategoria,subcategoria_cod,marca_producto,marca_producto_cod,activo';
+const REF_COLS_LIVIANAS = 'id,referencia,descripcion_en,temperatura_color,fob_usd,tipo_empaque,horas,tipo_tapa,marca_caja,ean13,master_packaging,ean14_master,internal_packaging,ean14_internal,observaciones,actualizado,categoria,referencia_ilumax,cbm,proveedor_predeterminado,nombre_comercial,ficha_tecnica_compra_url,moq,canal,clasificacion_abc_manual,fecha_creacion,fecha_inicio_ventas,quantity,amount,ean14_adicionales,potencia,potencia_cod,linea,linea_cod,categoria_cod,subcategoria,subcategoria_cod,marca_producto,marca_producto_cod,activo,tiene_bateria';
 const REF_FOTOS = { cache:{}, cargando:null, timer:null };   // cache[referencia] = {url, act}
 async function reabastCargarRefsLiviano(){
   const rows = await sbReabast.get('referencias_maestro', 'select='+REF_COLS_LIVIANAS+'&order=referencia.asc&limit=10000');
@@ -18595,6 +18595,7 @@ function abrirModalReferencia(r){
   }
   document.getElementById('rf-observaciones').value = r ? (r.observaciones||'') : '';
   document.getElementById('rf-ean14-adicionales').value = r ? (r.ean14_adicionales||'') : '';
+  { const cbB = document.getElementById('rf-tiene-bateria'); if(cbB) cbB.checked = !!(r && r.tiene_bateria); }
   // Foto del producto (si ya tiene una guardada).
   const fotoPrev = document.getElementById('rf-foto-preview');
   const fotoInput = document.getElementById('rf-foto-file');
@@ -18695,6 +18696,7 @@ function reabastInjectModalReferencia(){
     <div style="font-size:10px;color:var(--mu);margin-top:4px;">Sube un archivo, o copia una imagen y pégala con Ctrl+V en cualquier parte de este formulario.</div>
   </div>`;
   const ean14AdicionalesHtml = `<div class="fg"><label class="fl">EAN 14 adicionales (opcional — uno por línea, por si el producto tiene más presentaciones de empaque)</label><textarea class="inp" id="rf-ean14-adicionales" style="min-height:50px;" placeholder="Ej: presentación especial · 37706851026768"></textarea></div>`;
+  const bateriaHtml = `<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="rf-tiene-bateria" style="width:18px;height:18px;"> 🔋 Este producto tiene batería <span class="ayuda">Sale como columna «Battery» (Yes/No) en la orden de compra.</span></label></div>`;
   const observacionesHtml = `<div class="fg"><label class="fl">Observaciones (texto libre para recordatorios al proveedor — importante que el proveedor también las conozca)<span class="ayuda">Se precarga sola en la columna "Observation" cada vez que se pide esta referencia en una OC nueva (editable ahí si esa orden en particular es distinta).</span></label><textarea class="inp campo-clave" id="rf-observaciones"></textarea></div>`;
   const historialHtml = `<div class="fg"><label class="fl">Historial de compras de esta referencia</label><div id="rf-historial"></div></div>`;
   const cbmHtml = `<div class="fg"><label class="fl">CBM (metro cúbico)</label>
@@ -18713,7 +18715,7 @@ function reabastInjectModalReferencia(){
   const filaHtml = fila => {
     if(fila[0]==='__FOTO__') return fotoHtml;
     if(fila[0]==='__EAN14_ADICIONALES__') return ean14AdicionalesHtml;
-    if(fila[0]==='__OBSERVACIONES__') return observacionesHtml;
+    if(fila[0]==='__OBSERVACIONES__') return bateriaHtml + observacionesHtml;
     if(fila[0]==='__HISTORIAL__') return historialHtml;
     if(fila[0]==='__CBM__') return cbmHtml;
     if(fila.length===1 && fila[0]==='rf-referencia'){
@@ -18941,6 +18943,7 @@ async function guardarReferencia(){
   payload.marca_caja = payload.marca_producto;
   payload.observaciones = document.getElementById('rf-observaciones').value.trim() || null;
   payload.ean14_adicionales = document.getElementById('rf-ean14-adicionales').value.trim() || null;
+  payload.tiene_bateria = !!(document.getElementById('rf-tiene-bateria')||{}).checked;
   const fotoPrev = document.getElementById('rf-foto-preview');
   payload.foto_url = (fotoPrev && fotoPrev.dataset.valor) ? fotoPrev.dataset.valor : null;
   if(payload.foto_url && String(payload.foto_url).startsWith('data:')){ try{ payload.foto_url = await reabastFotoAStorage(payload.foto_url, payload.referencia); }catch(e){ console.warn('Foto al almacenamiento falló, se guarda dentro de la base:', e.message); } }
@@ -19737,7 +19740,7 @@ function reabastHtmlDocOC(ocId, variante){
       <th style="${celda}">Temperature Color</th><th style="${celda}">Quantity</th><th style="${celda}">USD</th><th style="${celda}">Amount</th>
       <th style="${celda}">Type Of Packaging</th><th style="${celda}"># Hours</th><th style="${celda}">Cap Type</th><th style="${celda}">Color Card / Box Brand</th>
       <th style="${celda}">EAN 13</th><th style="${celda}">Master Packaging</th><th style="${celda}">EAN 14 Master Packaging</th>
-      <th style="${celda}">Internal Packaging</th><th style="${celda}">EAN 14 Internal Packaging</th>
+      <th style="${celda}">Internal Packaging</th><th style="${celda}">EAN 14 Internal Packaging</th><th style="${celda}">Battery</th>
     </tr></thead>
     <tbody>
       ${filas.map(({it,r,cant,usd,usdTxt,amount})=>`<tr>
@@ -19758,7 +19761,8 @@ function reabastHtmlDocOC(ocId, variante){
         <td style="${celdaC}">${reabastEsc(r.ean14_master||'')}</td>
         <td style="${celdaC}">${reabastEsc(r.internal_packaging||'')}</td>
         <td style="${celdaC}">${reabastEsc(r.ean14_internal||'')}</td>
-      </tr>`).join('') || `<tr><td colspan="17" style="${celdaC}">Sin ítems</td></tr>`}
+        <td style="${celdaC}${r.tiene_bateria?'font-weight:700;':''}">${r.tiene_bateria?'Yes':'No'}</td>
+      </tr>`).join('') || `<tr><td colspan="18" style="${celdaC}">Sin ítems</td></tr>`}
     </tbody>
   </table>
   <table style="width:56%;margin-left:auto;margin-bottom:14px;">
@@ -19911,13 +19915,13 @@ async function reabastExcelOCBlob(ocId, variante){
   ws.getCell('A8').font = {bold:true, size:9};
   ws.mergeCells('A8:H8');
 
-  const encabezados = ['Observation','Reference','Description','Temperature Color','Quantity','USD','Amount','Type Of Packaging','# Hours','Cap Type','Color Card / Box Brand','EAN 13','Master Packaging','EAN 14 Master Packaging','Internal Packaging','EAN 14 Internal Packaging'];
+  const encabezados = ['Observation','Reference','Description','Temperature Color','Quantity','USD','Amount','Type Of Packaging','# Hours','Cap Type','Color Card / Box Brand','EAN 13','Master Packaging','EAN 14 Master Packaging','Internal Packaging','EAN 14 Internal Packaging','Battery'];
   const filaTh = 10;
   encabezados.forEach((h,i)=>{ const c = ws.getCell(filaTh, i+1); c.value = h; c.style = estiloTh; });
 
   filas.forEach(({it,r,cant,usd,amount}, i)=>{
     const fr = filaTh+1+i;
-    const vals = [it.observacion||r.observaciones||'', it.referencia, r.descripcion_en||it.descripcion||'', r.temperatura_color||'', cant, usd, amount, r.tipo_empaque||'', r.horas||'', r.tipo_tapa||'', r.marca_caja||'', r.ean13||'', r.master_packaging||'', r.ean14_master||'', r.internal_packaging||'', r.ean14_internal||''];
+    const vals = [it.observacion||r.observaciones||'', it.referencia, r.descripcion_en||it.descripcion||'', r.temperatura_color||'', cant, usd, amount, r.tipo_empaque||'', r.horas||'', r.tipo_tapa||'', r.marca_caja||'', r.ean13||'', r.master_packaging||'', r.ean14_master||'', r.internal_packaging||'', r.ean14_internal||'', r.tiene_bateria?'Yes':'No'];
     vals.forEach((v,i2)=>{
       const c = ws.getCell(fr, i2+1); c.value = v;
       const esNum = i2===4 || i2===5 || i2===6;
@@ -19926,11 +19930,11 @@ async function reabastExcelOCBlob(ocId, variante){
       if(i%2===1) c.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FFF8F8F8'}};
     });
   });
-  if(!filas.length){ ws.getCell(filaTh+1,1).value = 'Sin ítems'; ws.mergeCells(filaTh+1,1,filaTh+1,16); }
+  if(!filas.length){ ws.getCell(filaTh+1,1).value = 'Sin ítems'; ws.mergeCells(filaTh+1,1,filaTh+1,17); }
 
   ws.columns = [
     {width:14},{width:14},{width:30},{width:14},{width:10},{width:10},{width:12},{width:16},
-    {width:9},{width:12},{width:16},{width:14},{width:14},{width:16},{width:14},{width:16}
+    {width:9},{width:12},{width:16},{width:14},{width:14},{width:16},{width:14},{width:16},{width:10}
   ];
 
   // ═══ Hoja 2: Totales y condiciones ═══
