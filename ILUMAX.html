@@ -14476,6 +14476,12 @@ function tesoMarcarPagado(ocId){
   $('[data-usd]').oninput = ()=>{ const v = Number($('[data-usd]').value)||0; const trm = Number($('[data-trm]').value)||r.trm; $('[data-cop]').value = v && trm ? Math.round(v*trm) : ''; calc(); };
   $('[data-trm]').oninput = ()=>{ const v = Number($('[data-usd]').value)||0; const trm = Number($('[data-trm]').value)||r.trm; $('[data-cop]').value = v && trm ? Math.round(v*trm) : ''; };
   calc();
+  // TRM por fecha: si ya se digitó una TRM para esa fecha de pago, se rellena sola (y recalcula el COP)
+  let _trmF = {};
+  const _aplicaTrm = ()=>{ const t = _trmF[$('[data-fecha]').value]; if(t && !$('[data-trm]').dataset.manual){ $('[data-trm]').value = t; $('[data-trm]').oninput(); } };
+  $('[data-trm]').addEventListener('input', e=>{ if(e.isTrusted) $('[data-trm]').dataset.manual = '1'; });
+  $('[data-fecha]').addEventListener('change', ()=>{ delete $('[data-trm]').dataset.manual; $('[data-trm]').value = ''; $('[data-trm]').oninput(); _aplicaTrm(); });
+  sb.get('configuracion','clave=eq.teso_trm_fecha').then(rw=>{ try{ const v = rw&&rw[0]?rw[0].valor:null; _trmF = (typeof v==='string'?JSON.parse(v):v)||{}; }catch(e){} _aplicaTrm(); }).catch(()=>{});
   $('[data-ok]').onclick = async ()=>{
     const f = $('[data-file]').files[0]; const usd = Number($('[data-usd]').value)||0, cop = Number($('[data-cop]').value)||0, fecha = $('[data-fecha]').value;
     const nota = $('[data-nota]').value.trim();
@@ -14495,6 +14501,7 @@ function tesoMarcarPagado(ocId){
         saldo_anticipo_usd: Math.round(((Number(r.monto_usd)||0)-totUsd)*100)/100});
       r.historial = [...(r.historial||[]), {t:new Date().toISOString(), quien, accion:(yaPagado?'Pago adicional del ANTICIPO ':'Marcó el ANTICIPO como PAGADO ')+tesoUsd(usd)+' · fecha de pago '+fecha+(cop?' · COP '+Math.round(cop).toLocaleString('es-CO'):''), nota}];
       await tesoGuardar(r); ov.remove();
+      try{ const _t = Number($('[data-trm]').value)||0; if(_t>0){ _trmF[fecha] = _t; await sb.upsert('configuracion',{clave:'teso_trm_fecha', valor:JSON.stringify(_trmF), tipo:'json'},'clave'); } }catch(e){}
       const e = tesoEtapaAnticipo(ocId);
       if(e && e.estado==='en_curso'){
         const totalCop = (REABAST.ocItems[ocId]||[]).reduce((a,it)=>a+(it.costo_unitario_cop||0)*(Number(it.cantidad)||0),0);
@@ -16467,7 +16474,7 @@ function ppConstruir(){
       const pendTeso = pagadoTeso ? tesoPendienteAnticipo(reg) : 0;
       if(pagadoPanel || pagadoTeso || (etAnt && etAnt.estado==='completada' && !(reg && reg.estado==='autorizado'))){
         const fp = (reg && (reg.fecha_pago||reg.pagado_en)) || fecPanel || (etAnt && etAnt.fecha_fin);
-        pagos.push({...base, tipo:'anticipo', usd: pagadoTeso ? tesoPagadoUsd(reg) : antUsd, esp: antUsd, fecha: fp ? new Date(fp) : null, estado:'pagado', origen:'Pagado'});
+        pagos.push({...base, tipo:'anticipo', usd: pagadoTeso ? tesoPagadoUsd(reg) : antUsd, esp: antUsd, fecha: fp ? new Date(typeof fp==='string' && /^\d{4}-\d\d-\d\d$/.test(fp) ? fp+'T12:00:00' : fp) : null, estado:'pagado', origen:'Pagado'});
         if(pendTeso > 0.004) pagos.push({...base, tipo:'anticipo', usd:pendTeso, fecha:new Date(), estado:'pendiente', origen:'Saldo pendiente del anticipo (Tesorería)'});
       } else {
         let fecha = null, origen = '';
