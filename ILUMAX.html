@@ -1874,7 +1874,11 @@ async function apiSupabase(action, data) {
 
   // ── PRESUPUESTOS ──
   if(action === 'getPresupuestos') {
-    const rows = await sb.get('presupuestos', 'order=anio.desc,mes.desc&limit=1000');
+    let rows = [];
+    for(let off=0; off<20000; off+=1000){   // páginas de 1000: el servidor corta en 1000 y se perdían filas al crecer
+      const pg = await sb.get('presupuestos', 'order=anio.desc,mes.desc,id.asc&limit=1000&offset='+off) || [];
+      rows = rows.concat(pg); if(pg.length<1000) break;
+    }
     const presups = rows.map(sbToPres);
     savePresupuestos(presups); // Sync local
     return { ok: true, presupuestos: presups };
@@ -5789,12 +5793,12 @@ function presQaSubCambio(txt){
 }
 function presQaLista(q){
   var res = document.getElementById('pres-qa-res'); if(!res) return;
-  var t = presNorm(q).trim();
+  var t = presNorm(q).replace(/[^a-z0-9ñ]+/g,' ').trim();
   if(!t){ res.style.display='none'; res.innerHTML=''; return; }
   var pal = t.split(/\s+/), arr = [];
   (SUBS_ILUMAX||[]).forEach(function(s){
     var cat = (CATS_ILUMAX||[]).find(function(c){ return s.codigo.indexOf(c.codigo)===0; });
-    var nom = presNorm(s.nombre), txt = presNorm(s.nombre+' '+(s.grupo6||'')+' '+(cat?cat.nombre:'')+' '+s.codigo);
+    var nom = presNorm(s.nombre), txt = presNorm(s.nombre+' '+(s.grupo6||'')+' '+(cat?cat.codigo+' '+cat.nombre:'')+' '+s.codigo).replace(/[^a-z0-9ñ]+/g,' ');
     if(!pal.every(function(w){ return txt.indexOf(w)>=0; })) return;
     arr.push({s:s, cat:cat, r: nom.indexOf(t)===0?0 : nom.indexOf(t)>=0?1 : pal.every(function(w){return nom.indexOf(w)>=0;})?2:3});
   });
@@ -5828,7 +5832,7 @@ function presQaHtml(){
   return '<div style="background:var(--bld);border:1px solid var(--b1);border-radius:10px;padding:10px 12px;margin-bottom:10px;">'
     + '<div style="font-size:10px;font-weight:800;color:var(--bl);margin-bottom:6px;">⚡ AGREGAR FILA RÁPIDA — escribe para buscar la subcategoría</div>'
     + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">'
-    + '<div style="position:relative;flex:2 1 260px;"><input id="pres-qa-sub" autocomplete="off" placeholder="🔍 Subcategoría (ej: vehiculo, celular, arriendo)..." value="'+String(PRES_QA.subTxt).replace(/"/g,'&quot;')+'" oninput="presQaSubCambio(this.value)" onfocus="if(!PRES_QA.subCod)presQaLista(this.value)" onblur="setTimeout(function(){var r=document.getElementById(\'pres-qa-res\');if(r)r.style.display=\'none\';},200)" '+inp.replace('style="','style="width:100%;box-sizing:border-box;')+'>'
+    + '<div style="position:relative;flex:2 1 260px;"><input id="pres-qa-sub" autocomplete="off" placeholder="🔍 Subcategoría (ej: vehiculo, celular, arriendo)..." value="'+String(PRES_QA.subTxt).replace(/"/g,'&quot;')+'" oninput="presQaSubCambio(this.value)" onfocus="if(PRES_QA.subCod){this.select();}else presQaLista(this.value)" onblur="setTimeout(function(){var r=document.getElementById(\'pres-qa-res\');if(r)r.style.display=\'none\';},200)" '+inp.replace('style="','style="width:100%;box-sizing:border-box;')+'>'
     + '<div id="pres-qa-res" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:50;background:var(--w);border:1px solid var(--b1);border-radius:8px;max-height:260px;overflow:auto;box-shadow:0 6px 18px rgba(0,0,0,.15);"></div></div>'
     + '<select id="pres-qa-cc" onchange="PRES_QA.cc=this.value" '+inp.replace('style="','style="flex:1 1 180px;')+'><option value="">-- Centro de costo --</option>'
     + presCcOpciones(lista, PRES_QA.subCod, PRES_QA.cc).replace('<option value="">-- Centro de costo --</option>','')+'</select>'
@@ -5931,7 +5935,7 @@ function presTblRender(){
   var th = function(col,txt,al){ var on=PRES_TBL.col===col; return '<th onclick="presTblOrden(\''+col+'\')" style="cursor:pointer;user-select:none;padding:7px 6px;font-size:10px;font-weight:800;color:'+(on?'var(--bl)':'var(--mu)')+';text-align:'+(al||'right')+';white-space:nowrap;position:sticky;top:0;background:var(--w);border-bottom:2px solid var(--b1);">'+txt+(on?(PRES_TBL.dir>0?' ▲':' ▼'):' ↕')+'</th>'; };
   var thf = function(t){ return '<th style="position:sticky;top:0;background:var(--w);border-bottom:2px solid var(--b1);font-size:10px;color:var(--mu);padding:7px 6px;">'+t+'</th>'; };
   var tot = {}, totAll = 0;
-  var body = filas.map(function(f){
+  var body = filas.filter(function(f){ return !(PRES_TBL.solo && f.vacia); }).map(function(f){
     var kk = encodeURIComponent(f.k), cells = '';
     for(var m=1;m<=12;m++){
       var p=f.p[m], ed=presTblEditable(p), v=f.m[m]||0;
@@ -5966,8 +5970,8 @@ function presTblRender(){
     + '<button class="btn btn-bl btn-sm" onclick="presQaToggle()">⚡ Agregar fila rápida</button><button class="btn btn-p btn-sm" onclick="abrirModalPres()">+ Agregar</button></div></div>'
     + presQaHtml()
     + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">'
-    + '<input id="pres-tbl-q" class="inp" placeholder="🔍 Buscar categoría, subcategoría o ítem..." value="'+String(PRES_TBL.q).replace(/"/g,'&quot;')+'" oninput="PRES_TBL.q=this.value;presTblFiltrar()" style="flex:1 1 220px;font-size:12px;">'
-    + '<label style="display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer;"><input type="checkbox" id="pres-tbl-solo" '+(PRES_TBL.solo?'checked ':'')+'onchange="PRES_TBL.solo=this.checked;presTblFiltrar()"> Solo con valores</label>'
+    + '<input id="pres-tbl-q" class="inp" placeholder="🔍 Buscar categoría, subcategoría o ítem..." value="'+String(PRES_TBL.q).replace(/"/g,'&quot;')+'" oninput="PRES_TBL.q=this.value;clearTimeout(PRES_TBL._t);PRES_TBL._t=setTimeout(presTblFiltrar,120)" style="flex:1 1 220px;font-size:12px;">'
+    + '<label style="display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer;"><input type="checkbox" id="pres-tbl-solo" '+(PRES_TBL.solo?'checked ':'')+'onchange="PRES_TBL.solo=this.checked;presTblRender()"> Solo con valores</label>'
     + '<span id="pres-tbl-n" style="font-size:10px;color:var(--mu);"></span></div>'
     + '<div style="overflow:auto;max-height:560px;border:1px solid var(--b1);border-radius:10px;"><style>#pres-tabla-anio td,#pres-tabla-anio th{overflow-wrap:anywhere}#pres-tabla-anio input[type=number]::-webkit-inner-spin-button{display:none}#pres-tabla-anio input[type=number]{-moz-appearance:textfield}</style><table style="border-collapse:collapse;width:100%;min-width:1000px;table-layout:fixed;"><colgroup><col style="width:11%"><col style="width:11%"><col style="width:7%">'+nm.map(function(){return '<col style="width:5%">';}).join('')+'<col style="width:7%"><col style="width:6%"></colgroup>'
     + '<thead><tr>'+th('sub','Subcategoría','left')+th('desc','Ítem / descripción','left')+th('cc','Centro de costo','left')
@@ -5991,7 +5995,12 @@ function presTblNotaSet(el){
   var b = document.getElementById('pres-tbl-guardar');
   if(b){ b.style.display='inline-flex'; b.textContent = '💾 Guardar cambios ('+presTblPendN()+')'; }
 }
-function presTblAjustarNotas(){ document.querySelectorAll('#pres-tabla-anio .pres-nota').forEach(function(t){ t.style.height='auto'; t.style.height=Math.max(t.scrollHeight,18)+'px'; }); }
+function presTblAjustarNotas(){
+  // solo las notas con texto y en dos pasadas (leer todo, luego escribir): evita forzar un layout por cada casilla
+  var con = Array.prototype.filter.call(document.querySelectorAll('#pres-tabla-anio .pres-nota'), function(t){ return t.value; });
+  var hs = con.map(function(t){ return t.scrollHeight; });
+  con.forEach(function(t,i){ t.style.height = Math.max(hs[i],18)+'px'; });
+}
 function presTblEditar(inp){
   var k = decodeURIComponent(inp.dataset.k), mes = parseInt(inp.dataset.mes,10);
   PRES_TBL_PEND[k+'@@'+mes] = Math.max(0, parseFloat(inp.value)||0);
@@ -6522,11 +6531,18 @@ function pedirAjusteArea(area, mes, anio) {
 
 
 // ── ACCIONES ─────────────────────────────────────────────
+// Un registro es "mío" si lo creó el usuario logueado (por correo o por nombre)
+function presEsMio(p){
+  var em = String(CU&&CU.email||'').trim().toLowerCase(), nm = String(CU&&CU.nombre||'').trim().toLowerCase();
+  var pe = String(p.autorEmail||'').trim().toLowerCase(), pn = String(p.autor||'').trim().toLowerCase();
+  return (!!em && pe===em) || (!!nm && pn===nm) || (!!em && pn===em);
+}
 function enviarAContabilidad() {
   var presups = getPresupuestos();
-  var cambiados = [];
+  var cambiados = [], ajenos = 0;
   presups.forEach(function(p) {
     if(p.area===CU.area && (!p.estado || p.estado==='borrador' || p.estado==='devuelto')) {
+      if(!presEsMio(p)){ ajenos++; return; }   // solo se envía lo del usuario logueado
       p.estado = 'en_revision';
       p.tsEnvio = new Date().toISOString();
       cambiados.push(p);
@@ -6534,7 +6550,7 @@ function enviarAContabilidad() {
   });
   savePresupuestos(presups);
   sincronizarPresupuestosLote(cambiados);
-  toast(cambiados.length + ' concepto(s) enviados a revisión de contabilidad ✅','ok');
+  toast(cambiados.length ? cambiados.length + ' concepto(s) tuyos enviados a revisión de contabilidad ✅'+(ajenos?' · '+ajenos+' de otros usuarios del área NO se enviaron':'') : (ajenos ? 'No tienes conceptos propios por enviar ('+ajenos+' son de otros usuarios del área)' : 'No hay conceptos por enviar'), cambiados.length?'ok':'wa');
   renderPres();
 }
 
@@ -7245,12 +7261,12 @@ function presNorm(t){ return String(t||'').toLowerCase().normalize('NFD').replac
 function presBuscarSub(q) {
   var res = document.getElementById('pres-buscar-res'), wrap = document.getElementById('pres-cat-wrap');
   if(!res || !wrap) return;
-  var t = presNorm(q).trim();
+  var t = presNorm(q).replace(/[^a-z0-9ñ]+/g,' ').trim();
   if(!t){ res.style.display='none'; res.innerHTML=''; wrap.style.display=''; return; }
   var palabras = t.split(/\s+/);
   var hall = SUBS_ILUMAX.filter(function(s){
     var cat = CATS_ILUMAX.find(function(c){ return s.codigo.startsWith(c.codigo); });
-    var txt = presNorm(s.nombre+' '+(s.grupo6||'')+' '+(cat?cat.nombre:'')+' '+s.codigo);
+    var txt = presNorm(s.nombre+' '+(s.grupo6||'')+' '+(cat?cat.codigo+' '+cat.nombre:'')+' '+s.codigo).replace(/[^a-z0-9ñ]+/g,' ');
     return palabras.every(function(w){ return txt.indexOf(w)>=0; });
   });
   wrap.style.display = 'none'; res.style.display = '';
