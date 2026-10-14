@@ -5452,9 +5452,8 @@ const CENTROS_COSTO_ILUMAX = [
 // coincide con los 2 primeros dígitos de la cuenta (51/52/74); si no hay coincidencia
 // (o no hay categoría activa), devuelve la lista completa como respaldo.
 function centrosCostoParaCategoria(catCodigo) {
-  const grupo = catCodigo ? parseInt(String(catCodigo).substring(0,2), 10) : null;
-  const filtrados = grupo ? CENTROS_COSTO_ILUMAX.filter(c => c.grupo === grupo) : [];
-  return filtrados.length ? filtrados : CENTROS_COSTO_ILUMAX;
+  // Todos los centros de costo disponibles en todas las categorías/subcategorías/cuentas (ya no se filtran por grupo)
+  return CENTROS_COSTO_ILUMAX;
 }
 
 async function cargarCatsSubsPermisos() {
@@ -16664,7 +16663,23 @@ function ppPintarInterno(el){
     return `<div style="font-size:10.5px;line-height:1.5;white-space:nowrap;"><b>Total factura ${usd(t)}</b><br><b>Anticipo:</b> ${aTxt}<br><b>Saldo:</b> ${S.length ? S.map(one).join('<br>') : '<span class="arte-mu">—</span>'}${dif ? '<br>'+difHtml(dif) : ''}</div>`;
   };
   const puede = ppPuedeEditar();
+  fcIndexar();
+  const accFila = p => {
+    const n = reabastEsc(p.num), b = (t,js,tit,cls) => `<button class="btn ${cls||'btn-g'} btn-sm" style="padding:2px 6px;font-size:10.5px;" onclick="event.stopPropagation();${js}" title="${tit||''}">${t}</button>`;
+    const reg = typeof tesoRegDe==='function' ? tesoRegDe(p.ocId) : null, o = [];
+    if(p.estado!=='pagado'){
+      if(puede) o.push(b('✎ Editar',`ppAjustar('${n}','${p.tipo}')`,'Cambiar fecha o valor (el saldo se recalcula)'));
+      if(p.tipo==='anticipo'){ if(reg && reg.estado==='autorizado' && tesoPuedePagar()) o.push(b('💸 Pagado',`tesoMarcarPagado('${p.ocId}')`,'Registrar el pago del anticipo','btn-gr')); }
+      else if(puede) o.push(b('✅ Pagado',`ppMarcarSaldo('${n}')`,'Marcar el saldo como pagado','btn-gr'));
+    } else {
+      if(p.tipo==='anticipo' && reg && reg.estado==='pagado' && tesoPuedePagar()) o.push(b('✎ Corregir',`tesoCorregirPago('${p.ocId}','${n}')`,'Corregir valor, fecha o TRM del pago'));
+      if(p.tipo==='saldo' && puede) o.push(b('✎ Corregir',`ppMarcarSaldo('${n}',true)`,'Corregir el pago del saldo'), b('↩︎',`ppDeshacerSaldo('${n}')`,'Deshacer'));
+    }
+    o.push(b('🕘',`fcGestionar(${p._i})`,'Historial y ficha del pago'));
+    return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start;">${o.join('')}</div>`;
+  };
   const filaPago = p => `<tr style="${p.estado==='pagado'?'opacity:.6;':''}">
+      <td>${accFila(p)}</td>
       <td style="white-space:nowrap;font-weight:700;">${p.fecha?segDM(p.fecha):'—'}</td>
       <td><a href="javascript:void 0" style="font-weight:800;color:var(--tx);" onclick="reabastAbrirDetalleOC('${p.ocId}')">${reabastEsc(p.num)}</a></td>
       <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${reabastEsc(p.prov)}">${reabastEsc(p.prov)}</td>
@@ -16676,8 +16691,8 @@ function ppPintarInterno(el){
       <td style="font-size:10.5px;white-space:nowrap;">${p.tipo==='saldo' && p.emb ? `<span style="color:${p.emb.cls==='ok'?'var(--gr)':p.emb.cls==='med'?'#b45309':'var(--mu)'};font-weight:700;">${reabastEsc(p.emb.txt)}</span>` : ''}</td>
       <td style="white-space:nowrap;">${ppHtmlRevision(p, puede)}</td>
       <td>${filaEstado(p)}</td>
-      <td style="white-space:nowrap;">${puede && p.estado!=='pagado' ? `<button class="btn btn-g btn-sm" onclick="ppAjustar('${reabastEsc(p.num)}','${p.tipo}')" title="Cambiar fecha o valor programado">✎</button>${p.tipo==='saldo'?` <button class="btn btn-g btn-sm" onclick="ppReglaOcAbrir('${reabastEsc(p.num)}')" title="Regla de pago del saldo de esta OC: a crédito (después del ETD) o anticipado (antes del ETD)">⚙</button>`:''}${p.tipo==='saldo'?` <button class="btn btn-g btn-sm" onclick="ppMarcarSaldo('${reabastEsc(p.num)}')">✅ Pagado</button>`:''}` : ''}${puede && p.estado==='pagado' && p.tipo==='saldo' ? `<button class="btn btn-g btn-sm" onclick="ppDeshacerSaldo('${reabastEsc(p.num)}')" title="Deshacer">↩︎</button>`:''}</td></tr>`;
-  const cab = `<thead><tr><th>Fecha</th><th>OC</th><th>Proveedor</th><th>Tipo</th><th>Resumen de la OC</th><th style="text-align:right;">US$</th><th style="text-align:right;">≈ COP</th><th>De dónde sale la fecha</th><th>Embarque</th><th>Revisión semanal</th><th>Estado</th><th></th></tr></thead>`;
+      <td style="white-space:nowrap;">${puede && p.estado!=='pagado' && p.tipo==='saldo' ? `<button class="btn btn-g btn-sm" onclick="ppReglaOcAbrir('${reabastEsc(p.num)}')" title="Regla de pago del saldo de esta OC: a crédito (después del ETD) o anticipado (antes del ETD)">⚙</button>`:''}</td></tr>`;
+  const cab = `<thead><tr><th>Acciones</th><th>Fecha</th><th>OC</th><th>Proveedor</th><th>Tipo</th><th>Resumen de la OC</th><th style="text-align:right;">US$</th><th style="text-align:right;">≈ COP</th><th>De dónde sale la fecha</th><th>Embarque</th><th>Revisión semanal</th><th>Estado</th><th></th></tr></thead>`;
   const bloqueMes = (k, arr, abierto) => {
     const semanas = {}; arr.forEach(p=>{ const l = ppIso(ppLunes(p.fecha)); (semanas[l] = semanas[l] || []).push(p); });
     const a = sum(arr.filter(p=>p.tipo==='anticipo')), s = sum(arr.filter(p=>p.tipo==='saldo'));
@@ -16703,7 +16718,7 @@ function ppPintarInterno(el){
       const pg = a => a.filter(x=>x.estado==='pagado'), pd = a => a.filter(x=>x.estado!=='pagado');
       const lastF = a => a.map(x=>x.fecha).filter(Boolean).sort((x,y)=>y-x)[0] || null;
       const pagado = sum(pg(l)), porPagar = sum(pd(l));
-      return {dif:difOC(l), num:n, prov:l[0].prov, ocId:l[0].ocId, tot:l[0].tot||0, antUsd:sum(A), antPag:sum(pg(A)), antF:lastF(pg(A)) || lastF(A), antOk:pg(A).length>0 && !pd(A).length,
+      return {ids:l.map(x=>({i:x._i,t:x.tipo})), dif:difOC(l), num:n, prov:l[0].prov, ocId:l[0].ocId, tot:l[0].tot||0, antUsd:sum(A), antPag:sum(pg(A)), antF:lastF(pg(A)) || lastF(A), antOk:pg(A).length>0 && !pd(A).length,
         salUsd:sum(S), salPag:sum(pg(S)), salF:lastF(pg(S)) || lastF(S), salOk:pg(S).length>0 && !pd(S).length, pagado, porPagar,
         est: porPagar<=0.01 && pagado>0 ? 'completa' : pagado>0 ? 'parcial' : 'sin'}; })
     .filter(r=>(!f.resEst || r.est===f.resEst) && enRango(r.antF,aD,aH) && enRango(r.salF,sD,sH));
@@ -16725,11 +16740,11 @@ function ppPintarInterno(el){
       <div><label>Fecha del saldo</label><div class="oct-rng"><input class="inp" type="date" value="${RS.salD||''}" onchange="ppResSet('salD',this.value)"><input class="inp" type="date" value="${RS.salH||''}" onchange="ppResSet('salH',this.value)"></div></div>
       <div style="display:flex;align-items:flex-end;"><button class="btn btn-g btn-sm" onclick="ppResLimpiar()">✖ Limpiar filtros</button></div>
     </div>
-    <div class="oct-wrap" style="max-height:62vh;"><table class="oct-t"><thead><tr>${rth('num','OC')}${rth('prov','Proveedor')}${rth('tot','Total factura US$',1)}${rth('antUsd','Anticipo US$',1)}${rth('antF','Fecha anticipo')}${rth('salUsd','Saldo US$',1)}${rth('salF','Fecha saldo')}${rth('pagado','Pagado US$',1)}${rth('porPagar','Por pagar US$',1)}${rth('dif','A favor / Debe US$',1)}${rth('est','Estado')}</tr></thead><tbody>
-      ${ocsRes.map(r=>`<tr onclick="reabastAbrirDetalleOC('${r.ocId}')"><td class="oct-f">${reabastEsc(r.num)}</td><td>${reabastEsc(r.prov)}</td><td class="num"><b>${usd(r.tot)}</b></td>
+    <div class="oct-wrap" style="max-height:62vh;"><table class="oct-t"><thead><tr>${rth('num','OC')}<th>Gestionar</th>${rth('prov','Proveedor')}${rth('tot','Total factura US$',1)}${rth('antUsd','Anticipo US$',1)}${rth('antF','Fecha anticipo')}${rth('salUsd','Saldo US$',1)}${rth('salF','Fecha saldo')}${rth('pagado','Pagado US$',1)}${rth('porPagar','Por pagar US$',1)}${rth('dif','A favor / Debe US$',1)}${rth('est','Estado')}</tr></thead><tbody>
+      ${ocsRes.map(r=>`<tr onclick="reabastAbrirDetalleOC('${r.ocId}')"><td class="oct-f">${reabastEsc(r.num)}</td><td style="white-space:nowrap;">${r.ids.map(x=>`<button class="btn btn-g btn-sm" style="padding:2px 6px;font-size:10.5px;" onclick="event.stopPropagation();fcGestionar(${x.i})" title="Editar / corregir / historial">✎ ${x.t==='anticipo'?'Anticipo':'Saldo'}</button>`).join(' ')}</td><td>${reabastEsc(r.prov)}</td><td class="num"><b>${usd(r.tot)}</b></td>
         <td class="num">${r.antUsd?usd(r.antUsd):'—'}</td><td>${r.antF?(r.antOk?'✅ ':'⏳ ')+fx(r.antF):'—'}</td>
         <td class="num">${r.salUsd?usd(r.salUsd):'—'}</td><td>${r.salF?(r.salOk?'✅ ':'⏳ ')+fx(r.salF):'—'}</td>
-        <td class="num" style="color:var(--gr);font-weight:700;">${usd(r.pagado)}</td><td class="num">${r.porPagar>0.01?usd(r.porPagar):'—'}</td><td class="num">${r.dif?difHtml(r.dif):'—'}</td><td>${estRes[r.est]}</td></tr>`).join('') || '<tr><td colspan="11" style="padding:14px;text-align:center;color:var(--mu);">Ninguna OC con esos filtros</td></tr>'}
+        <td class="num" style="color:var(--gr);font-weight:700;">${usd(r.pagado)}</td><td class="num">${r.porPagar>0.01?usd(r.porPagar):'—'}</td><td class="num">${r.dif?difHtml(r.dif):'—'}</td><td>${estRes[r.est]}</td></tr>`).join('') || '<tr><td colspan="12" style="padding:14px;text-align:center;color:var(--mu);">Ninguna OC con esos filtros</td></tr>'}
     </tbody></table></div>
     <div class="arte-mu" style="font-size:10.5px;margin-top:6px;">✅ = pagado en esa fecha · ⏳ = programado. El total de la factura es el valor de la compra (Base compras / OC); anticipo y saldo salen de la programación de pagos.</div>
   </div>`;
