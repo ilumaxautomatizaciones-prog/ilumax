@@ -1242,6 +1242,8 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
       <div id="pres-header"></div>
       <!-- Alertas -->
       <div id="pres-alertas" style="margin-bottom:12px;"></div>
+      <!-- Buscador general (todas las vistas del presupuesto) -->
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;"><input class="inp" id="pres-q-global" placeholder="🔍 Buscar en esta vista (área, subcategoría, ítem, centro de costo, autor…)" oninput="presBuscarGlobal(this.value)" autocomplete="off" style="flex:1;font-size:12px;margin:0;"><button class="btn btn-g btn-sm" onclick="var i=document.getElementById('pres-q-global');i.value='';presBuscarGlobal('')">✖</button><span id="pres-q-n" style="font-size:10px;color:var(--mu);white-space:nowrap;"></span></div>
       <!-- Tabs internos -->
       <div class="rrhh-tabs">
         <div class="rrhh-tab on" onclick="setPresTab('mi-area',this)">📊 Mi Área</div>
@@ -5576,6 +5578,37 @@ function renderPres() {
   renderPresMiArea(mes, anio);
 }
 
+// ── Buscador general del presupuesto: filtra lo que se ve en Mi Área / Histórico / Todas las áreas / Revisión ──
+var PRES_Q = '';
+function presBuscarGlobal(q){ PRES_Q = presNorm(q||''); presAplicarBusqueda(); }
+function presAplicarBusqueda(){
+  var ids = ['pres-mi-area','pres-historico','pres-todas','pres-revdet'], total = 0, vis = 0;
+  ids.forEach(function(id){
+    var c = document.getElementById(id); if(!c) return;
+    var tabla = document.getElementById('pres-tabla-anio');   // esa tabla ya tiene su propio buscador
+    var cands = Array.prototype.slice.call(c.querySelectorAll('tr, details, .area-card, [style*="border:1px solid var(--b1)"]')).filter(function(e){
+      if(tabla && (tabla===e || tabla.contains(e) || e.contains(tabla))) return false;
+      if(e.tagName==='TR' && (e.closest('thead') || e.closest('tfoot') || e.querySelector('th'))) return false;
+      return true; });
+    var hijos = function(e){ return cands.some(function(o){ return o!==e && e.contains(o); }); };
+    var hojas = cands.filter(function(e){ return !hijos(e); }), grupos = cands.filter(function(e){ return hijos(e); });
+    hojas.forEach(function(e){ var ac = e.closest('.area-card'), hd = ac && ac.querySelector('.area-card-head'); var ok = !PRES_Q || presNorm(e.textContent||'').indexOf(PRES_Q)>=0 || (hd && presNorm(hd.textContent||'').indexOf(PRES_Q)>=0); e.style.display = ok ? '' : 'none'; if(PRES_Q){ total++; if(ok) vis++; } });
+    // contenedores: se ocultan si todos sus ítems quedaron ocultos (de adentro hacia afuera)
+    grupos.sort(function(a,b){ return (b.querySelectorAll('*').length) - (a.querySelectorAll('*').length); }).reverse().forEach(function(g){
+      var hs = cands.filter(function(o){ return o!==g && g.contains(o) && !hijos(o); });
+      var alguno = hs.some(function(o){ return o.style.display!=='none'; });
+      var ownMatch = PRES_Q && presNorm((g.querySelector(':scope > .area-card-head, :scope > summary')||{textContent:''}).textContent).indexOf(PRES_Q)>=0;
+      g.style.display = (!PRES_Q || alguno || ownMatch) ? '' : 'none';
+    });
+  });
+  var n = document.getElementById('pres-q-n'); if(n) n.textContent = PRES_Q ? (vis+' de '+total+' coinciden') : '';
+}
+(function(){
+  var t = null, f = function(){ if(!PRES_Q) return; clearTimeout(t); t = setTimeout(presAplicarBusqueda, 60); };
+  var init = function(){ ['pres-mi-area','pres-historico','pres-todas','pres-revdet'].forEach(function(id){ var c = document.getElementById(id); if(c && !c._qObs){ c._qObs = new MutationObserver(f); c._qObs.observe(c,{childList:true,subtree:true}); } }); };
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init); else init();
+  setTimeout(init, 1500);
+})();
 function setPresTab(tab, el) {
   document.querySelectorAll('.rrhh-tab').forEach(t => t.classList.remove('on'));
   document.querySelectorAll('.rrhh-view').forEach(v => v.classList.remove('on'));
