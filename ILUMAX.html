@@ -14493,7 +14493,7 @@ function tesoMarcarPagado(ocId){
       const totUsd = r.pagos.reduce((a,p)=>a+(Number(p.usd)||0),0), totCop = r.pagos.reduce((a,p)=>a+(Number(p.cop)||0),0);
       Object.assign(r, {estado:'pagado', pagado_por:quien, pagado_en:new Date().toISOString(), fecha_pago:fecha, pagado_usd:Math.round(totUsd*100)/100, pagado_cop:totCop, comprobante_url:url, nota_pago:nota,
         saldo_anticipo_usd: Math.round(((Number(r.monto_usd)||0)-totUsd)*100)/100});
-      r.historial = [...(r.historial||[]), {t:new Date().toISOString(), quien, accion:(yaPagado?'pago adicional ':'pago ')+tesoUsd(usd), nota}];
+      r.historial = [...(r.historial||[]), {t:new Date().toISOString(), quien, accion:(yaPagado?'Pago adicional del ANTICIPO ':'Marcó el ANTICIPO como PAGADO ')+tesoUsd(usd)+' · fecha de pago '+fecha+(cop?' · COP '+Math.round(cop).toLocaleString('es-CO'):''), nota}];
       await tesoGuardar(r); ov.remove();
       const e = tesoEtapaAnticipo(ocId);
       if(e && e.estado==='en_curso'){
@@ -16461,10 +16461,11 @@ function ppConstruir(){
     if(!sinAnt && antUsd>0.004){
       const reg = typeof tesoRegDe==='function' ? tesoRegDe(o.id) : null;
       const fecPanel = maxFecha('fec_pago anticipo');
-      const pagadoPanel = filas.some(f=>pciNorm(f['PAGO SI/NO'])==='si') || !!fecPanel;
+      // Si hay autorización de Tesorería, solo cuenta como pagado cuando Tesorería lo registra (no por el Excel Base compras)
+      const pagadoPanel = !(reg && reg.estado==='autorizado') && (filas.some(f=>pciNorm(f['PAGO SI/NO'])==='si') || !!fecPanel);
       const pagadoTeso = reg && reg.estado==='pagado';
       const pendTeso = pagadoTeso ? tesoPendienteAnticipo(reg) : 0;
-      if(pagadoPanel || pagadoTeso || (etAnt && etAnt.estado==='completada')){
+      if(pagadoPanel || pagadoTeso || (etAnt && etAnt.estado==='completada' && !(reg && reg.estado==='autorizado'))){
         const fp = (reg && (reg.fecha_pago||reg.pagado_en)) || fecPanel || (etAnt && etAnt.fecha_fin);
         pagos.push({...base, tipo:'anticipo', usd: pagadoTeso ? tesoPagadoUsd(reg) : antUsd, esp: antUsd, fecha: fp ? new Date(fp) : null, estado:'pagado', origen:'Pagado'});
         if(pendTeso > 0.004) pagos.push({...base, tipo:'anticipo', usd:pendTeso, fecha:new Date(), estado:'pendiente', origen:'Saldo pendiente del anticipo (Tesorería)'});
@@ -16801,6 +16802,7 @@ function ppAjustar(num, tipo){
     });
   setTimeout(()=>{ const b = document.querySelector('[data-quitar]'); if(b) b.onclick = async()=>{ const A = PP.ajustes[ceNum(num)]||{}; const pag = A[tipo] && A[tipo].pagado; A[tipo] = pag ? {pagado:pag} : undefined; await ppGuardarAjustes(); b.closest('.ov').remove(); ppPintar(); }; }, 0);
 }
+function ppLog(num, accion){ const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {}; A.hist = [...(A.hist||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion}]; }
 function ppMarcarSaldo(num){
   const p = (PP.ult||[]).find(x=>x.num===num && x.tipo==='saldo' && x.estado!=='pagado'); if(!p) return;
   { const _rg = typeof tesoRegDe==='function' ? tesoRegDe(p.ocId) : null; if(_rg && _rg.estado!=='pagado'){ if(typeof toast==='function') toast('El anticipo de '+num+' aún no está pagado (solo autorizado). Regístralo con "Registrar pago del anticipo", no como saldo.','wa'); return; } }
@@ -16811,12 +16813,13 @@ function ppMarcarSaldo(num){
       const v = Number(ov.querySelector('[data-v]').value)||0; if(v<=0){ if(typeof toast==='function') toast('Escribe el valor pagado','wa'); return false; }
       const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {};
       A.saldo = {...(A.saldo||{}), pagado:{fecha: ov.querySelector('[data-f]').value, usd:v, nota: ov.querySelector('[data-n]').value.trim()||null, por:(CU&&CU.nombre)||'', en:new Date().toISOString()}};
+      ppLog(num,'Marcó el saldo como PAGADO · US$'+v+' · fecha de pago '+A.saldo.pagado.fecha+(A.saldo.pagado.nota?' · '+A.saldo.pagado.nota:''));
       await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Saldo marcado como pagado','ok');
     });
 }
 async function ppDeshacerSaldo(num){
   if(!confirm('¿Quitar el pago registrado del saldo de '+num+'?')) return;
-  const A = PP.ajustes[ceNum(num)] || {}; if(A.saldo){ delete A.saldo.pagado; }
+  const A = PP.ajustes[ceNum(num)] || {}; if(A.saldo){ ppLog(num,'Deshizo el pago del saldo'+(A.saldo.pagado?' (era US$'+A.saldo.pagado.usd+' del '+A.saldo.pagado.fecha+', marcado por '+(A.saldo.pagado.por||'?')+')':'')); delete A.saldo.pagado; }
   await ppGuardarAjustes(); ppPintar();
 }
 
@@ -17465,10 +17468,22 @@ function fcGestionar(i){
       ${dato('Estado de la OC', fcE(p.ocEstado||''))}${dato('Tesorería (anticipo)', reg ? fcE(reg.estado)+(reg.autorizado_por?' · autorizó '+fcE(reg.autorizado_por):'') : '')}
       ${dato('Revisión semanal', p.rev ? (p.rev.estado==='ok'?'Se paga':'Aún no')+' (semana '+fcE(p.rev.semana)+')'+(p.rev.nota?' · '+fcE(p.rev.nota):'') : '')}${dato('Nota', fcE(p.nota||''))}
     </div>
+    ${fcHistHtml(p)}
     ${hermanos.length?`<div class="arte-mu" style="margin:12px 0 4px;font-weight:700;">Otros pagos de esta OC</div><div class="tw"><table><tbody>${hermanos.map(x=>`<tr class="fc-tr" onclick="fcGestionar(${x._i})"><td>${x.fecha?ppIso(x.fecha):'sin fecha'}</td><td>${x.tipo==='anticipo'?'Anticipo':'Saldo'}</td><td class="fc-r">${fcUsd(x.usd)}</td><td>${fcBdg(fcEst(x))}</td></tr>`).join('')}</tbody></table></div>`:''}</div>
     <div class="mf" style="flex-wrap:wrap;justify-content:flex-start;gap:6px;">${ac.join('')}</div></div>`;
   ov.addEventListener('click', e=>{ if(e.target===ov) fcCerrarModal(); });
   document.body.appendChild(ov);
+}
+function fcHistHtml(p){
+  const ev = []; const reg = typeof tesoRegDe==='function' ? tesoRegDe(p.ocId) : null; const A = (PP.ajustes||{})[ceNum(p.num)] || {};
+  ((reg&&reg.historial)||[]).forEach(h=>ev.push({t:h.t, q:h.quien, a:'Anticipo · '+h.accion, n:h.nota}));
+  if(A.saldo && A.saldo.pagado){ const g = A.saldo.pagado; ev.push({t:g.en, q:g.por, a:'Saldo marcado pagado (vigente) · US$'+g.usd+' · fecha '+g.fecha, n:g.nota}); }
+  (A.hist||[]).forEach(h=>ev.push({t:h.t, q:h.quien, a:'Saldo · '+h.accion}));
+  try{ const fl = (typeof pciGrupos==='function' ? pciGrupos() : {}); const g = Object.entries(fl).find(([k])=>ceNum(k)===ceNum(p.num)); const fs = g ? g[1] : [];
+    if(fs.some(f=>pciNorm(f['PAGO SI/NO'])==='si' || f['fec_pago anticipo'])) ev.push({t:null, q:'Excel Base compras', a:'Trae «PAGO SI/NO» o «fec_pago anticipo» (informativo: '+(reg&&reg.estado==='autorizado'?'NO se toma como pagado porque Tesorería aún no lo registra':'se usa como respaldo')+')'}); }catch(e){}
+  ev.sort((x,y)=>(x.t?+new Date(x.t):0)-(y.t?+new Date(y.t):0));
+  const f = t => t ? new Date(t).toLocaleString('es-CO',{timeZone:'America/Bogota',day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+  return `<div class="arte-mu" style="margin:12px 0 4px;font-weight:700;">🕘 Historial de esta OC (quién marcó qué y cuándo)</div>`+(ev.length?`<div class="tw"><table><tbody>${ev.map(e=>`<tr><td style="white-space:nowrap;font-size:11px;">${fcE(f(e.t))}</td><td style="font-weight:600;">${fcE(e.q||'—')}</td><td>${fcE(e.a)}${e.n?' <span style="color:var(--mu);">· '+fcE(e.n)+'</span>':''}</td></tr>`).join('')}</tbody></table></div>`:'<div style="font-size:12px;color:var(--mu);">Sin movimientos registrados.</div>');
 }
 function fcAct(i,a){
   const p = (PP.ult||[])[i]; if(!p) return; fcCerrarModal();
