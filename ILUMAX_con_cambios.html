@@ -5841,6 +5841,22 @@ function presTblIdNuevo(presups, sub, mes, anio){
   while(presups.some(function(x){ return x.id===id; })){ n++; id = base+'-'+n; }
   return id;
 }
+// Devolver a borrador (editable) los meses de la tabla que ya se enviaron / están en revisión
+function presTblNBloq(sub){ var anio = presTblAnio(); return getPresupuestos().filter(function(x){ return x.area===CU.area && x.anio===anio && (!sub || x.subCodigo===sub) && !presTblEditable(x); }).length; }
+function presTblDevolverTodo(sub, volver){
+  var anio = presTblAnio(), admin = CU && CU.rol==='admin', presups = getPresupuestos(), cambiados = [], aprob = 0;
+  presups.forEach(function(p){
+    if(p.area!==CU.area || p.anio!==anio || (sub && p.subCodigo!==sub) || presTblEditable(p)) return;
+    if((p.estado==='aprobado' || p.estado==='con_cambios') && !admin){ aprob++; return; }
+    p.estado = 'devuelto'; p.obsContabilidad = 'Devuelto por '+(CU&&CU.nombre||'')+' para poder editar'; p.tsDevuelto = new Date().toISOString(); cambiados.push(p);
+  });
+  if(!cambiados.length){ toast(aprob ? 'Los meses aprobados solo los puede devolver un administrador' : 'No hay meses bloqueados','wa'); return; }
+  if(!confirm('Se devolverán a borrador '+cambiados.length+' registro(s) '+(sub?'de esta subcategoría ':'')+'de '+anio+' para poder editarlos. Después hay que volver a enviarlos a revisión. ¿Continuar?')) return;
+  savePresupuestos(presups); sincronizarPresupuestosLote(cambiados);
+  toast('🔓 '+cambiados.length+' registro(s) devueltos a borrador'+(aprob?' · '+aprob+' aprobados no se tocaron (solo admin)':''),'ok');
+  presTblRender(); if(typeof renderPres==='function') renderPres();
+  if(typeof volver==='function') volver();
+}
 function presTblBloq(sub, mes){ var anio = presTblAnio(); return getPresupuestos().some(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===sub && !presTblEditable(x); }); }
 function presTblItemsDe(p){ return (Array.isArray(p.items) && p.items.length) ? p.items : [{ cc:p.centroCosto||'', desc:p.obs||'', valor:p.monto }]; }
 function presTblClave(sub, cc, desc){ return sub+'||'+siesaResolverCC(cc||'')+'||'+String(desc||'').trim().toLowerCase(); }
@@ -5913,6 +5929,7 @@ function presTblRender(){
     + '<div style="font-size:13px;font-weight:800;">📅 Presupuesto '+anio+' — '+CU.area+' <span style="font-weight:400;font-size:10px;color:var(--mu);">· una fila por ítem · clic en un encabezado para ordenar · edita las casillas y pulsa 💾 Guardar cambios · deja 0 para borrar un mes</span></div>'
     + '<div style="display:flex;gap:6px;align-items:center;"><button class="btn btn-g btn-sm" onclick="presTblCambiarAnio(-1)">‹</button><b style="font-size:13px;">'+anio+'</b><button class="btn btn-g btn-sm" onclick="presTblCambiarAnio(1)">›</button><button id="pres-tbl-guardar" class="btn btn-bl btn-sm" style="display:'+(presTblPendN()?'inline-flex':'none')+';" onclick="presTblGuardar()">💾 Guardar cambios ('+presTblPendN()+')</button>'
     + (presTblPendN()?'<button class="btn btn-g btn-sm" onclick="presTblDescartar()">Descartar</button>':'')
+    + (presTblNBloq()?'<button class="btn btn-g btn-sm" title="Devuelve a borrador todos los meses ya enviados para poder editarlos" onclick="presTblDevolverTodo()">🔓 Devolver todo a borrador</button>':'')
     + '<button class="btn btn-bl btn-sm" onclick="presQaToggle()">⚡ Agregar fila rápida</button><button class="btn btn-p btn-sm" onclick="abrirModalPres()">+ Agregar</button></div></div>'
     + presQaHtml()
     + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">'
@@ -6041,10 +6058,12 @@ function presTblEditarItem(kk){
     +'<div class="fg"><label class="fl">Ítem / descripción</label><input class="inp" data-desc value="'+esc(f.desc)+'"></div></div>'
     +'<div class="fl" style="margin:6px 0 4px;">Valor y nota por mes (🔒 = mes ya en revisión, no editable · 0 o vacío = sin valor)</div>'
     +'<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;">'+meses+'</div>'
+    +(presTblNBloq(f.sub)?'<div style="margin-top:8px;"><button class="btn btn-g btn-sm" data-desb>🔓 Devolver los meses bloqueados a borrador para editarlos</button></div>':'')
     +'<div data-err style="font-size:11px;color:var(--rd);min-height:14px;margin-top:6px;"></div></div>'
     +'<div class="mf"><button class="btn btn-g" data-x>Cancelar</button><button class="btn btn-p" data-ok>💾 Guardar esta fila</button></div></div>';
   document.body.appendChild(ov);
   var $ = function(q){ return ov.querySelector(q); }; ov.querySelectorAll('[data-x]').forEach(function(b){ b.onclick=function(){ ov.remove(); }; });
+  if($('[data-desb]')) $('[data-desb]').onclick = function(){ presTblDevolverTodo(f.sub, function(){ ov.remove(); presTblEditarItem(kk); }); };
   $('[data-ok]').onclick = async function(){
     var sub2 = $('[data-sub]').value, cc2 = $('[data-cc]').value, desc2 = $('[data-desc]').value.trim();
     if(!sub2) return $('[data-err]').textContent = 'Elige la subcategoría';

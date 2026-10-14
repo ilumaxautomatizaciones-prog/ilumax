@@ -5829,6 +5829,18 @@ function presQaAgregar(){
 function presTblOrden(col){ if(PRES_TBL.col===col) PRES_TBL.dir=-PRES_TBL.dir; else { PRES_TBL.col=col; PRES_TBL.dir=(col==='cat'||col==='sub'||col==='cc'||col==='desc')?1:-1; } presTblRender(); }
 function presTblEditable(p){ return !p || !p.estado || p.estado==='borrador' || p.estado==='devuelto'; }
 // ¿La subcategoría ya tiene ese mes en revisión/aprobado? (aunque el ítem sea nuevo, el mes completo está bloqueado)
+// Varios ítems por subcategoría y mes: si el documento del mes ya está en revisión, el ítem NUEVO va en otro documento (borrador) de ese mismo mes
+function presTblDocPara(presups, sub, mes, k){
+  var anio = presTblAnio();
+  var docs = presups.filter(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===sub; });
+  if(k){ var c = docs.find(function(d){ return presTblItemsDe(d).some(function(it){ return presTblClave(d.subCodigo, it.cc, it.desc)===k; }); }); if(c) return {doc:c}; }
+  var ed = docs.find(presTblEditable); return {doc: ed||null};
+}
+function presTblIdNuevo(presups, sub, mes, anio){
+  var base = 'PRES-'+presAreaSlug(CU.area)+'-'+sub+'-'+anio+'-'+mes, id = base, n = 1;
+  while(presups.some(function(x){ return x.id===id; })){ n++; id = base+'-'+n; }
+  return id;
+}
 function presTblBloq(sub, mes){ var anio = presTblAnio(); return getPresupuestos().some(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===sub && !presTblEditable(x); }); }
 function presTblItemsDe(p){ return (Array.isArray(p.items) && p.items.length) ? p.items : [{ cc:p.centroCosto||'', desc:p.obs||'', valor:p.monto }]; }
 function presTblClave(sub, cc, desc){ return sub+'||'+siesaResolverCC(cc||'')+'||'+String(desc||'').trim().toLowerCase(); }
@@ -5873,7 +5885,7 @@ function presTblRender(){
   var body = filas.map(function(f){
     var kk = encodeURIComponent(f.k), cells = '';
     for(var m=1;m<=12;m++){
-      var p=f.p[m], ed=presTblEditable(p) && !(!p && presTblBloq(f.sub,m)), v=f.m[m]||0;
+      var p=f.p[m], ed=presTblEditable(p), v=f.m[m]||0;
       tot[m]=(tot[m]||0)+v;
       var pend = PRES_TBL_PEND[f.k+'@@'+m];
       if(pend!==undefined) v = pend;
@@ -5949,12 +5961,12 @@ async function presTblGuardar(){
     var k = pk.split('@@')[0], mes = parseInt(pk.split('@@')[1],10), f = PRES_TBL_ROWS[k], v = PRES_TBL_PEND[pk]!==undefined ? PRES_TBL_PEND[pk] : (f ? (f.m[mes]||0) : 0);
     if(!f || f.vacia) return;
     if(!(v>0) && PRES_TBL_NOTA[pk]) avisos.push('Descripción sin valor en mes '+mes+' no se guardó');
-    var p = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===mes && x.subCodigo===f.sub; });
+    var p = presTblDocPara(presups, f.sub, mes, k).doc;
     if(p && !presTblEditable(p)){ var _t = 'Mes '+mes+' ('+f.subNombre+') ya está en revisión'; if(avisos.indexOf(_t)<0) avisos.push(_t); return; }
     if(!p){
       if(!(v>0)) return;
       var ref = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===f.sub; });
-      p = { id:'PRES-'+presAreaSlug(CU.area)+'-'+f.sub+'-'+anio+'-'+mes, area:CU.area, catCodigo:ref?ref.catCodigo:(f.catCod||f.sub.substring(0,4)), catNombre:ref?ref.catNombre:f.cat,
+      p = { id:presTblIdNuevo(presups, f.sub, mes, anio), area:CU.area, catCodigo:ref?ref.catCodigo:(f.catCod||f.sub.substring(0,4)), catNombre:ref?ref.catNombre:f.cat,
         subCodigo:f.sub, subNombre:f.subNombre, mes:mes, anio:anio, monto:0, obs:f.desc, items:[], centroCosto:f.ccCod,
         estado:'borrador', autor:CU.nombre, autorEmail:CU.email, fecha:new Date().toLocaleDateString('es-CO'), ts:new Date().toISOString() };
       presups.push(p);
@@ -6018,7 +6030,7 @@ function presTblEditarItem(kk){
   var ccs = (typeof CENTROS_COSTO_ILUMAX!=='undefined' ? CENTROS_COSTO_ILUMAX : []);
   var optSub = subs.map(function(s){ return '<option value="'+esc(s.codigo)+'"'+(s.codigo===f.sub?' selected':'')+'>'+esc(s.codigo)+' — '+esc(s.nombre)+'</option>'; }).join('');
   var optCc = '<option value="">-- Centro de costo --</option>'+ccs.map(function(c){ return '<option value="'+esc(c.codigo)+'"'+(c.codigo===f.ccCod?' selected':'')+'>'+esc(c.codigo)+' — '+esc(c.nombre)+'</option>'; }).join('');
-  var meses = nm.map(function(n,i){ var m=i+1, p=f.p[m], bloq = (p && !presTblEditable(p)) || (!p && presTblBloq(f.sub,m));
+  var meses = nm.map(function(n,i){ var m=i+1, p=f.p[m], bloq = p && !presTblEditable(p);
     return '<div style="border:1px solid var(--b1);border-radius:8px;padding:6px;'+(bloq?'opacity:.55;':'')+'"><div style="font-size:10px;font-weight:800;margin-bottom:3px;">'+n+(bloq?' 🔒':'')+'</div>'
       +'<input class="inp" type="number" min="0" data-m="'+m+'" value="'+(f.m[m]||'')+'" '+(bloq?'disabled ':'')+'style="margin:0;font-size:12px;">'
       +'<input class="inp" data-n="'+m+'" value="'+esc((f.n&&f.n[m])||'')+'" placeholder="nota" '+(bloq?'disabled ':'')+'style="margin:3px 0 0;font-size:10px;"></div>'; }).join('');
@@ -6041,7 +6053,7 @@ function presTblEditarItem(kk){
     var subO = subs.find(function(s){ return s.codigo===sub2; }) || {codigo:sub2, nombre:sub2};
     var catO = (typeof CATS_ILUMAX!=='undefined' ? CATS_ILUMAX : []).find(function(c){ return sub2.indexOf(c.codigo)===0; }) || {codigo:sub2.substring(0,4), nombre:''};
     for(var m=1;m<=12;m++){
-      var pOld = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===m && x.subCodigo===f.sub; });
+      var pOld = presTblDocPara(presups, f.sub, m, k).doc;
       var inp = $('[data-m="'+m+'"]'); if(!inp || inp.disabled) continue;
       var v = Math.max(0, parseFloat(inp.value)||0), nota = $('[data-n="'+m+'"]').value.trim();
       // quitar el ítem del documento anterior
@@ -6051,11 +6063,11 @@ function presTblEditarItem(kk){
         if(ix>=0){ its.splice(ix,1); pOld.items = its; presTblRecalc(pOld); tocados[pOld.id] = pOld; hubo = true; }
       }
       if(!(v>0)) continue;
-      var pNew = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.mes===m && x.subCodigo===sub2; });
+      var pNew = presTblDocPara(presups, sub2, m, null).doc;
       if(pNew && !presTblEditable(pNew)){ avisos.push(nm[m-1]+': el mes destino ya está en revisión'); continue; }
       if(!pNew){
         var ref = presups.find(function(x){ return x.area===CU.area && x.anio===anio && x.subCodigo===sub2; });
-        pNew = { id:'PRES-'+presAreaSlug(CU.area)+'-'+sub2+'-'+anio+'-'+m, area:CU.area, catCodigo:ref?ref.catCodigo:catO.codigo, catNombre:ref?ref.catNombre:catO.nombre,
+        pNew = { id:presTblIdNuevo(presups, sub2, m, anio), area:CU.area, catCodigo:ref?ref.catCodigo:catO.codigo, catNombre:ref?ref.catNombre:catO.nombre,
           subCodigo:sub2, subNombre:subO.nombre, mes:m, anio:anio, monto:0, obs:desc2, items:[], centroCosto:cc2,
           estado:'borrador', autor:CU.nombre, autorEmail:CU.email, fecha:new Date().toLocaleDateString('es-CO'), ts:new Date().toISOString() };
         presups.push(pNew);
