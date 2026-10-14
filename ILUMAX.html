@@ -8865,11 +8865,28 @@ async function confirmarReset(email) {
 // ══════════════════════════════════════════════════════════
 // ══ Excel AVANZADO de presupuestos de gastos (ExcelJS: fórmulas vivas, selector de año, mapa de calor, filtros) ══
 async function pxeExcel(){
-  try{ await ppCargarExcelJS(); pxeExcelDinamico(); }
+  try{
+    await ppCargarExcelJS();
+    var _ps = getPresupuestos(), _vt = (typeof paGestor==='function') ? paGestor() : (CU && CU.rol==='admin');
+    if(!_vt) _ps = _ps.filter(function(p){ return p.area === (CU && CU.area); });
+    var _an = Array.from(new Set(_ps.map(function(p){ return parseInt(p.anio,10)||0; }))).filter(Boolean).sort();
+    if(!_an.length){ toast('No tienes presupuestos para exportar','wa'); return; }
+    var _def = _an.indexOf(2027)>=0 ? 2027 : _an[_an.length-1];
+    var ov = document.createElement('div'); ov.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+    ov.innerHTML='<div style="background:var(--w,#fff);border-radius:14px;padding:20px 22px;min-width:290px;box-shadow:0 10px 40px rgba(0,0,0,.3);">'
+      +'<div style="font-weight:800;font-size:15px;margin-bottom:4px;">📥 Descargar presupuesto de gastos</div>'
+      +'<div style="font-size:11px;color:var(--mu,#64748b);margin-bottom:12px;">El Excel trae solo el año elegido, con hojas separadas para borradores y enviados.</div>'
+      +'<label style="font-size:12px;font-weight:700;">Año</label> <select id="pxe-anio" style="padding:7px 10px;border:1px solid var(--b1,#cbd5e1);border-radius:8px;font-size:13px;margin-left:6px;">'+_an.map(function(a){ return '<option value="'+a+'"'+(a===_def?' selected':'')+'>'+a+'</option>'; }).join('')+'</select>'
+      +'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;"><button id="pxe-no" class="btn btn-sm">Cancelar</button><button id="pxe-ok" class="btn btn-bl btn-sm">Descargar</button></div></div>';
+    document.body.appendChild(ov);
+    ov.querySelector('#pxe-no').onclick=function(){ ov.remove(); };
+    ov.querySelector('#pxe-ok').onclick=function(){ var a=parseInt(ov.querySelector('#pxe-anio').value,10); ov.remove(); try{ pxeExcelDinamico(a); }catch(e){ console.error(e); toast('Error al generar el Excel','er'); } };
+  }
   catch(e){ console.error(e); if(typeof toast==='function') toast('No cargó el generador avanzado; descargo la versión básica','wa'); exportarExcel('presupuestos_basico'); }
 }
-function pxeExcelDinamico(){
+function pxeExcelDinamico(anioSel){
   var pres = getPresupuestos();
+  if(anioSel) pres = pres.filter(function(p){ return (parseInt(p.anio,10)||0)===anioSel; });
   var verTodo = (typeof paGestor==='function') ? paGestor() : (CU && CU.rol==='admin');
   if(!verTodo) pres = pres.filter(function(p){ return p.area === (CU && CU.area); });
   if(!pres.length){ toast('No tienes presupuestos para exportar','wa'); return; }
@@ -8892,7 +8909,7 @@ function pxeExcelDinamico(){
   });
   det.sort(function(a,b){ return a.anio-b.anio || a.area.localeCompare(b.area) || a.cod.localeCompare(b.cod) || a.mes-b.mes; });
   var anios = Array.from(new Set(det.map(function(d){ return d.anio; }))).filter(Boolean).sort();
-  var anioDef = anios.indexOf(2027)>=0 ? 2027 : anios[anios.length-1];
+  var anioDef = anioSel || (anios.indexOf(2027)>=0 ? 2027 : anios[anios.length-1]);
   var areas = Array.from(new Set(det.map(function(d){ return d.area; }))).sort();
   var cats = Array.from(new Set(det.map(function(d){ return d.cat; }))).sort();
   var estados = Array.from(new Set(det.map(function(d){ return d.est; }))).sort();
@@ -8915,7 +8932,7 @@ function pxeExcelDinamico(){
   var N=det.length, FD=N+1000, D=function(L){ return "Detalle!$"+L+"$2:$"+L+"$"+FD; };
   var listaAnios='"'+anios.join(',')+'"';
 
-  var wsR=hoja('Resumen','FFF5C518'), wsE=hoja('Estado de resultados','FF0EA5E9'), wsM=hoja('Matriz anual'), wsD=hoja('Detalle'), wsA=hoja('Aprobaciones','FF16A34A');
+  var wsR=hoja('Resumen','FFF5C518'), wsE=hoja('Estado de resultados','FF0EA5E9'), wsM=hoja('Matriz anual'), wsD=hoja('Detalle'), wsA=hoja('Aprobaciones','FF16A34A'), wsB=hoja('Borradores','FFF59E0B'), wsS=hoja('Enviados','FF16A34A');
 
   // ══ DETALLE (tabla Excel con filtros y cebra) ══
   titulo(wsD,'Detalle de presupuestos — una fila por ítem y mes');
@@ -9051,6 +9068,25 @@ function pxeExcelDinamico(){
   apRows.forEach(function(p,i){ var r=4+i; wsA.getCell(r,10).value={formula:'IF(I'+r+'="","",I'+r+'-H'+r+')'}; [8,9,10].forEach(function(c){ wsA.getCell(r,c).numFmt='#,##0;[Red]-#,##0'; }); });
   anchos(wsA,[28,18,24,28,11,7,11,14,14,14,13,32,28,28,20,20]);
   wsA.views=[{state:'frozen',ySplit:3,showGridLines:false}];
+
+  // ══ BORRADORES / ENVIADOS (hojas separadas por situación) ══
+  var esBorr=function(p){ var e=String(p.estado||'borrador').toLowerCase(); return e==='borrador'||e===''; };
+  var sit=function(ws,nm,tit,lista,tema){
+    titulo(ws,tit+' — '+anioDef,lista.length+' presupuestos (área · subcategoría · mes). Total propuesto al pie.');
+    var cs=['Área','Categoría','Subcategoría','Código','Mes','Propuesto','Aprobado','Estado','Autor','Última actualización','Justificación'];
+    var rows=lista.slice().sort(function(a,b){ return String(a.area).localeCompare(b.area)||String(a.subCodigo).localeCompare(b.subCodigo)||(a.mes-b.mes); }).map(function(p){
+      var f=p.actualizado||p.enviadoEn||p.creado||''; var fd=f?new Date(f):null;
+      return [p.area||'',p.catNombre||catDe(p.subCodigo),p.subNombre||'',String(p.subCodigo||''),NML[p.mes]||p.mes,parseFloat(p.monto)||0,(p.montoAprobado!==undefined&&p.montoAprobado!==null&&p.montoAprobado!=='')?parseFloat(p.montoAprobado)||0:'',p.estado||'borrador',p.autor||'',(fd&&!isNaN(fd))?fd.toLocaleDateString('es-CO'):'',p.obs||''];
+    });
+    if(!rows.length){ put(ws,4,1,'Sin presupuestos en esta situación para '+anioDef+'.').font={italic:true,color:{argb:'FF64748B'}}; return; }
+    ws.addTable({name:nm,ref:'A4',headerRow:true,totalsRow:false,style:{theme:tema,showRowStripes:true},columns:cs.map(function(c){ return {name:c,filterButton:true}; }),rows:rows});
+    rows.forEach(function(_,i){ [6,7].forEach(function(c){ ws.getCell(5+i,c).numFmt='#,##0'; }); });
+    var rt2=5+rows.length+1; put(ws,rt2,1,'TOTAL propuesto'); put(ws,rt2,6,{formula:'SUBTOTAL(109,F5:F'+(4+rows.length)+')'},COP0); tot(ws,rt2,1,11);
+    anchos(ws,[18,24,28,11,11,14,14,13,22,16,40]);
+    ws.views=[{state:'frozen',ySplit:4,showGridLines:false}];
+  };
+  sit(wsB,'TblBorrador','Borradores (aún sin enviar)',pres.filter(esBorr),'TableStyleMedium3');
+  sit(wsS,'TblEnviados','Enviados (en revisión, gerencia o aprobados)',pres.filter(function(p){ return !esBorr(p); }),'TableStyleMedium7');
 
   wb.xlsx.writeBuffer().then(function(buf){
     var nombre='ILUMAX_Presupuesto_gastos_'+new Date().toISOString().slice(0,10)+'.xlsx';
@@ -27790,6 +27826,7 @@ function pvRenderTabla() {
   thead.innerHTML = `<tr>
     <th style="background:#0f172a;color:#fff;padding:6px 8px;text-align:left;font-size:9px;font-weight:700;position:sticky;top:0;left:0;z-index:20;min-width:62px;">SKU</th>
     <th style="background:#0f172a;color:#fff;padding:6px 8px;text-align:left;font-size:9px;font-weight:700;position:sticky;top:0;left:62px;z-index:20;min-width:130px;">Descripción</th>
+    <th style="background:#0f172a;color:#94a3b8;padding:6px 6px;text-align:left;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;">Creó /<br>Editó</th>
     <th style="background:#0f172a;color:#94a3b8;padding:6px 6px;text-align:right;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;">Precio<br>Lista</th>
     <th style="background:#0f172a;color:#94a3b8;padding:6px 6px;text-align:right;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;">Stock<br>Bodega</th>
     <th style="background:#0f172a;color:#94a3b8;padding:6px 6px;text-align:right;font-size:9px;font-weight:700;position:sticky;top:0;z-index:10;white-space:nowrap;">Meses<br>Stock</th>
@@ -27892,6 +27929,7 @@ function pvRenderTabla() {
         onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
         <td style="padding:6px 8px;font-family:monospace;font-size:10px;color:var(--mu);white-space:nowrap;position:sticky;left:0;background:inherit;z-index:5;">${esLibre?'💰 sin SKU':r.referencia}</td>
         <td style="padding:6px 8px;font-size:11px;font-weight:600;max-width:130px;position:sticky;left:62px;background:inherit;z-index:5;" title="${r.descripcion||''}">${(r.descripcion||'').substring(0,35)}${pvModo()==='cliente'?(pvCliDe(r.referencia)?`<div style="font-size:9px;font-weight:700;color:#7c3aed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="Cliente">👤 ${r._cli || pvCliTxt(r.referencia)}</div>`:`<div style="font-size:9px;color:#d97706;">⚠ sin cliente</div>`):''}</td>
+        <td style="padding:4px 6px;font-size:9px;line-height:1.3;white-space:nowrap;color:var(--mu);" title="${String(r.autor_email||'').replace(/"/g,'')}">${r.autor?`<b style="color:${(CU&&r.autor_email&&r.autor_email===CU.email)?'#1d4ed8':'#92400e'};">👤 ${String(r.autor).split(' ').slice(0,2).join(' ').replace(/</g,'&lt;')}</b><br>${r.actualizado?new Date(r.actualizado).toLocaleDateString('es-CO',{day:'numeric',month:'short',year:'2-digit'}):''}`:'—'}</td>
         <td style="padding:4px 6px;text-align:right;white-space:nowrap;" title="${esLibre?'Precio por unidad de esta línea. Déjalo en 1 para escribir el monto en $ directo cada mes, o pon un precio real y cada mes escribe la cantidad (se multiplica cantidad × precio).':(precio ? '' : 'Sin precio registrado para este SKU en la lista actual (puede existir en otras listas)')}">
           ${esLibre
             ? `<input type="number" min="0" step="1" value="${precio||1}" data-ref="${r.referencia}"
@@ -27939,7 +27977,7 @@ function pvRenderTabla() {
   }).join('');
 
   tfoot.innerHTML = `<tr style="border-top:2px solid var(--b2);">
-    <td colspan="5" style="padding:8px 10px;font-size:11px;font-weight:800;color:#0f172a;background:#f8fafc;">TOTAL GENERAL</td>
+    <td colspan="6" style="padding:8px 10px;font-size:11px;font-weight:800;color:#0f172a;background:#f8fafc;">TOTAL GENERAL</td>
     ${mesesTotales}
     <td id="pv-totund-global" style="padding:8px;text-align:right;font-size:11px;font-weight:800;color:#0f172a;background:#f8fafc;">${totalUndGlobal.toLocaleString('es-CO')}</td>
     <td id="pv-totcop-global" style="padding:8px;text-align:right;font-size:11px;font-weight:800;color:var(--bl);background:#f8fafc;white-space:nowrap;">$${Math.round(totalCOPGlobal).toLocaleString('es-CO')}</td>
@@ -28133,8 +28171,10 @@ async function pvGuardar() {
         u01:r.u01||0, u02:r.u02||0, u03:r.u03||0, u04:r.u04||0,
         u05:r.u05||0, u06:r.u06||0, u07:r.u07||0, u08:r.u08||0,
         u09:r.u09||0, u10:r.u10||0, u11:r.u11||0, u12:r.u12||0,
+        autor: (CU&&(CU.nombre||CU.email))||null, autor_email: (CU&&CU.email)||null,
         actualizado: new Date().toISOString()
       };
+      r.autor = payload.autor; r.autor_email = payload.autor_email; r.actualizado = payload.actualizado;
       if(r.id) {
         await sb.patch('presupuesto_detalle', `id=eq.${r.id}`, payload);
       } else {
@@ -28629,7 +28669,7 @@ async function pvAdmImportar() {
       let nuevos=0, act=0, sinPrecio=0; const ins=[];
       for(const f of filas){
         const inf = info[f.sku]; if(!inf && !f.precioArchivo) sinPrecio++;
-        const payload = { presupuesto_id:pid, referencia:f.sku, categoria:inf?.categoria||'Sin categoría', descripcion:inf?.descripcion||f.descArchivo||f.sku, precio_lista:parseFloat(inf?.precio)||f.precioArchivo||0, actualizado:new Date().toISOString() };
+        const payload = { presupuesto_id:pid, referencia:f.sku, categoria:inf?.categoria||'Sin categoría', descripcion:inf?.descripcion||f.descArchivo||f.sku, precio_lista:parseFloat(inf?.precio)||f.precioArchivo||0, autor:(CU&&(CU.nombre||CU.email))||null, autor_email:(CU&&CU.email)||null, actualizado:new Date().toISOString() };
         f.u.forEach((v,i)=>payload['u'+String(i+1).padStart(2,'0')]=v);
         const kf = claveNum(f.sku)!==null ? 'n'+claveNum(f.sku) : f.sku;
         const idEx = idPorRef[f.sku] || idPorRef[kf];
