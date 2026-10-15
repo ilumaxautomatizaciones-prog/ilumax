@@ -6631,7 +6631,9 @@ function pedirAjusteArea(area, mes, anio) {
 function presEsMio(p){
   var em = String(CU&&CU.email||'').trim().toLowerCase(), nm = String(CU&&CU.nombre||'').trim().toLowerCase();
   var pe = String(p.autorEmail||'').trim().toLowerCase(), pn = String(p.autor||'').trim().toLowerCase();
-  return (!!em && pe===em) || (!!nm && pn===nm) || (!!em && pn===em);
+  if((!!em && pe===em) || (!!nm && pn===nm) || (!!em && pn===em)) return true;
+  /* también es mío si yo agregué ítems en un registro creado por otra persona del área */
+  return !!em && (p.items||[]).some(function(it){ return String(it&&it.por||'').trim().toLowerCase()===em; });
 }
 function enviarAContabilidad() {
   var presups = getPresupuestos();
@@ -7740,7 +7742,7 @@ function pwQuickAplicar(){
   ms.forEach(function(m){
     var its = pwItemsMes(m).filter(function(it){ return it.cc || it.desc || parseFloat(it.valor)>0; });
     var igual = its.find(function(it){ return it.cc===pwQuick.cc && String(it.desc||'').trim().toLowerCase()===desc.toLowerCase(); });
-    if(igual) igual.valor = porMes; else its.push({cc:pwQuick.cc, desc:desc, valor:porMes});
+    if(igual) igual.valor = porMes; else its.push({cc:pwQuick.cc, desc:desc, valor:porMes, por:(CU&&CU.email)||''});
     presWizardItemsPorMes[m] = its;
   });
   pwQuick.valor=''; pwQuick.desc='';
@@ -8106,7 +8108,7 @@ async function guardarPresupuestoWizard() {
       anio:       presWizardAnio,
       monto:      v.monto,
       obs:        obs,
-      items:      v.items || [],
+      items:      (v.items || []).map(function(it){ return it.por ? it : Object.assign({}, it, {por:(CU&&CU.email)||''}); }),
       // Código de Centro de Costo del primer ítem, resuelto (nombre→código si hace falta) —
       // campo plano de conveniencia, además del desglose completo en items.
       centroCosto: siesaResolverCC(v.items && v.items[0] ? v.items[0].cc : ''),
@@ -8208,7 +8210,7 @@ async function pxlLeer(file){
       vals.forEach(function(v,idx){
         if(v>0){
           var k = s.codigo+'|'+(idx+1);
-          (grupos[k] = grupos[k] || {sub:s, cat:cat.split(' - ')[0].trim(), mes:idx+1, items:[]}).items.push({cc:ccCod, desc:desc, valor:v});
+          (grupos[k] = grupos[k] || {sub:s, cat:cat.split(' - ')[0].trim(), mes:idx+1, items:[]}).items.push({cc:ccCod, desc:desc, valor:v, por:(CU&&CU.email)||''});
         }
       });
     }
@@ -8265,7 +8267,7 @@ async function pxlGuardar(){
   var presups = getPresupuestos();
   PXL.regs.forEach(function(n){
     var idx = presups.findIndex(function(p){ return p.id===n.id; });
-    if(idx>=0){ n.estado = presups[idx].estado || 'borrador'; n.autor = presups[idx].autor || n.autor; n.autorEmail = presups[idx].autorEmail || n.autorEmail; presups[idx] = n; }
+    if(idx>=0){ n.estado = presups[idx].estado || 'borrador'; /* el Excel reemplaza el registro completo: queda a nombre de quien lo sube (antes quedaba a nombre del creador original) */ presups[idx] = n; }
     else presups.push(n);
   });
   savePresupuestos(presups);
