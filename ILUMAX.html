@@ -32926,7 +32926,7 @@ var RZV_MAP = {"TUNJA":"Boyacá","DUITAMA":"Boyacá","SOGAMOSO":"Boyacá","CHIQU
 // 📍 VENTAS POR ZONA (Centro de Trabajo): Boyacá · Casanare · Meta × canal, mes a mes 2023-2026
 // Histórico 2023-2025 = Excel de Siesa (cargado en el HTML) · 2026 = ventas_facturas_excel (en vivo, agregado en la base)
 // ════════════════════════════════════════════════════════════════════
-var RZV = {t:0, ultima:'', rows:null, depto:'Todos', canal:'Todos', cargando:false, err:'', mesMax:0, actualizado:''};
+var RZV = {hasta:0, hastaSel:0, t:0, ultima:'', rows:null, depto:'Todos', canal:'Todos', cargando:false, err:'', mesMax:0, actualizado:''};
 var RZV_ANIOS = [2023,2024,2025,2026];
 var RZV_DEPTOS = ['Boyacá','Casanare','Meta','Nariño'];
 var RZV_CANALES = {FERRO:'Ferre eléctrico / Especializado', MIXTO:'Mixto', PROYECTOS:'Proyectos'};
@@ -32970,6 +32970,10 @@ function rzvSelect(id, val, opts, fn){
 }
 function rzvSetDepto(v){ RZV.depto = v; renderCtZona(RZV.el); }
 function rzvSetCanal(v){ RZV.canal = v; renderCtZona(RZV.el); }
+function rzvSetHasta(v){ RZV.hastaSel = +v; renderCtZona(RZV.el); }
+// Nov 2025: el Excel de Siesa trae la tabla dinámica contraída (solo subtotales, sin ciudad) -> no se puede asignar a zonas; se marca sin detalle y no se compara
+function rzvFalta(a,i){ return a===2025 && i===10; }
+function rzvInc(a,H){ return a===2025 && H>=11; }
 async function rzvRefrescar(){ RZV.rows = null; renderCtZona(RZV.el); }
 
 // ── Línea SVG: un trazo por año ──
@@ -32991,22 +32995,26 @@ function rzvGrafico(s){
 
 // ── Tabla año × mes de una serie ──
 function rzvTablaAnios(s, conVar){
-  var h = '<div style="overflow:auto;"><table style="border-collapse:collapse;font-size:11px;width:100%;min-width:760px;"><thead><tr style="background:#1e293b;color:#fff;"><th style="padding:5px 8px;text-align:left;">Año</th>'
-    + RZV_M.map(function(m){ return '<th style="padding:5px 6px;text-align:right;">'+m+'</th>'; }).join('') + '<th style="padding:5px 8px;text-align:right;">Total</th></tr></thead><tbody>';
+  var H = RZV.hasta || RZV.mesMax || 12, th = 'padding:5px 6px;text-align:right;';
+  var h = '<div style="overflow:auto;"><table style="border-collapse:collapse;font-size:11px;width:100%;min-width:860px;"><thead><tr style="background:#1e293b;color:#fff;"><th style="padding:5px 8px;text-align:left;">Año</th>'
+    + RZV_M.map(function(m,i){ return '<th style="'+th+(i>=H?'opacity:.55;':'')+'">'+m+'</th>'; }).join('')
+    + '<th style="'+th+'background:#1d4ed8;">Ene–'+RZV_M[H-1]+'</th><th style="'+th+'">Año completo</th></tr></thead><tbody>';
   RZV_ANIOS.forEach(function(a,ix){
-    var parcial = a===2026;
-    h += '<tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:4px 8px;font-weight:700;">'+a+(parcial?' <span style="font-weight:400;color:#94a3b8;">(parcial)</span>':'')+'</td>'
-      + s[a].map(function(v,i){ return '<td style="padding:4px 6px;text-align:right;'+((parcial&&i>=RZV.mesMax)?'color:#cbd5e1;':'')+'">'+((parcial&&i>=RZV.mesMax)?'':rzvM(v))+'</td>'; }).join('')
-      + '<td style="padding:4px 8px;text-align:right;font-weight:700;">'+rzvM(rzvSum(s[a]))+'</td></tr>';
+    var parcial = a===2026, tp = rzvSum(s[a],H);
+    h += '<tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:4px 8px;font-weight:700;">'+a+(parcial?' <span style="font-weight:400;color:#94a3b8;">(en curso)</span>':'')+'</td>'
+      + s[a].map(function(v,i){ var vacio = parcial && i>=RZV.mesMax; return '<td style="padding:4px 6px;text-align:right;'+(i>=H?'color:#94a3b8;':'')+'">'+(vacio?'':(rzvFalta(a,i)?'<span style="color:#d97706;" title="Sin detalle en el Excel de Siesa">s/d</span>':rzvM(v)))+'</td>'; }).join('')
+      + '<td style="padding:4px 8px;text-align:right;font-weight:800;background:rgba(29,78,216,.08);">'+rzvM(tp)+(rzvInc(a,H)?'*':'')+'</td>'
+      + '<td style="padding:4px 8px;text-align:right;color:#64748b;">'+(parcial?'':rzvM(rzvSum(s[a]))+(a===2025?'*':''))+'</td></tr>';
     if(conVar && ix>0){
       var pa = RZV_ANIOS[ix-1];
       h += '<tr style="border-bottom:1px solid #e2e8f0;background:var(--bg,#f8fafc);"><td style="padding:2px 8px;font-size:10px;color:#64748b;">Var. '+a+' vs '+pa+'</td>'
-        + s[a].map(function(v,i){ if(parcial && i>=RZV.mesMax) return '<td></td>'; var p = rzvVar(v, s[pa][i]); return '<td style="padding:2px 6px;text-align:right;font-size:10px;'+rzvBg(p)+'">'+rzvVarHtml(p)+'</td>'; }).join('')
-        + (function(){ var hasta = parcial?RZV.mesMax:12, p = rzvVar(rzvSum(s[a],hasta), rzvSum(s[pa],hasta)); return '<td style="padding:2px 8px;text-align:right;font-size:10px;'+rzvBg(p)+'">'+rzvVarHtml(p)+'</td>'; })()
+        + s[a].map(function(v,i){ if(parcial && i>=RZV.mesMax) return '<td></td>'; var p = (rzvFalta(a,i)||rzvFalta(pa,i)) ? null : rzvVar(v, s[pa][i]); return '<td style="padding:2px 6px;text-align:right;font-size:10px;'+rzvBg(p)+(i>=H?'opacity:.6;':'')+'">'+rzvVarHtml(p)+'</td>'; }).join('')
+        + (function(){ var p = (rzvInc(a,H)||rzvInc(pa,H)) ? null : rzvVar(tp, rzvSum(s[pa],H)); return '<td style="padding:2px 8px;text-align:right;font-size:10px;font-weight:800;'+rzvBg(p)+'">'+rzvVarHtml(p)+'</td>'; })()
+        + (function(){ if(parcial) return '<td></td>'; var p = (a===2025||pa===2025) ? null : rzvVar(rzvSum(s[a]), rzvSum(s[pa])); return '<td style="padding:2px 8px;text-align:right;font-size:10px;'+rzvBg(p)+'">'+rzvVarHtml(p)+'</td>'; })()
         + '</tr>';
     }
   });
-  return h + '</tbody></table></div>';
+  return h + '</tbody></table></div><div style="font-size:10px;color:#94a3b8;margin-top:4px;">La columna azul compara todos los años con el mismo periodo (Ene–'+RZV_M[H-1]+'). «Año completo» solo como referencia. s/d = sin detalle (nov-2025).</div>';
 }
 
 function rzvAtipicos(){
@@ -33015,6 +33023,7 @@ function rzvAtipicos(){
     var s = rzvSerie(d,k);
     [2024,2025,2026].forEach(function(a){ var pa=a-1; for(var i=0;i<12;i++){
       if(a===2026 && i>=RZV.mesMax-1) break;   // el mes en curso está incompleto
+      if(rzvFalta(a,i)||rzvFalta(pa,i)) continue;
       var cur=s[a][i], base=s[pa][i]; if(base<3e6 && cur<3e6) continue;
       var p = rzvVar(cur,base); var dif = cur-base;
       if((p===null && cur>=3e6) || (p!==null && (p>=.6 || p<=-.5)) ) out.push({d:d,k:k,a:a,m:i,cur:cur,base:base,p:p,dif:dif});
@@ -33031,30 +33040,32 @@ async function renderCtZona(el){
     var _prev = RZV.rows; await rzvCargar();
     if(!RZV.rows){ el.innerHTML = '<div class="card" style="padding:16px;color:#b91c1c;">No se pudieron cargar las ventas de 2026: '+RZV.err+' <button class="btn btn-g btn-sm" onclick="rzvRefrescar()">Reintentar</button></div>'; return; }
   }
-  var dSel = RZV.depto, cSel = RZV.canal, hasta = RZV.mesMax || 12;
+  var dSel = RZV.depto, cSel = RZV.canal;
+  var hasta = RZV.hastaSel || (RZV.mesMax>1 ? RZV.mesMax-1 : (RZV.mesMax||12)); RZV.hasta = hasta;
+  var pTxt = 'Ene–'+RZV_M[hasta-1];
   var sSel = rzvSerie(dSel, cSel);
   var tit = (dSel==='Todos'?'Boyacá + Casanare + Meta + Nariño':dSel)+' · '+(cSel==='Todos'?'todos los canales':RZV_CANALES[cSel]);
-  // A) Resumen por zona (respeta el canal elegido)
-  var zonas = ['Todos'].concat(RZV_DEPTOS);
-  var A = '<div style="overflow:auto;"><table style="border-collapse:collapse;font-size:12px;width:100%;min-width:720px;"><thead><tr style="background:#1e293b;color:#fff;"><th style="padding:6px 8px;text-align:left;">Zona</th><th style="text-align:right;padding:6px 8px;">2023</th><th style="text-align:right;padding:6px 8px;">2024</th><th style="text-align:right;padding:6px 8px;">2025</th><th style="text-align:right;padding:6px 8px;">2026 (Ene–'+RZV_M[hasta-1]+')</th><th style="text-align:right;padding:6px 8px;">2025 mismo periodo</th><th style="text-align:right;padding:6px 8px;">Var 24/23</th><th style="text-align:right;padding:6px 8px;">Var 25/24</th><th style="text-align:right;padding:6px 8px;">Var 26/25*</th></tr></thead><tbody>';
-  zonas.forEach(function(z){
-    var s = rzvSerie(z, cSel), t = {}; RZV_ANIOS.forEach(function(a){ t[a] = rzvSum(s[a], a===2026?hasta:12); });
-    var p1 = rzvVar(t[2024],t[2023]), p2 = rzvVar(t[2025],t[2024]), b25 = rzvSum(s[2025],hasta), p3 = rzvVar(t[2026],b25);
-    A += '<tr style="border-bottom:1px solid #e2e8f0;'+(z==='Todos'?'font-weight:800;background:var(--bg,#f8fafc);':'')+'"><td style="padding:6px 8px;">'+(z==='Todos'?'Total 4 zonas':z)+'</td>'
-      + [2023,2024,2025,2026].map(function(a){ return '<td style="padding:6px 8px;text-align:right;">'+rzvM(t[a])+'</td>'; }).join('')
-      + '<td style="padding:6px 8px;text-align:right;color:#64748b;">'+rzvM(b25)+'</td>'
-      + [p1,p2,p3].map(function(p){ return '<td style="padding:6px 8px;text-align:right;'+rzvBg(p)+'">'+rzvVarHtml(p)+'</td>'; }).join('') + '</tr>';
-  });
-  A += '</tbody></table></div><div style="font-size:10px;color:#94a3b8;margin-top:4px;">Millones de pesos. *2026 se compara contra los mismos meses de 2025 (Ene–'+RZV_M[hasta-1]+'; el último mes está incompleto).</div>';
-  // B) Matriz zona × canal
-  var B = '<div style="overflow:auto;"><table style="border-collapse:collapse;font-size:12px;width:100%;min-width:720px;"><thead><tr style="background:#1e293b;color:#fff;"><th style="padding:6px 8px;text-align:left;">Zona</th><th style="padding:6px 8px;text-align:left;">Canal</th><th style="text-align:right;padding:6px 8px;">2023</th><th style="text-align:right;padding:6px 8px;">2024</th><th style="text-align:right;padding:6px 8px;">2025</th><th style="text-align:right;padding:6px 8px;">2026 YTD</th><th style="text-align:right;padding:6px 8px;">Var 24/23</th><th style="text-align:right;padding:6px 8px;">Var 25/24</th><th style="text-align:right;padding:6px 8px;">Var 26/25*</th></tr></thead><tbody>';
+  // A) Resumen por zona (mismo periodo en todos los años; respeta el canal elegido)
+  var thc = 'text-align:right;padding:6px 8px;', zonas = ['Todos'].concat(RZV_DEPTOS);
+  var cabP = '<thead><tr style="background:#1e293b;color:#fff;"><th style="padding:6px 8px;text-align:left;">@Z@</th>'
+    + [2023,2024,2025,2026].map(function(a){ return '<th style="'+thc+'background:#1d4ed8;">'+a+'<br><span style="font-weight:400;font-size:9px;">'+pTxt+'</span></th>'; }).join('')
+    + '<th style="'+thc+'">Var 24/23</th><th style="'+thc+'">Var 25/24</th><th style="'+thc+'">Var 26/25</th>'
+    + '<th style="'+thc+'opacity:.7;">Año compl. 2023</th><th style="'+thc+'opacity:.7;">2024</th><th style="'+thc+'opacity:.7;">2025*</th></tr></thead>';
+  var filaP = function(s, rotulo, negrita){
+    var t = {}, f = {}; RZV_ANIOS.forEach(function(a){ t[a] = rzvSum(s[a], hasta); f[a] = rzvSum(s[a]); });
+    var ps = [rzvVar(t[2024],t[2023]), rzvInc(2025,hasta)?null:rzvVar(t[2025],t[2024]), rzvInc(2025,hasta)?null:rzvVar(t[2026],t[2025])];
+    return '<tr style="border-bottom:1px solid #e2e8f0;'+(negrita?'font-weight:800;background:var(--bg,#f8fafc);':'')+'">'+rotulo
+      + [2023,2024,2025,2026].map(function(a){ return '<td style="padding:6px 8px;text-align:right;">'+rzvM(t[a])+(rzvInc(a,hasta)?'*':'')+'</td>'; }).join('')
+      + ps.map(function(p){ return '<td style="padding:6px 8px;text-align:right;'+rzvBg(p)+'">'+rzvVarHtml(p)+'</td>'; }).join('')
+      + [2023,2024,2025].map(function(a){ return '<td style="padding:6px 8px;text-align:right;color:#94a3b8;font-weight:400;">'+rzvM(f[a])+'</td>'; }).join('') + '</tr>';
+  };
+  var A = '<div style="overflow:auto;"><table style="border-collapse:collapse;font-size:12px;width:100%;min-width:760px;">'+cabP.replace('@Z@','Zona')+'<tbody>';
+  zonas.forEach(function(z){ A += filaP(rzvSerie(z,cSel), '<td style="padding:6px 8px;">'+(z==='Todos'?'Total 4 zonas':z)+'</td>', z==='Todos'); });
+  A += '</tbody></table></div><div style="font-size:10px;color:#94a3b8;margin-top:4px;">Millones de pesos. Todos los años se comparan con el mismo periodo ('+pTxt+'); el año completo va solo de referencia. 2026 llega hasta la última factura cargada. *2025 no incluye noviembre (ver aviso).</div>';
+  var B = '<div style="overflow:auto;"><table style="border-collapse:collapse;font-size:12px;width:100%;min-width:760px;">'+cabP.replace('@Z@','Zona · Canal')+'<tbody>';
   RZV_DEPTOS.forEach(function(z){ Object.keys(RZV_CANALES).forEach(function(k,ix){
-    var s = rzvSerie(z,k), t = {}; RZV_ANIOS.forEach(function(a){ t[a] = rzvSum(s[a], a===2026?hasta:12); });
-    if(!t[2023]&&!t[2024]&&!t[2025]&&!t[2026]) return;
-    var p1 = rzvVar(t[2024],t[2023]), p2 = rzvVar(t[2025],t[2024]), p3 = rzvVar(t[2026], rzvSum(s[2025],hasta));
-    B += '<tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:5px 8px;font-weight:700;">'+(ix===0?z:'')+'</td><td style="padding:5px 8px;">'+RZV_CANALES[k]+'</td>'
-      + [2023,2024,2025,2026].map(function(a){ return '<td style="padding:5px 8px;text-align:right;">'+rzvM(t[a])+'</td>'; }).join('')
-      + [p1,p2,p3].map(function(p){ return '<td style="padding:5px 8px;text-align:right;'+rzvBg(p)+'">'+rzvVarHtml(p)+'</td>'; }).join('') + '</tr>';
+    var s = rzvSerie(z,k); if(!RZV_ANIOS.some(function(a){ return s[a].some(Boolean); })) return;
+    B += filaP(s, '<td style="padding:5px 8px;"><b>'+(ix===0?z:'')+'</b>'+(ix===0?'<br>':'')+'<span style="color:#475569;">'+RZV_CANALES[k]+'</span></td>', false);
   });});
   B += '</tbody></table></div>';
   // E) Atípicos
@@ -33083,9 +33094,11 @@ async function renderCtZona(el){
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">'
     + rzvSelect('rzv-d', dSel, [['Todos','Todas las zonas']].concat(RZV_DEPTOS.map(function(d){ return [d,d]; })), 'rzvSetDepto')
     + rzvSelect('rzv-c', cSel, [['Todos','Todos los canales']].concat(Object.keys(RZV_CANALES).map(function(k){ return [k,RZV_CANALES[k]]; })), 'rzvSetCanal')
+    + '<span style="font-size:11px;color:#64748b;">Periodo:</span>' + rzvSelect('rzv-h', String(hasta), Array.apply(null,Array(RZV.mesMax||12)).map(function(_,i){ return [String(i+1),'Ene – '+RZV_M[i]+(i+1===RZV.mesMax?' (mes en curso)':'')]; }), 'rzvSetHasta')
     + '<span style="flex:1"></span><button class="btn btn-gr btn-sm" style="'+btnX+'" onclick="rzvExcel()">📊 Descargar Excel</button></div>'
-    + '<div class="card" style="padding:14px;margin-bottom:12px;"><div style="font-weight:800;margin-bottom:8px;">1 · Resumen por zona'+(cSel!=='Todos'?' — '+RZV_CANALES[cSel]:'')+'</div>'+A+'</div>'
-    + '<div class="card" style="padding:14px;margin-bottom:12px;"><div style="font-weight:800;margin-bottom:8px;">2 · Variación por zona y canal</div>'+B+'</div>'
+    + '<div style="background:#fffbeb;border:1px solid #fcd34d;color:#92400e;border-radius:10px;padding:8px 12px;font-size:11px;margin-bottom:12px;">⚠️ <b>Noviembre 2025 sin detalle:</b> el Excel de Siesa trae ese mes contraído (solo subtotales por canal, sin ciudad), por eso no se puede asignar a las zonas. Aparece como «s/d» y no se compara. Se corrige cargando el Excel con el lapso 202511 expandido.</div>'
+    + '<div class="card" style="padding:14px;margin-bottom:12px;"><div style="font-weight:800;margin-bottom:8px;">1 · Resumen por zona — '+pTxt+(cSel!=='Todos'?' · '+RZV_CANALES[cSel]:'')+'</div>'+A+'</div>'
+    + '<div class="card" style="padding:14px;margin-bottom:12px;"><div style="font-weight:800;margin-bottom:8px;">2 · Variación por zona y canal — '+pTxt+'</div>'+B+'</div>'
     + '<div class="card" style="padding:14px;margin-bottom:12px;"><div style="font-weight:800;margin-bottom:2px;">3 · Comparativa anual mes a mes</div><div style="font-size:11px;color:#64748b;margin-bottom:8px;">'+tit+'</div>'+rzvGrafico(sSel)+rzvTablaAnios(sSel,true)+'</div>'
     + '<div class="card" style="padding:14px;margin-bottom:12px;"><div style="font-weight:800;margin-bottom:8px;">4 · Comportamientos atípicos</div>'+E+'</div>'
     + '<div class="card" style="padding:14px;"><div style="font-weight:800;margin-bottom:8px;">5 · Detalle mes a mes por zona y canal</div><div style="font-size:10px;color:#94a3b8;margin-bottom:6px;">Millones de pesos. Cada tabla trae la fila de variación contra el año anterior.</div>'+D+'</div>';
@@ -33093,24 +33106,20 @@ async function renderCtZona(el){
 
 function rzvExcel(){
   try{
-    var hasta = RZV.mesMax || 12, wb = XLSX.utils.book_new();
-    var cab = ['Zona','Canal','Año'].concat(RZV_M).concat(['Total']);
-    var det = [cab];
+    var hasta = RZV.hasta || RZV.mesMax || 12, pT = 'Ene-'+RZV_M[hasta-1], wb = XLSX.utils.book_new();
+    var cab = ['Zona','Canal','Año'].concat(RZV_M).concat(['Total '+pT,'Año completo']);
+    var det = [cab], res = [['Zona','Canal','2023 '+pT,'2024 '+pT,'2025 '+pT,'2026 '+pT,'Var 24/23 %','Var 25/24 %','Var 26/25 %','Año completo 2023','Año completo 2024','Año completo 2025 (sin nov)']];
+    var f1 = function(p){ return p===null?'':Math.round(p*1000)/10; };
     RZV_DEPTOS.concat(['Todos']).forEach(function(z){ Object.keys(RZV_CANALES).concat(['Todos']).forEach(function(k){
-      var s = rzvSerie(z,k); RZV_ANIOS.forEach(function(a){
-        var t = rzvSum(s[a]); if(!t && !s[a].some(Boolean)) return;
-        det.push([z==='Todos'?'Total 4 zonas':z, k==='Todos'?'Todos los canales':RZV_CANALES[k], a].concat(s[a].map(function(v,i){ return (a===2026&&i>=hasta)?null:Math.round(v); })).concat([Math.round(t)]));
-      });
+      var s = rzvSerie(z,k), zn = z==='Todos'?'Total 4 zonas':z, cn = k==='Todos'?'Todos los canales':RZV_CANALES[k], t = {}, f = {};
+      RZV_ANIOS.forEach(function(a){ t[a] = rzvSum(s[a],hasta); f[a] = rzvSum(s[a]); if(!s[a].some(Boolean)) return;
+        det.push([zn,cn,a].concat(s[a].map(function(v,i){ return ((a===2026&&i>=RZV.mesMax)||rzvFalta(a,i))?null:Math.round(v); })).concat([Math.round(t[a]), a===2026?null:Math.round(f[a])])); });
+      var inc = rzvInc(2025,hasta);
+      res.push([zn,cn,Math.round(t[2023]),Math.round(t[2024]),Math.round(t[2025]),Math.round(t[2026]),f1(rzvVar(t[2024],t[2023])),inc?'':f1(rzvVar(t[2025],t[2024])),inc?'':f1(rzvVar(t[2026],t[2025])),Math.round(f[2023]),Math.round(f[2024]),Math.round(f[2025])]);
     });});
-    var res = [['Zona','Canal','2023','2024','2025','2026 Ene-'+RZV_M[hasta-1],'2025 mismo periodo','Var 24/23','Var 25/24','Var 26/25']];
-    RZV_DEPTOS.concat(['Todos']).forEach(function(z){ Object.keys(RZV_CANALES).concat(['Todos']).forEach(function(k){
-      var s = rzvSerie(z,k), t = {}; RZV_ANIOS.forEach(function(a){ t[a] = rzvSum(s[a], a===2026?hasta:12); });
-      var b = rzvSum(s[2025],hasta), f = function(p){ return p===null?'':Math.round(p*1000)/10; };
-      res.push([z==='Todos'?'Total 4 zonas':z, k==='Todos'?'Todos los canales':RZV_CANALES[k], Math.round(t[2023]),Math.round(t[2024]),Math.round(t[2025]),Math.round(t[2026]),Math.round(b), f(rzvVar(t[2024],t[2023])), f(rzvVar(t[2025],t[2024])), f(rzvVar(t[2026],b))]);
-    });});
-    var wsR = XLSX.utils.aoa_to_sheet(res); wsR['!cols'] = [{wch:16},{wch:30}].concat(Array(8).fill({wch:16}));
-    var wsD = XLSX.utils.aoa_to_sheet(det); wsD['!cols'] = [{wch:16},{wch:30},{wch:7}].concat(Array(13).fill({wch:13}));
-    var nt = XLSX.utils.aoa_to_sheet([['Notas'],['Valores en pesos (Valor neto / subtotal de facturas).'],['2023-2025: Excel de Siesa (Base_datos_19-25_ventas). 2026: facturas de Siesa sincronizadas en la nube (las mismas del Reporte Diario, sin anuladas), hasta '+(RZV.ultima||RZV_M[hasta-1])+' (mes en curso incompleto).'],['Canales: Ferre eléctrico / Especializado = FERROELECTRICO (hasta 2025) y ESPECIALIZADO (2026). Mixto y Proyectos igual en ambas fuentes.'],['Zona asignada por la ciudad del cliente. Var 26/25 compara los mismos meses.']]);
+    var wsR = XLSX.utils.aoa_to_sheet(res); wsR['!cols'] = [{wch:16},{wch:30}].concat(Array(10).fill({wch:16}));
+    var wsD = XLSX.utils.aoa_to_sheet(det); wsD['!cols'] = [{wch:16},{wch:30},{wch:7}].concat(Array(14).fill({wch:13}));
+    var nt = XLSX.utils.aoa_to_sheet([['Notas'],['Valores en pesos (subtotal de facturas, sin IVA).'],['Todos los años se comparan con el mismo periodo: '+pT+'. El año completo va solo de referencia.'],['Noviembre 2025 sin detalle: el Excel de Siesa lo trae contraído (sin ciudad); no se incluye ni se compara.'],['2023-2025: Excel de Siesa (Base_datos_19-25_ventas). 2026: facturas de Siesa sincronizadas en la nube (las mismas del Reporte Diario, sin anuladas), hasta '+(RZV.ultima||RZV_M[RZV.mesMax-1])+'.'],['Canales: Ferre eléctrico / Especializado = FERROELECTRICO (hasta 2025) y ESPECIALIZADO (2026). Mixto y Proyectos igual en ambas fuentes.'],['Zona asignada por la ciudad del cliente.']]);
     nt['!cols'] = [{wch:120}];
     XLSX.utils.book_append_sheet(wb, wsR, 'Resumen y variación'); XLSX.utils.book_append_sheet(wb, wsD, 'Mes a mes'); XLSX.utils.book_append_sheet(wb, nt, 'Notas');
     XLSX.writeFile(wb, 'Ventas_por_zona_Boyaca_Casanare_Meta_Narino.xlsx');
