@@ -5910,25 +5910,38 @@ function presQaElegir(cod){
   var sel = document.getElementById('pres-qa-cc'); if(!sel) return;
   var cat = (CATS_ILUMAX||[]).find(function(c){ return s.codigo.indexOf(c.codigo)===0; });
   PRES_QA.catCod = cat ? cat.codigo : '';
-  var _sc = document.getElementById('pres-qa-cat'); if(_sc) _sc.value = PRES_QA.catCod;
-  var _ss = document.getElementById('pres-qa-subsel'); if(_ss){ _ss.innerHTML = presQaSubOpts(PRES_QA.catCod, cod); }
+  presQaExpCerrar();
   PRES_QA.cc = presCcSugerido(s.codigo);
   sel.innerHTML = presCcOpciones(centrosCostoParaCategoria(cat?cat.codigo:null), s.codigo, PRES_QA.cc);
 }
-function presQaSubOpts(catCod, selSub){
-  var l = (SUBS_ILUMAX||[]).filter(function(x){ return catCod && String(x.codigo).indexOf(catCod)===0; });
-  return '<option value="">'+(catCod?'-- Subcategoría --':'-- Primero elige categoría --')+'</option>'+l.map(function(x){ return '<option value="'+x.codigo+'"'+(x.codigo===selSub?' selected':'')+'>'+x.codigo+' · '+String(x.nombre).replace(/</g,'&lt;')+'</option>'; }).join('');
+/* Explorador categoría → subcategoría (como el asistente de "Subir presupuesto"): al elegir la categoría pasa directo a sus subcategorías */
+function presQaExpCerrar(){ var e=document.getElementById('pres-qa-exp'); if(e){ e.style.display='none'; e.innerHTML=''; } }
+function presQaExplorar(){
+  var e=document.getElementById('pres-qa-exp'); if(!e) return;
+  if(e.style.display==='block'){ presQaExpCerrar(); return; }
+  e.style.display='block'; presQaExpCats();
 }
-function presQaCatCambio(c){
-  PRES_QA.catCod = c;
-  var ss = document.getElementById('pres-qa-subsel'); if(ss) ss.innerHTML = presQaSubOpts(c, '');
-  if(PRES_QA.subCod && String(PRES_QA.subCod).indexOf(c)!==0){
-    PRES_QA.subCod=''; PRES_QA.subTxt='';
-    var i = document.getElementById('pres-qa-sub'); if(i) i.value='';
-    var cc = document.getElementById('pres-qa-cc'); if(cc){ PRES_QA.cc=''; cc.innerHTML = presCcOpciones(centrosCostoParaCategoria(c||null), '', ''); }
-  }
+function presQaExpCats(){
+  var e=document.getElementById('pres-qa-exp'); if(!e) return;
+  var subs=SUBS_ILUMAX||[], cats=(CATS_ILUMAX||[]).filter(function(c){ return subs.some(function(x){ return String(x.codigo).indexOf(c.codigo)===0; }); });
+  if(!cats.length){ e.innerHTML='<div style="padding:12px;font-size:11px;color:var(--mu);">No hay categorías disponibles para tu usuario. Recarga con Ctrl+F5 o pide acceso a las subcategorías.</div>'; return; }
+  var lab={'51':'51 — Gastos Administrativos','52':'52 — Gastos de Ventas','53':'53 — No Operacionales'}, h='', ult='';
+  cats.forEach(function(c){
+    var g=String(c.codigo).substring(0,2);
+    if(g!==ult){ ult=g; h+='<div style="padding:5px 10px;font-size:10px;font-weight:800;color:var(--navy,#1e3a5f);background:var(--s1);position:sticky;top:0;">'+(lab[g]||g)+'</div>'; }
+    var n=subs.filter(function(x){ return String(x.codigo).indexOf(c.codigo)===0; }).length;
+    h+='<div onmousedown="event.preventDefault();presQaExpCat(\''+c.codigo+'\')" style="padding:7px 10px;cursor:pointer;font-size:11px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;gap:8px;" onmouseover="this.style.background=\'var(--bld)\'" onmouseout="this.style.background=\'\'"><span><b>'+c.codigo+'</b> · '+String(c.nombre).replace(/</g,'&lt;')+'</span><span style="color:var(--mu);">'+n+' ›</span></div>';
+  });
+  e.innerHTML=h;
 }
-function presQaSubSel(cod){ if(cod) presQaElegir(cod); }
+function presQaExpCat(cod){
+  var e=document.getElementById('pres-qa-exp'); if(!e) return;
+  var c=(CATS_ILUMAX||[]).find(function(x){ return x.codigo===cod; });
+  var l=(SUBS_ILUMAX||[]).filter(function(x){ return String(x.codigo).indexOf(cod)===0; });
+  e.innerHTML='<div onmousedown="event.preventDefault();presQaExpCats()" style="padding:7px 10px;cursor:pointer;font-size:11px;font-weight:700;color:var(--bl);background:var(--s1);position:sticky;top:0;border-bottom:1px solid var(--b1);">← Categorías · '+cod+' '+String(c?c.nombre:'').replace(/</g,'&lt;')+'</div>'
+   + l.map(function(x){ return '<div onmousedown="event.preventDefault();presQaElegir(\''+x.codigo+'\')" style="padding:7px 10px 7px 16px;cursor:pointer;font-size:11px;border-bottom:1px solid var(--b1);" onmouseover="this.style.background=\'var(--bld)\'" onmouseout="this.style.background=\'\'"><b>'+String(x.nombre).replace(/</g,'&lt;')+'</b> <span style="color:var(--mu);font-size:10px;">· '+x.codigo+'</span></div>'; }).join('');
+}
+document.addEventListener('mousedown', function(ev){ var e=document.getElementById('pres-qa-exp'); if(e && e.style.display==='block' && !e.contains(ev.target) && !(ev.target.closest && ev.target.closest('#pres-qa-expbtn'))) presQaExpCerrar(); });
 function presQaHtml(){
   if(!PRES_QA.abierto) return '';
   var subs = SUBS_ILUMAX||[];
@@ -5939,9 +5952,8 @@ function presQaHtml(){
   return '<div style="background:var(--bld);border:1px solid var(--b1);border-radius:10px;padding:10px 12px;margin-bottom:10px;">'
     + '<div style="font-size:10px;font-weight:800;color:var(--bl);margin-bottom:6px;">⚡ AGREGAR FILA RÁPIDA — elige categoría y subcategoría, o escribe para buscar</div>'
     + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">'
-    + '<select id="pres-qa-cat" onchange="presQaCatCambio(this.value)" '+inp.replace('style="','style="flex:1 1 200px;max-width:260px;')+'><option value="">-- Categoría --</option>'
-    + (CATS_ILUMAX||[]).map(function(c){ return '<option value="'+c.codigo+'"'+((cat?cat.codigo:PRES_QA.catCod)===c.codigo?' selected':'')+'>'+c.codigo+' · '+String(c.nombre).replace(/</g,'&lt;')+'</option>'; }).join('')+'</select>'
-    + '<select id="pres-qa-subsel" onchange="presQaSubSel(this.value)" '+inp.replace('style="','style="flex:1 1 220px;max-width:300px;')+'>'+presQaSubOpts(cat?cat.codigo:(PRES_QA.catCod||''), PRES_QA.subCod)+'</select>'
+    + '<div style="position:relative;flex:0 0 auto;"><button type="button" id="pres-qa-expbtn" class="btn btn-sm" onclick="presQaExplorar()" style="white-space:nowrap;">📂 Categorías ▾</button>'
+    + '<div id="pres-qa-exp" style="display:none;position:absolute;left:0;top:100%;margin-top:4px;z-index:60;width:380px;max-width:88vw;background:var(--w);border:1px solid var(--b1);border-radius:8px;max-height:340px;overflow:auto;box-shadow:0 6px 18px rgba(0,0,0,.18);"></div></div>'
     + '<div style="position:relative;flex:2 1 260px;"><input id="pres-qa-sub" autocomplete="off" placeholder="🔍 Subcategoría (ej: vehiculo, celular, arriendo)..." value="'+String(PRES_QA.subTxt).replace(/"/g,'&quot;')+'" oninput="presQaSubCambio(this.value)" onfocus="if(PRES_QA.subCod){this.select();}else presQaLista(this.value)" onblur="setTimeout(function(){var r=document.getElementById(\'pres-qa-res\');if(r)r.style.display=\'none\';},200)" '+inp.replace('style="','style="width:100%;box-sizing:border-box;')+'>'
     + '<div id="pres-qa-res" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:50;background:var(--w);border:1px solid var(--b1);border-radius:8px;max-height:260px;overflow:auto;box-shadow:0 6px 18px rgba(0,0,0,.15);"></div></div>'
     + '<select id="pres-qa-cc" onchange="PRES_QA.cc=this.value" '+inp.replace('style="','style="flex:1 1 180px;')+'><option value="">-- Centro de costo --</option>'
