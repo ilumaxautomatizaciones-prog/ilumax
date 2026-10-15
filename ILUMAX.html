@@ -1729,15 +1729,17 @@ function descEsPesada(tabla, params){
   if(/(referencia|id)=(eq|in)\./.test(q)) return false;           // consulta puntual
   const lim = (q.match(/(?:^|&)limit=(\d+)/)||[])[1];
   if(lim && Number(lim) <= 200 && !/offset=/.test(q)) return false;  // trae pocas filas
+  const fd = (q.match(/(?:^|&)fecha=gte\.(\d{4}-\d{2}-\d{2})/)||[])[1];
+  if(fd && (Date.now() - Date.parse(fd)) < 40*864e5) return false;   // solo el mes en curso: es liviano, no pide permiso
   return true;
 }
 function descPermiso(tabla){
-  try{ const g = JSON.parse(sessionStorage.getItem('desc_ok')||'{}'); if(g[tabla] && g[tabla] > Date.now()) return Promise.resolve(true); }catch(e){}
+  try{ const g = JSON.parse(localStorage.getItem('desc_ok')||'{}'); if(g[tabla] && g[tabla] > Date.now()) return Promise.resolve(true); }catch(e){}
   if(_descOk[tabla] && _descOk[tabla] > Date.now()) return Promise.resolve(true);
   if(_descPend[tabla]) return _descPend[tabla];
   return _descPend[tabla] = new Promise(res=>{
     const fin = (ok, min)=>{ const t = Date.now() + (ok ? 60*60e3 : 60e3);
-      if(ok){ _descOk[tabla] = t; try{ const g = JSON.parse(sessionStorage.getItem('desc_ok')||'{}'); g[tabla] = t; sessionStorage.setItem('desc_ok', JSON.stringify(g)); }catch(e){} }
+      if(ok){ _descOk[tabla] = t; try{ const g = JSON.parse(localStorage.getItem('desc_ok')||'{}'); g[tabla] = t; localStorage.setItem('desc_ok', JSON.stringify(g)); }catch(e){} }
       else { _descOk[tabla] = 0; setTimeout(()=>{ delete _descPend[tabla]; }, 60e3); }
       if(ok) delete _descPend[tabla]; ov.remove(); res(ok); };
     const ov = document.createElement('div'); ov.className = 'ov on'; ov.style.zIndex = 99999;
@@ -5923,7 +5925,7 @@ function presQaExplorar(){
 }
 function presQaExpCats(){
   var e=document.getElementById('pres-qa-exp'); if(!e) return;
-  var subs=SUBS_ILUMAX||[], cats=(CATS_ILUMAX||[]).filter(function(c){ return subs.some(function(x){ return String(x.codigo).indexOf(c.codigo)===0; }); });
+  var subs=SUBS_ILUMAX||[], cats=(CATS_ILUMAX||[]).filter(function(c){ return subs.some(function(x){ return String(x.codigo).indexOf(c.codigo)===0; }); }).sort(function(a,b){ return String(a.codigo).localeCompare(String(b.codigo)); });
   if(!cats.length){ e.innerHTML='<div style="padding:12px;font-size:11px;color:var(--mu);">No hay categorías disponibles para tu usuario. Recarga con Ctrl+F5 o pide acceso a las subcategorías.</div>'; return; }
   var lab={'51':'51 — Gastos Administrativos','52':'52 — Gastos de Ventas','53':'53 — No Operacionales'}, h='', ult='';
   cats.forEach(function(c){
@@ -5941,7 +5943,7 @@ function presQaExpCat(cod){
   e.innerHTML='<div onmousedown="event.preventDefault();presQaExpCats()" style="padding:7px 10px;cursor:pointer;font-size:11px;font-weight:700;color:var(--bl);background:var(--s1);position:sticky;top:0;border-bottom:1px solid var(--b1);">← Categorías · '+cod+' '+String(c?c.nombre:'').replace(/</g,'&lt;')+'</div>'
    + l.map(function(x){ return '<div onmousedown="event.preventDefault();presQaElegir(\''+x.codigo+'\')" style="padding:7px 10px 7px 16px;cursor:pointer;font-size:11px;border-bottom:1px solid var(--b1);" onmouseover="this.style.background=\'var(--bld)\'" onmouseout="this.style.background=\'\'"><b>'+String(x.nombre).replace(/</g,'&lt;')+'</b> <span style="color:var(--mu);font-size:10px;">· '+x.codigo+'</span></div>'; }).join('');
 }
-document.addEventListener('mousedown', function(ev){ var e=document.getElementById('pres-qa-exp'); if(e && e.style.display==='block' && !e.contains(ev.target) && !(ev.target.closest && ev.target.closest('#pres-qa-expbtn'))) presQaExpCerrar(); });
+document.addEventListener('mousedown', function(ev){ var e=document.getElementById('pres-qa-exp'); if(!e || e.style.display!=='block') return; var path = (ev.composedPath ? ev.composedPath() : []); if(path.indexOf(e)>=0 || path.some(function(n){ return n && n.id==='pres-qa-expbtn'; })) return; presQaExpCerrar(); });
 function presQaHtml(){
   if(!PRES_QA.abierto) return '';
   var subs = SUBS_ILUMAX||[];
