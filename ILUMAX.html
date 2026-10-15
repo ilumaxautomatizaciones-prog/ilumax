@@ -32926,7 +32926,7 @@ var RZV_MAP = {"TUNJA":"Boyacá","DUITAMA":"Boyacá","SOGAMOSO":"Boyacá","CHIQU
 // 📍 VENTAS POR ZONA (Centro de Trabajo): Boyacá · Casanare · Meta × canal, mes a mes 2023-2026
 // Histórico 2023-2025 = Excel de Siesa (cargado en el HTML) · 2026 = ventas_facturas_excel (en vivo, agregado en la base)
 // ════════════════════════════════════════════════════════════════════
-var RZV = {rows:null, depto:'Todos', canal:'Todos', cargando:false, err:'', mesMax:0, actualizado:''};
+var RZV = {t:0, ultima:'', rows:null, depto:'Todos', canal:'Todos', cargando:false, err:'', mesMax:0, actualizado:''};
 var RZV_ANIOS = [2023,2024,2025,2026];
 var RZV_DEPTOS = ['Boyacá','Casanare','Meta','Nariño'];
 var RZV_CANALES = {FERRO:'Ferre eléctrico / Especializado', MIXTO:'Mixto', PROYECTOS:'Proyectos'};
@@ -32936,11 +32936,12 @@ async function rzvCargar(forzar){
   if(RZV.cargando) return; RZV.cargando = true; RZV.err = '';
   try{
     var rows = RZV_HIST.map(function(r){ return {a:r[0], m:r[1], d:r[2], c:r[3], k:r[4], v:r[5]}; });
-    var live = await sb.post('rpc/rzv_2026', {p_ciudades:Object.keys(RZV_MAP)});
-    (live||[]).forEach(function(r){ rows.push({a:2026, m:r[0], d:RZV_MAP[r[1]], c:r[1], k:r[2], v:+r[3]||0}); });
+    var res = await sb.post('rpc/rzv_ventas_zona', {p_ciudades:Object.keys(RZV_MAP)});   // mismas facturas de Siesa (sync cada hora) que usa el Reporte Diario
+    RZV.ultima = (res && res.ultima) || '';
+    ((res && res.filas) || []).forEach(function(r){ rows.push({a:2026, m:r[0], d:RZV_MAP[r[1]], c:r[1], k:r[2], v:+r[3]||0}); });
     RZV.rows = rows;
     RZV.mesMax = rows.reduce(function(mx,r){ return r.a===2026 && r.m>mx ? r.m : mx; }, 0);
-    RZV.actualizado = new Date().toLocaleString('es-CO');
+    RZV.actualizado = new Date().toLocaleString('es-CO'); RZV.t = Date.now();
   }catch(e){ console.error(e); RZV.err = String(e.message||e).slice(0,160); }
   RZV.cargando = false;
 }
@@ -33025,9 +33026,9 @@ function rzvAtipicos(){
 
 async function renderCtZona(el){
   if(!el) return; RZV.el = el;
-  if(!RZV.rows){
+  if(!RZV.rows || (Date.now() - RZV.t) > 600000){   // se vuelve a leer sola si pasaron más de 10 min
     el.innerHTML = cargaHtml('Cargando ventas por zona');
-    await rzvCargar();
+    var _prev = RZV.rows; await rzvCargar();
     if(!RZV.rows){ el.innerHTML = '<div class="card" style="padding:16px;color:#b91c1c;">No se pudieron cargar las ventas de 2026: '+RZV.err+' <button class="btn btn-g btn-sm" onclick="rzvRefrescar()">Reintentar</button></div>'; return; }
   }
   var dSel = RZV.depto, cSel = RZV.canal, hasta = RZV.mesMax || 12;
@@ -33078,11 +33079,11 @@ async function renderCtZona(el){
     '<div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:12px;padding:14px 16px;margin-bottom:12px;color:#fff;">'
     + '<div style="font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.8px;">📍 Reporte de ventas por zona</div>'
     + '<div style="font-size:15px;font-weight:800;color:#f5c518;margin-top:2px;">Boyacá · Casanare · Meta · Nariño — 2023 a 2026</div>'
-    + '<div style="font-size:10px;color:rgba(255,255,255,.55);margin-top:2px;">Histórico 2023-2025 del Excel de Siesa · 2026 en vivo desde las facturas del portal (hasta '+RZV_M[hasta-1]+') · actualizado '+RZV.actualizado+'</div></div>'
+    + '<div style="font-size:10px;color:rgba(255,255,255,.55);margin-top:2px;">Histórico 2023-2025 del Excel de Siesa · 2026 en vivo desde Siesa (mismo origen del Reporte Diario, se actualiza solo) · última factura: '+(RZV.ultima||'—')+' · consultado '+RZV.actualizado+'</div></div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">'
     + rzvSelect('rzv-d', dSel, [['Todos','Todas las zonas']].concat(RZV_DEPTOS.map(function(d){ return [d,d]; })), 'rzvSetDepto')
     + rzvSelect('rzv-c', cSel, [['Todos','Todos los canales']].concat(Object.keys(RZV_CANALES).map(function(k){ return [k,RZV_CANALES[k]]; })), 'rzvSetCanal')
-    + '<span style="flex:1"></span><button class="btn btn-g btn-sm" style="'+btnX+'" onclick="rzvRefrescar()">↻ Actualizar 2026</button><button class="btn btn-gr btn-sm" style="'+btnX+'" onclick="rzvExcel()">📊 Descargar Excel</button></div>'
+    + '<span style="flex:1"></span><button class="btn btn-gr btn-sm" style="'+btnX+'" onclick="rzvExcel()">📊 Descargar Excel</button></div>'
     + '<div class="card" style="padding:14px;margin-bottom:12px;"><div style="font-weight:800;margin-bottom:8px;">1 · Resumen por zona'+(cSel!=='Todos'?' — '+RZV_CANALES[cSel]:'')+'</div>'+A+'</div>'
     + '<div class="card" style="padding:14px;margin-bottom:12px;"><div style="font-weight:800;margin-bottom:8px;">2 · Variación por zona y canal</div>'+B+'</div>'
     + '<div class="card" style="padding:14px;margin-bottom:12px;"><div style="font-weight:800;margin-bottom:2px;">3 · Comparativa anual mes a mes</div><div style="font-size:11px;color:#64748b;margin-bottom:8px;">'+tit+'</div>'+rzvGrafico(sSel)+rzvTablaAnios(sSel,true)+'</div>'
@@ -33109,7 +33110,7 @@ function rzvExcel(){
     });});
     var wsR = XLSX.utils.aoa_to_sheet(res); wsR['!cols'] = [{wch:16},{wch:30}].concat(Array(8).fill({wch:16}));
     var wsD = XLSX.utils.aoa_to_sheet(det); wsD['!cols'] = [{wch:16},{wch:30},{wch:7}].concat(Array(13).fill({wch:13}));
-    var nt = XLSX.utils.aoa_to_sheet([['Notas'],['Valores en pesos (Valor neto / subtotal de facturas).'],['2023-2025: Excel de Siesa (Base_datos_19-25_ventas). 2026: facturas del portal (ventas_facturas_excel), hasta '+RZV_M[hasta-1]+' 2026 (mes en curso incompleto).'],['Canales: Ferre eléctrico / Especializado = FERROELECTRICO (hasta 2025) y ESPECIALIZADO (2026). Mixto y Proyectos igual en ambas fuentes.'],['Zona asignada por la ciudad del cliente. Var 26/25 compara los mismos meses.']]);
+    var nt = XLSX.utils.aoa_to_sheet([['Notas'],['Valores en pesos (Valor neto / subtotal de facturas).'],['2023-2025: Excel de Siesa (Base_datos_19-25_ventas). 2026: facturas de Siesa sincronizadas en la nube (las mismas del Reporte Diario, sin anuladas), hasta '+(RZV.ultima||RZV_M[hasta-1])+' (mes en curso incompleto).'],['Canales: Ferre eléctrico / Especializado = FERROELECTRICO (hasta 2025) y ESPECIALIZADO (2026). Mixto y Proyectos igual en ambas fuentes.'],['Zona asignada por la ciudad del cliente. Var 26/25 compara los mismos meses.']]);
     nt['!cols'] = [{wch:120}];
     XLSX.utils.book_append_sheet(wb, wsR, 'Resumen y variación'); XLSX.utils.book_append_sheet(wb, wsD, 'Mes a mes'); XLSX.utils.book_append_sheet(wb, nt, 'Notas');
     XLSX.writeFile(wb, 'Ventas_por_zona_Boyaca_Casanare_Meta_Narino.xlsx');
