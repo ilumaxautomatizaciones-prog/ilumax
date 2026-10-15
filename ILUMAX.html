@@ -656,6 +656,8 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
 .mes-btn.con-datos{border-color:var(--gr);color:var(--gr);}
 .mes-btn.con-datos.seleccionado{background:var(--bl);color:#fff;}
 
+/* Carga/sincronización manual de inventario y precios: oculta porque ahora corre automática. Para volver a mostrarla: SYNC_MANUAL_VISIBLE = true */
+body:not(.sync-manual) [data-sync-manual]{display:none!important;}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
@@ -1691,6 +1693,64 @@ const SB_REABAST_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmF
 // Modo offline automático si no hay Supabase configurado
 const MODO_OFFLINE = !SB_URL || !SB_KEY;
 
+// ── Control de descargas pesadas (la salida de Supabase en plan gratis es 5 GB/mes) ─────────
+// Las tablas grandes solo se bajan completas si el usuario lo permite; el permiso dura 1 hora por tabla.
+const DESC_PESADAS = {ventas_historico:'17 MB', inventario:'11 MB', precios_lista:'10 MB', ventas_facturas_excel:'4 MB', ventas_cliente_producto:'3,5 MB', ventas_facturas_siesa:'2,5 MB'};
+// Caché local (IndexedDB) de tablas de referencia: se descargan una vez y se reutilizan 30 min (se invalida al escribir en la tabla).
+const SBC_TTL = {ventas_historico:30, inventario:30, precios_lista:30, ventas_facturas_excel:30, ventas_cliente_producto:30, ventas_facturas_siesa:30, ventas_promedio_mensual:30, ventas_abc:30, presupuesto_mensual_referencia:30, listas_catalogo:60, 'R_politica_inventario':30};
+const _SBC = {mem:new Map(), db:null};
+function sbcDB(){ return _SBC.db || (_SBC.db = new Promise(res=>{ try{ const rq = indexedDB.open('ilumax_cache',1); rq.onupgradeneeded = ()=>rq.result.createObjectStore('c'); rq.onsuccess = ()=>res(rq.result); rq.onerror = ()=>res(null); }catch(e){ res(null); } })); }
+async function sbcGet(k){ const m = _SBC.mem.get(k); if(m) return m; const db = await sbcDB(); if(!db) return null; return new Promise(res=>{ try{ const q = db.transaction('c').objectStore('c').get(k); q.onsuccess = ()=>{ const v = q.result; if(v) _SBC.mem.set(k,v); res(v||null); }; q.onerror = ()=>res(null); }catch(e){ res(null); } }); }
+async function sbcSet(k,v){ _SBC.mem.set(k,v); const db = await sbcDB(); if(!db) return; try{ db.transaction('c','readwrite').objectStore('c').put(v,k); }catch(e){} }
+async function sbcClear(tabla){ if(!tabla){ _SBC.mem.clear(); } else for(const k of [..._SBC.mem.keys()]) if(k.startsWith(tabla+'?')) _SBC.mem.delete(k);
+  const db = await sbcDB(); if(!db) return; try{ const st = db.transaction('c','readwrite').objectStore('c'), rq = st.openKeyCursor(); rq.onsuccess = ()=>{ const c = rq.result; if(c){ if(!tabla || String(c.key).startsWith(tabla+'?')) st.delete(c.key); c.continue(); } }; }catch(e){} }
+async function sbcLeer(tabla, params, fresh){ const ttl = SBC_TTL[tabla]; if(!ttl || fresh) return null; const e = await sbcGet(tabla+'?'+(params||'')); if(e && (Date.now()-e.t) < ttl*60e3){ descMedir(tabla, e.b||0, 'copia'); return e.v; } return null; }
+function sbcGuardar(tabla, params, v, b){ if(SBC_TTL[tabla] && Array.isArray(v)) sbcSet(tabla+'?'+(params||''), {t:Date.now(), v, b:b||0}); }
+// Medidor de consumo (estimado): suma lo que baja el portal por tabla y lo envía a uso_salida cada 2 min
+const _USO = {buf:{}, t:null};
+function descMedir(tabla, bytes, origen){
+  try{ const t = String(tabla).replace(/^R_/,''); if(t==='uso_salida') return;
+    const f = new Date(Date.now()-5*3600e3).toISOString().slice(0,10), u = (typeof CU!=='undefined' && CU && (CU.email||CU.nombre)) || '?', k = f+'|'+u+'|'+t+'|'+origen;
+    const e = _USO.buf[k] || (_USO.buf[k] = {fecha:f, usuario:u, tabla:t, origen, kb:0, n:0}); e.kb += (bytes||0)/1024; e.n++;
+    if(!_USO.t) _USO.t = setTimeout(descVolcar, 120e3);
+  }catch(e){}
+}
+function descVolcar(){
+  _USO.t = null; const rows = Object.values(_USO.buf).map(r=>({...r, kb:Math.round(r.kb*10)/10})); _USO.buf = {}; if(!rows.length) return;
+  try{ fetch(SB_URL+'/rest/v1/uso_salida', {method:'POST', keepalive:true, headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json','Prefer':'return=minimal'}, body:JSON.stringify(rows)}).catch(()=>{}); }catch(e){}
+}
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') descVolcar(); });
+const SYNC_MANUAL_VISIBLE = false;   // botones de subir Excel de inventario / actualizar desde SIESA / INV-DUV (ahora es automático)
+document.addEventListener('DOMContentLoaded', ()=>document.body.classList.toggle('sync-manual', SYNC_MANUAL_VISIBLE));
+const _descOk = {}, _descPend = {};
+function descEsPesada(tabla, params){
+  if(!DESC_PESADAS[tabla]) return false;
+  const q = String(params||'');
+  if(/(referencia|id)=(eq|in)\./.test(q)) return false;           // consulta puntual
+  const lim = (q.match(/(?:^|&)limit=(\d+)/)||[])[1];
+  if(lim && Number(lim) <= 200 && !/offset=/.test(q)) return false;  // trae pocas filas
+  return true;
+}
+function descPermiso(tabla){
+  try{ const g = JSON.parse(sessionStorage.getItem('desc_ok')||'{}'); if(g[tabla] && g[tabla] > Date.now()) return Promise.resolve(true); }catch(e){}
+  if(_descOk[tabla] && _descOk[tabla] > Date.now()) return Promise.resolve(true);
+  if(_descPend[tabla]) return _descPend[tabla];
+  return _descPend[tabla] = new Promise(res=>{
+    const fin = (ok, min)=>{ const t = Date.now() + (ok ? 60*60e3 : 60e3);
+      if(ok){ _descOk[tabla] = t; try{ const g = JSON.parse(sessionStorage.getItem('desc_ok')||'{}'); g[tabla] = t; sessionStorage.setItem('desc_ok', JSON.stringify(g)); }catch(e){} }
+      else { _descOk[tabla] = 0; setTimeout(()=>{ delete _descPend[tabla]; }, 60e3); }
+      if(ok) delete _descPend[tabla]; ov.remove(); res(ok); };
+    const ov = document.createElement('div'); ov.className = 'ov on'; ov.style.zIndex = 99999;
+    ov.innerHTML = `<div class="mo" style="max-width:430px;"><div class="mh"><div class="mt">📥 Descarga pesada</div></div>
+      <div class="mb" style="font-size:13px;line-height:1.5;">El portal quiere descargar la tabla <b>${tabla}</b> completa (≈ <b>${DESC_PESADAS[tabla]}</b>).<br>
+      <span style="color:var(--mu);font-size:11.5px;">La salida de Supabase tiene un tope de 5 GB al mes; por eso se pide permiso. Al permitir, no se vuelve a preguntar por esta tabla durante 1 hora.</span></div>
+      <div class="mf"><button class="btn btn-g" data-n>Cancelar</button><button class="btn btn-p" data-s>✅ Permitir (1 hora)</button></div></div>`;
+    ov.querySelector('[data-n]').onclick = ()=>fin(false);
+    ov.querySelector('[data-s]').onclick = ()=>fin(true);
+    document.body.appendChild(ov);
+  });
+}
+
 // ── Cliente Supabase ligero (sin librería externa) ────────
 const sb = {
   headers: {
@@ -1700,7 +1760,9 @@ const sb = {
     'Prefer':        'return=representation'
   },
 
-  async get(tabla, params) {
+  async get(tabla, params, opts) {
+    const _c = await sbcLeer(tabla, params, opts && opts.fresh); if(_c) return _c;
+    if(descEsPesada(tabla, params) && !(await descPermiso(tabla))) throw new Error('Descarga de '+tabla+' cancelada (sin permiso)');
     let url = SB_URL + '/rest/v1/' + tabla;
     if(params) url += '?' + params;
     const controller = new AbortController();
@@ -1709,17 +1771,18 @@ const sb = {
       const r = await fetch(url, { headers: this.headers, signal: controller.signal });
       clearTimeout(timer);
       if(!r.ok) throw new Error('Supabase GET error: ' + r.status);
-      return r.json();
+      const _t = await r.text(), _j = JSON.parse(_t); descMedir(tabla, _t.length, 'red'); sbcGuardar(tabla, params, _j, _t.length); return _j;
     } catch(e) { clearTimeout(timer); throw e; }
   },
 
   async post(tabla, data) {
+    const _big = DESC_PESADAS[tabla] && Array.isArray(data) && data.length > 20;   // no devolver de vuelta miles de filas (ahorra salida)
     const r = await fetch(SB_URL + '/rest/v1/' + tabla, {
-      method: 'POST', headers: this.headers,
+      method: 'POST', headers: _big ? {...this.headers, 'Prefer':'return=minimal'} : this.headers,
       body: JSON.stringify(data)
     });
     if(!r.ok) { const e = await r.text(); throw new Error(e); }
-    return r.json();
+    return _big ? [] : r.json();
   },
 
   async patch(tabla, filtro, data) {
@@ -1760,12 +1823,13 @@ const sbReabast = {
     'Content-Type':  'application/json',
     'Prefer':        'return=representation'
   },
-  async get(tabla, params) {
+  async get(tabla, params, opts) {
+    const _k = 'R_'+tabla, _c = await sbcLeer(_k, params, opts && opts.fresh); if(_c) return _c;
     let url = SB_REABAST_URL + '/rest/v1/' + tabla;
     if(params) url += '?' + params;
     const r = await fetch(url, { headers: this.headers });
     if(!r.ok) throw new Error('Supabase GET error: ' + r.status);
-    return r.json();
+    const _t = await r.text(), _j = JSON.parse(_t); descMedir(_k, _t.length, 'red'); sbcGuardar(_k, params, _j, _t.length); return _j;
   },
   async post(tabla, data) {
     const r = await fetch(SB_REABAST_URL + '/rest/v1/' + tabla, {
@@ -1789,6 +1853,11 @@ const sbReabast = {
     return true;
   }
 };
+
+// Cualquier escritura invalida la caché de esa tabla
+['post','patch','delete','upsert'].forEach(m=>{
+  [[sb,''],[sbReabast,'R_']].forEach(([o,pre])=>{ const f = o[m]; if(!f) return; o[m] = async function(t, ...a){ try{ return await f.apply(this, [t, ...a]); } finally { sbcClear(pre+t); } }; });
+});
 
 // ── Helpers de caché local (usados por apiLocal y por el fallback offline) ──
 function dbGet(k){ try{return JSON.parse(localStorage.getItem('ilx_'+k)||'null');}catch(e){return null;} }
@@ -9568,21 +9637,21 @@ function renderInvVista() {
 
     <!-- Acciones -->
     <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
-      <label style="display:inline-flex;align-items:center;gap:6px;background:var(--bl);color:#fff;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+      <label data-sync-manual style="display:inline-flex;align-items:center;gap:6px;background:var(--bl);color:#fff;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
         <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="subirExcelInventario(this)">
         📤 Subir Excel inventario
       </label>
-      <button id="btn-siesa-sync" onclick="actualizarDesdeSiesa()" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+      <button id="btn-siesa-sync" data-sync-manual onclick="actualizarDesdeSiesa()" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
         🔄 Actualizar desde SIESA
       </button>
-      <label title="Sube el Excel 'INV - DUV' (Biable): actualiza inventario, ventas históricas y por canal, facturas del Reporte Diario y Margen por Cliente" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+      <label data-sync-manual title="Sube el Excel 'INV - DUV' (Biable): actualiza inventario, ventas históricas y por canal, facturas del Reporte Diario y Margen por Cliente" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
         <input type="file" accept=".xlsx,.xlsm,.xls" style="display:none;" onchange="invduvSincronizar(this)">
         🔄 Sincronizar INV - DUV
       </label>
       <button onclick="invExportarExcelPorBodega()" style="display:inline-flex;align-items:center;gap:6px;background:#0f172a;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;" title="Descarga un Excel con SKU, Descripción, Categoría, Existencia y Bodega — una fila por cada SKU+bodega con existencia real (solo bodegas disponibles, sin averías/muestras/etc.)">
         📥 Excel existencias por bodega
       </button>
-      <div id="inv-siesa-status" style="font-size:11px;color:var(--mu);">Sincroniza el inventario directo desde la API de SIESA</div>
+      <div id="inv-siesa-status" data-sync-manual style="font-size:11px;color:var(--mu);">Sincroniza el inventario directo desde la API de SIESA</div>
     </div>
     <div id="invduv-status" style="display:none;background:#0f172a;color:#e2e8f0;border-radius:10px;padding:10px 12px;font:11px/1.6 monospace;margin-bottom:12px;white-space:pre-wrap;max-height:220px;overflow:auto;"></div>
 
@@ -14628,7 +14697,7 @@ async function tesoGuardar(reg){
   if(TESO.lista){ const i = TESO.lista.findIndex(x=>x.ocId===reg.ocId); if(i>=0) TESO.lista[i] = reg; else TESO.lista.push(reg); }
 }
 function tesoNumeral(r){ return (r && r.numeral) || TESO_NUMERAL_DEF; }
-function tesoSaldo(r){ const pag = r.estado==='pagado' ? (r.pagado_usd||r.monto_usd) : r.monto_usd; return Math.round(((r.fob_total||0) - (pag||0))*100)/100; }
+function tesoSaldo(r){ const pag = r.estado==='pagado' ? (r.pagado_usd||r.monto_usd) : r.monto_usd; return Math.round(((r.fob_total||0) - (pag||0) - tesoNcUsd(r,'saldo'))*100)/100; }
 async function tesoSetNumeral(ocId, v){
   const r = tesoRegDe(ocId); if(!r) return; v = String(v||'').trim();
   if(!/^\d{4}$/.test(v)){ if(typeof toast==='function') toast('El numeral cambiario debe tener 4 dígitos (ej. 2017)','wa'); tesoRepintar(); return; }
@@ -15437,7 +15506,7 @@ async function tesoPintarEnDetalle(ocId){
   try{ await tesoCargar(); }catch(err){ el.innerHTML = ''; return; }
   const r = tesoRegDe(ocId); const a = tesoCalcularAnticipo(o);
   let html;
-  if(r && r.estado==='pagado') html = `✅ <strong>Anticipo pagado</strong> ${tesoUsd(tesoPagadoUsd(r))} por ${reabastEsc(r.pagado_por||'Tesorería')} el ${reabastEsc(r.fecha_pago||tesoFmt(r.pagado_en))}${tesoPendienteAnticipo(r)>0.004?` · <strong style="color:var(--or);">pendiente ${tesoUsd(tesoPendienteAnticipo(r))} del anticipo</strong>`:''} · saldo restante OC ${tesoUsd(tesoSaldo(r))}${r.comprobante_url?` · <a href="${reabastEsc(r.comprobante_url)}" target="_blank" style="color:var(--bl);">📎 comprobante</a>`:''}`;
+  if(r && r.estado==='pagado') html = `✅ <strong>Anticipo pagado</strong> ${tesoUsd(tesoPagadoUsd(r))} por ${reabastEsc(r.pagado_por||'Tesorería')} el ${reabastEsc(r.fecha_pago||tesoFmt(r.pagado_en))}${tesoPendienteAnticipo(r)>0.004?` · <strong style="color:var(--or);">pendiente ${tesoUsd(tesoPendienteAnticipo(r))} del anticipo</strong>`:''} · saldo restante OC ${tesoUsd(tesoSaldo(r))}${tesoNcLista(r).length?` · 🧾 ${tesoNcLista(r).length} nota(s) crédito ${tesoUsd(tesoNcUsd(r))}`:''}${r.comprobante_url?` · <a href="${reabastEsc(r.comprobante_url)}" target="_blank" style="color:var(--bl);">📎 comprobante</a>`:''}`;
   else if(r) html = `🟢 <strong>Autorizado para pago</strong> ${tesoUsd(r.monto_usd)} (${Math.round(r.pct*1000)/10}%) · numeral ${reabastEsc(tesoNumeral(r))} · saldo restante ${tesoUsd(tesoSaldo(r))} · por ${reabastEsc(r.autorizado_por)} · corte ${tesoFmt(r.corte,true)} → Tesorería paga el <strong>${tesoFmt(r.pago_programado)}</strong>
       ${tesoPuedeAutorizar()&&new Date(r.corte)>new Date()?` <span class="arte-link" onclick="tesoAnular('${ocId}')">quitar del corte</span>`:''}<span class="arte-mu"> · ⏳ pendiente de pago en Tesorería</span>`;
   else if(e.estado==='completada') html = `✅ Etapa de anticipo ya completada.`;
@@ -16760,6 +16829,7 @@ function ppConstruir(){
     // Si el anticipo se editó a mano, el saldo se recalcula solo: total de la compra − anticipo (salvo que el saldo también se haya ajustado a mano)
     if(!sinAnt && A.anticipo && A.anticipo.usd!=null && !(A.saldo && A.saldo.usd!=null)) salUsd = Math.max(0, Math.round(((ramasDe ? calc.fob : (compras||calc.fob)) - antUsd)*100)/100);
     if(A.saldo && A.saldo.usd!=null) salUsd = Number(A.saldo.usd);
+    else { const _rg = typeof tesoRegDe==='function' ? tesoRegDe(o.id) : null, _nc = _rg ? tesoNcUsd(_rg,'saldo') : 0; if(_nc>0) salUsd = Math.max(0, Math.round((salUsd - _nc)*100)/100); } // notas crédito del proveedor bajan el saldo
     const r = typeof ceDe==='function' ? ceDe(o.numero_oc) : null;
     const emb = r && r.fase!=null ? (r.fase>=6 ? {cls:'ok', txt:'🚢 Zarpó'+(r.bl&&r.bl.length?' · BL '+r.bl[0]:'')} : r.fase===5 ? {cls:'med', txt:'⏳ En embarque'} : {cls:'no', txt:'🏭 Sin zarpar'}) : {cls:'no', txt:'— sin dato Com. Ext.'};
     const rev = A.saldo && A.saldo.rev || null;
@@ -16922,6 +16992,7 @@ function ppPintarInterno(el){
   const accFila = p => {
     const n = reabastEsc(p.num), b = (t,js,tit,cls) => `<button class="btn ${cls||'btn-g'} btn-sm" style="padding:2px 6px;font-size:10.5px;" onclick="event.stopPropagation();${js}" title="${tit||''}">${t}</button>`;
     const reg = typeof tesoRegDe==='function' ? tesoRegDe(p.ocId) : null, o = [];
+    if(reg && tesoPuedePagar()) o.push(b('🧾 NC',`tesoNotaCredito('${p.ocId}','${n}')`,'Anexar / ver notas crédito del proveedor'+(tesoNcLista(reg).length?' ('+tesoNcLista(reg).length+')':'')));
     if(p.estado!=='pagado'){
       if(puede) o.push(b('✎ Editar',`ppAjustar('${n}','${p.tipo}')`,'Cambiar fecha o valor (el saldo se recalcula)'));
       if(p.tipo==='anticipo'){ if(reg && reg.estado==='autorizado' && tesoPuedePagar()) o.push(b('💸 Pagado',`tesoMarcarPagado('${p.ocId}')`,'Registrar el pago del anticipo','btn-gr')); }
@@ -17162,6 +17233,84 @@ function tesoDevolverPago(ocId, num){
       const A = PP.ajustes[ceNum(num||r.numero_oc)]; if(A && A.anticipo){ delete A.anticipo.usd; }
       ppLog(num||r.numero_oc,'DEVOLVIÓ el pago del anticipo (era '+pagos+') · motivo: '+n);
       await tesoGuardar(r); await ppGuardarAjustes(); if(typeof tesoRepintar==='function') tesoRepintar(); ppPintar(); if(typeof toast==='function') toast('Pago devuelto: el anticipo quedó autorizado, pendiente de pago','ok');
+    });
+}
+
+// ── Notas crédito del proveedor: se anexan a la OC (con su anticipo). Una nota crédito es el documento con que el proveedor
+// REDUCE lo que le debemos (precio/cantidad corregidos, mercancía faltante o devuelta, descuento, o anticipo pagado de más).
+// "Aplica a": saldo → baja el saldo por pagar de la OC; devolución → el proveedor reembolsa (queda por recibir); otra OC → cruce.
+const TESO_NC_APLICA = {saldo:'Descuenta del saldo de esta OC', devolucion:'El proveedor devuelve el dinero (reembolso)', otra_oc:'Se cruza con otra OC del proveedor'};
+function tesoNcLista(r){ return (r && r.notas_credito) || []; }
+function tesoNcUsd(r, aplica){ return Math.round(tesoNcLista(r).filter(n=>!aplica || n.aplica===aplica).reduce((a,n)=>a+(Number(n.usd)||0),0)*100)/100; }
+function tesoNotaCredito(ocId, num){
+  const r = tesoRegDe(ocId); if(!r){ if(typeof toast==='function') toast('Primero debe existir el anticipo autorizado de esta OC','wa'); return; }
+  if(!tesoPuedePagar()){ if(typeof toast==='function') toast('Solo Tesorería/Cartera o un administrador puede anexar notas crédito','wa'); return; }
+  const hoy = new Date(Date.now()+TESO_TZ_OFF*3600e3).toISOString().slice(0,10);
+  const ov = document.createElement('div'); ov.className = 'ov on'; ov.style.zIndex = 950;
+  const lista = ()=> tesoNcLista(r).length ? `<div class="tw" style="margin-bottom:10px;"><table style="font-size:11px;"><thead><tr><th>Nota crédito</th><th>Fecha</th><th style="text-align:right;">US$</th><th>Aplica a</th><th>Motivo</th><th></th></tr></thead><tbody>${tesoNcLista(r).map(n=>`<tr><td><b>${reabastEsc(n.num)}</b>${n.url?` <a href="${reabastEsc(n.url)}" target="_blank" rel="noopener">📎</a>`:''}</td><td>${reabastEsc(n.fecha||'')}</td><td style="text-align:right;font-weight:700;">${tesoUsd(n.usd)}</td><td>${reabastEsc(TESO_NC_APLICA[n.aplica]||n.aplica||'')}${n.oc_destino?' → '+reabastEsc(n.oc_destino):''}</td><td>${reabastEsc(n.motivo||'')}</td><td><button class="btn btn-g btn-sm" data-q="${reabastEsc(n.id)}" title="Quitar">🗑</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="arte-mu" style="font-size:11px;margin-bottom:10px;">Esta OC aún no tiene notas crédito.</div>';
+  const pintar = ()=>{
+    ov.innerHTML = `<div class="mo" style="max-width:560px;">
+      <div class="mh"><div class="mt">🧾 Notas crédito · ${reabastEsc(r.numero_oc||num||'')}</div><div class="mx" data-x>✕</div></div>
+      <div class="mb">
+        <div class="teso-pago-res">
+          <div><span>Proveedor</span><b>${reabastEsc(r.proveedor)}</b></div>
+          <div><span>Valor OC (FOB)</span><b>${tesoUsd(r.fob_total)}</b></div>
+          <div><span>Anticipo ${r.estado==='pagado'?'pagado':'autorizado'}</span><b>${tesoUsd(r.estado==='pagado'?(r.pagado_usd||r.monto_usd):r.monto_usd)}</b></div>
+          <div><span>Notas crédito (total)</span><b style="color:var(--gr);">${tesoUsd(tesoNcUsd(r))}</b></div>
+          <div><span>Saldo por pagar tras notas crédito</span><b>${tesoUsd(tesoSaldo(r))}</b></div>
+        </div>
+        <div style="font-size:11px;color:var(--mu);margin:8px 0;">La nota crédito es el documento con el que el proveedor <b>reduce</b> lo que le debemos (diferencia de precio o cantidad, mercancía faltante o devuelta, descuento, o anticipo pagado de más).</div>
+        ${lista()}
+        <div style="font-weight:800;font-size:12px;margin:6px 0;">➕ Anexar nota crédito</div>
+        <div class="fg2"><div class="fg"><label class="fl">N.º de nota crédito *</label><input class="inp" data-num placeholder="Ej: NC-2026-0123"></div>
+          <div class="fg"><label class="fl">Fecha *</label><input class="inp" type="date" data-fecha value="${hoy}" max="${hoy}"></div></div>
+        <div class="fg2"><div class="fg"><label class="fl">Valor US$ *</label><input class="inp" type="number" step="0.01" min="0" data-usd></div>
+          <div class="fg"><label class="fl">¿A qué se aplica? *</label><select class="inp" data-ap>${Object.keys(TESO_NC_APLICA).map(k=>`<option value="${k}">${TESO_NC_APLICA[k]}</option>`).join('')}</select></div></div>
+        <div class="fg" data-ocd style="display:none;"><label class="fl">OC a la que se cruza</label><input class="inp" data-oc placeholder="Ej: OCI120"></div>
+        <div class="fg"><label class="fl">Motivo *</label><select class="inp" data-mot><option>Diferencia de precio</option><option>Diferencia de cantidad / mercancía faltante</option><option>Mercancía devuelta o dañada</option><option>Descuento pactado</option><option>Anticipo pagado de más</option><option>Otro</option></select></div>
+        <div class="fg"><label class="fl">Detalle (opcional)</label><input class="inp" data-det placeholder="Ej: faltaron 200 und. del ítem X"></div>
+        <div class="fg"><label class="fl">Soporte de la nota crédito (PDF o imagen) *</label><input class="inp" type="file" data-file accept="image/*,.pdf"></div>
+        <div data-err style="font-size:11px;color:var(--rd);min-height:14px;"></div>
+      </div>
+      <div class="mf"><button class="btn btn-g" data-x>Cerrar</button><button class="btn btn-p" data-ok>💾 Anexar nota crédito</button></div></div>`;
+    ov.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>ov.remove());
+    const ap = ov.querySelector('[data-ap]'); ap.onchange = ()=>{ ov.querySelector('[data-ocd]').style.display = ap.value==='otra_oc' ? 'block' : 'none'; };
+    ov.querySelectorAll('[data-q]').forEach(b=>b.onclick=()=>tesoNcQuitar(ocId, b.dataset.q, ()=>pintar()));
+    ov.querySelector('[data-ok]').onclick = async ()=>{
+      const $ = q=>ov.querySelector(q), err = $('[data-err]');
+      const num_ = $('[data-num]').value.trim(), fecha = $('[data-fecha]').value, usd = Number($('[data-usd]').value)||0, f = $('[data-file]').files[0];
+      const aplica = $('[data-ap]').value, oc_destino = $('[data-oc]').value.trim();
+      if(!num_) return err.textContent = 'Escribe el número de la nota crédito';
+      if(!fecha) return err.textContent = 'Escribe la fecha';
+      if(usd<=0) return err.textContent = 'Escribe el valor en US$';
+      if(aplica==='otra_oc' && !oc_destino) return err.textContent = 'Escribe a qué OC se cruza';
+      if(!f) return err.textContent = 'Adjunta el soporte de la nota crédito';
+      if(tesoNcLista(r).some(n=>String(n.num).toLowerCase()===num_.toLowerCase())) return err.textContent = 'Esa nota crédito ya está anexada a esta OC';
+      $('[data-ok]').disabled = true; err.textContent = '⏳ Subiendo soporte…';
+      try{
+        const url = await ocSubirAdjunto(f); const quien = (CU&&CU.nombre)||'';
+        const motivo = $('[data-mot]').value + ($('[data-det]').value.trim() ? ' · '+$('[data-det]').value.trim() : '');
+        r.notas_credito = [...tesoNcLista(r), {id:'NC'+Date.now(), num:num_, fecha, usd:Math.round(usd*100)/100, aplica, oc_destino:oc_destino||null, motivo, url, por:quien, t:new Date().toISOString()}];
+        r.historial = [...(r.historial||[]), {t:new Date().toISOString(), quien, accion:'Anexó NOTA CRÉDITO '+num_+' · '+tesoUsd(usd)+' · '+(TESO_NC_APLICA[aplica]||aplica), nota:motivo}];
+        await tesoGuardar(r);
+        try{ ppLog(num||r.numero_oc, 'Anexó nota crédito '+num_+' por US$'+usd+' ('+(TESO_NC_APLICA[aplica]||aplica)+') · '+motivo); await ppGuardarAjustes(); }catch(e){}
+        if(typeof toast==='function') toast('Nota crédito anexada','ok');
+        try{ tesoRepintar(); }catch(e){} try{ ppPintar(); }catch(e){}
+        pintar();
+      }catch(e){ $('[data-ok]').disabled = false; err.textContent = 'Error: '+e.message; }
+    };
+  };
+  document.body.appendChild(ov); pintar();
+}
+function tesoNcQuitar(ocId, id, despues){
+  const r = tesoRegDe(ocId); if(!r) return; const n = tesoNcLista(r).find(x=>x.id===id); if(!n) return;
+  ppModal(`🗑 Quitar nota crédito ${reabastEsc(n.num)}`, `<div style="font-size:12px;margin-bottom:8px;">Se quita la nota crédito de ${tesoUsd(n.usd)}; el saldo de la OC vuelve a subir. Queda en el historial.</div>
+    <div class="fg"><label class="fl">Motivo (obligatorio)</label><input class="inp" data-n placeholder="¿Por qué se quita?"></div>`, async ov=>{
+      const m = ov.querySelector('[data-n]').value.trim(); if(!m){ if(typeof toast==='function') toast('Escribe el motivo','wa'); return false; }
+      r.notas_credito = tesoNcLista(r).filter(x=>x.id!==id);
+      r.historial = [...(r.historial||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion:'QUITÓ la nota crédito '+n.num+' ('+tesoUsd(n.usd)+')', nota:m}];
+      await tesoGuardar(r); try{ ppLog(r.numero_oc,'Quitó la nota crédito '+n.num+' · motivo: '+m); await ppGuardarAjustes(); }catch(e){}
+      try{ tesoRepintar(); }catch(e){} try{ ppPintar(); }catch(e){} if(typeof despues==='function') despues();
     });
 }
 
@@ -17796,7 +17945,9 @@ function fcGestionar(i){
     if(p.estado!=='pagado'){ if(reg && reg.estado==='autorizado' && tesoPuedePagar()) ac.push(btn('💸 Registrar pago del anticipo','pagar','btn-gr')); else if(!reg && tesoPuedeAutorizar()) ac.push(btn('✔ Autorizar anticipo','autorizar','btn-bl')); }
     else { if(reg && reg.estado==='pagado' && tesoPendienteAnticipo(reg)>0.004 && tesoPuedePagar()) ac.push(btn('💸 Registrar pago adicional','pagar','btn-gr')); if(reg && reg.estado==='pagado' && tesoPuedePagar()) ac.push(btn('✎ Corregir pago (valor / fecha / TRM)','corregir'), btn('↩︎ Devolver pago (volver a autorizado)','devolver')); }
     if(p.estado!=='pagado' && puede) ac.push(btn('✎ Ajustar fecha / valor','ajustar'));
-  } else if(puede){
+  }
+  if(reg && tesoPuedePagar()) ac.push(btn('🧾 Notas crédito'+(tesoNcLista(reg).length?' ('+tesoNcLista(reg).length+')':''),'nc'));
+  if(p.tipo!=='anticipo' && puede){
     if(p.estado!=='pagado'){ ac.push(btn('✅ Marcar saldo pagado','saldo','btn-gr'), btn('✎ Ajustar fecha / valor','ajustar'), btn('👍 Se paga esta semana','rev_ok'), btn('⏳ Aún no se puede','rev_no')); if(p.rev) ac.push(btn('✕ Quitar revisión','rev_x')); }
     else ac.push(btn('✎ Corregir pago del saldo','corregirs'), btn('↩ Deshacer pago del saldo','deshacer'));
   }
@@ -17829,7 +17980,7 @@ function fcHistHtml(p){
 }
 function fcAct(i,a){
   const p = (PP.ult||[])[i]; if(!p) return; fcCerrarModal();
-  const m = {oc:()=>reabastAbrirDetalleOC(p.ocId), pagar:()=>tesoMarcarPagado(p.ocId), autorizar:()=>tesoAutorizar([p.ocId]), saldo:()=>ppMarcarSaldo(p.num), deshacer:()=>ppDeshacerSaldo(p.num), corregir:()=>tesoCorregirPago(p.ocId,p.num), devolver:()=>tesoDevolverPago(p.ocId,p.num), corregirs:()=>ppMarcarSaldo(p.num,true), ajustar:()=>ppAjustar(p.num,p.tipo), rev_ok:()=>ppRevision(p.num,'ok'), rev_no:()=>ppRevision(p.num,'no'), rev_x:()=>ppRevision(p.num,'')};
+  const m = {oc:()=>reabastAbrirDetalleOC(p.ocId), pagar:()=>tesoMarcarPagado(p.ocId), autorizar:()=>tesoAutorizar([p.ocId]), saldo:()=>ppMarcarSaldo(p.num), deshacer:()=>ppDeshacerSaldo(p.num), corregir:()=>tesoCorregirPago(p.ocId,p.num), devolver:()=>tesoDevolverPago(p.ocId,p.num), nc:()=>tesoNotaCredito(p.ocId,p.num), corregirs:()=>ppMarcarSaldo(p.num,true), ajustar:()=>ppAjustar(p.num,p.tipo), rev_ok:()=>ppRevision(p.num,'ok'), rev_no:()=>ppRevision(p.num,'no'), rev_x:()=>ppRevision(p.num,'')};
   if(m[a]) m[a]();
 }
 
@@ -26115,7 +26266,7 @@ async function actualizarDesdeSiesa() {
           let offsetPrecios = 0;
           while(true) {
             const rows = await sb.get('precios_lista',
-              'select=lista,referencia,precio&order=id.asc&limit=' + PAGE_PRECIOS + '&offset=' + offsetPrecios);
+              'select=lista,referencia,precio&order=id.asc&limit=' + PAGE_PRECIOS + '&offset=' + offsetPrecios, {fresh:true});
             if(!rows || !rows.length) break;
             rows.forEach(r => { existentesPrecios[r.referencia + '_' + r.lista] = r; });
             if(rows.length < PAGE_PRECIOS) break;
@@ -26287,7 +26438,7 @@ async function invduvSincronizar(inputEl) {
     const h = {...H}; if(prefer) h['Prefer'] = prefer;
     for(let intento=1; intento<=3; intento++) {
       const r = await fetch(SB_URL + '/rest/v1/' + path, {method, headers:h, body: body ? JSON.stringify(body) : undefined});
-      if(r.ok) return method==='GET' ? r.json() : null;
+      if(r.ok){ if(method!=='GET') sbcClear(String(path).split('?')[0]); return method==='GET' ? r.json() : null; }
       const t = await r.text();
       if(intento===3) throw new Error(r.status + ' ' + t.slice(0,300));
       await new Promise(res => setTimeout(res, 1500*intento));
@@ -31615,6 +31766,7 @@ function renderCentroShell(el) {
       <button id="ct-tab-briefing"  class="flt"    onclick="ctTab('briefing')"  style="font-size:11px;padding:7px 14px;">🗺️ Plan & Notas</button>
       <button id="ct-tab-reporte"   class="flt"    onclick="ctTab('reporte')"   style="font-size:11px;padding:7px 14px;">📊 Reporte Diario</button>
       <button id="ct-tab-comisiones" class="flt"  onclick="ctTab('comisiones')" style="font-size:11px;padding:7px 14px;">💰 Comisiones</button>
+      <button id="ct-tab-consumo" class="flt"  onclick="ctTab('consumo')" style="font-size:11px;padding:7px 14px;">📊 Consumo de datos</button>
     </div>
 
     <!-- CONTENIDO DE CADA TAB -->
@@ -32135,7 +32287,7 @@ async function cmExcel(){
 // ── TABS ──────────────────────────────────────────────────────────────
 function ctTab(tab) {
   CT.tabActivo = tab;
-  ['tareas','manuales','contactos','tramites','briefing','reporte','comisiones'].forEach(t => {
+  ['tareas','manuales','contactos','tramites','briefing','reporte','comisiones','consumo'].forEach(t => {
     const btn = document.getElementById('ct-tab-'+t);
     if(btn) btn.classList.toggle('on', t===tab);
   });
@@ -32148,6 +32300,30 @@ function ctTab(tab) {
   if(tab==='briefing')  renderCtBriefing(el);
   if(tab==='reporte')   renderCtReporte(el);
   if(tab==='comisiones'){ CM.dest = null; renderCtComisiones(el); }
+  if(tab==='consumo')   renderCtConsumo(el);
+}
+
+// ── TAB CONSUMO DE DATOS (estimado de la salida de Supabase: plan gratis = 5 GB por ciclo, del 14 al 14) ──
+async function renderCtConsumo(el){
+  el.innerHTML = cargaHtml('Calculando consumo');
+  const hoy = new Date(Date.now()-5*3600e3), ini = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth() - (hoy.getUTCDate()>=14?0:1), 14)).toISOString().slice(0,10);
+  descVolcar();
+  let rows = []; try{ rows = await sb.get('uso_salida', 'select=fecha,usuario,tabla,origen,kb,n&fecha=gte.'+ini+'&limit=20000') || []; }catch(e){ el.innerHTML = '<div class="empty">No se pudo leer el consumo: '+reabastEsc(e.message)+'</div>'; return; }
+  const LIM = 5*1024, mb = x => x/1024, f = x => x>=1024 ? (x/1024).toFixed(2)+' GB' : x.toFixed(1)+' MB';
+  const red = rows.filter(r=>r.origen==='red'), cop = rows.filter(r=>r.origen==='copia');
+  const sum = a => a.reduce((t,r)=>t+Number(r.kb||0),0)/1024, usado = sum(red), ahorro = sum(cop), pct = Math.min(100, usado/LIM*100);
+  const color = pct>=85 ? '#ef4444' : pct>=70 ? '#f59e0b' : '#16a34a';
+  const grp = (a,k) => { const o={}; a.forEach(r=>{ o[r[k]||'?'] = (o[r[k]||'?']||0) + Number(r.kb||0)/1024; }); return Object.entries(o).sort((x,y)=>y[1]-x[1]); };
+  const barras = (L, max) => L.map(([n,v])=>`<div style="display:flex;align-items:center;gap:8px;font-size:11.5px;margin:3px 0;"><div style="width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${reabastEsc(n)}">${reabastEsc(n)}</div><div style="flex:1;background:var(--b1,#e5e7eb);border-radius:4px;height:10px;"><div style="width:${Math.max(2,v/(max||1)*100)}%;background:#6366f1;height:10px;border-radius:4px;"></div></div><div style="width:70px;text-align:right;font-weight:700;">${f(v)}</div></div>`).join('') || '<div class="arte-mu">Sin datos todavía.</div>';
+  const dias = grp(red,'fecha').sort((a,b)=>a[0]<b[0]?1:-1).slice(0,14), porTabla = grp(red,'tabla').slice(0,8), porUser = grp(red,'usuario').slice(0,8);
+  const caja = (t,h)=>`<div style="background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:12px 14px;"><div style="font-weight:800;font-size:12px;margin-bottom:6px;">${t}</div>${h}</div>`;
+  el.innerHTML = `<div style="display:grid;gap:12px;">
+    ${caja('📊 Salida estimada · ciclo desde el '+ini, `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;"><span style="font-size:26px;font-weight:800;color:${color};">${f(usado)}</span><span class="arte-mu">de 5 GB (${pct.toFixed(1)} %)</span>${pct>=70?'<b style="color:'+color+';">⚠ Cerca del límite</b>':''}<span style="margin-left:auto;" class="arte-mu">💾 Ahorrado con la copia local: <b>${f(ahorro)}</b></span></div><div style="background:var(--b1,#e5e7eb);border-radius:6px;height:12px;margin-top:8px;"><div style="width:${pct}%;background:${color};height:12px;border-radius:6px;"></div></div><div class="arte-mu" style="font-size:10.5px;margin-top:6px;">Es una estimación de lo que descarga el portal (sin la compresión ni los procesos externos como la sincronización con SIESA). El dato exacto está en Supabase → Uso → Salida. <button class="btn btn-g btn-sm" onclick="renderCtConsumo(document.getElementById('ct-tab-content'))">↻ Actualizar</button></div>`)}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;">
+      ${caja('📅 Por día (últimos 14)', barras(dias, Math.max(0,...dias.map(d=>d[1]))))}
+      ${caja('🗂 Por tabla', barras(porTabla, porTabla[0]&&porTabla[0][1]))}
+      ${caja('👤 Por usuario', barras(porUser, porUser[0]&&porUser[0][1]))}
+    </div></div>`;
 }
 
 // ── TAB TAREAS ─────────────────────────────────────────────────────────
