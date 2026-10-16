@@ -10452,9 +10452,9 @@ async function invExportarRotacion() {
     if(ks.length>=4){ const L=ks[ks.length-1], prev=ks.slice(-4,-1).reduce((a,k)=>a+tot[k],0)/3; if(tot[L] < prev*0.6) ks.pop(); }
     if(ks.length<3){ toast('No hay suficientes meses completos de ventas','wa'); return; }
     const k3 = ks.slice(-3), k6 = ks.slice(-6), n6 = k6.length;
-    const u3 = {}, u6 = {};
+    const u3 = {}, u6 = {}, um = {}; // um[ref][k] = unidades de ese mes
     (rows||[]).forEach(r=>{ const k=mk(r.anio,r.mes), u=+r.unidades||0;
-      if(k6.includes(k)) u6[r.referencia]=(u6[r.referencia]||0)+u;
+      if(k6.includes(k)){ u6[r.referencia]=(u6[r.referencia]||0)+u; (um[r.referencia]=um[r.referencia]||{})[k]=((um[r.referencia]||{})[k]||0)+u; }
       if(k3.includes(k)) u3[r.referencia]=(u3[r.referencia]||0)+u; });
     const inv = reabastInventarioPorReferencia();
     const lista = Array.isArray(inv) ? inv : Object.values(inv);
@@ -10469,18 +10469,22 @@ async function invExportarRotacion() {
       if(st<=0 && a6<=0) return;
       const r3=a3/3, r6=a6/n6, m3=r3>0?st/r3:null, m6=r6>0?st/r6:null;
       const est = (st<=0 && a6>0) ? 'Agotado - comprar' : (a6<=0 ? 'Sin rotación' : (m6>T_ALTO ? 'Alto stock' : (m6<T_REF ? 'Reforzar compra' : 'Normal')));
-      out.push({ 'Referencia':r, 'Descripción':e.descripcion||'', 'Categoría':cat[r]||'', 'Inventario actual':st,
+      const fila = { 'Referencia':r, 'Descripción':e.descripcion||'', 'Categoría':cat[r]||'', 'Inventario actual':st };
+      k6.forEach(k=>{ const v=(um[r]&&um[r][k])||0; fila['Ventas '+nom(k)]=v; });
+      k6.forEach(k=>{ const v=(um[r]&&um[r][k])||0; fila['Meses inv. con ritmo '+nom(k)]= v>0?Math.round(st/v*10)/10:''; });
+      out.push(Object.assign(fila,{
         'Ventas 3m (und)':a3, 'Ventas 6m (und)':a6, 'Rotación 3m (und/mes)':Math.round(r3*10)/10, 'Rotación 6m (und/mes)':Math.round(r6*10)/10,
         'Meses inventario (3m)': m3==null?'':Math.round(m3*10)/10, 'Meses inventario (6m)': m6==null?'':Math.round(m6*10)/10,
-        'Estado':est, 'Costo prom.':cost[r]||0, 'Valor inventario':Math.round(st*(cost[r]||0)) });
+        'Estado':est, 'Costo prom.':cost[r]||0, 'Valor inventario':Math.round(st*(cost[r]||0)) }));
     });
     out.sort((a,b)=>b['Inventario actual']-a['Inventario actual']);
     const ws = XLSX.utils.json_to_sheet(out);
-    ws['!cols']=[{wch:12},{wch:44},{wch:24},{wch:12},{wch:12},{wch:12},{wch:13},{wch:13},{wch:13},{wch:13},{wch:18},{wch:12},{wch:16}];
+    ws['!cols']=[{wch:12},{wch:44},{wch:24},{wch:12}].concat(k6.map(()=>({wch:11})),k6.map(()=>({wch:14})),[{wch:12},{wch:12},{wch:13},{wch:13},{wch:13},{wch:13},{wch:18},{wch:12},{wch:16}]);
     ws['!autofilter']={ref:ws['!ref']}; ws['!freeze']={xSplit:2,ySplit:1};
     const nota = [['Inventario actual: bodegas que cuentan ('+INV_BODEGAS_CUENTAN.join(', ')+')'],
       ['Ventas 3m: '+k3.map(nom).join(', ')], ['Ventas '+n6+'m: '+k6.map(nom).join(', ')+' (meses completos)'],
       ['Estado (según meses de inventario a 6m): Alto stock > '+T_ALTO+' · Reforzar compra < '+T_REF+' · Normal entre ambos'],
+      ['Mes a mes: "Meses inv. con ritmo <mes>" = inventario actual / unidades vendidas ese mes (cuánto duraría el stock al ritmo de ese mes).'],
       ['Agotado - comprar = sin stock pero con ventas · Sin rotación = con stock y sin ventas']];
     const wn = XLSX.utils.aoa_to_sheet(nota); wn['!cols']=[{wch:110}];
     const wb = XLSX.utils.book_new();
