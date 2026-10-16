@@ -10436,61 +10436,197 @@ function invExportarExcelPorBodega() {
   toast('📥 Excel descargado: ' + filas.length + ' filas','ok');
 }
 
-// ── Excel de inventario y rotación: stock actual (bodegas que cuentan) vs ventas de los últimos 3 y 6 meses COMPLETOS ──
+// ── Excel de inventario y rotación (ExcelJS: fórmulas vivas, parámetros editables, colores y filtros) ──
+// Compara el stock actual (bodegas que cuentan) contra las ventas de los últimos meses COMPLETOS, mes a mes.
+function invRotBuildWb(D){
+  // D = {filas:[{ref,desc,cat,stock,costo,m:[unidades por mes]}], meses:[etiquetas], bodegas:[...], fecha}
+  const wb = new ExcelJS.Workbook(); wb.creator='ILUMAX'; wb.calcProperties={fullCalcOnLoad:true};
+  const n = D.meses.length, NF=D.filas.length;
+  const col = c => { let s=''; c++; while(c>0){ const m=(c-1)%26; s=String.fromCharCode(65+m)+s; c=Math.floor((c-1)/26);} return s; }; // 0→A
+  const AZUL='1E293B', thin={style:'thin',color:{argb:'FFCBD5E1'}}, bord={top:thin,bottom:thin,left:thin,right:thin};
+  const hdr = (c,bg)=>{ c.font={bold:true,color:{argb:'FFFFFFFF'},size:10}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF'+(bg||AZUL)}}; c.alignment={horizontal:'center',vertical:'middle',wrapText:true}; c.border=bord; };
+  // ══ Hoja Panel ══
+  const wp = wb.addWorksheet('Panel',{properties:{tabColor:{argb:'FF0F766E'}},views:[{showGridLines:false}]});
+  // ══ Hoja Detalle ══
+  const wd = wb.addWorksheet('Detalle',{properties:{tabColor:{argb:'FF1E293B'}},views:[{state:'frozen',xSplit:2,ySplit:4,showGridLines:false}]});
+  const H=4, R0=5, R1=R0+NF-1;           // encabezado y rango de datos
+  const cD=3;                              // índice 0-based de "Inventario actual" (D)
+  const cM0=4;                             // primera columna de ventas por mes (E)
+  const cV3=cM0+n, cV6=cV3+1, cR3=cV6+1, cR6=cR3+1, cRB=cR6+1, cMB=cRB+1, cMM0=cMB+1, cEst=cMM0+n,
+        cCto=cEst+1, cVal=cCto+1, cExc=cVal+1, cVExc=cExc+1, cSug=cVExc+1, cCSug=cSug+1;
+  const L = {D:col(cD), V6:col(cV6), V3:col(cV3), R3:col(cR3), R6:col(cR6), RB:col(cRB), MB:col(cMB), Est:col(cEst), Cto:col(cCto), Val:col(cVal), Exc:col(cExc), VExc:col(cVExc), Sug:col(cSug), CSug:col(cCSug)};
+  // Parámetros (Panel)
+  const P = { alto:"Panel!$C$5", ref:"Panel!$C$6", obj:"Panel!$C$7", base:"Panel!$C$8" };
+  // — Detalle —
+  wd.getCell('A1').value='Inventario y rotación por referencia'; wd.getCell('A1').font={bold:true,size:14,color:{argb:'FF1E293B'}};
+  wd.getCell('A2').value='Stock al '+D.fecha+' · bodegas: '+D.bodegas.join(', ')+' · Los parámetros (umbrales, base 3m/6m, meses objetivo) se cambian en la hoja Panel y todo se recalcula.';
+  wd.getCell('A2').font={italic:true,size:9,color:{argb:'FF64748B'}};
+  const heads=['Referencia','Descripción','Categoría','Inventario actual'].concat(D.meses.map(m=>'Ventas '+m),
+    ['Ventas 3m (und)','Ventas '+n+'m (und)','Rotación 3m (und/mes)','Rotación '+n+'m (und/mes)','Rotación base (und/mes)','Meses de inventario (base)'],
+    D.meses.map(m=>'Meses inv. a ritmo '+m), ['Estado','Costo prom.','Valor inventario','Exceso (und)','Valor exceso','Sugerido comprar (und)','Costo compra sugerida']);
+  heads.forEach((h,i)=>{ const c=wd.getCell(H,i+1); c.value=h; hdr(c, i>=cM0&&i<cV3?'0F766E': (i>=cMM0&&i<cEst?'7C3AED': (i>=cEst?'B45309':AZUL))); });
+  wd.getRow(H).height=44;
+  D.filas.forEach((f,k)=>{
+    const r=R0+k, row=wd.getRow(r);
+    row.getCell(1).value=f.ref; row.getCell(2).value=f.desc; row.getCell(3).value=f.cat; row.getCell(cD+1).value=f.stock;
+    f.m.forEach((u,j)=>{ row.getCell(cM0+j+1).value=u; });
+    const first3=col(cM0+n-3), lastM=col(cM0+n-1), firstM=col(cM0);
+    row.getCell(cV3+1).value={formula:`SUM(${first3}${r}:${lastM}${r})`};
+    row.getCell(cV6+1).value={formula:`SUM(${firstM}${r}:${lastM}${r})`};
+    row.getCell(cR3+1).value={formula:`${L.V3}${r}/3`};
+    row.getCell(cR6+1).value={formula:`${L.V6}${r}/${n}`};
+    row.getCell(cRB+1).value={formula:`IF(${P.base}="3 meses",${L.R3}${r},${L.R6}${r})`};
+    row.getCell(cMB+1).value={formula:`IF(${L.RB}${r}>0,${L.D}${r}/${L.RB}${r},"")`};
+    for(let j=0;j<n;j++) row.getCell(cMM0+j+1).value={formula:`IF(${col(cM0+j)}${r}>0,$${L.D}${r}/${col(cM0+j)}${r},"")`};
+    row.getCell(cEst+1).value={formula:`IF(AND(${L.D}${r}<=0,${L.V6}${r}>0),"Agotado - comprar",IF(${L.V6}${r}<=0,IF(${L.D}${r}>0,"Sin rotación","—"),IF(${L.MB}${r}>${P.alto},"Alto stock",IF(${L.MB}${r}<${P.ref},"Reforzar compra","Normal"))))`};
+    row.getCell(cCto+1).value=f.costo;
+    row.getCell(cVal+1).value={formula:`${L.D}${r}*${L.Cto}${r}`};
+    row.getCell(cExc+1).value={formula:`IF(${L.RB}${r}>0,MAX(0,ROUND(${L.D}${r}-${P.alto}*${L.RB}${r},0)),IF(${L.D}${r}>0,${L.D}${r},0))`};
+    row.getCell(cVExc+1).value={formula:`${L.Exc}${r}*${L.Cto}${r}`};
+    row.getCell(cSug+1).value={formula:`IF(${L.RB}${r}>0,MAX(0,ROUND(${P.obj}*${L.RB}${r}-${L.D}${r},0)),0)`};
+    row.getCell(cCSug+1).value={formula:`${L.Sug}${r}*${L.Cto}${r}`};
+  });
+  const fmtInt='#,##0', fmt1='#,##0.0', fmtMon='$ #,##0';
+  for(let c=0;c<heads.length;c++){
+    const cl=wd.getColumn(c+1);
+    cl.width = c===0?13 : c===1?44 : c===2?24 : c===cEst?18 : (c===cVal||c===cVExc||c===cCSug)?17 : 12;
+    if(c>=cD && c<cV3) cl.numFmt=fmtInt;
+    else if(c===cV3||c===cV6) cl.numFmt=fmtInt;
+    else if(c>=cR3&&c<=cRB) cl.numFmt=fmt1;
+    else if(c>=cMB&&c<cEst) cl.numFmt=fmt1;
+    else if(c===cCto||c===cVal||c===cVExc||c===cCSug) cl.numFmt=fmtMon;
+    else if(c===cExc||c===cSug) cl.numFmt=fmtInt;
+  }
+  for(let r=R0;r<=R1;r++){ for(let c=1;c<=heads.length;c++){ const x=wd.getCell(r,c); x.border=bord; x.font={size:10}; if(c-1===cEst) x.alignment={horizontal:'center'}; if(r%2===0 && c-1!==cEst) x.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF8FAFC'}}; } }
+  wd.autoFilter={from:{row:H,column:1},to:{row:H,column:heads.length}};
+  // formato condicional
+  const rg=(a,b)=>`${a}${R0}:${b}${R1}`, estR=`${L.Est}${R0}:${L.Est}${R1}`;
+  [['Alto stock','FFFECACA','FF991B1B'],['Reforzar compra','FFFDE68A','FF92400E'],['Agotado - comprar','FFFDBA74','FF7C2D12'],['Normal','FFBBF7D0','FF166534'],['Sin rotación','FFE2E8F0','FF475569']].forEach(([t,bg,fg])=>{
+    wd.addConditionalFormatting({ref:estR,rules:[{type:'cellIs',operator:'equal',formulae:['"'+t+'"'],style:{fill:{type:'pattern',pattern:'solid',bgColor:{argb:bg}},font:{bold:true,color:{argb:fg}}}}]});
+  });
+  const mesR = [rg(L.MB,L.MB), rg(col(cMM0),col(cMM0+n-1))];
+  mesR.forEach(ref=>{ wd.addConditionalFormatting({ref,rules:[
+    {type:'expression',formulae:[`AND(ISNUMBER(${ref.split(':')[0]}),${ref.split(':')[0]}>${P.alto})`],style:{font:{color:{argb:'FF991B1B'},bold:true},fill:{type:'pattern',pattern:'solid',bgColor:{argb:'FFFEE2E2'}}}},
+    {type:'expression',formulae:[`AND(ISNUMBER(${ref.split(':')[0]}),${ref.split(':')[0]}<${P.ref})`],style:{font:{color:{argb:'FF92400E'},bold:true},fill:{type:'pattern',pattern:'solid',bgColor:{argb:'FFFEF3C7'}}}}]}); });
+  wd.addConditionalFormatting({ref:rg(L.VExc,L.VExc),rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFF87171'}]}]});
+  wd.addConditionalFormatting({ref:rg(L.CSug,L.CSug),rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFFBBF24'}]}]});
+  wd.addConditionalFormatting({ref:rg(col(cM0),col(cM0+n-1)),rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FF5EEAD4'}]}]});
+  // ══ Panel ══
+  wp.columns=[{width:3},{width:34},{width:20},{width:18},{width:18},{width:18},{width:3},{width:30},{width:16},{width:16}];
+  wp.getCell('B1').value='📦 Inventario y rotación — ILUMAX'; wp.getCell('B1').font={bold:true,size:16,color:{argb:'FF1E293B'}};
+  wp.getCell('B2').value='Stock al '+D.fecha+' · Ventas mes a mes: '+D.meses.join(', ')+' (meses completos)'; wp.getCell('B2').font={italic:true,size:10,color:{argb:'FF64748B'}};
+  wp.getCell('B4').value='PARÁMETROS (celdas amarillas, editables)'; wp.getCell('B4').font={bold:true,color:{argb:'FF0F766E'}};
+  const par=[['Alto stock si meses de inventario >',6],['Reforzar compra si meses de inventario <',2],['Meses objetivo de cobertura (para sugerido de compra)',3],['Base de rotación','6 meses']];
+  par.forEach((a,i)=>{ const r=5+i; wp.getCell(r,2).value=a[0]; wp.getCell(r,2).font={size:10}; const c=wp.getCell(r,3); c.value=a[1]; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFEF9C3'}}; c.font={bold:true,size:11}; c.border=bord; c.alignment={horizontal:'center'}; });
+  wp.getCell('C5').dataValidation={type:'decimal',operator:'greaterThan',formulae:[0],showErrorMessage:true,error:'Ingresa un número mayor que 0'};
+  wp.getCell('C6').dataValidation={type:'decimal',operator:'greaterThan',formulae:[0],showErrorMessage:true,error:'Ingresa un número mayor que 0'};
+  wp.getCell('C7').dataValidation={type:'decimal',operator:'greaterThan',formulae:[0],showErrorMessage:true,error:'Ingresa un número mayor que 0'};
+  wp.getCell('C8').dataValidation={type:'list',allowBlank:false,formulae:['"3 meses,6 meses"'],showErrorMessage:true,error:'Elige 3 meses o 6 meses'};
+  // Resumen por estado
+  wp.getCell('B10').value='RESUMEN POR ESTADO'; wp.getCell('B10').font={bold:true,color:{argb:'FF0F766E'}};
+  ['Estado','# Referencias','Inventario (und)','Valor inventario','% del valor'].forEach((h,i)=>{ const c=wp.getCell(11,2+i); c.value=h; hdr(c); });
+  const est=[['Alto stock','FFFECACA'],['Normal','FFBBF7D0'],['Reforzar compra','FFFDE68A'],['Agotado - comprar','FFFDBA74'],['Sin rotación','FFE2E8F0']];
+  const dE=`Detalle!$${L.Est}$${R0}:$${L.Est}$${R1}`, dD=`Detalle!$${L.D}$${R0}:$${L.D}$${R1}`, dV=`Detalle!$${L.Val}$${R0}:$${L.Val}$${R1}`;
+  est.forEach((e,i)=>{ const r=12+i;
+    wp.getCell(r,2).value=e[0]; wp.getCell(r,2).fill={type:'pattern',pattern:'solid',fgColor:{argb:e[1]}}; wp.getCell(r,2).font={bold:true};
+    wp.getCell(r,3).value={formula:`COUNTIF(${dE},B${r})`};
+    wp.getCell(r,4).value={formula:`SUMIF(${dE},B${r},${dD})`};
+    wp.getCell(r,5).value={formula:`SUMIF(${dE},B${r},${dV})`};
+    wp.getCell(r,6).value={formula:`IF(SUM($E$12:$E$16)>0,E${r}/SUM($E$12:$E$16),0)`};
+    wp.getCell(r,3).numFmt=fmtInt; wp.getCell(r,4).numFmt=fmtInt; wp.getCell(r,5).numFmt=fmtMon; wp.getCell(r,6).numFmt='0.0%';
+    for(let c=2;c<=6;c++) wp.getCell(r,c).border=bord; });
+  wp.getCell('B17').value='Total'; wp.getCell('B17').font={bold:true};
+  ['C','D','E'].forEach(c=>{ wp.getCell(c+'17').value={formula:`SUM(${c}12:${c}16)`}; wp.getCell(c+'17').font={bold:true}; wp.getCell(c+'17').numFmt = c==='E'?fmtMon:fmtInt; });
+  wp.getCell('F17').value={formula:'SUM(F12:F16)'}; wp.getCell('F17').numFmt='0.0%'; wp.getCell('F17').font={bold:true};
+  for(let c=2;c<=6;c++){ wp.getCell(17,c).border=bord; wp.getCell(17,c).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF1F5F9'}}; }
+  wp.addConditionalFormatting({ref:'F12:F16',rules:[{type:'dataBar',cfvo:[{type:'num',value:0},{type:'num',value:1}],color:{argb:'FF38BDF8'}}]});
+  // Indicadores clave
+  wp.getCell('B19').value='INDICADORES CLAVE'; wp.getCell('B19').font={bold:true,color:{argb:'FF0F766E'}};
+  const dEx=`Detalle!$${L.VExc}$${R0}:$${L.VExc}$${R1}`, dCs=`Detalle!$${L.CSug}$${R0}:$${L.CSug}$${R1}`, dR=`Detalle!$${L.RB}$${R0}:$${L.RB}$${R1}`;
+  const kp=[['Valor total del inventario',`SUM(${dV})`,fmtMon],['Capital inmovilizado en exceso (sobre el umbral de alto stock)',`SUM(${dEx})`,fmtMon],['Inversión sugerida para llegar a los meses objetivo',`SUM(${dCs})`,fmtMon],['Meses de inventario global (stock / ventas mensuales base)',`IF(SUM(${dR})>0,SUM(${dD})/SUM(${dR}),0)`,fmt1],['Referencias con stock',`COUNTIF(${dD},">0")`,fmtInt]];
+  kp.forEach((k,i)=>{ const r=20+i; wp.getCell(r,2).value=k[0]; wp.getCell(r,2).alignment={wrapText:true,vertical:'middle'}; wp.getCell(r,3).value={formula:k[1]}; wp.getCell(r,3).numFmt=k[2]; wp.getCell(r,3).font={bold:true,size:12}; wp.getCell(r,2).border=bord; wp.getCell(r,3).border=bord; wp.getRow(r).height=30; });
+  wp.mergeCells('C20:D20'); wp.mergeCells('C21:D21'); wp.mergeCells('C22:D22'); wp.mergeCells('C23:D23'); wp.mergeCells('C24:D24');
+  // Por categoría
+  const cats=[...new Set(D.filas.map(f=>f.cat||'(sin categoría)'))].sort();
+  wp.getCell('H4').value='POR CATEGORÍA'; wp.getCell('H4').font={bold:true,color:{argb:'FF0F766E'}};
+  ['Categoría','Valor inventario','Valor exceso','# Alto stock','# Reforzar'].forEach((h,i)=>{ const c=wp.getCell(5,8+i); c.value=h; hdr(c); });
+  wp.getColumn(11).width=16; wp.getColumn(12).width=14;
+  const dC=`Detalle!$C$${R0}:$C$${R1}`;
+  cats.forEach((ct,i)=>{ const r=6+i, crit = ct==='(sin categoría)'?'""':`H${r}`;
+    wp.getCell(r,8).value=ct;
+    wp.getCell(r,9).value={formula:`SUMIF(${dC},${crit},${dV})`}; wp.getCell(r,10).value={formula:`SUMIF(${dC},${crit},${dEx})`};
+    wp.getCell(r,11).value={formula:`COUNTIFS(${dC},${crit},${dE},"Alto stock")`}; wp.getCell(r,12).value={formula:`COUNTIFS(${dC},${crit},${dE},"Reforzar compra")`};
+    wp.getCell(r,9).numFmt=fmtMon; wp.getCell(r,10).numFmt=fmtMon; for(let c=8;c<=12;c++) wp.getCell(r,c).border=bord; });
+  wp.addConditionalFormatting({ref:`J6:J${5+cats.length}`,rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFF87171'}]}]});
+  // ══ Hoja Mes a mes (ventas totales por mes y por categoría) ══
+  const wm = wb.addWorksheet('Mes a mes',{properties:{tabColor:{argb:'FF7C3AED'}},views:[{showGridLines:false}]});
+  wm.getCell('A1').value='Unidades vendidas por mes y categoría'; wm.getCell('A1').font={bold:true,size:14};
+  ['Categoría'].concat(D.meses,['Total','Prom. mensual']).forEach((h,i)=>{ const c=wm.getCell(3,i+1); c.value=h; hdr(c,'7C3AED'); });
+  cats.forEach((ct,i)=>{ const r=4+i, crit = ct==='(sin categoría)'?'""':`$A${r}`;
+    wm.getCell(r,1).value=ct;
+    for(let j=0;j<n;j++){ const cc=wm.getCell(r,2+j); cc.value={formula:`SUMIF(${dC},${crit},Detalle!$${col(cM0+j)}$${R0}:$${col(cM0+j)}$${R1})`}; cc.numFmt=fmtInt; }
+    wm.getCell(r,2+n).value={formula:`SUM(B${r}:${col(n)}${r})`}; wm.getCell(r,3+n).value={formula:`${col(n+1)}${r}/${n}`};
+    wm.getCell(r,2+n).numFmt=fmtInt; wm.getCell(r,3+n).numFmt=fmtInt;
+    for(let c=1;c<=3+n;c++) wm.getCell(r,c).border=bord; });
+  const rt=4+cats.length; wm.getCell(rt,1).value='Total'; wm.getCell(rt,1).font={bold:true};
+  for(let c=2;c<=3+n;c++){ const cl=col(c-1); wm.getCell(rt,c).value={formula:`SUM(${cl}4:${cl}${rt-1})`}; wm.getCell(rt,c).numFmt=fmtInt; wm.getCell(rt,c).font={bold:true}; wm.getCell(rt,c).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF1F5F9'}}; }
+  for(let c=1;c<=3+n;c++) wm.getCell(rt,c).border=bord;
+  wm.getColumn(1).width=32; for(let c=2;c<=3+n;c++) wm.getColumn(c).width=13;
+  wm.addConditionalFormatting({ref:`B4:${col(n)}${rt-1}`,rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFA78BFA'}]}]});
+  // ══ Notas ══
+  const wn = wb.addWorksheet('Notas',{views:[{showGridLines:false}]}); wn.getColumn(1).width=120;
+  ['CÓMO LEER ESTE ARCHIVO',
+   '• Panel: parámetros editables (celdas amarillas), resumen por estado, indicadores clave y resumen por categoría. Todo es fórmula: cambia un parámetro y se recalcula.',
+   '• Detalle: una fila por referencia. Usa los filtros del encabezado (estado, categoría, referencia…). Las columnas moradas muestran cuántos meses duraría el stock al ritmo de CADA mes; las naranjas son acciones (exceso y compra sugerida).',
+   '• Mes a mes: unidades vendidas por categoría en cada mes.',
+   '',
+   'DEFINICIONES',
+   '• Inventario actual: suma de las bodegas que cuentan ('+D.bodegas.join(', ')+') al '+D.fecha+'.',
+   '• Ventas por mes: unidades de los últimos '+n+' meses completos ('+D.meses.join(', ')+'). El mes en curso (o un último mes incompleto) no se usa.',
+   '• Rotación 3m / '+n+'m: promedio mensual de unidades vendidas. Rotación base: la que elijas en Panel (3 o 6 meses).',
+   '• Meses de inventario = inventario actual / rotación base. Meses inv. a ritmo <mes> = inventario actual / ventas de ese mes.',
+   '• Estado: Alto stock (meses > umbral alto) · Reforzar compra (meses < umbral) · Normal · Agotado - comprar (sin stock y con ventas) · Sin rotación (con stock y sin ventas).',
+   '• Exceso (und) = inventario − (umbral alto × rotación base). Sugerido comprar (und) = (meses objetivo × rotación base) − inventario, si es positivo.',
+   '• El sugerido no descuenta órdenes de compra en tránsito: revísalo contra Compras antes de pedir.'
+  ].forEach((t,i)=>{ const c=wn.getCell(i+1,1); c.value=t; c.alignment={wrapText:true,vertical:'top'}; if(t==='CÓMO LEER ESTE ARCHIVO'||t==='DEFINICIONES') c.font={bold:true,color:{argb:'FF0F766E'},size:12}; });
+  wb.views=[{activeTab:0}];
+  return wb;
+}
+
 async function invExportarRotacion() {
   try {
-    toast('Calculando rotación…','ok');
+    await ppCargarExcelJS();
+    toast('Calculando rotación mes a mes…','ok');
     const hoy = new Date(), mk = (y,m)=>y*12+(m-1);
-    const desde = mk(hoy.getFullYear(), hoy.getMonth()+1) - 8;
+    const actual = mk(hoy.getFullYear(), hoy.getMonth()+1), desde = actual - 8;
     const dy = Math.floor(desde/12), dm = desde%12+1;
     const rows = await sb.get('ventas_historico', 'select=referencia,anio,mes,unidades&or=(anio.gt.'+dy+',and(anio.eq.'+dy+',mes.gte.'+dm+'))');
     const tot = {}; (rows||[]).forEach(r=>{ const k=mk(r.anio,r.mes); tot[k]=(tot[k]||0)+(+r.unidades||0); });
-    let ks = Object.keys(tot).map(Number).sort((a,b)=>a-b);
-    const actual = mk(hoy.getFullYear(), hoy.getMonth()+1);
-    ks = ks.filter(k=>k<actual);
+    let ks = Object.keys(tot).map(Number).sort((a,b)=>a-b).filter(k=>k<actual);
     // descarta el último mes si quedó incompleto (< 60% del promedio de los 3 anteriores)
     if(ks.length>=4){ const L=ks[ks.length-1], prev=ks.slice(-4,-1).reduce((a,k)=>a+tot[k],0)/3; if(tot[L] < prev*0.6) ks.pop(); }
     if(ks.length<3){ toast('No hay suficientes meses completos de ventas','wa'); return; }
-    const k3 = ks.slice(-3), k6 = ks.slice(-6), n6 = k6.length;
-    const u3 = {}, u6 = {}, um = {}; // um[ref][k] = unidades de ese mes
-    (rows||[]).forEach(r=>{ const k=mk(r.anio,r.mes), u=+r.unidades||0;
-      if(k6.includes(k)){ u6[r.referencia]=(u6[r.referencia]||0)+u; (um[r.referencia]=um[r.referencia]||{})[k]=((um[r.referencia]||{})[k]||0)+u; }
-      if(k3.includes(k)) u3[r.referencia]=(u3[r.referencia]||0)+u; });
-    const inv = reabastInventarioPorReferencia();
-    const lista = Array.isArray(inv) ? inv : Object.values(inv);
-    const cost = {}; (INV_DATA||[]).forEach(r=>{ if(r.costo_prom) cost[r.referencia]=parseFloat(r.costo_prom)||0; });
-    const cat = {}; (INV_DATA||[]).forEach(r=>{ if(r.categoria) cat[r.referencia]=r.categoria; });
-    const refs = new Set(lista.map(x=>x.referencia)); Object.keys(u6).forEach(r=>refs.add(r));
-    const ex = {}; lista.forEach(x=>ex[x.referencia]=x);
+    const k6 = ks.slice(-6);
     const nom = k=>{const y=Math.floor((k-1)/12),m=(k-1)%12+1;return ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][m-1]+'-'+y;};
-    const T_ALTO = 6, T_REF = 2, out = [];
+    const um = {};
+    (rows||[]).forEach(r=>{ const k=mk(r.anio,r.mes), i=k6.indexOf(k); if(i<0) return; (um[r.referencia]=um[r.referencia]||new Array(k6.length).fill(0))[i]+=(+r.unidades||0); });
+    const lista = reabastInventarioPorReferencia(), ex = {}; lista.forEach(x=>ex[x.referencia]=x);
+    const cost = {}, cat = {}; (INV_DATA||[]).forEach(r=>{ if(r.costo_prom) cost[r.referencia]=parseFloat(r.costo_prom)||0; if(r.categoria) cat[r.referencia]=r.categoria; });
+    const refs = new Set(lista.map(x=>x.referencia)); Object.keys(um).forEach(r=>refs.add(r));
+    const filas = [];
     refs.forEach(r=>{
-      const e = ex[r]||{}, st = Math.round(e.existencia||0), a3=u3[r]||0, a6=u6[r]||0;
-      if(st<=0 && a6<=0) return;
-      const r3=a3/3, r6=a6/n6, m3=r3>0?st/r3:null, m6=r6>0?st/r6:null;
-      const est = (st<=0 && a6>0) ? 'Agotado - comprar' : (a6<=0 ? 'Sin rotación' : (m6>T_ALTO ? 'Alto stock' : (m6<T_REF ? 'Reforzar compra' : 'Normal')));
-      const fila = { 'Referencia':r, 'Descripción':e.descripcion||'', 'Categoría':cat[r]||'', 'Inventario actual':st };
-      k6.forEach(k=>{ const v=(um[r]&&um[r][k])||0; fila['Ventas '+nom(k)]=v; });
-      k6.forEach(k=>{ const v=(um[r]&&um[r][k])||0; fila['Meses inv. con ritmo '+nom(k)]= v>0?Math.round(st/v*10)/10:''; });
-      out.push(Object.assign(fila,{
-        'Ventas 3m (und)':a3, 'Ventas 6m (und)':a6, 'Rotación 3m (und/mes)':Math.round(r3*10)/10, 'Rotación 6m (und/mes)':Math.round(r6*10)/10,
-        'Meses inventario (3m)': m3==null?'':Math.round(m3*10)/10, 'Meses inventario (6m)': m6==null?'':Math.round(m6*10)/10,
-        'Estado':est, 'Costo prom.':cost[r]||0, 'Valor inventario':Math.round(st*(cost[r]||0)) }));
+      const e = ex[r]||{}, st = Math.round(e.existencia||0), m = um[r]||new Array(k6.length).fill(0);
+      if(st<=0 && !m.some(v=>v>0)) return;
+      filas.push({ref:r, desc:e.descripcion||'', cat:cat[r]||'', stock:st, costo:cost[r]||0, m});
     });
-    out.sort((a,b)=>b['Inventario actual']-a['Inventario actual']);
-    const ws = XLSX.utils.json_to_sheet(out);
-    ws['!cols']=[{wch:12},{wch:44},{wch:24},{wch:12}].concat(k6.map(()=>({wch:11})),k6.map(()=>({wch:14})),[{wch:12},{wch:12},{wch:13},{wch:13},{wch:13},{wch:13},{wch:18},{wch:12},{wch:16}]);
-    ws['!autofilter']={ref:ws['!ref']}; ws['!freeze']={xSplit:2,ySplit:1};
-    const nota = [['Inventario actual: bodegas que cuentan ('+INV_BODEGAS_CUENTAN.join(', ')+')'],
-      ['Ventas 3m: '+k3.map(nom).join(', ')], ['Ventas '+n6+'m: '+k6.map(nom).join(', ')+' (meses completos)'],
-      ['Estado (según meses de inventario a 6m): Alto stock > '+T_ALTO+' · Reforzar compra < '+T_REF+' · Normal entre ambos'],
-      ['Mes a mes: "Meses inv. con ritmo <mes>" = inventario actual / unidades vendidas ese mes (cuánto duraría el stock al ritmo de ese mes).'],
-      ['Agotado - comprar = sin stock pero con ventas · Sin rotación = con stock y sin ventas']];
-    const wn = XLSX.utils.aoa_to_sheet(nota); wn['!cols']=[{wch:110}];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Inventario y rotación'); XLSX.utils.book_append_sheet(wb, wn, 'Notas');
-    XLSX.writeFile(wb, 'Inventario_rotacion_' + new Date().toISOString().slice(0,10) + '.xlsx');
-    toast('📥 Excel descargado: '+out.length+' referencias','ok');
+    filas.sort((a,b)=>b.stock-a.stock);
+    const fechas = (INV_DATA||[]).map(r=>r.periodo).filter(Boolean).sort();
+    const wb = invRotBuildWb({filas, meses:k6.map(nom), bodegas:INV_BODEGAS_CUENTAN, fecha: (fechas.length?fechas[fechas.length-1]:new Date().toISOString().slice(0,10))});
+    const buf = await wb.xlsx.writeBuffer();
+    const nombre = 'Inventario_rotacion_' + new Date().toISOString().slice(0,10) + '.xlsx';
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download = nombre; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1500);
+    toast('📥 Excel descargado: '+filas.length+' referencias','ok');
   } catch(e){ console.error(e); toast('Error: '+e.message,'er'); }
 }
 
@@ -40051,6 +40187,7 @@ async function rvDatosAnioParaExcel() {
   const btn = document.getElementById('rv-btn-xlsx');
   const estado = (txt) => { if(btn){ btn.disabled = true; btn.innerHTML = '⏳ ' + txt; } };
   const porMes = {}; // mes(0-11) -> lista de candidatos [{fuente, filas}]
+  const cliCiu = {}; // cliente (MAYÚSCULAS) -> ciudad más reciente, para asignar zona a facturas de SIESA que no traen ciudad
   const cand = (mes, fuente, filas) => { if(filas.length) (porMes[mes] = porMes[mes] || []).push({fuente, filas}); };
   const serial = (iso) => { const p=String(iso||'').slice(0,10).split('-').map(Number); return p.length===3&&p[0] ? Math.round((Date.UTC(p[0],p[1]-1,p[2])-Date.UTC(1899,11,30))/86400000) : 0; };
   try {
@@ -40071,7 +40208,7 @@ async function rvDatosAnioParaExcel() {
       const tmp = {};
       for(let off=0; ; off+=1000){
         const rows = await sb.get('ventas_facturas_excel','select=fecha,nro_documento,cliente,vendedor,canal,ciudad,subtotal&fecha=gte.'+anio+'-01-01&order=fecha.asc,nro_documento.asc&limit=1000&offset='+off) || [];
-        rows.forEach(r=>{ const m=parseInt(String(r.fecha).slice(5,7),10)-1; (tmp[m]=tmp[m]||[]).push({Fecha:serial(r.fecha),'Nro documento':r.nro_documento||'','Razon social cliente factura':r.cliente||'','Nombre vendedor':r.vendedor||'','Desc. tipo de cliente':r.canal||'','Ciudad':r.ciudad||'','Valor subtotal local':parseFloat(r.subtotal)||0}); });
+        rows.forEach(r=>{ if(r.ciudad && String(r.ciudad).trim()) cliCiu[String(r.cliente||'').trim().toUpperCase()] = String(r.ciudad).trim(); const m=parseInt(String(r.fecha).slice(5,7),10)-1; (tmp[m]=tmp[m]||[]).push({Fecha:serial(r.fecha),'Nro documento':r.nro_documento||'','Razon social cliente factura':r.cliente||'','Nombre vendedor':r.vendedor||'','Desc. tipo de cliente':r.canal||'','Ciudad':r.ciudad||'','Valor subtotal local':parseFloat(r.subtotal)||0}); });
         if(rows.length<1000) break;
       }
       Object.keys(tmp).forEach(m=>cand(+m,'Excel INV-DUV',tmp[m]));
@@ -40099,9 +40236,28 @@ async function rvDatosAnioParaExcel() {
     origen[+m] = mejor.fuente; mejor.filas.forEach(r=>datos.push(r));
   });
   const faltan = []; for(let m=0;m<=hoy.getMonth();m++) if(!origen.hasOwnProperty(m)) faltan.push(String(m+1).padStart(2,'0'));
-  RV._anual = {anio, datos, fallos:faltan, origen, ts:Date.now(), vacio:!datos.length};
+  RV._anual = {anio, datos, fallos:faltan, origen, cliCiu, ts:Date.now(), vacio:!datos.length};
   return RV._anual;
 }
+// Zonas comerciales por ejecutivo (canal Especializado). Clave = vendedor de Siesa (MAYÚSCULAS, sin tildes) → [ejecutivo al que se suma, zona, regla].
+// Las ventas de vendedores retirados se suman al ejecutivo que quedó con su cartera. Se puede ajustar en la hoja "Mapa zonas" del Excel.
+const RV_VEND_ZONA = {
+  'FLOREZ PELAEZ CARMELINA':['Carmelina Flórez','Suroccidente',''],
+  'TAYLOR RAMOS CAMILO GUSTAVO':['Camilo Taylor','Suroccidente',''],
+  'SANCHEZ LEON LIZ KATHERINE':['Katherine Sánchez','Suroccidente',''],
+  'CHABUR SANCHEZ EDWIN':['Katherine Sánchez','Suroccidente','Edwin Chabur se suma a Katherine (Caterine) Sánchez'],
+  'GARCIA NOGUERA CLAUDIA LORENA':['Claudia García','Suroccidente',''],
+  'FERREIRA TORRES JAIME':['Jaime Ferreira','Oriente',''],
+  'PARRA ZAPATA SERGIO ANDRES':['Sergio Andrés Parra','Oriente',''],
+  'CHAVES ZULUAGA GERSSON ANDRES':['Gerson Chaves','Centro',''],
+  'BASTO MARTINEZ JEISSON ENRIQUE':['Gerson Chaves','Centro','Jeisson Enrique se suma a Gerson'],
+  'FERRO BAQUERO MAURICIO':['Mauricio Ferro','Centro',''],
+  'LOZADA ACOSTA LUIS FELIPE':['Luis Felipe Lozada','Centro',''],
+  'SANTOFIMIO YENY PAHOLA':['Luis Felipe Lozada','Centro','Paola Santofimio se suma a Luis Felipe'],
+  'PADILLA MORALES ROSA ANGELICA':['Rosa Padilla','Costa',''],
+  'CRUZ QUINONEZ ANGELICA MARIA':['Rosa Padilla','Costa','Angélica María se suma a Rosa']
+};
+const RV_ZONAS_ORDEN = ['Suroccidente','Oriente','Centro','Costa','Sin zona'];
 // ── Excel detallado de ventas (Reporte diario): tabla de facturas + tablas dinámicas con fórmulas SUMIFS/COUNTIFS ──
 async function rvExportarExcelDetallado() {
   if(!RV.cargado || !(RV.datos||[]).length){ toast('Primero carga los datos de ventas','wa'); return; }
@@ -40129,6 +40285,12 @@ async function rvExportarExcelDetallado() {
       ciu:String(r['Ciudad']||'').trim(), val:parseFloat(r['Valor subtotal local'])||0};
   }).sort((a,b)=>a.fecha-b.fecha || a.doc.localeCompare(b.doc));
   if(!filas.length){ toast('No hay facturas con fecha para exportar','wa'); return; }
+  // Zona (departamento) de cada factura: por su ciudad; si viene de SIESA sin ciudad, se toma la del cliente (INV-DUV). Mapa de ciudades = el del módulo Ventas por zona.
+  const _cliCiu = (fuente && fuente.cliCiu) || {};
+  const _acc = {'Á':'A','É':'E','Í':'I','Ó':'O','Ú':'U','Ü':'U'};
+  const _normC = t => String(t||'').trim().toUpperCase().replace(/[ÁÉÍÓÚÜ]/g, m=>_acc[m]);
+  const _normV = t => _normC(t).replace(/Ñ/g,'N').replace(/\s+/g,' ');
+  filas.forEach(f=>{ if(!f.ciu) f.ciu = _cliCiu[f.cli.toUpperCase()] || ''; const mz = RV_VEND_ZONA[_normV(f.ven)]; f.zona = mz ? mz[1] : 'Sin zona'; f.eje = mz ? mz[0] : f.ven; });
   const anios = [...new Set(filas.map(f=>f.anio))].sort();
   const anio = anios[anios.length-1];
   const N = filas.length + 1;                       // última fila de Detalle (encabezado en fila 1)
@@ -40136,33 +40298,45 @@ async function rvExportarExcelDetallado() {
   const sumDe = (fn) => filas.filter(f=>f.anio===anio).filter(fn).reduce((a,f)=>a+f.val,0);
   const cntDe = (fn) => filas.filter(f=>f.anio===anio).filter(fn).length;
   const porTotal = campo => { const m={}; filas.forEach(f=>{ m[f[campo]]=(m[f[campo]]||0)+f.val; }); return Object.keys(m).sort((a,b)=>m[b]-m[a]); };
-  const canales = porTotal('canal'), vendedores = porTotal('ven'), clientes = porTotal('cli'), ciudades = hayCiudad ? porTotal('ciu').filter(Boolean) : [];
+  const canales = porTotal('canal'), zonas = RV_ZONAS_ORDEN.filter(z=>filas.some(f=>f.zona===z)), vendedores = porTotal('ven'), clientes = porTotal('cli'), ciudades = hayCiudad ? porTotal('ciu').filter(Boolean) : [];
 
   const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX'; wb.created = new Date();
   wb.calcProperties = {fullCalcOnLoad:true};
   const wsR = wb.addWorksheet('Resumen', {views:[{showGridLines:false}]});
   const wsD = wb.addWorksheet('Detalle');
   // Columnas de Detalle: A Fecha · B Año · C Mes · D Documento · E Cliente · F Vendedor · G Canal · H Ciudad · I Valor
-  const COL = {anio:'B', mes:'C', cli:'E', ven:'F', canal:'G', ciu:'H', val:'I'};
+  const COL = {anio:'B', mes:'C', cli:'E', ven:'F', canal:'G', ciu:'H', val:'I', zona:'J', eje:'K'};
   const D = c => `Detalle!$${c}:$${c}`;
   const YR = 'Resumen!$C$3';
+  // Mapa vendedor → ejecutivo → zona (editable): todos los vendedores del año; los que no están en la regla quedan "Sin zona"
+  const mapaLista = []; const _vv = {};
+  filas.forEach(f=>{ if(_vv[f.ven]) return; _vv[f.ven]=1; const mz=RV_VEND_ZONA[_normV(f.ven)]; mapaLista.push({v:f.ven, e:mz?mz[0]:f.ven, z:mz?mz[1]:'Sin zona', n:mz?mz[2]:''}); });
+  mapaLista.sort((a,b)=> RV_ZONAS_ORDEN.indexOf(a.z)-RV_ZONAS_ORDEN.indexOf(b.z) || a.e.localeCompare(b.e) || a.v.localeCompare(b.v));
+  // Canal que filtran las hojas de zona (lista desplegable en 'Zona x Mes'!I1); por defecto el Especializado
+  const canalZ0 = canales.find(c=>/especializ/i.test(c)) || '(Todos)';
+  const filtroZ = f => canalZ0==='(Todos)' || f.canal===canalZ0;
+  const CSEL = "'Zona x Mes'!$I$1";
+  const CRIT = `,${D(COL.canal)},IF(${CSEL}="(Todos)","*",${CSEL})`;
 
   // ── Detalle: tabla de Excel con filtros; Año y Mes son fórmulas sobre la fecha ──
   wsD.addTable({name:'tblVentas', ref:'A1', headerRow:true, totalsRow:false,
     style:{theme:'TableStyleMedium2', showRowStripes:true},
-    columns:['Fecha','Año','Mes','Nro documento','Cliente','Vendedor','Canal','Ciudad','Valor subtotal'].map(n=>({name:n, filterButton:true})),
-    rows: filas.map(f=>[f.fecha, f.anio, f.mes, f.doc, f.cli, f.ven, f.canal, f.ciu, f.val])});
+    columns:['Fecha','Año','Mes','Nro documento','Cliente','Vendedor','Canal','Ciudad','Valor subtotal','Zona','Ejecutivo (zona)'].map(n=>({name:n, filterButton:true})),
+    rows: filas.map(f=>[f.fecha, f.anio, f.mes, f.doc, f.cli, f.ven, f.canal, f.ciu, f.val, f.zona, f.eje])});
   filas.forEach((f,i)=>{ const r=i+2;
     wsD.getCell(r,1).numFmt = FEC;
     wsD.getCell(r,2).value = {formula:`YEAR(A${r})`, result:f.anio};
     wsD.getCell(r,3).value = {formula:`MONTH(A${r})`, result:f.mes};
     wsD.getCell(r,9).numFmt = COP;
+    wsD.getCell(r,10).value = {formula:`IFERROR(VLOOKUP($F${r},'Mapa zonas'!$A$5:$C$${4+mapaLista.length},3,FALSE),"Sin zona")`, result:f.zona};
+    wsD.getCell(r,11).value = {formula:`IFERROR(VLOOKUP($F${r},'Mapa zonas'!$A$5:$C$${4+mapaLista.length},2,FALSE),$F${r})`, result:f.eje};
   });
-  wsD.columns = [{width:12},{width:7},{width:6},{width:16},{width:42},{width:34},{width:20},{width:16},{width:16}];
+  wsD.columns = [{width:12},{width:7},{width:6},{width:16},{width:42},{width:34},{width:20},{width:16},{width:16},{width:16},{width:24}];
   wsD.views = [{state:'frozen', ySplit:1}];
 
   // ── Matriz Clave × Mes con SUMIFS (la clave está en la columna A) ──
-  const hoja = (nombre, titulo, etiqueta, claves, colClave, claveKey) => {
+  const hoja = (nombre, titulo, etiqueta, claves, colClave, claveKey, filtro, crit) => {
+    filtro = filtro || (()=>true); crit = crit || '';
     const ws = wb.addWorksheet(nombre, {views:[{showGridLines:false, state:'frozen', xSplit:1, ySplit:4}]});
     ws.getCell(1,1).value = titulo; ws.getCell(1,1).style = tit;
     ws.getCell(2,1).value = 'Año (se cambia en la hoja Resumen, celda C3). Todas las cifras son fórmulas SUMIFS sobre la hoja Detalle.'; ws.getCell(2,1).style = nota;
@@ -40173,9 +40347,9 @@ async function rvExportarExcelDetallado() {
       const a=ws.getCell(r,1); a.value=k; a.style={font:{size:9},border:EST.bordeCelda};
       let tot=0;
       for(let m=1;m<=12;m++){
-        const v = sumDe(f=>f[claveKey]===k && f.mes===m); tot+=v;
+        const v = sumDe(f=>f[claveKey]===k && f.mes===m && filtro(f)); tot+=v;
         const c = ws.getCell(r,m+1);
-        c.value = {formula:`SUMIFS(${D(COL.val)},${D(COL.anio)},${YR},${D(colClave)},$A${r},${D(COL.mes)},${pvColLetra(m+1)}$3)`, result:v};
+        c.value = {formula:`SUMIFS(${D(COL.val)},${D(COL.anio)},${YR},${D(colClave)},$A${r}${crit},${D(COL.mes)},${pvColLetra(m+1)}$3)`, result:v};
         c.numFmt = COP; c.style = {font:{size:9},border:EST.bordeCelda,numFmt:COP};
       }
       const t=ws.getCell(r,14); t.value={formula:`SUM(B${r}:M${r})`,result:tot}; t.style={font:{bold:true,size:9},border:EST.bordeCelda,numFmt:COP};
@@ -40183,20 +40357,118 @@ async function rvExportarExcelDetallado() {
     });
     const tt = ws.getCell(rT,1); tt.value='Total general'; tt.style=EST.canalHdr;
     for(let c=2;c<=14;c++){ const L=pvColLetra(c); const cell=ws.getCell(rT,c);
-      const v = c<14 ? sumDe(f=>f.mes===c-1) : sumDe(()=>true);
+      const v = c<14 ? sumDe(f=>f.mes===c-1 && filtro(f)) : sumDe(f=>filtro(f));
       cell.value={formula:`SUM(${L}${r0}:${L}${rN})`,result:v}; cell.style={...EST.canalHdr,numFmt:COP,alignment:{horizontal:'right'}}; }
     const pp=ws.getCell(rT,15); pp.value=1; pp.style={...EST.canalHdr,numFmt:'0.0%'};
     ws.getColumn(1).width = 34; for(let c=2;c<=14;c++) ws.getColumn(c).width = 15; ws.getColumn(15).width = 9;
     ws.addConditionalFormatting({ref:`B${r0}:M${rN}`, rules:[{type:'colorScale', cfvo:[{type:'min'},{type:'max'}], color:[{argb:'FFFFFFFF'},{argb:'FF93C5FD'}]}]});
     ws.addConditionalFormatting({ref:`O${r0}:O${rN}`, rules:[{type:'dataBar', cfvo:[{type:'num',value:0},{type:'num',value:1}], color:{argb:'FF60A5FA'}}]});
     // % part. con el total ya conocido
-    const totAnio = sumDe(()=>true);
-    claves.forEach((k,i)=>{ const v=sumDe(f=>f[claveKey]===k); ws.getCell(r0+i,15).value={formula:`IF(N$${rT}=0,0,N${r0+i}/N$${rT})`,result:totAnio?v/totAnio:0}; });
+    const totAnio = sumDe(f=>filtro(f));
+    claves.forEach((k,i)=>{ const v=sumDe(f=>f[claveKey]===k && filtro(f)); ws.getCell(r0+i,15).value={formula:`IF(N$${rT}=0,0,N${r0+i}/N$${rT})`,result:totAnio?v/totAnio:0}; });
     return {ws, r0, rN, rT};
   };
   const hC = hoja('Canal x Mes', `Ventas por canal — mes a mes`, 'CANAL', canales, COL.canal, 'canal');
   const hV = hoja('Vendedor x Mes', `Ventas por vendedor — mes a mes`, 'VENDEDOR', vendedores, COL.ven, 'ven');
+  const hZ = hoja('Zona x Mes', `Ventas por zona (por ejecutivo) — mes a mes`, 'ZONA', zonas, COL.zona, 'zona', filtroZ, CRIT);
+  hZ.ws.getCell(2,1).value = 'Zonas según el ejecutivo de cada factura (hoja "Mapa zonas"). Año: hoja Resumen C3. Elige el canal en la celda amarilla I1.'; 
+  hZ.ws.getCell(1,8).value = 'Canal ►'; hZ.ws.getCell(1,8).style = {font:{bold:true,size:10},alignment:{horizontal:'right'}};
+  { const cs = hZ.ws.getCell(1,9); cs.value = canalZ0; cs.style = {font:{bold:true,size:11,color:{argb:'FF1D4ED8'}},fill:fill('FFFEF3C7'),border:EST.bordeCelda,alignment:{horizontal:'center'}};
+    cs.dataValidation = {type:'list', allowBlank:false, formulae:['"'+['(Todos)'].concat(canales).join(',').replace(/"/g,'')+'"']}; hZ.ws.getColumn(9).width = 20; }
+  // ── Zona × Canal ──
+  {
+    const ws = wb.addWorksheet('Zona x Canal', {views:[{showGridLines:false, state:'frozen', xSplit:1, ySplit:3}]});
+    ws.getCell(1,1).value='Ventas por zona y canal (año de la hoja Resumen)'; ws.getCell(1,1).style=tit;
+    ws.getCell(2,1).value='Fórmulas SUMIFS sobre la hoja Detalle. La zona sale de la ciudad de la factura (o de la ciudad del cliente).'; ws.getCell(2,1).style=nota;
+    ['ZONA',...canales,'Total','% part.'].forEach((h,i)=>{ const c=ws.getCell(3,i+1); c.value=h; c.style=EST.th; });
+    const r0=4, rN=r0+zonas.length-1, rT=rN+1, cT=canales.length+2;
+    zonas.forEach((z,i)=>{ const r=r0+i; const a=ws.getCell(r,1); a.value=z; a.style={font:{size:9},border:EST.bordeCelda};
+      canales.forEach((cn,j)=>{ const c=ws.getCell(r,j+2);
+        c.value={formula:`SUMIFS(${D(COL.val)},${D(COL.anio)},${YR},${D(COL.zona)},$A${r},${D(COL.canal)},${pvColLetra(j+2)}$3)`, result:sumDe(f=>f.zona===z&&f.canal===cn)};
+        c.style={font:{size:9},border:EST.bordeCelda,numFmt:COP}; });
+      const t=ws.getCell(r,cT); t.value={formula:`SUM(B${r}:${pvColLetra(cT-1)}${r})`,result:sumDe(f=>f.zona===z)}; t.style={font:{bold:true,size:9},border:EST.bordeCelda,numFmt:COP};
+      const pc=ws.getCell(r,cT+1); pc.value={formula:`IF(${pvColLetra(cT)}$${rT}=0,0,${pvColLetra(cT)}${r}/${pvColLetra(cT)}$${rT})`,result:(sumDe(()=>true)?sumDe(f=>f.zona===z)/sumDe(()=>true):0)}; pc.style={font:{size:9},border:EST.bordeCelda,numFmt:'0.0%'}; });
+    const tt=ws.getCell(rT,1); tt.value='Total general'; tt.style=EST.canalHdr;
+    for(let c=2;c<=cT;c++){ const L=pvColLetra(c); const cell=ws.getCell(rT,c);
+      cell.value={formula:`SUM(${L}${r0}:${L}${rN})`, result: c<cT ? sumDe(f=>f.canal===canales[c-2]) : sumDe(()=>true)}; cell.style={...EST.canalHdr,numFmt:COP,alignment:{horizontal:'right'}}; }
+    const pp=ws.getCell(rT,cT+1); pp.value=1; pp.style={...EST.canalHdr,numFmt:'0.0%'};
+    ws.getColumn(1).width=30; for(let c=2;c<=cT;c++) ws.getColumn(c).width=17; ws.getColumn(cT+1).width=9;
+    ws.addConditionalFormatting({ref:`B${r0}:${pvColLetra(cT-1)}${rN}`, rules:[{type:'colorScale', cfvo:[{type:'min'},{type:'max'}], color:[{argb:'FFFFFFFF'},{argb:'FF86EFAC'}]}]});
+    ws.addConditionalFormatting({ref:`${pvColLetra(cT+1)}${r0}:${pvColLetra(cT+1)}${rN}`, rules:[{type:'dataBar', cfvo:[{type:'num',value:0},{type:'num',value:1}], color:{argb:'FF34D399'}}]});
+  }
+  // ── Zona × Ciudad × Mes (con filtros) ──
+  {
+    const pares = {}; filas.forEach(f=>{ if(!f.ciu || !filtroZ(f)) return; const k=f.zona+'|'+f.ciu; pares[k]=(pares[k]||0)+f.val; });
+    const zTot = {}; filas.forEach(f=>{ zTot[f.zona]=(zTot[f.zona]||0)+f.val; });
+    const lista = Object.keys(pares).map(k=>{ const i=k.indexOf('|'); return {z:k.slice(0,i), c:k.slice(i+1), v:pares[k]}; })
+      .sort((a,b)=> (zTot[b.z]-zTot[a.z]) || (b.v-a.v));
+    if(lista.length){
+      const ws = wb.addWorksheet('Zona x Ciudad', {views:[{showGridLines:false, state:'frozen', xSplit:2, ySplit:4}]});
+      ws.getCell(1,1).value='Ventas por zona y ciudad — mes a mes'; ws.getCell(1,1).style=tit;
+      ws.getCell(2,1).value='Año de la hoja Resumen (C3); canal en la hoja Zona x Mes (I1). Usa los filtros del encabezado para quedarte con una zona o ciudad. Fórmulas SUMIFS sobre Detalle.'; ws.getCell(2,1).style=nota;
+      MES.forEach((m,i)=>{ const c=ws.getCell(3,i+3); c.value=i+1; c.style={font:{size:8,color:{argb:'FF94A3B8'}},alignment:{horizontal:'center'}}; });
+      ['ZONA','CIUDAD',...MES,'Total año','# Facturas'].forEach((h,i)=>{ const c=ws.getCell(4,i+1); c.value=h; c.style=EST.th; });
+      const r0=5, rN=r0+lista.length-1;
+      lista.forEach((x,i)=>{ const r=r0+i;
+        ws.getCell(r,1).value=x.z; ws.getCell(r,1).style={font:{size:9,bold:true},border:EST.bordeCelda};
+        ws.getCell(r,2).value=x.c; ws.getCell(r,2).style={font:{size:9},border:EST.bordeCelda};
+        for(let m=1;m<=12;m++){ const c=ws.getCell(r,m+2); const v=sumDe(f=>f.zona===x.z&&f.ciu===x.c&&f.mes===m&&filtroZ(f));
+          c.value={formula:`SUMIFS(${D(COL.val)},${D(COL.anio)},${YR},${D(COL.zona)},$A${r},${D(COL.ciu)},$B${r}${CRIT},${D(COL.mes)},${pvColLetra(m+2)}$3)`, result:v};
+          c.style={font:{size:9},border:EST.bordeCelda,numFmt:COP}; }
+        const t=ws.getCell(r,15); t.value={formula:`SUM(C${r}:N${r})`,result:sumDe(f=>f.zona===x.z&&f.ciu===x.c&&filtroZ(f))}; t.style={font:{bold:true,size:9},border:EST.bordeCelda,numFmt:COP};
+        const n=ws.getCell(r,16); n.value={formula:`COUNTIFS(${D(COL.anio)},${YR},${D(COL.zona)},$A${r},${D(COL.ciu)},$B${r}${CRIT})`,result:cntDe(f=>f.zona===x.z&&f.ciu===x.c&&filtroZ(f))}; n.style={font:{size:9},border:EST.bordeCelda,numFmt:'#,##0'};
+      });
+      const rT=rN+2; ws.getCell(rT,1).value='Total (con ciudad, según filtro: use SUBTOTAL)'; ws.getCell(rT,1).style=EST.canalHdr; ws.getCell(rT,2).style=EST.canalHdr;
+      for(let c=3;c<=16;c++){ const L=pvColLetra(c); const cell=ws.getCell(rT,c); cell.value={formula:`SUBTOTAL(109,${L}${r0}:${L}${rN})`,result:(c===16?filas.filter(f=>f.ciu&&f.anio===anio&&filtroZ(f)).length:sumDe(f=>f.ciu&&filtroZ(f)&&(c===15||f.mes===c-2)))}; cell.style={...EST.canalHdr,numFmt:c===16?'#,##0':COP,alignment:{horizontal:'right'}}; }
+      ws.autoFilter={from:{row:4,column:1},to:{row:4,column:16}};
+      ws.getColumn(1).width=18; ws.getColumn(2).width=24; for(let c=3;c<=15;c++) ws.getColumn(c).width=14; ws.getColumn(16).width=11;
+      ws.addConditionalFormatting({ref:`C${r0}:N${rN}`, rules:[{type:'colorScale', cfvo:[{type:'min'},{type:'max'}], color:[{argb:'FFFFFFFF'},{argb:'FF86EFAC'}]}]});
+      ws.addConditionalFormatting({ref:`O${r0}:O${rN}`, rules:[{type:'dataBar', cfvo:[{type:'min'},{type:'max'}], color:{argb:'FF34D399'}}]});
+    }
+  }
 
+  // ── Zona × Ejecutivo × Mes ──
+  {
+    const pares = {}; filas.forEach(f=>{ if(!filtroZ(f)) return; const k=f.zona+'|'+f.eje; pares[k]=(pares[k]||0)+f.val; });
+    const lista = Object.keys(pares).map(k=>{ const i=k.indexOf('|'); return {z:k.slice(0,i), e:k.slice(i+1), v:pares[k]}; })
+      .sort((a,b)=> RV_ZONAS_ORDEN.indexOf(a.z)-RV_ZONAS_ORDEN.indexOf(b.z) || b.v-a.v);
+    const ws = wb.addWorksheet('Zona x Ejecutivo', {views:[{showGridLines:false, state:'frozen', xSplit:2, ySplit:4}]});
+    ws.getCell(1,1).value='Ventas por zona y ejecutivo — mes a mes'; ws.getCell(1,1).style=tit;
+    ws.getCell(2,1).value='Incluye lo sumado de los vendedores retirados (ver hoja Mapa zonas). Año: Resumen C3 · Canal: hoja Zona x Mes, celda I1. Filtra por zona o ejecutivo con los botones del encabezado.'; ws.getCell(2,1).style=nota;
+    MES.forEach((m,i)=>{ const c=ws.getCell(3,i+3); c.value=i+1; c.style={font:{size:8,color:{argb:'FF94A3B8'}},alignment:{horizontal:'center'}}; });
+    ['ZONA','EJECUTIVO',...MES,'Total año','% de la zona'].forEach((h,i)=>{ const c=ws.getCell(4,i+1); c.value=h; c.style=EST.th; });
+    const r0=5, rN=r0+lista.length-1;
+    lista.forEach((x,i)=>{ const r=r0+i;
+      ws.getCell(r,1).value=x.z; ws.getCell(r,1).style={font:{size:9,bold:true},border:EST.bordeCelda};
+      ws.getCell(r,2).value=x.e; ws.getCell(r,2).style={font:{size:9},border:EST.bordeCelda};
+      for(let m=1;m<=12;m++){ const c=ws.getCell(r,m+2);
+        c.value={formula:`SUMIFS(${D(COL.val)},${D(COL.anio)},${YR},${D(COL.zona)},$A${r},${D(COL.eje)},$B${r}${CRIT},${D(COL.mes)},${pvColLetra(m+2)}$3)`, result:sumDe(f=>f.zona===x.z&&f.eje===x.e&&f.mes===m&&filtroZ(f))};
+        c.style={font:{size:9},border:EST.bordeCelda,numFmt:COP}; }
+      const t=ws.getCell(r,15); t.value={formula:`SUM(C${r}:N${r})`,result:sumDe(f=>f.zona===x.z&&f.eje===x.e&&filtroZ(f))}; t.style={font:{bold:true,size:9},border:EST.bordeCelda,numFmt:COP};
+      const zt = sumDe(f=>f.zona===x.z&&filtroZ(f));
+      const pc=ws.getCell(r,16); pc.value={formula:`IF(SUMIFS($O$${r0}:$O$${rN},$A$${r0}:$A$${rN},$A${r})=0,0,O${r}/SUMIFS($O$${r0}:$O$${rN},$A$${r0}:$A$${rN},$A${r}))`,result:zt?x.v/zt:0}; pc.style={font:{size:9},border:EST.bordeCelda,numFmt:'0.0%'};
+    });
+    const rT=rN+2; ws.getCell(rT,1).value='Total (según filtro)'; ws.getCell(rT,1).style=EST.canalHdr; ws.getCell(rT,2).style=EST.canalHdr;
+    for(let c=3;c<=15;c++){ const L=pvColLetra(c); const cell=ws.getCell(rT,c); cell.value={formula:`SUBTOTAL(109,${L}${r0}:${L}${rN})`,result:c===15?sumDe(f=>filtroZ(f)):sumDe(f=>filtroZ(f)&&f.mes===c-2)}; cell.style={...EST.canalHdr,numFmt:COP,alignment:{horizontal:'right'}}; }
+    ws.autoFilter={from:{row:4,column:1},to:{row:4,column:16}};
+    ws.getColumn(1).width=16; ws.getColumn(2).width=26; for(let c=3;c<=15;c++) ws.getColumn(c).width=14; ws.getColumn(16).width=12;
+    ws.addConditionalFormatting({ref:`C${r0}:N${rN}`, rules:[{type:'colorScale', cfvo:[{type:'min'},{type:'max'}], color:[{argb:'FFFFFFFF'},{argb:'FFFDE68A'}]}]});
+    ws.addConditionalFormatting({ref:`P${r0}:P${rN}`, rules:[{type:'dataBar', cfvo:[{type:'num',value:0},{type:'num',value:1}], color:{argb:'FF60A5FA'}}]});
+  }
+  // ── Mapa zonas (editable) ──
+  {
+    const ws = wb.addWorksheet('Mapa zonas', {views:[{showGridLines:false, state:'frozen', ySplit:4}]});
+    ws.getCell(1,1).value='Mapa de vendedores → ejecutivo → zona'; ws.getCell(1,1).style=tit;
+    ws.getCell(2,1).value='Celdas amarillas editables: cambia el ejecutivo o la zona y las hojas de zona y la columna Zona del Detalle se recalculan. Las ventas de vendedores retirados se suman al ejecutivo indicado.'; ws.getCell(2,1).style=nota;
+    ['VENDEDOR (Siesa)','Se suma a (ejecutivo)','Zona','Regla aplicada'].forEach((h,i)=>{ const c=ws.getCell(4,i+1); c.value=h; c.style=EST.th; });
+    mapaLista.forEach((m,i)=>{ const r=5+i;
+      ws.getCell(r,1).value=m.v; ws.getCell(r,2).value=m.e; ws.getCell(r,3).value=m.z; ws.getCell(r,4).value=m.n;
+      for(let c=1;c<=4;c++) ws.getCell(r,c).style={font:{size:9},border:EST.bordeCelda};
+      [2,3].forEach(c=>{ ws.getCell(r,c).fill=fill('FFFEF9C3'); });
+      ws.getCell(r,3).dataValidation={type:'list', allowBlank:false, formulae:['"'+RV_ZONAS_ORDEN.join(',')+'"']}; });
+    ws.getColumn(1).width=38; ws.getColumn(2).width=26; ws.getColumn(3).width=16; ws.getColumn(4).width=52;
+    ws.autoFilter={from:{row:4,column:1},to:{row:4,column:4}};
+  }
   // ── Vendedor × Canal ──
   {
     const ws = wb.addWorksheet('Vendedor x Canal', {views:[{showGridLines:false, state:'frozen', xSplit:1, ySplit:3}]});
@@ -40279,10 +40551,17 @@ async function rvExportarExcelDetallado() {
     const b=wsR.getCell(r,9); b.value={formula:`'Canal x Mes'!N${src}`,result:v}; b.style={font:{bold:true,size:9},border:EST.bordeCelda,numFmt:COP};
     const c=wsR.getCell(r,10); c.value={formula:`'Canal x Mes'!O${src}`,result:totA?v/totA:0}; c.style={font:{size:9},border:EST.bordeCelda,numFmt:'0.0%'}; });
   wsR.addConditionalFormatting({ref:`I13:I${12+canales.length}`, rules:[{type:'dataBar', cfvo:[{type:'min'},{type:'max'}], color:{argb:'FFFBBF24'}}]});
+  // Venta por zona (enlaza con la hoja Zona x Mes)
+  ['ZONA','Venta','% part.'].forEach((h,i)=>{ const c=wsR.getCell(12,i+12); c.value=h; c.style=EST.th; });
+  zonas.forEach((k,i)=>{ const r=13+i, src=hZ.r0+i; const v=sumDe(f=>f.zona===k);
+    const a=wsR.getCell(r,12); a.value={formula:`'Zona x Mes'!A${src}`,result:k}; a.style={font:{size:9},border:EST.bordeCelda};
+    const b=wsR.getCell(r,13); b.value={formula:`'Zona x Mes'!N${src}`,result:v}; b.style={font:{bold:true,size:9},border:EST.bordeCelda,numFmt:COP};
+    const c=wsR.getCell(r,14); c.value={formula:`'Zona x Mes'!O${src}`,result:totA?v/totA:0}; c.style={font:{size:9},border:EST.bordeCelda,numFmt:'0.0%'}; });
+  wsR.addConditionalFormatting({ref:`M13:M${12+zonas.length}`, rules:[{type:'dataBar', cfvo:[{type:'min'},{type:'max'}], color:{argb:'FF34D399'}}]});
   const nf = 28;
-  wsR.getCell(nf,2).value='Hojas: Detalle (todas las facturas, con filtros) · Canal x Mes · Vendedor x Mes · Vendedor x Canal · Clientes'+(ciudades.length?' · Ciudades':'')+'. Para ver otro año cambia la celda C3; para filtrar por fecha, canal o vendedor usa los filtros de la hoja Detalle (las demás hojas siempre muestran el total del año).';
-  wsR.getCell(nf,2).style={font:{size:9,color:{argb:'FF475569'}},alignment:{wrapText:true,vertical:'top'}}; wsR.mergeCells(nf,2,nf+2,10);
-  wsR.columns=[{width:3},{width:26},{width:20},{width:14},{width:18},{width:12},{width:3},{width:24},{width:20},{width:10}];
+  wsR.getCell(nf,2).value='Hojas: Detalle (todas las facturas, con filtros) · Canal x Mes · Vendedor x Mes · Vendedor x Canal · Zona x Mes · Zona x Canal · Zona x Ciudad · Zona x Ejecutivo · Mapa zonas · Clientes'+(ciudades.length?' · Ciudades':'')+'. Para ver otro año cambia la celda C3; para filtrar por fecha, canal o vendedor usa los filtros de la hoja Detalle (las demás hojas siempre muestran el total del año).';
+  wsR.getCell(nf,2).style={font:{size:9,color:{argb:'FF475569'}},alignment:{wrapText:true,vertical:'top'}}; wsR.mergeCells(nf,2,nf+2,14);
+  wsR.columns=[{width:3},{width:26},{width:20},{width:14},{width:18},{width:12},{width:3},{width:24},{width:20},{width:10},{width:3},{width:22},{width:18},{width:10}];
 
   const fch = rvFecha(filas[filas.length-1].fecha);
   await pvExcelDescargar(wb, `Ventas_detalladas_ILUMAX_${fch.getFullYear()}-${String(fch.getMonth()+1).padStart(2,'0')}-${String(fch.getDate()).padStart(2,'0')}.xlsx`);
