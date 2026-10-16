@@ -9147,6 +9147,85 @@ function pxeExcelDinamico(anioSel){
   wsM.getColumn(20).width=10;
   wsM.views=[{state:'frozen',xSplit:6,ySplit:5,showGridLines:false}];
 
+  // ══ POR SEMESTRE (S1 Ene–Jun · S2 Jul–Dic; fórmulas vivas desde Detalle, siguen el año de «Matriz anual») ══
+  (function(){
+    var wsT = hoja('Por semestre','FF0D9488');
+    var VAR = '[Red]+#,##0;[Color10]-#,##0;"·"', VARP = '[Red]+0.0%;[Color10]-0.0%;"·"';
+    titulo(wsT,'Presupuesto de gastos por semestre');
+    put(wsT,2,1,'Año:').font={bold:true}; var cy=put(wsT,2,2,{formula:"'Matriz anual'!$B$2"}); cy.font={bold:true,color:{argb:'FF1D4ED8'}}; cy.alignment={horizontal:'left'};
+    put(wsT,2,4,'← sigue al año elegido en «Matriz anual». S1 = enero–junio · S2 = julio–diciembre. Valores = presupuesto vigente (aprobado si existe, si no el propuesto). En las variaciones, rojo = el gasto sube en S2 y verde = baja.').font={italic:true,color:{argb:'FF64748B'}};
+    var S1c = ',' + DR('B') + ',"<=6"', S2c = ',' + DR('B') + ',">=7"';
+    var base = function(crit, sem){ return 'SUMIFS('+DR('L')+','+DR('A')+',$B$2'+(crit||'')+(sem===1?S1c:S2c)+')'; };
+    var NUMH = ['S1 (Ene–Jun)','S2 (Jul–Dic)','Total año','% en S1','% en S2','Var. S2 − S1','Var. % S2 vs S1','% del total'];
+    var r = 4;
+    // 1) Resumen
+    put(wsT,r,1,'1 · Resumen del año').font={bold:true,size:13,color:{argb:AZ}}; r++;
+    enc(wsT,r,1,['Semestre']); wsT.mergeCells(r,1,r,6); enc(wsT,r,7,['Vigente','% del año','Ítems']); r++;
+    var rS1=r, rS2=r+1, rTT=r+2, rVV=r+3;
+    put(wsT,rS1,1,'Primer semestre (enero–junio)'); put(wsT,rS2,1,'Segundo semestre (julio–diciembre)'); put(wsT,rTT,1,'Total año'); put(wsT,rVV,1,'Variación S2 vs S1');
+    put(wsT,rS1,7,{formula:base('',1)},COP0); put(wsT,rS2,7,{formula:base('',2)},COP0); put(wsT,rTT,7,{formula:'G'+rS1+'+G'+rS2},COP0); put(wsT,rVV,7,{formula:'G'+rS2+'-G'+rS1},VAR);
+    put(wsT,rS1,8,{formula:'IF($G$'+rTT+'=0,0,G'+rS1+'/$G$'+rTT+')'},'0.0%'); put(wsT,rS2,8,{formula:'IF($G$'+rTT+'=0,0,G'+rS2+'/$G$'+rTT+')'},'0.0%'); put(wsT,rTT,8,{formula:'IF(G'+rTT+'=0,0,1)'},'0%'); put(wsT,rVV,8,{formula:'IF(G'+rS1+'=0,"",G'+rVV+'/G'+rS1+')'},VARP);
+    put(wsT,rS1,9,{formula:'COUNTIFS('+DR('A')+',$B$2'+S1c+')'},COP0); put(wsT,rS2,9,{formula:'COUNTIFS('+DR('A')+',$B$2'+S2c+')'},COP0); put(wsT,rTT,9,{formula:'I'+rS1+'+I'+rS2},COP0);
+    [rS1,rS2,rTT,rVV].forEach(function(rr){ wsT.mergeCells(rr,1,rr,6); [1,7,8,9].forEach(function(c){ var x=wsT.getCell(rr,c); x.font={bold:rr===rTT||rr===rVV,size:11}; x.border={bottom:{style:'hair'}}; }); });
+    tot(wsT,rTT,1,9);
+    r = rVV + 3;
+    // bloque genérico: etiquetas en A (y B..F combinadas), números en G..N
+    var bloque = function(titulo_, rotulo, items, critDe, etiquetas){
+      put(wsT,r,1,titulo_).font={bold:true,size:13,color:{argb:AZ}}; r++;
+      enc(wsT,r,1,rotulo); for(var c=rotulo.length+1;c<=6;c++){ var h=wsT.getCell(r,c); h.fill=sol(AZ); }
+      enc(wsT,r,7,NUMH); r++;
+      var r0=r, rN=r0+items.length-1, rT=rN+1;
+      items.forEach(function(it,i){
+        var rr=r0+i; etiquetas(it).forEach(function(v,c){ var x=put(wsT,rr,c+1,v); x.font={size:10}; x.alignment={horizontal:'left'}; });
+        var cr = critDe(rr);
+        put(wsT,rr,7,{formula:base(cr,1)},COP); put(wsT,rr,8,{formula:base(cr,2)},COP);
+        put(wsT,rr,9,{formula:'G'+rr+'+H'+rr},COP0).font={bold:true,size:10};
+        put(wsT,rr,10,{formula:'IF(I'+rr+'=0,0,G'+rr+'/I'+rr+')'},'0.0%'); put(wsT,rr,11,{formula:'IF(I'+rr+'=0,0,H'+rr+'/I'+rr+')'},'0.0%');
+        put(wsT,rr,12,{formula:'H'+rr+'-G'+rr},VAR); put(wsT,rr,13,{formula:'IF(G'+rr+'=0,"",L'+rr+'/G'+rr+')'},VARP);
+        put(wsT,rr,14,{formula:'IF($I$'+rT+'=0,0,I'+rr+'/$I$'+rT+')'},'0.0%');
+        for(var c=1;c<=14;c++) wsT.getCell(rr,c).border={bottom:{style:'hair',color:{argb:'FFCBD5E1'}}};
+      });
+      put(wsT,rT,1,'TOTAL');
+      [7,8].forEach(function(c){ var L=wsT.getColumn(c).letter; put(wsT,rT,c,{formula:'SUM('+L+r0+':'+L+rN+')'},COP0); });
+      put(wsT,rT,9,{formula:'G'+rT+'+H'+rT},COP0); put(wsT,rT,10,{formula:'IF(I'+rT+'=0,0,G'+rT+'/I'+rT+')'},'0.0%'); put(wsT,rT,11,{formula:'IF(I'+rT+'=0,0,H'+rT+'/I'+rT+')'},'0.0%');
+      put(wsT,rT,12,{formula:'H'+rT+'-G'+rT},VAR); put(wsT,rT,13,{formula:'IF(G'+rT+'=0,"",L'+rT+'/G'+rT+')'},VARP); put(wsT,rT,14,{formula:'IF(I'+rT+'=0,0,1)'},'0%');
+      tot(wsT,rT,1,14);
+      mapa(wsT,'G'+r0+':H'+rN,'FF5EEAD4');
+      var res = {r0:r0, rN:rN, rT:rT}; r = rT + 3; return res;
+    };
+    // 2) Por área
+    bloque('2 · Por área',['Área'],areas,function(rr){ return ','+DR('D')+',$A'+rr; },function(a){ return [a]; });
+    // 3) Por categoría
+    bloque('3 · Por categoría',['Categoría'],cats,function(rr){ return ','+DR('E')+',$A'+rr; },function(c){ return [c]; });
+    // 4) Por cuenta (subcategoría)
+    var ctas = {}; det.forEach(function(d){ if(d.cod && !ctas[d.cod]) ctas[d.cod] = {cod:d.cod, sub:d.sub, cat:d.cat}; });
+    var listaCtas = Object.keys(ctas).sort().map(function(k){ return ctas[k]; });
+    bloque('4 · Por cuenta contable',['Cuenta','Subcategoría','','','','Categoría'],listaCtas,function(rr){ return ','+DR('G')+',$A'+rr; },function(c){ return [c.cod,c.sub,'','','',c.cat]; });
+    // 5) Detalle por ítem (con filtros)
+    put(wsT,r,1,'5 · Detalle por ítem (usa los filtros del encabezado; el total se ajusta al filtro)').font={bold:true,size:13,color:{argb:AZ}}; r++;
+    enc(wsT,r,1,['Área','Categoría','Subcategoría','Código','Centro de costo','Ítem / descripción']); enc(wsT,r,7,NUMH);
+    var hI = r; r++;
+    var i0=r, iN=i0+filas.length-1, iT=iN+1;
+    filas.forEach(function(f,i){
+      var rr=i0+i; [f.area,f.cat,f.sub,f.cod,f.cc,f.desc].forEach(function(v,c){ var x=put(wsT,rr,c+1,v); x.font={size:10}; });
+      var cr = ','+DR('D')+',$A'+rr+','+DR('G')+',$D'+rr+','+DR('H')+',$E'+rr+','+DR('I')+',$F'+rr;
+      put(wsT,rr,7,{formula:base(cr,1)},COP); put(wsT,rr,8,{formula:base(cr,2)},COP);
+      put(wsT,rr,9,{formula:'G'+rr+'+H'+rr},COP0).font={bold:true,size:10};
+      put(wsT,rr,10,{formula:'IF(I'+rr+'=0,0,G'+rr+'/I'+rr+')'},'0.0%'); put(wsT,rr,11,{formula:'IF(I'+rr+'=0,0,H'+rr+'/I'+rr+')'},'0.0%');
+      put(wsT,rr,12,{formula:'H'+rr+'-G'+rr},VAR); put(wsT,rr,13,{formula:'IF(G'+rr+'=0,"",L'+rr+'/G'+rr+')'},VARP);
+      put(wsT,rr,14,{formula:'IF($I$'+iT+'=0,0,I'+rr+'/$I$'+iT+')'},'0.0%');
+      for(var c=1;c<=14;c++) wsT.getCell(rr,c).border={bottom:{style:'hair',color:{argb:'FFCBD5E1'}}};
+    });
+    put(wsT,iT,1,'TOTAL (según filtro)');
+    [7,8,9,12].forEach(function(c){ var L=wsT.getColumn(c).letter; put(wsT,iT,c,{formula:'SUBTOTAL(109,'+L+i0+':'+L+iN+')'},c===12?VAR:COP0); });
+    put(wsT,iT,10,{formula:'IF(I'+iT+'=0,0,G'+iT+'/I'+iT+')'},'0.0%'); put(wsT,iT,11,{formula:'IF(I'+iT+'=0,0,H'+iT+'/I'+iT+')'},'0.0%'); put(wsT,iT,13,{formula:'IF(G'+iT+'=0,"",L'+iT+'/G'+iT+')'},VARP); put(wsT,iT,14,{formula:'IF(I'+iT+'=0,0,1)'},'0%');
+    tot(wsT,iT,1,14);
+    mapa(wsT,'G'+i0+':H'+iN,'FF5EEAD4');
+    wsT.autoFilter={from:{row:hI,column:1},to:{row:iN,column:14}};
+    anchos(wsT,[16,22,26,11,28,30,16,16,16,10,10,15,12,10]);
+    wsT.views=[{state:'frozen',xSplit:1,ySplit:2,showGridLines:false}];
+  })();
+
   // ══ POR EQUIVALENTE (cuentas SBS agrupadas por su equivalente; fórmulas vivas desde Detalle) ══
   (function(){
     var wsQ = hoja('Por equivalente','FF7C3AED');
@@ -10264,6 +10343,9 @@ function renderInvVista() {
       <button onclick="invExportarExcelPorBodega()" style="display:inline-flex;align-items:center;gap:6px;background:#0f172a;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;" title="Descarga un Excel con SKU, Descripción, Categoría, Existencia y Bodega — una fila por cada SKU+bodega con existencia real (solo bodegas disponibles, sin averías/muestras/etc.)">
         📥 Excel existencias por bodega
       </button>
+      <button onclick="invExportarRotacion()" style="display:inline-flex;align-items:center;gap:6px;background:#0f766e;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;" title="Excel con inventario actual, rotación a 3 y 6 meses y meses de inventario por referencia (alto stock / reforzar compra)">
+        📥 Excel inventario y rotación
+      </button>
       <div id="inv-siesa-status" data-sync-manual style="font-size:11px;color:var(--mu);">Sincroniza el inventario directo desde la API de SIESA</div>
     </div>
     <div id="invduv-status" style="display:none;background:#0f172a;color:#e2e8f0;border-radius:10px;padding:10px 12px;font:11px/1.6 monospace;margin-bottom:12px;white-space:pre-wrap;max-height:220px;overflow:auto;"></div>
@@ -10352,6 +10434,60 @@ function invExportarExcelPorBodega() {
   XLSX.utils.book_append_sheet(wb, ws, 'Existencias por bodega');
   XLSX.writeFile(wb, 'Existencias_por_bodega_' + new Date().toISOString().slice(0,10) + '.xlsx');
   toast('📥 Excel descargado: ' + filas.length + ' filas','ok');
+}
+
+// ── Excel de inventario y rotación: stock actual (bodegas que cuentan) vs ventas de los últimos 3 y 6 meses COMPLETOS ──
+async function invExportarRotacion() {
+  try {
+    toast('Calculando rotación…','ok');
+    const hoy = new Date(), mk = (y,m)=>y*12+(m-1);
+    const desde = mk(hoy.getFullYear(), hoy.getMonth()+1) - 8;
+    const dy = Math.floor(desde/12), dm = desde%12+1;
+    const rows = await sb.get('ventas_historico', 'select=referencia,anio,mes,unidades&or=(anio.gt.'+dy+',and(anio.eq.'+dy+',mes.gte.'+dm+'))');
+    const tot = {}; (rows||[]).forEach(r=>{ const k=mk(r.anio,r.mes); tot[k]=(tot[k]||0)+(+r.unidades||0); });
+    let ks = Object.keys(tot).map(Number).sort((a,b)=>a-b);
+    const actual = mk(hoy.getFullYear(), hoy.getMonth()+1);
+    ks = ks.filter(k=>k<actual);
+    // descarta el último mes si quedó incompleto (< 60% del promedio de los 3 anteriores)
+    if(ks.length>=4){ const L=ks[ks.length-1], prev=ks.slice(-4,-1).reduce((a,k)=>a+tot[k],0)/3; if(tot[L] < prev*0.6) ks.pop(); }
+    if(ks.length<3){ toast('No hay suficientes meses completos de ventas','wa'); return; }
+    const k3 = ks.slice(-3), k6 = ks.slice(-6), n6 = k6.length;
+    const u3 = {}, u6 = {};
+    (rows||[]).forEach(r=>{ const k=mk(r.anio,r.mes), u=+r.unidades||0;
+      if(k6.includes(k)) u6[r.referencia]=(u6[r.referencia]||0)+u;
+      if(k3.includes(k)) u3[r.referencia]=(u3[r.referencia]||0)+u; });
+    const inv = reabastInventarioPorReferencia();
+    const lista = Array.isArray(inv) ? inv : Object.values(inv);
+    const cost = {}; (INV_DATA||[]).forEach(r=>{ if(r.costo_prom) cost[r.referencia]=parseFloat(r.costo_prom)||0; });
+    const cat = {}; (INV_DATA||[]).forEach(r=>{ if(r.categoria) cat[r.referencia]=r.categoria; });
+    const refs = new Set(lista.map(x=>x.referencia)); Object.keys(u6).forEach(r=>refs.add(r));
+    const ex = {}; lista.forEach(x=>ex[x.referencia]=x);
+    const nom = k=>{const y=Math.floor((k-1)/12),m=(k-1)%12+1;return ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][m-1]+'-'+y;};
+    const T_ALTO = 6, T_REF = 2, out = [];
+    refs.forEach(r=>{
+      const e = ex[r]||{}, st = Math.round(e.existencia||0), a3=u3[r]||0, a6=u6[r]||0;
+      if(st<=0 && a6<=0) return;
+      const r3=a3/3, r6=a6/n6, m3=r3>0?st/r3:null, m6=r6>0?st/r6:null;
+      const est = (st<=0 && a6>0) ? 'Agotado - comprar' : (a6<=0 ? 'Sin rotación' : (m6>T_ALTO ? 'Alto stock' : (m6<T_REF ? 'Reforzar compra' : 'Normal')));
+      out.push({ 'Referencia':r, 'Descripción':e.descripcion||'', 'Categoría':cat[r]||'', 'Inventario actual':st,
+        'Ventas 3m (und)':a3, 'Ventas 6m (und)':a6, 'Rotación 3m (und/mes)':Math.round(r3*10)/10, 'Rotación 6m (und/mes)':Math.round(r6*10)/10,
+        'Meses inventario (3m)': m3==null?'':Math.round(m3*10)/10, 'Meses inventario (6m)': m6==null?'':Math.round(m6*10)/10,
+        'Estado':est, 'Costo prom.':cost[r]||0, 'Valor inventario':Math.round(st*(cost[r]||0)) });
+    });
+    out.sort((a,b)=>b['Inventario actual']-a['Inventario actual']);
+    const ws = XLSX.utils.json_to_sheet(out);
+    ws['!cols']=[{wch:12},{wch:44},{wch:24},{wch:12},{wch:12},{wch:12},{wch:13},{wch:13},{wch:13},{wch:13},{wch:18},{wch:12},{wch:16}];
+    ws['!autofilter']={ref:ws['!ref']}; ws['!freeze']={xSplit:2,ySplit:1};
+    const nota = [['Inventario actual: bodegas que cuentan ('+INV_BODEGAS_CUENTAN.join(', ')+')'],
+      ['Ventas 3m: '+k3.map(nom).join(', ')], ['Ventas '+n6+'m: '+k6.map(nom).join(', ')+' (meses completos)'],
+      ['Estado (según meses de inventario a 6m): Alto stock > '+T_ALTO+' · Reforzar compra < '+T_REF+' · Normal entre ambos'],
+      ['Agotado - comprar = sin stock pero con ventas · Sin rotación = con stock y sin ventas']];
+    const wn = XLSX.utils.aoa_to_sheet(nota); wn['!cols']=[{wch:110}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Inventario y rotación'); XLSX.utils.book_append_sheet(wb, wn, 'Notas');
+    XLSX.writeFile(wb, 'Inventario_rotacion_' + new Date().toISOString().slice(0,10) + '.xlsx');
+    toast('📥 Excel descargado: '+out.length+' referencias','ok');
+  } catch(e){ console.error(e); toast('Error: '+e.message,'er'); }
 }
 
 async function poblarListasInv() {
