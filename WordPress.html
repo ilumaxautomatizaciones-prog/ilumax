@@ -47,6 +47,8 @@ tr:hover td{background:#fafcff}
 <p class="mini">Pega los dos códigos. Se guardan solo en este navegador. También puedes abrir la página con <code>#k=CODIGO_ERP&amp;w=CODIGO_WP</code>.</p>
 <div class="bar"><input class="inp" id="iK" placeholder="Código ERP (link-token)" style="flex:1;min-width:180px"><input class="inp" id="iW" placeholder="Código WordPress" style="flex:1;min-width:180px"><button class="btn btn-p" id="bSave">Guardar y cargar</button></div></div></div>
 
+<div class="bar" id="tabs" style="margin-bottom:12px"><span class="chip on" data-t="inv">📦 Inventario</span><span class="chip" data-t="pedidos">🧾 Pedidos</span><span class="chip" data-t="carritos">🛒 Carritos abiertos</span><span class="chip" data-t="busquedas">🔎 Búsquedas</span></div>
+<div id="vInv">
 <div class="sg" id="kpis"></div>
 <div class="card"><div class="cb">
 <div class="bar" style="margin-bottom:10px">
@@ -61,6 +63,8 @@ tr:hover td{background:#fafcff}
 </div></div>
 <div class="tw"><table><thead><tr id="th"></tr></thead><tbody id="tb"></tbody></table></div>
 <p class="mini">% publicado = inventario en WordPress ÷ inventario SIESA (bodegas marcadas). «Sugerido» = SIESA × % del nivel. Esta página solo lee: no modifica WordPress ni SIESA.</p>
+</div>
+<div id="vX" style="display:none"><div class="sg" id="xk"></div><div class="bar" style="margin-bottom:10px"><input class="inp" id="xq" placeholder="Buscar…" style="flex:1;min-width:180px"><button class="btn" id="xr">↻ Recargar</button></div><div id="xm"></div><div class="tw"><table><thead><tr id="xh"></tr></thead><tbody id="xb"></tbody></table></div></div>
 </div>
 <script>
 var EDGE='https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/wordpress-siesa',WPU='https://ilumax.com.co/wp-json/ilumax/v1/web';
@@ -130,5 +134,46 @@ $('bX').onclick=function(){
  function go(){var d=[['SKU','Producto','Vendidas','Pedidos','Inv. WordPress','Inv. SIESA','% en WordPress','Nivel','Sugerido web','Dif. vs sugerido']].concat((S.view||[]).map(function(r){return[r.sku,r.nombre,r.uds,r.pedidos,r.gest?r.wp:'sin control',r.si,r.pct==null?'':+r.pct.toFixed(1),r.lv,r.sug,r.dif]}));
   var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(d),'WordPress');XLSX.writeFile(wb,'WordPress_inventario_'+new Date().toISOString().slice(0,10)+'.xlsx')}
  if(window.XLSX)return go();var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=go;document.head.appendChild(s)};
+
+var X={tab:'inv',d:{}};
+var XC={
+ pedidos:{cols:['Pedido','Fecha','Estado','Cliente','Ciudad','Productos','Total','Envío'],
+  row:function(r){return['<b>#'+r.id+'</b>',fd(r.fecha),esc(r.estado_txt),esc(r.cliente)+'<div class="mini">'+esc(r.email)+(r.tel?' · '+esc(r.tel):'')+'</div>',esc(r.ciudad),r.items.map(function(i){return esc(i[2]+'× '+i[1])}).join('<br>'),'<b>'+m$(r.total)+'</b>',m$(r.envio)]},
+  txt:function(r){return [r.id,r.cliente,r.email,r.ciudad,r.estado_txt,r.items.map(function(i){return i[0]+' '+i[1]}).join(' ')].join(' ')},
+  kp:function(a){var t=a.reduce(function(x,r){return x+r.total},0),e=a.reduce(function(x,r){return x+r.envio},0);return[['Pedidos',nf(a.length)],['Venta total',m$(t)],['Ticket promedio',a.length?m$(t/a.length):'—'],['Flete promedio',a.length?m$(e/a.length):'—']]}},
+ carritos:{cols:['Última actividad','Cliente','Ciudad','Productos','Valor'],
+  row:function(r){return[ago(r.ultima),(r.cliente?esc(r.cliente):'<span class="mini">anónimo</span>')+(r.registrado?' <span class="pb v">registrado</span>':'')+'<div class="mini">'+esc(r.email)+'</div>',esc(r.ciudad),r.items.map(function(i){return esc(i[2]+'× '+i[1])}).join('<br>'),'<b>'+m$(r.total)+'</b>']},
+  txt:function(r){return [r.cliente,r.email,r.ciudad,r.items.map(function(i){return i[0]+' '+i[1]}).join(' ')].join(' ')},
+  kp:function(a){return[['Carritos con productos',nf(a.length)],['Valor en carritos',m$(a.reduce(function(x,r){return x+r.total},0))],['Identificados',nf(a.filter(function(r){return r.email}).length)]]}},
+ busquedas:{cols:['Búsqueda','Veces','Resultados','Última'],
+  row:function(r){return['<b>'+esc(r.termino)+'</b>',nf(r.veces),r.resultados===0?'<span class="pb r">0 · sin resultados</span>':nf(r.resultados),fd(r.ultima+'Z')]},
+  txt:function(r){return r.termino},
+  kp:function(a){return[['Términos distintos',nf(a.length)],['Búsquedas',nf(a.reduce(function(x,r){return x+r.veces},0))],['Sin resultados',nf(a.filter(function(r){return r.resultados===0}).length)]]}}
+};
+function m$(n){return'$'+nf(n)}
+function fd(s){var d=new Date(s);return isNaN(d)?'':d.toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}
+function ago(s){var m=Math.round((Date.now()-new Date(s))/60000);return m<60?'hace '+Math.max(m,0)+' min':m<1440?'hace '+Math.round(m/60)+' h':'hace '+Math.round(m/1440)+' d'}
+async function loadX(t,force){
+ if(X.d[t]&&!force)return xr();
+ var w=ls('wp_w');if(!w){$('cfg').style.display='';return}
+ $('xm').innerHTML='<div class="alert">Cargando…</div>';
+ try{var r=await fetch(WPU.replace('/web','/'+t)+'?dias='+$('dias').value+'&k='+encodeURIComponent(w));var j=await r.json();
+  if(!j.items){$('xm').innerHTML='<div class="alert err">'+esc(j.error||(r.status===404?'Falta activar el fragmento ilumax_web_extra_wpcode en WPCode':'Sin datos'))+'</div>';$('xb').innerHTML='';return}
+  X.d[t]=j}catch(e){$('xm').innerHTML='<div class="alert err">'+esc(e.message)+'</div>';return}
+ xr();
+}
+function xr(){
+ var t=X.tab,c=XC[t],j=X.d[t];if(!j)return;var q=$('xq').value.trim().toLowerCase();
+ var a=j.items.filter(function(r){return!q||c.txt(r).toLowerCase().indexOf(q)>=0});
+ $('xm').innerHTML=t==='busquedas'?'<div class="alert">'+(j.desde_registro?'Registrando desde '+esc(fd(j.desde_registro+'Z'))+'. Solo se cuentan las búsquedas hechas después de activar el fragmento.':'Todavía no hay búsquedas registradas: aparecerán a medida que los clientes usen el buscador de la tienda.')+'</div>':t==='carritos'?'<div class="alert">Carritos activos en las últimas 48 h. Si el cliente no ha iniciado sesión ni escrito su correo, aparece como anónimo.</div>':'';
+ $('xk').innerHTML=c.kp(a).map(function(x){return'<div class="sc"><div class="sv">'+x[1]+'</div><div class="sl">'+x[0]+'</div></div>'}).join('');
+ $('xh').innerHTML=c.cols.map(function(h){return'<th>'+h+'</th>'}).join('');
+ $('xb').innerHTML=a.length?a.map(function(r){return'<tr>'+c.row(r).map(function(v){return'<td>'+v+'</td>'}).join('')+'</tr>'}).join(''):'<tr><td colspan="9" class="mini" style="padding:20px;text-align:center">Sin resultados</td></tr>';
+}
+function setTab(t){X.tab=t;document.querySelectorAll('#tabs .chip').forEach(function(c){c.classList.toggle('on',c.dataset.t===t)});
+ $('vInv').style.display=t==='inv'?'':'none';$('vX').style.display=t==='inv'?'none':'';if(t!=='inv')loadX(t)}
+$('tabs').onclick=function(e){if(e.target.dataset.t)setTab(e.target.dataset.t)};
+$('xq').oninput=xr;$('xr').onclick=function(){loadX(X.tab,true)};
+$('dias').addEventListener('change',function(){X.d={};if(X.tab!=='inv')loadX(X.tab)});
 hash();load();
 </script></body></html>
