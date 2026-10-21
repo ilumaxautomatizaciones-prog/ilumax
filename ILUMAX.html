@@ -11684,7 +11684,7 @@ function reabastCalcularSobrestock(){
 // ═══ Embarque (BL) + Comercio Exterior ═══
 // Los BL se crean aquí (Embarque), se siguen en Comercio Exterior y alimentan el tablero (reemplazan al Excel de Seguimiento).
 // Se guardan en configuracion.cbl_embarques = {bls:[{id, bl, agente, etd, eta, po, pd, cont, planta, registro, items:[{oc, ocId, ref, desc, cant, cbm, cajas, estado, planta, ingreso}], hist}]}
-const CBL = { bls:[], cargado:false, sel:{}, abiertas:{}, f:{q:'', oc:'', estado:'activos', vista:'oc', agrupar:true}, form:{bl:'', etd:'', eta:'', agente:'', po:'', pd:'', cont:''}, det:null };
+const CBL = { bls:[], cargado:false, sel:{}, abiertas:{}, f:{q:'', oc:'', estado:'activos', vista:'oc', agrupar:true}, form:{bl:'', etd:'', eta:'', agente:'', po:'', pd:'Buenaventura', cont:''}, det:null };
 // Los 5 estados de la orden: Producción → Embarque (hasta que zarpa) → Tránsito (hasta llegar a Buenaventura) → Nacionalización → Ingreso a bodega
 const CBL_ESTADOS = ['Producción','Embarque','Tránsito','Nacionalización','Ingreso a bodega'];
 const CBL_FASE_TXT = {3:'Producción', 5:'Embarque', 6:'Tránsito', 7:'Nacionalización', 9:'Ingreso a bodega'};
@@ -11704,19 +11704,26 @@ function cblCss(){
   .cbl-pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:10.5px;font-weight:700;background:var(--s1);}`;
   document.head.appendChild(st);
 }
+// Puertos: lo que el Excel trae (Ningbo, Shenzhen…) es el ORIGEN; el destino por defecto es Buenaventura.
+// Corrige también los BL guardados antes, donde el origen quedó en "destino".
+function cblNormPuertos(l){ (l||[]).forEach(b=>{ if(!b.po && b.pd && !/buenaventura/i.test(b.pd)){ b.po = b.pd; b.pd = 'Buenaventura'; } else if(!b.pd) b.pd = 'Buenaventura'; }); return l; }
+// Llegada a planta estimada: ETA + 1 día de arribo + 7 días hábiles de nacionalización y transporte
+function cblPlantaEst(eta){ if(!eta) return ''; try{ const d = new Date(eta+'T12:00:00'); d.setDate(d.getDate()+1); return _prodfIso(ocSumarHabiles(d,7)); }catch(e){ return ''; } }
+function cblPlantaSug(){ const e = document.getElementById('cbld-eta'), p = document.getElementById('cbld-planta'); if(e && p && !p.dataset.man) p.value = cblPlantaEst(e.value); }
 async function cblCargar(forzar){
   if(CBL.cargado && !forzar) return;
-  try{ const r = await sb.get('configuracion','clave=eq.cbl_embarques'); const v = r && r[0] ? r[0].valor : null; const j = typeof v==='string' ? JSON.parse(v) : v; CBL.bls = (j && j.bls) || []; CBL.cargado = true; }
+  try{ const r = await sb.get('configuracion','clave=eq.cbl_embarques'); const v = r && r[0] ? r[0].valor : null; const j = typeof v==='string' ? JSON.parse(v) : v; CBL.bls = cblNormPuertos((j && j.bls) || []); CBL.cargado = true; }
   catch(e){ console.warn('BL del ERP:', e.message); }
 }
 async function cblGuardar(cambiados, eliminados){
   let remoto = []; try{ const r = await sb.get('configuracion','clave=eq.cbl_embarques'); const v = r && r[0] ? r[0].valor : null; const j = typeof v==='string' ? JSON.parse(v) : v; remoto = (j && j.bls) || []; }catch(e){}
   const m = new Map(remoto.map(b=>[b.id,b])); (cambiados||[]).forEach(b=>m.set(b.id,b)); (eliminados||[]).forEach(id=>m.delete(id));
-  CBL.bls = [...m.values()];
+  CBL.bls = cblNormPuertos([...m.values()]);
   await sb.upsert('configuracion', {clave:'cbl_embarques', valor:JSON.stringify({fecha:new Date().toISOString(), usuario:(CU&&CU.nombre)||'', bls:CBL.bls}), tipo:'json'}, 'clave');
 }
 function cblUxCaja(ref){ const M = (REABAST.referenciasMaestro||{})[String(ref||'').trim()] || {}; const t = String(M.master_packaging||'').trim();
-  return /^\d+(\.\d+)?\s*(pcs?|pzs?|unid\w*|uds?|und)?$/i.test(t) ? Number(parseFloat(t)) : null; }
+  // Acepta "24", "24 pcs", "24 pcs/ctn", "24 pcs per ctn"… (el maestro guarda "N pcs/ctn"); 0 o texto sin número → sin dato
+  const m = t.match(/^(\d+(?:\.\d+)?)\s*(?:pcs?|pzs?|unid\w*|uds?|und)?\s*(?:\/\s*ctns?|per\s*ctns?)?$/i); return m && Number(m[1])>0 ? Number(m[1]) : null; }
 function cblFaseBL(b){ const fs = (b.items||[]).map(it=>ceFaseLinea(it.estado||'Embarque','').fase).filter(f=>f!=null && f>=0); return fs.length ? Math.min(...fs) : (b.items||[]).length ? -1 : null; }
 function cblEstadoBL(b){ const f = cblFaseBL(b); return f===-1 ? 'Cancelado' : f==null ? '—' : (CBL_FASE_TXT[f] || '—'); }
 function cblDeOC(numero){ return CBL.bls.some(b=>(b.items||[]).some(it=>ceNum(it.oc)===ceNum(numero))); }
@@ -11804,7 +11811,7 @@ function cblOverlay(){
   nums.forEach(num=>{
     const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===num), orden = num.replace(/-\d+$/,'');
     const base = {orden, impo:null, tokens:[], comentario:'', pend:0, aci:'', carga:null, rim:null};
-    const lineas = porOC[num].map(({b,it})=>({...base, estado:it.estado||'Embarque', cantOrd:Number(it.cant)||0, cantEnv:Number(it.cant)||0, puerto:b.pd||b.po||'', aci:b.agente||'', cont:b.cont||'', bl:b.bl,
+    const lineas = porOC[num].map(({b,it})=>({...base, estado:it.estado||'Embarque', cantOrd:Number(it.cant)||0, cantEnv:Number(it.cant)||0, puerto:b.po||b.pd||'', aci:b.agente||'', cont:b.cont||'', bl:b.bl,
       etd:D(b.etd), eta:D(b.eta), planta:D(it.planta||b.planta), ingreso:D(it.ingreso), rim:(b.registro&&b.registro.numero)||null, ref:it.ref}));
     if(oc){ const pend = cblPendientes(oc).reduce((a,p)=>a+p.pend,0);
       if(pend>0){ const em = (typeof EMB!=='undefined' && EMB.datos) ? EMB.datos[oc.id] : null;
@@ -11931,7 +11938,7 @@ async function cblCrear(){
   if(!items.length){ if(typeof toast==='function') toast('Marca al menos un ítem','er'); return; }
   const quien = (CU&&CU.nombre)||'', t = new Date().toISOString();
   let b = CBL.bls.find(x=>String(x.bl).toUpperCase()===num), nuevo = !b;
-  if(!b) b = {id:'bl_'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), bl:num, agente:'', etd:'', eta:'', po:'', pd:'', cont:'', planta:'', registro:null, creado:t, quien, items:[], hist:[]};
+  if(!b) b = {id:'bl_'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), bl:num, agente:'', etd:'', eta:'', po:'', pd:'Buenaventura', cont:'', planta:'', registro:null, creado:t, quien, items:[], hist:[]};
   else b = JSON.parse(JSON.stringify(b));
   ['agente','po','pd','cont'].forEach(k=>{ if(F[k]) b[k] = F[k]; }); b.etd = F.etd; b.eta = F.eta;
   items.forEach(n=>{ const e = b.items.find(x=>ceNum(x.oc)===ceNum(n.oc) && ceRefKey(x.ref)===ceRefKey(n.ref)); if(e){ e.cant += n.cant; if(n.cajas!=null) e.cajas = (Number(e.cajas)||0)+n.cajas; } else b.items.push(n); });
@@ -11940,7 +11947,7 @@ async function cblCrear(){
     await cblPersistir(b);
     // las prealertas de esas OC pasan a "en gestión" (ya tienen BL)
     for(const ocId of new Set(items.map(i=>i.ocId))){ if(EMB.datos[ocId] && EMB.datos[ocId].estado==='por_gestionar'){ try{ await embGuardar(ocId, d=>{ d.estado='en_gestion'; d.gestiona = quien; d.t_gestion = t; d.hist = [...(d.hist||[]), {t, quien, accion:'BL '+num+' creado en Embarque'}]; }); }catch(e){} } }
-    CBL.sel = {}; CBL.form = {bl:'', etd:'', eta:'', agente:'', po:'', pd:'', cont:''};
+    CBL.sel = {}; CBL.form = {bl:'', etd:'', eta:'', agente:'', po:'', pd:'Buenaventura', cont:''};
     if(typeof toast==='function') toast('BL '+num+(nuevo?' creado':' actualizado')+' · '+items.length+' ítem(s) · el tablero ya usa su ETD/ETA','ok');
   }catch(e){ if(typeof toast==='function') toast('No se pudo guardar el BL: '+e.message,'er'); return; }
   reabastPintar();
@@ -12014,11 +12021,11 @@ function cblHtmlTablaOC(){
 function cblHtmlTabla(){
   const lista = cblBLsFiltrados(), hoy = Date.now();
   if(!lista.length) return '<div class="empty">No hay BL. Créalos en la pestaña 🚢 Embarque (BL).</div>';
-  return `<div class="tw"><table class="cbl-t"><thead><tr><th>BL</th><th>Agente</th><th>Origen → Destino</th><th>ETD</th><th>ETA</th><th>OC</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th>Estado</th><th>Registro de importación</th><th>Siguiente paso</th></tr></thead><tbody>
+  return `<div class="tw"><table class="cbl-t"><thead><tr><th>BL</th><th>OC</th><th>Agente</th><th>Origen → Destino</th><th>ETD</th><th>ETA</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th>Estado</th><th>Registro de importación</th><th>Siguiente paso</th></tr></thead><tbody>
   ${lista.map(b=>{ const d = b.eta ? Math.ceil((new Date(b.eta+'T12:00:00')-hoy)/86400000) : null, fase = cblFaseBL(b), ocs = [...new Set((b.items||[]).map(it=>it.oc))], cbm = (b.items||[]).reduce((a,it)=>a+(it.cbm>0?it.cant*it.cbm:0),0), rim = b.registro && b.registro.numero;
-    return `<tr style="cursor:pointer;" onclick="cblAbrir('${b.id}')"><td style="font-family:monospace;font-weight:800;">${reabastEsc(b.bl)}</td><td>${reabastEsc(b.agente||'—')}</td><td>${reabastEsc((b.po||'—')+' → '+(b.pd||'—'))}</td><td onclick="event.stopPropagation()">${cblFd(b.etd)}${fase===5?` <span style="cursor:pointer;" title="Actualizar ETD" onclick="cblEditarFecha('${b.id}','etd')">✏️</span>`:''}</td>
+    return `<tr style="cursor:pointer;" onclick="cblAbrir('${b.id}')"><td style="font-family:monospace;font-weight:800;">${reabastEsc(b.bl)}</td><td title="${reabastEsc(ocs.join(', '))}">${reabastEsc(ocs.slice(0,3).join(', '))}${ocs.length>3?' +'+(ocs.length-3):''}</td><td>${reabastEsc(b.agente||'—')}</td><td>${reabastEsc((b.po||'—')+' → '+(b.pd||'—'))}</td><td onclick="event.stopPropagation()">${cblFd(b.etd)}${fase===5?` <span style="cursor:pointer;" title="Actualizar ETD" onclick="cblEditarFecha('${b.id}','etd')">✏️</span>`:''}</td>
     <td style="white-space:nowrap;" onclick="event.stopPropagation()"><b>${cblFd(b.eta)}</b>${fase!==9&&fase!==-1?` <span style="cursor:pointer;" title="Actualizar ETA" onclick="cblEditarFecha('${b.id}','eta')">✏️</span>`:''}${fase!==9 && d!=null?`<div style="font-size:10px;color:${d<0?'#991b1b':d<=15?'#1e40af':'var(--mu)'};">${d<0?'hace '+(-d)+' d':d===0?'hoy':'en '+d+' d'}</div>`:''}</td>
-    <td title="${reabastEsc(ocs.join(', '))}">${reabastEsc(ocs.slice(0,3).join(', '))}${ocs.length>3?' +'+(ocs.length-3):''}</td><td style="text-align:right;">${(b.items||[]).length}</td><td style="text-align:right;">${cblN(cbm,1)}</td>
+    <td style="text-align:right;">${(b.items||[]).length}</td><td style="text-align:right;">${cblN(cbm,1)}</td>
     <td><span class="cbl-pill" style="${fase===9?'background:#dcfce7;color:#166534;':fase===5?'background:#ede9fe;color:#5b21b6;':fase===6?'background:#dbeafe;color:#1e40af;':fase===7?'background:#fef3c7;color:#92400e;':''}">${reabastEsc(cblEstadoBL(b))}</span></td>
     <td>${rim?`<b>${reabastEsc(b.registro.numero)}</b>${b.registro.aprobado?' ✅':''}`:'<span class="arte-mu">—</span>'}</td><td style="white-space:nowrap;" onclick="event.stopPropagation()">${cblBotonAvanzar(b,true)}</td></tr>`; }).join('')}
   </tbody></table></div>`;
@@ -12064,13 +12071,14 @@ function cblPintarDetalle(){
   const b = CBL.bls.find(x=>x.id===CBL.det); if(!b){ cblCerrarDetalle(); return; } cblCss();
   const puede = cblPuede(), dis = puede ? '' : 'disabled', fase = cblFaseBL(b), aduana = fase!=null && fase>=7;
   let m = document.getElementById('cbl-det'); if(!m){ m = document.createElement('div'); m.id = 'cbl-det'; m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:10000;display:flex;align-items:flex-start;justify-content:center;padding:3vh 12px;overflow:auto;'; document.body.appendChild(m); }
-  const inp = (k,l,t)=>`<div><label>${l}</label><input id="cbld-${k}" class="inp" type="${t||'text'}" value="${reabastEsc(b[k]||'')}" ${dis} style="width:100%;"></div>`;
+  const inp = (k,l,t,x)=>`<div><label>${l}</label><input id="cbld-${k}" class="inp" type="${t||'text'}" value="${reabastEsc(b[k]||'')}" ${dis} ${x||''} style="width:100%;"></div>`;
+  const plEst = cblPlantaEst(b.eta), plantaInp = `<div><label>Llegada a planta (est.)</label><input id="cbld-planta" class="inp" type="date" value="${b.planta||plEst}" ${dis} ${b.planta?'data-man="1"':''} oninput="this.dataset.man='1'" style="width:100%;"><div class="arte-mu" style="font-size:10px;margin-top:2px;">${b.planta?'Fecha puesta por ti · se aplica a los ítems':(plEst?'≈ estimada: ETA + 1 d + 7 días hábiles · cámbiala si quieres':'Se calcula al poner el ETA')}</div></div>`;
   const opts = est => { const todos = CBL_ESTADOS.includes(est) || !est ? CBL_ESTADOS : [est, ...CBL_ESTADOS]; return todos.map(e=>`<option ${ (est||'Embarque')===e?'selected':''}>${reabastEsc(e)}</option>`).join(''); };
   const cbm = (b.items||[]).reduce((a,it)=>a+(it.cbm>0?it.cant*it.cbm:0),0), cajas = (b.items||[]).reduce((a,it)=>a+(Number(it.cajas)||0),0), R = b.registro || {};
   m.innerHTML = `<div style="background:var(--w,#fff);color:var(--tx);border-radius:12px;max-width:1100px;width:100%;padding:16px 18px;box-shadow:0 20px 50px rgba(0,0,0,.35);">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;"><div style="font-weight:800;font-size:16px;">🌐 BL <span style="font-family:monospace;">${reabastEsc(b.bl)}</span>${puede?` <span style="cursor:pointer;font-size:13px;" title="Cambiar el número de BL" onclick="cblRenombrar('${b.id}')">✏️</span>`:''}</div><span class="cbl-pill">${reabastEsc(cblEstadoBL(b))}</span><span class="arte-mu" style="font-size:11px;">${(b.items||[]).length} ítem(s) · ${cblN(cbm,2)} m³ · ${cblN(cajas)} cajas</span><span style="margin-left:auto;display:flex;gap:8px;align-items:center;">${cblBotonAvanzar(b)}<button class="btn btn-g btn-sm" onclick="cblCerrarDetalle()">✕ Cerrar</button></span></div>
     <div style="font-weight:700;font-size:12px;margin-bottom:4px;">Fechas y logística <span class="arte-mu" style="font-weight:500;">· el ETD y el ETA que guardes mueven el tablero de Abastecimiento</span></div>
-    <div class="cbl-in">${inp('bl','Número de BL')}${inp('agente','Agente de carga')}${inp('po','Puerto de origen')}${inp('pd','Puerto de destino')}${inp('cont','Contenedor(es)')}${inp('etd','ETD (salida)','date')}${inp('eta','ETA (llegada)','date')}${inp('planta','Llegada a planta (est.)','date')}</div>
+    <div class="cbl-in">${inp('bl','Número de BL')}${inp('agente','Agente de carga')}${inp('po','Puerto de origen')}${inp('pd','Puerto de destino')}${inp('cont','Contenedor(es)')}${inp('etd','ETD (salida)','date')}${inp('eta','ETA (llegada)','date','onchange="cblPlantaSug()"')}${plantaInp}</div>
     <div style="margin:8px 0 14px;"><button class="btn btn-bl btn-sm" ${dis} onclick="cblGuardarCab('${b.id}')">💾 Guardar fechas y logística</button></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;"><b style="font-size:12px;">Ítems del BL y su estado</b><span class="arte-mu" style="font-size:11px;">Poner todos en:</span><select id="cbld-todos" class="inp" style="width:auto;" ${dis}>${CBL_ESTADOS.map(e=>`<option>${e}</option>`).join('')}</select><button class="btn btn-g btn-xs" ${dis} onclick="cblTodosEstado('${b.id}')">Aplicar a todos</button></div>
     <div class="tw" style="max-height:340px;"><table class="cbl-t"><thead><tr><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Cajas</th><th>Estado</th><th>Llegada a planta</th><th>Ingreso a bodega</th><th></th></tr></thead><tbody>
@@ -12156,7 +12164,10 @@ function cblGuardarCab(id){
   const nbl = v('bl').trim();
   if(!nbl){ if(typeof toast==='function') toast('El número de BL no puede quedar vacío','er'); return; }
   if(CBL.bls.some(x=>x.id!==id && String(x.bl).trim().toLowerCase()===nbl.toLowerCase())){ if(typeof toast==='function') toast('Ya existe otro BL con el número '+nbl,'er'); return; }
-  cblMutar(id, b=>{ const ant = `ETD ${b.etd||'—'}→${v('etd')||'—'} · ETA ${b.eta||'—'}→${v('eta')||'—'}`; if(b.bl!==nbl){ cblLog(b,'Número de BL '+(b.bl||'—')+' → '+nbl); b.bl = nbl; } ['agente','po','pd','cont','etd','eta','planta'].forEach(k=>{ b[k] = v(k); }); cblLog(b,'Fechas/logística: '+ant); }, 'Guardado · el tablero se actualizó con el nuevo ETD/ETA');
+  cblMutar(id, b=>{ const ant = `ETD ${b.etd||'—'}→${v('etd')||'—'} · ETA ${b.eta||'—'}→${v('eta')||'—'}`; if(b.bl!==nbl){ cblLog(b,'Número de BL '+(b.bl||'—')+' → '+nbl); b.bl = nbl; } const antPl = b.planta||''; ['agente','po','pd','cont','etd','eta'].forEach(k=>{ b[k] = v(k); }); if(!b.pd) b.pd = 'Buenaventura';
+    const pl = v('planta'); b.planta = (pl && pl!==cblPlantaEst(b.eta)) ? pl : '';
+    if(b.planta && b.planta!==antPl){ (b.items||[]).forEach(it=>{ if(!it.ingreso) it.planta = b.planta; }); cblLog(b,'Llegada a planta '+(antPl||'—')+' → '+b.planta+' (aplicada a los ítems sin ingreso)'); }
+    cblLog(b,'Fechas/logística: '+ant); }, 'Guardado · el tablero se actualizó con el nuevo ETD/ETA');
 }
 function cblItemEstado(id, ix, est){
   cblMutar(id, b=>{ const it = b.items[ix]; if(!it) return false; it.estado = est; if(ceFaseLinea(est,'').fase===9 && !it.ingreso) it.ingreso = _prodfIso(new Date()); cblLog(b, 'Ítem '+it.ref+' ('+it.oc+') → '+est); }, 'Estado actualizado');
@@ -12199,10 +12210,10 @@ async function cblMigrarExcel(soloBl){
   g.forEach((ls, k)=>{ const items = []; ls.forEach(x=>{ const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===ceNum(x.oc)); if(!oc) return;
       const it = (REABAST.ocItems[oc.id]||[]).find(i=>ceRefKey(i.referencia)===ceRefKey(x.r)), inf = cbmRefInfo(x.r), M = (REABAST.referenciasMaestro||{})[x.r] || {};
       const e = items.find(i=>ceNum(i.oc)===ceNum(oc.numero_oc) && ceRefKey(i.ref)===ceRefKey(x.r)); if(e){ e.cant += x.c; return; }
-      items.push({oc:oc.numero_oc, ocId:oc.id, ref:x.r, desc:(it&&it.descripcion)||M.descripcion_en||'', cant:x.c, cbm:inf.cbm||null, cajas:null, estado:cblEstadoNorm(x.e, x.f), planta:x.pl||'', ingreso:x.ing||''}); });
+      items.push({oc:oc.numero_oc, ocId:oc.id, ref:x.r, desc:(it&&it.descripcion)||M.descripcion_en||'', cant:x.c, cbm:inf.cbm||null, cajas:(u=>u?Math.ceil(x.c/u):null)(cblUxCaja(x.r)), estado:cblEstadoNorm(x.e, x.f), planta:x.pl||'', ingreso:x.ing||''}); });
     if(!items.length) return;
     const d1 = ls.map(x=>x.d1).filter(Boolean).sort().pop()||'', d2 = ls.map(x=>x.d2).filter(Boolean).sort().pop()||'', puertos = [...new Set(ls.map(x=>{ const rr = r[ceNum(x.oc)]; return rr && rr.puerto && rr.puerto[0]; }).filter(Boolean))];
-    nuevos.push({id:'bl_'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), bl:k, agente:'', etd:d1, eta:d2, po:'', pd:puertos[0]||'', cont:[...new Set(ls.map(x=>x.ct).filter(Boolean))].join(', '), planta:'', registro:null, creado:t, quien, items, hist:[{t, quien, accion:'Cargado desde el Excel de Comercio Exterior'}]}); });
+    nuevos.push({id:'bl_'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), bl:k, agente:'', etd:d1, eta:d2, po:puertos[0]||'', pd:'Buenaventura', cont:[...new Set(ls.map(x=>x.ct).filter(Boolean))].join(', '), planta:'', registro:null, creado:t, quien, items, hist:[{t, quien, accion:'Cargado desde el Excel de Comercio Exterior'}]}); });
   if(!nuevos.length){ if(typeof toast==='function') toast('No se pudieron relacionar los BL con OC del ERP','wa'); return; }
   try{ await cblGuardar(nuevos); await cblSincronizar(nuevos.flatMap(b=>b.items.map(i=>i.oc))); if(typeof toast==='function') toast('📥 '+nuevos.length+' BL cargados desde el Excel','ok'); }catch(e){ if(typeof toast==='function') toast('No se pudo cargar: '+e.message,'er'); }
   reabastPintar();
