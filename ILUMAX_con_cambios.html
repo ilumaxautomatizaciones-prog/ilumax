@@ -11833,8 +11833,15 @@ function cblDesdeExcel(){
 }
 async function cblAplicarExcelBL(){
   if(!cblPuede()) return 0;
-  const R = cblDesdeExcel(); if(!R.cam.length) return 0;
-  await cblGuardar(R.cam); await cblSincronizar((CBL.bls||[]).flatMap(b=>(b.items||[]).map(i=>i.oc)));
+  let nRamas = 0; try{ nRamas = await ceCrearRamasFaltantes(); if(nRamas){ await cargarOC(); if(typeof toast==='function') toast('🆕 Ramas creadas desde la sábana: '+CE._ramasCreadas.join(', '),'ok'); } }catch(e){ console.warn(e); }
+  const R = cblDesdeExcel(); if(!R.cam.length) return nRamas;
+  const nums = (CBL.bls||[]).flatMap(b=>(b.items||[]).map(i=>i.oc));
+  await cblGuardar(R.cam); await cblSincronizar(nums);
+  try{ await cargarOC(); REABAST._cargadoEn = Date.now(); }catch(e){}
+  // verificación: toda OC cuyo BL quedó ingresado debe tener Recepción a bodega completada; si no, se dice cuál y por qué
+  const mal = []; new Set(nums.map(ceNum)).forEach(n=>{ const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===n), r = ceDe(n); if(!oc || !r) return;
+    const e = (REABAST.ocEtapas[oc.id]||[]).find(x=>x.etapa_id==='recepcion_bodega'); if(r.fase===9 && (!e || e.estado!=='completada')) mal.push(n+' (resumen fase '+r.fase+', pendiente '+(r.pend||0)+', recepción: '+(e?e.estado:'sin etapa')+')'); else if(r.fase!==9 && r.fase!=null && (R.cam.some(b=>(b.items||[]).some(i=>ceNum(i.oc)===n && ceFaseLinea(i.estado||'','').fase===9))) && r.pend>0) mal.push(n+' (quedan '+r.pend+' u. por enviar según el ERP)'); });
+  if(mal.length || (CBL._errSync||[]).length){ console.warn('Sincronía Com. Ext.', mal, CBL._errSync); alert('Sincronía con el Excel — hay OC que revisar:\n\n'+mal.slice(0,15).join('\n')+((CBL._errSync||[]).length?'\n\nErrores:\n'+CBL._errSync.slice(0,10).join('\n'):'')); }
   if(typeof toast==='function') toast('🔄 '+R.cam.length+' BL del ERP actualizados con el Excel ('+R.items+' ítems avanzaron)'+(R.adel.length?' · '+R.adel.length+' ítems del ERP van más adelante que el Excel y no se tocaron':''),'ok');
   return R.cam.length;
 }
@@ -11854,8 +11861,8 @@ function cblOverlay(){
     const base = {orden, impo:null, tokens:[], comentario:'', pend:0, aci:'', carga:null, rim:null};
     const lineas = porOC[num].map(({b,it})=>({...base, estado:it.estado||'Embarque', cantOrd:Number(it.cant)||0, cantEnv:Number(it.cant)||0, puerto:b.po||b.pd||'', aci:b.agente||'', cont:b.cont||'', bl:b.bl,
       etd:D(b.etd), eta:D(b.eta), planta:D(it.planta||b.planta), ingreso:D(it.ingreso), rim:(b.registro&&b.registro.numero)||null, ref:it.ref}));
-    if(oc){ const pend = cblPendientes(oc).reduce((a,p)=>a+p.pend,0);
-      if(pend>0){ const em = (typeof EMB!=='undefined' && EMB.datos) ? EMB.datos[oc.id] : null;
+    if(oc){ const pend = cblPendientes(oc).reduce((a,p)=>a+p.pend,0), ex = CE.resumen[num];   // ex = lo que dice el Excel de Com. Ext. (aún sin el overlay)
+      if(pend>0 && !(ex && ex.fase!=null && Number(ex.pend)<=0)){ const em = (typeof EMB!=='undefined' && EMB.datos) ? EMB.datos[oc.id] : null;
         lineas.push({...base, estado:'Producción', cantOrd:pend, cantEnv:0, pend, puerto:'', cont:'', bl:'', etd:null, eta:null, planta:null, ingreso:null, carga: em && em.fin_prod ? D(em.fin_prod) : null, ref:''}); } }
     CE.resumen[num] = ceResumir(num, lineas);
   });
@@ -11868,8 +11875,8 @@ function cblOverlay(){
 // Recarga todo (Excel base + BL del ERP) y aplica a las etapas de las OC afectadas
 async function cblSincronizar(nums){
   try{ await ceCargarResumen(true); }catch(e){ console.warn(e); }
-  let cambios = 0;
-  for(const n of new Set((nums||[]).map(ceNum))){ const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===n), r = ceDe(n); if(oc && r){ try{ cambios += (await ceAplicarOC(oc, r)).cambios||0; }catch(e){ console.warn('CBL', n, e.message); } } }
+  let cambios = 0; CBL._errSync = [];
+  for(const n of new Set((nums||[]).map(ceNum))){ const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===n), r = ceDe(n); if(oc && r){ try{ cambios += (await ceAplicarOC(oc, r)).cambios||0; }catch(e){ console.warn('CBL', n, e.message); CBL._errSync.push(n+': '+e.message); } } else CBL._errSync.push(n+': '+(!oc?'no está en Órdenes de compra':'sin resumen de Com. Ext.')); }
   if(cambios>0){ try{ await cargarOC(); REABAST._cargadoEn = Date.now(); }catch(e){} }   // solo recarga las OC si cambiaron etapas
   return cambios;
 }
@@ -16829,7 +16836,7 @@ function ceCompactarBL(lineas){
   const iso = d => d ? new Date(d).toISOString().slice(0,10) : null;
   return lineas.filter(l=>l.ref!=null && String(l.ref).trim()!=='').map(l=>{
     const sub = (l.tokens||[]).find(t=>t!==l.orden && t.startsWith(l.orden+'-') && /^-\d+$/.test(t.slice(l.orden.length)));
-    return {o:l.orden, oc: sub||l.orden, r:String(l.ref).trim(), c: l.cantEnv>0 ? l.cantEnv : l.cantOrd, env:l.cantEnv, co:l.cantOrd, bl: l.bl?String(l.bl).trim():'', ct: l.cont?String(l.cont).trim():'', dm: l.dim!=null&&String(l.dim).trim()?String(l.dim).trim():'', cm: l.comentario?String(l.comentario).slice(0,200):'', rm: l.rim?String(l.rim).trim():'',
+    return {o:l.orden, oc: sub||l.orden, r:String(l.ref).trim(), c: ceCantLinea(l.cantEnv, l.cantOrd), env:l.cantEnv, co:l.cantOrd, bl: l.bl?String(l.bl).trim():'', ct: l.cont?String(l.cont).trim():'', dm: l.dim!=null&&String(l.dim).trim()?String(l.dim).trim():'', cm: l.comentario?String(l.comentario).slice(0,200):'', rm: l.rim?String(l.rim).trim():'',
       e:l.estado||'', f:ceFaseLinea(l.estado, l.comentario).fase, d1:iso(l.etd), d2:iso(l.eta), pl:iso(l.planta), ing:iso(l.ingreso)};
   });
 }
@@ -16966,6 +16973,8 @@ function ceAgrupar(lineas){
   const esSub = (l,t) => t!==l.orden && t.startsWith(l.orden+'-') && /^-\d+$/.test(t.slice(l.orden.length));
   const famExiste = orden => !!erp[orden] || Object.keys(erp).some(k=>k.startsWith(orden+'-') && /^-\d+$/.test(k.slice(orden.length)));
   lineas.forEach(l=>{
+    if(/-\d+$/.test(l.orden) && !erp[l.orden]){   // la columna ORDEN ya trae la rama (OI1894-1) y el ERP aún no la tiene → se crea con lo pendiente de la sábana
+      const ob = l.orden.replace(/-\d+$/,''); if(famExiste(ob)){ (nuevasRamas[l.orden] = nuevasRamas[l.orden] || {orden:ob, lineas:[]}).lineas.push(l); return; } }
     const sub = l.tokens.find(t=>t!==l.orden && t.startsWith(l.orden+'-') && erp[t]);
     if(sub){ (g[sub] = g[sub] || []).push(l); return; }
     const subNueva = !erp[l.orden] && famExiste(l.orden) ? l.tokens.find(t=>esSub(l,t)) : null;   // la OC base no está en el ERP, pero sí otra rama de la misma familia
@@ -16989,7 +16998,7 @@ function ceAgrupar(lineas){
 function ceObjetivoItems(lineas){
   const m = new Map();
   lineas.forEach(l=>{ if(l.ref==null || String(l.ref).trim()==='') return;
-    const k = ceRefKey(l.ref); const q = l.cantEnv>0 ? l.cantEnv : l.cantOrd;
+    const k = ceRefKey(l.ref); const q = ceCantLinea(l.cantEnv, l.cantOrd);
     const x = m.get(k) || {ref:String(l.ref).trim(), desc:l.desc||'', qty:0}; x.qty += q; if(!x.desc && l.desc) x.desc = l.desc; m.set(k,x); });
   return [...m.values()];
 }
@@ -17032,6 +17041,8 @@ const ceUnicos = arr => [...new Set(arr.map(x=>x==null?'':String(x).trim()).filt
 // caso y se separa automáticamente en ramas (numero-N), igual al patrón manual que ya usa el equipo
 // (p.ej. OI1886-2/3/5, OCI106-1).
 function ceRefKey(s){ return ceNum(s); }
+// Cantidad de una línea de la sábana: lo enviado, salvo diferencias de pocas unidades (redondeo del proveedor) → se deja la mayor (la ordenada).
+function ceCantLinea(env, ord){ env = Number(env)||0; ord = Number(ord)||0; if(env<=0) return ord; if(env<ord && (ord-env)<=100 && (ord-env)/ord<=0.05) return ord; return env; }
 function ceLotesDeGrupo(lineas){
   const porLote = {};
   lineas.forEach(l=>{ const key = ceNum(l.impo) || '·sin no. impo·'; (porLote[key] = porLote[key] || []).push(l); });
@@ -17257,6 +17268,41 @@ async function ceMarcarAmbiguos(oc, refs){
   }
 }
 
+// Ramas que la sábana trae (OI1886-4, OI1894-1…: el saldo pendiente de una OC repetido más abajo) y el ERP aún no tiene:
+// se crean con las cantidades de la sábana, y la OC base se ajusta a lo enviado para que no se cuente doble.
+async function ceCrearRamasFaltantes(){
+  if(!CE.bls || !CE.bls.length) return 0;
+  const erp = {}; (REABAST.ordenesCompra||[]).forEach(o=>{ erp[ceNum(o.numero_oc)] = o; });
+  const falt = {};
+  CE.bls.forEach(x=>{ const num = ceNum(x.oc); if(!/-\d+$/.test(num) || erp[num]) return; (falt[num] = falt[num] || []).push(x); });
+  let creadas = 0; CE._ramasCreadas = [];
+  for(const num of Object.keys(falt)){
+    const ob = num.replace(/-\d+$/,''), base = erp[ob] || Object.keys(erp).filter(k=>k.startsWith(ob+'-')).sort().map(k=>erp[k])[0];
+    if(!base) continue;   // pedido histórico que nunca estuvo en el ERP
+    try{
+      const L = falt[num], lote = null, conEspacio = /\s-\d+$/.test(base.numero_oc||'');
+      const ramaOc = {...base, id:null, numero_oc: String(base.numero_oc).replace(/\s*-\d+$/,'')+(conEspacio?' -':'-')+num.slice(ob.length+1), _nueva:true, _baseId:base.id, _baseNumero:base.numero_oc, _impo:num, _refsAMover:[]};
+      const m = new Map(); L.forEach(x=>{ const k = ceRefKey(x.r); const o = m.get(k) || {ref:String(x.r).trim(), desc:'', qty:0}; o.qty += Number(x.c)||0; m.set(k,o); });
+      ramaOc._nuevosItems = [...m.values()].filter(o=>o.qty>0).map(o=>({...o, plantilla: ceItemPlantilla(o.ref, ob)}));
+      const oc = await ceCrearRama(ramaOc); erp[num] = oc;
+      // OC base: sus ítems pasan a la cantidad realmente enviada (el saldo vive ahora en la rama)
+      for(const o of ramaOc._nuevosItems){
+        const bl = CE.bls.find(x=>ceNum(x.oc)===ob && ceRefKey(x.r)===ceRefKey(o.ref) && Number(x.env)>0 && Number(x.env)<Number(x.co) && ceCantLinea(x.env,x.co)===Number(x.env));
+        const it = bl && (REABAST.ocItems[base.id]||[]).find(i=>ceRefKey(i.referencia||i.sku||i.codigo)===ceRefKey(o.ref));
+        if(it && Number(it.cantidad)===Number(bl.co)){ await ceSincItems(base, {upd:[{it, ref:o.ref, desde:Number(it.cantidad), hasta:Number(bl.env)}], nuevos:[]}); }
+      }
+      // resumen y etapas de la rama nueva, con lo que dice la sábana
+      const lin = L.map(x=>{ const D = s=>s?new Date(s+'T12:00:00'):null; return {orden:ob, impo:num, comentario:x.cm||null, estado:x.e||'', ref:x.r, cantOrd:Number(x.co)||0, cantEnv:Number(x.env)||0, pend:0,
+        bl:x.bl, cont:x.ct, etd:D(x.d1), eta:D(x.d2), planta:D(x.pl), ingreso:D(x.ing), carga:null, aci:null, rim:null, puerto:null}; });
+      const r = ceResumir(num, lin); CE.resumen = CE.resumen || {}; CE.resumen[num] = r;
+      await sb.upsert('configuracion', {clave:'ce_resumen', valor:JSON.stringify({fecha:(CE.meta&&CE.meta.fecha)||new Date().toISOString(), usuario:(CE.meta&&CE.meta.usuario)||'', archivo:(CE.meta&&CE.meta.archivo)||'', ocs:CE.resumen}), tipo:'json'}, 'clave');
+      if(r.fase!=null) await ceAplicarOC(oc, r);
+      creadas++; CE._ramasCreadas.push(oc.numero_oc);
+    }catch(e){ console.warn('ceCrearRamasFaltantes', num, e); (CBL._errSync = CBL._errSync || []).push(num+' (crear rama): '+e.message); }
+  }
+  return creadas;
+}
+
 // Etapa actual (texto) de una OC en el ERP, para la vista previa.
 function ceEtapaActualTxt(oc){
   const es = REABAST.ocEtapas[oc.id]||[];
@@ -17382,6 +17428,7 @@ async function ceEjecutar(){
   await Promise.all(Array.from({length:Math.min(6, sel.length)}, trabajador));
   // 3) OC con ítems en un BL del ERP: se recalculan desde el BL ya actualizado y se aplican a sus etapas
   if(numsBL.length){ prog.innerHTML = `⏳ Sincronizando ${nBL} BL del ERP y sus OC…`; try{ cambios += await cblSincronizar(numsBL) || 0; }catch(e){ err.push('Sincronía de BL: '+e.message); } }
+  try{ const nr = await ceCrearRamasFaltantes(); if(nr) cambios += nr; }catch(e){ err.push('Ramas faltantes: '+e.message); }
   await cargarOC(); REABAST._cargadoEn = Date.now();
   prog.innerHTML = `<span style="color:var(--gr);font-weight:700;">✅ ${sel.length} OC revisadas${nBL?' · '+nBL+' BL del ERP actualizados':''} · ${cambios} cambios en ${Math.round((Date.now()-t0)/1000)} s.</span>${adelBL?`<div class="arte-mu" style="margin-top:4px;">${adelBL} ítem(s) del ERP van más adelante que el Excel: no se retrocedieron.</div>`:''}${err.length?`<div style="color:var(--rd);margin-top:4px;">Con error (${err.length}): ${reabastEsc(err.slice(0,8).join(' · '))}</div>`:''}`;
   document.getElementById('ce-foot').innerHTML = `<button class="btn btn-p" onclick="document.getElementById('ce-ov').remove();reabastPintar()">Listo</button>`;
