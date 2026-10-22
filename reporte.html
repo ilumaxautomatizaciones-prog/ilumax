@@ -128,7 +128,7 @@ tr.xno td{background:#fee2e2!important;color:#991b1b}tr.xno.xp td{background:#fe
 </head>
 <body>
 <div class="hdr"><button class="mnb" onclick="manual(1)">📖 Manual</button><h1>ILU<span>MAX</span> · Reporte Diario de Ventas</h1><div class="sub" id="sub">Cargando…</div></div>
-<div class="wrap"><div class="tabs"><div class="tab on" id="t-res" onclick="verTab('res')">📊 Resumen del equipo</div><div class="tab" id="t-cum" onclick="verTab('cum')">🎯 Cumplimiento</div><div class="tab" id="t-sem" onclick="verTab('sem')">📅 Semana</div><div class="tab" id="t-ase" onclick="verTab('ase')">👤 Por asesor / clientes</div><div class="tab" id="t-mix" onclick="verTab('mix')">🧩 Mix por categoría</div><div class="tab" id="t-per" onclick="verTab('per')">🔎 Ventas perdidas</div></div><div id="app"><div class="err">Cargando reporte…</div></div><div id="cum" style="display:none"></div><div id="sem" style="display:none"></div><div id="det" style="display:none"></div><div id="mix" style="display:none"></div><div id="per" style="display:none"></div></div>
+<div class="wrap"><div class="tabs"><div class="tab on" id="t-res" onclick="verTab('res')">📊 Resumen del equipo</div><div class="tab" id="t-cum" onclick="verTab('cum')">🎯 Cumplimiento</div><div class="tab" id="t-sem" onclick="verTab('sem')">📅 Semana</div><div class="tab" id="t-ase" onclick="verTab('ase')">👤 Por asesor / clientes</div><div class="tab" id="t-mix" onclick="verTab('mix')">🧩 Mix por categoría</div><div class="tab" id="t-per" onclick="verTab('per')">🔎 Ventas perdidas</div><div class="tab" id="t-imp" onclick="verTab('imp')">🚢 Importaciones</div></div><div id="app"><div class="err">Cargando reporte…</div></div><div id="cum" style="display:none"></div><div id="sem" style="display:none"></div><div id="det" style="display:none"></div><div id="mix" style="display:none"></div><div id="per" style="display:none"></div><div id="imp" style="display:none"></div></div>
 <div class="dm" id="dm" onclick="if(event.target===this)cerrarDr()"><div class="dmb"><div class="dmh"><div><div class="dmt" id="dmt"></div><div class="dms" id="dms"></div></div><button class="dmx" onclick="cerrarDr()" aria-label="Cerrar">✕</button></div><div class="bar" style="padding:0 14px;margin:10px 0 8px"><input id="dmq" placeholder="🔍 Buscar cliente, documento o asesor…" oninput="DR.q=this.value;pintarDrTabla()"></div><div class="tw" id="dmtw"></div></div></div>
 <div class="mn" id="mn" onclick="if(event.target===this)manual(0)"><div class="mnc" role="dialog" aria-label="Manual de uso"><div class="mnh"><b>ILU<span>MAX</span> · Manual de uso</b><small id="mnn"></small><button class="mnx" onclick="manual(0)" aria-label="Cerrar">✕</button></div><div class="mnp"><i id="mnpb"></i></div><div class="mns" id="mns"><section data-k="Bienvenida"><div class="k">Bienvenida</div><h3>Reporte Diario de Ventas ILUMAX</h3><div class="big">📊</div><p>Esta página muestra, <b>casi en tiempo real</b>, cómo va la venta del equipo comercial contra el presupuesto: por día, por semana, por canal, por ejecutivo y por cliente.</p>
 <div class="g"><div class="b"><b>📊 Resumen del equipo</b>El día, el mes y los canales.</div><div class="b"><b>🎯 Cumplimiento</b>Quién va en ritmo y quién no.</div><div class="b"><b>📅 Semana</b>Venta día por día.</div><div class="b"><b>👤 Por asesor / clientes</b>Detalle y búsqueda de facturas.</div></div>
@@ -370,13 +370,15 @@ const mesLbl = m => MESN[+m.slice(5) - 1] + ' ' + m.slice(0, 4);
 let TAB = 'res';
 function verTab(t) {
   TAB = t;
-  ['res', 'cum', 'sem', 'ase', 'mix', 'per'].forEach(x => { document.getElementById('t-' + x).className = 'tab' + (x === t ? ' on' : ''); });
+  ['res', 'cum', 'sem', 'ase', 'mix', 'per', 'imp'].forEach(x => { document.getElementById('t-' + x).className = 'tab' + (x === t ? ' on' : ''); });
   document.getElementById('app').style.display = t === 'res' ? '' : 'none';
   document.getElementById('cum').style.display = t === 'cum' ? '' : 'none';
   document.getElementById('sem').style.display = t === 'sem' ? '' : 'none';
   document.getElementById('det').style.display = t === 'ase' ? '' : 'none';
   document.getElementById('per').style.display = t === 'per' ? '' : 'none';
   document.getElementById('mix').style.display = t === 'mix' ? '' : 'none';
+  document.getElementById('imp').style.display = t === 'imp' ? '' : 'none';
+  if (t === 'imp') { if (!IMP.d) cargarImp(); else pintarImp(); }
   if (t === 'mix') { if (!MIX.d) cargarMix(MIX.mes); else pintarMix(); }
   if (t === 'per') { if (!PER.d) cargarPer(PER.mes); else pintarPer(); }
   if (t === 'cum') pintarCum();
@@ -827,6 +829,67 @@ async function excelPerdidas() {
     wr.getColumn(1).width = 42; wr.getColumn(2).width = 22;
     const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'Ventas_perdidas_' + d.mes + '.xlsx'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  } catch (e) { alert('No se pudo generar el Excel: ' + e.message); }
+}
+// ───────── Importaciones (visible para todos los códigos) ─────────
+const API_IMP = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/reporte-importaciones';
+const IMP = { d: null, q: '', est: 'activos', soloNov: false, dias: 7, k: 8, dir: 1 };
+const IMP_COL = [['bl', 'BL', 0], ['oc', 'Orden', 1], ['ref', 'Referencia', 2], ['desc', 'Descripción', 3], ['cant', 'Cant. en el BL', 4], ['est', 'Estado', 6], ['etd', 'ETD', 7], ['eta', 'ETA', 8], ['pl', 'Llegada a planta (est.)', 9], ['nov', 'Novedades', 10]];
+async function cargarImp() {
+  const el = document.getElementById('imp'); el.innerHTML = '<div class="err">Cargando importaciones…</div>';
+  try {
+    const r = await fetch(API_IMP + '?k=' + encodeURIComponent(token()) + '&dias=' + IMP.dias, { cache: 'no-store' });
+    const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'Error');
+    IMP.d = d; if (TAB === 'imp') pintarImp();
+  } catch (e) { el.innerHTML = '<div class="err"><b>No se pudo cargar.</b><br>' + esc(e.message) + ' <button class="btn" onclick="cargarImp()">Reintentar</button></div>'; }
+}
+const impF = x => x ? new Date(x + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+function impFilas() {
+  const q = IMP.q.toLowerCase().trim();
+  const L = IMP.d.filas.filter(f => {
+    if (IMP.est === 'activos' && f[6] === 9) return false;
+    if (['3', '5', '6', '7', '9'].includes(IMP.est) && String(f[6]) !== IMP.est) return false;
+    if (IMP.soloNov && !f[10]) return false;
+    if (q && !(f[0] + ' ' + f[1] + ' ' + f[2] + ' ' + f[3] + ' ' + f[5] + ' ' + f[10]).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const k = IMP.k, d = IMP.dir;
+  return L.sort((a, b) => { const x = a[k], y = b[k]; const c = (typeof x === 'number' && typeof y === 'number') ? x - y : String(x == null ? '' : x).localeCompare(String(y == null ? '' : y), 'es', { numeric: true }); return (c || String(a[0]).localeCompare(String(b[0]))) * d; });
+}
+function impOrden(k) { IMP.dir = IMP.k === k ? -IMP.dir : 1; IMP.k = k; pintarImp(); }
+function pintarImp() {
+  const el = document.getElementById('imp'), R = IMP.d.filas, act = R.filter(f => f[6] !== 9), cnt = n => act.filter(f => f[6] === n).length, L = impFilas();
+  const chip = (lbl, v, e, col) => '<div onclick="IMP.est=\'' + e + '\';pintarImp()" style="cursor:pointer;flex:1;min-width:110px;background:' + (IMP.est === e ? '#dbeafe' : '#fff') + ';border:' + (IMP.est === e ? '2px solid #2563eb' : '1px solid #bfdbfe') + ';border-radius:12px;padding:8px 12px"><div style="font-size:22px;font-weight:800;color:' + col + '">' + v + '</div><div style="font-size:11px;color:#475569;font-weight:600">' + lbl + '</div></div>';
+  const pill = f => { const c = f[6] === 6 ? ['#dbeafe', '#1e40af'] : f[6] === 7 ? ['#fef3c7', '#92400e'] : f[6] === 9 ? ['#dcfce7', '#166534'] : f[6] === 5 ? ['#ede9fe', '#5b21b6'] : ['#e0f2fe', '#075985']; return '<span style="background:' + c[0] + ';color:' + c[1] + ';padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700">' + esc(f[5]) + '</span>'; };
+  const tot = Math.round(L.reduce((a, f) => a + f[4], 0)).toLocaleString('es-CO');
+  let h = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">' + chip('Líneas activas', act.length, 'activos', '#1e3a8a') + chip('En embarque', cnt(5), '5', '#5b21b6') + chip('En tránsito', cnt(6), '6', '#1d4ed8') + chip('En nacionalización', cnt(7), '7', '#b45309') + chip('Ingresadas', R.filter(f => f[6] === 9).length, '9', '#166534') + '</div>'
+    + '<div class="bar"><input id="impQ" placeholder="🔎 Buscar BL, orden, referencia o descripción…" value="' + esc(IMP.q) + '" oninput="IMP.q=this.value;clearTimeout(window.__impT);window.__impT=setTimeout(impTabla,200)">'
+    + '<select onchange="IMP.est=this.value;pintarImp()">' + [['activos', 'Activos (sin ingresar)'], ['todos', 'Todos'], ['5', 'Embarque'], ['6', 'Tránsito'], ['7', 'Nacionalización'], ['9', 'Ingresadas']].map(o => '<option value="' + o[0] + '"' + (IMP.est === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>'
+    + '<label style="font-size:12px;font-weight:600;display:flex;gap:5px;align-items:center"><input type="checkbox" style="flex:none" ' + (IMP.soloNov ? 'checked' : '') + ' onchange="IMP.soloNov=this.checked;pintarImp()"> Solo con novedades</label>'
+    + '<select onchange="IMP.dias=+this.value;IMP.d=null;cargarImp()">' + [7, 15, 30].map(n => '<option value="' + n + '"' + (IMP.dias === n ? ' selected' : '') + '>Novedades: últimos ' + n + ' días</option>').join('') + '</select>'
+    + '<button class="btn" onclick="excelImp()">📥 Excel</button><span id="impN" style="font-size:12px;color:#475569;font-weight:600">' + L.length + ' líneas · ' + tot + ' u</span></div>'
+    + '<div id="impT">' + impTablaHtml(L, pill) + '</div>'
+    + '<div class="foot">Actualizado ' + new Date(IMP.d.actualizado).toLocaleString('es-CO') + ' · Las novedades muestran cambios en la llegada a planta de los últimos ' + IMP.dias + ' días.</div>';
+  el.innerHTML = h;
+}
+function impTabla() { const L = impFilas(), pill = f => ''; pintarImp(); const i = document.getElementById('impQ'); if (i) { i.focus(); const v = i.value; i.value = ''; i.value = v; } }
+function impTablaHtml(L, pill) {
+  if (!L.length) return '<div class="card"><div class="err" style="margin:20px auto">No hay líneas con esos filtros.</div></div>';
+  return '<style>#impT td,#impT th{width:1%;white-space:nowrap;text-align:left}#impT td.w,#impT th.w{width:auto;white-space:normal}#impT th{background:linear-gradient(#2563eb,#1d4ed8);cursor:pointer;padding:10px;font-size:11.5px}#impT th.r,#impT td.r{text-align:right}</style>'
+    + '<div class="card tw"><table><thead><tr>' + IMP_COL.map(c => '<th class="' + (c[0] === 'desc' || c[0] === 'nov' ? 'w ' : '') + (c[0] === 'cant' ? 'r' : '') + '" onclick="impOrden(' + c[2] + ')">' + c[1] + (IMP.k === c[2] ? (IMP.dir > 0 ? ' ▲' : ' ▼') : ' <span style="opacity:.5">⇅</span>') + '</th>').join('') + '</tr></thead><tbody>'
+    + L.map((f, i) => '<tr style="background:' + (i % 2 ? '#eff6ff' : '#fff') + '"><td style="font-family:monospace;font-weight:800;color:#1e3a8a">' + esc(f[0]) + '</td><td style="font-weight:700">' + esc(f[1]) + '</td><td style="font-weight:700">' + esc(f[2]) + '</td><td class="w" style="min-width:200px">' + esc(f[3]) + '</td><td class="r" style="font-weight:700">' + Math.round(f[4]).toLocaleString('es-CO') + '</td><td>' + pill(f) + '</td><td>' + impF(f[7]) + '</td><td style="font-weight:700">' + impF(f[8]) + '</td><td>' + impF(f[9]) + '</td><td class="w" style="min-width:200px;font-size:11.5px;' + (f[10] ? 'color:#92400e;font-weight:700;background:#fffbeb' : 'color:#94a3b8') + '">' + (f[10] ? '⚠️ ' + esc(f[10]) : '—') + '</td></tr>').join('')
+    + '</tbody></table></div>';
+}
+async function excelImp() {
+  try {
+    await cargarScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
+    const L = impFilas(), wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('Importaciones');
+    ws.addRow(IMP_COL.map(c => c[1]));
+    ws.getRow(1).eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } }; c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }; }); ws.getRow(1).height = 24;
+    L.forEach((f, i) => { const r = ws.addRow([f[0], f[1], f[2], f[3], Math.round(f[4]), f[5], f[7], f[8], f[9], f[10]]); r.getCell(5).numFmt = '#,##0'; if (i % 2) r.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFF6FF' } }; }); });
+    [18, 12, 11, 44, 14, 16, 12, 12, 20, 46].forEach((w, i) => { ws.getColumn(i + 1).width = w; }); ws.views = [{ state: 'frozen', ySplit: 1 }]; ws.autoFilter = { from: 'A1', to: 'J1' };
+    const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'Informe_importaciones_' + new Date().toISOString().slice(0, 10) + '.xlsx'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   } catch (e) { alert('No se pudo generar el Excel: ' + e.message); }
 }
 </script>

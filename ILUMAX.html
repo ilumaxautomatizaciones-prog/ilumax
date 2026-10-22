@@ -11684,7 +11684,7 @@ function reabastCalcularSobrestock(){
 // ═══ Embarque (BL) + Comercio Exterior ═══
 // Los BL se crean aquí (Embarque), se siguen en Comercio Exterior y alimentan el tablero (reemplazan al Excel de Seguimiento).
 // Se guardan en configuracion.cbl_embarques = {bls:[{id, bl, agente, etd, eta, po, pd, cont, planta, registro, items:[{oc, ocId, ref, desc, cant, cbm, cajas, estado, planta, ingreso}], hist}]}
-const CBL = { bls:[], cargado:false, sel:{}, abiertas:{}, f:{q:'', oc:'', estado:'activos', vista:'oc', agrupar:true}, form:{bl:'', etd:'', eta:'', agente:'', po:'', pd:'Buenaventura', cont:''}, det:null };
+const CBL = { bls:[], cargado:false, sel:{}, abiertas:{}, f:{q:'', oc:'', estado:'activos', vista:'oc', agrupar:true, kpi:''}, form:{bl:'', etd:'', eta:'', agente:'', po:'', pd:'Buenaventura', cont:''}, det:null };
 // Los 5 estados de la orden: Producción → Embarque (hasta que zarpa) → Tránsito (hasta llegar a Buenaventura) → Nacionalización → Ingreso a bodega
 const CBL_ESTADOS = ['Producción','Embarque','Tránsito','Nacionalización','Ingreso a bodega'];
 const CBL_FASE_TXT = {3:'Producción', 5:'Embarque', 6:'Tránsito', 7:'Nacionalización', 9:'Ingreso a bodega'};
@@ -11706,12 +11706,13 @@ function cblCss(){
 }
 // Puertos: lo que el Excel trae (Ningbo, Shenzhen…) es el ORIGEN; el destino por defecto es Buenaventura.
 // Corrige también los BL guardados antes, donde el origen quedó en "destino".
-function cblNormPuertos(l){ (l||[]).forEach(b=>{ if(!b.po && b.pd && !/buenaventura/i.test(b.pd)){ b.po = b.pd; b.pd = 'Buenaventura'; } else if(!b.pd) b.pd = 'Buenaventura'; }); return l; }
+function cblNormPuertos(l){ (l||[]).forEach(b=>{ (b.items||[]).forEach(it=>{ const R = (CBL.rimRef||{})[ceNum(it.ref)]; if(R){ if(!it.rim && R.rim) it.rim = R.rim; if(!it.rimf && R.rimf) it.rimf = R.rimf; } }); if(!b.po && b.pd && !/buenaventura/i.test(b.pd)){ b.po = b.pd; b.pd = 'Buenaventura'; } else if(!b.pd) b.pd = 'Buenaventura'; }); return l; }
 // Llegada a planta estimada: ETA + 1 día de arribo + 7 días hábiles de nacionalización y transporte
 function cblPlantaEst(eta){ if(!eta) return ''; try{ const d = new Date(eta+'T12:00:00'); d.setDate(d.getDate()+1); return _prodfIso(ocSumarHabiles(d,7)); }catch(e){ return ''; } }
 function cblPlantaSug(){ const e = document.getElementById('cbld-eta'), p = document.getElementById('cbld-planta'); if(e && p && !p.dataset.man) p.value = cblPlantaEst(e.value); }
 async function cblCargar(forzar){
   if(CBL.cargado && !forzar) return;
+  try{ const rr = await sb.get('configuracion','clave=eq.rim_por_ref'); const vr = rr && rr[0] ? rr[0].valor : null; CBL.rimRef = (typeof vr==='string' ? JSON.parse(vr) : vr) || {}; }catch(e){ CBL.rimRef = CBL.rimRef || {}; }
   try{ const r = await sb.get('configuracion','clave=eq.cbl_embarques'); const v = r && r[0] ? r[0].valor : null; const j = typeof v==='string' ? JSON.parse(v) : v; CBL.bls = cblNormPuertos((j && j.bls) || []); CBL.cargado = true; }
   catch(e){ console.warn('BL del ERP:', e.message); }
 }
@@ -11806,7 +11807,9 @@ function cblDesdeExcel(){
     const ls = base.filter(x=>x.bl && String(x.bl).toUpperCase()===String(b0.bl).toUpperCase() && x.f!==-1); if(!ls.length) return;
     const b = JSON.parse(JSON.stringify(b0)), ch = []; let n = 0;
     (b.items||[]).forEach(it=>{
-      const l = ls.find(z=>ceNum(z.oc)===ceNum(it.oc) && ceRefKey(z.r)===ceRefKey(it.ref)); if(!l || l.f==null || l.f<0) return;
+      const l = ls.find(z=>ceNum(z.oc)===ceNum(it.oc) && ceRefKey(z.r)===ceRefKey(it.ref));
+      if(l && l.rm && /^(REG-|TMR-I-)/i.test(String(l.rm).trim()) && !it.rim){ it.rim = String(l.rm).trim(); n++; }   // N.º de registro de importación por referencia (la fecha de vigencia se pone a mano)
+      if(!l || l.f==null || l.f<0) return;
       const fi = ceFaseLinea(it.estado||'Embarque','').fase;
       if(fi!=null && fi>l.f){ adel.push(b.bl+' · '+it.oc+' '+it.ref); return; }
       let m = false;
@@ -12007,26 +12010,32 @@ function cblBLsFiltrados(){
   return CBL.bls.filter(b=>{ const fase = cblFaseBL(b);
     if(f.estado==='activos' && fase===9) return false; if(f.estado==='ingresados' && fase!==9) return false;
     if(['5','6','7'].includes(f.estado) && String(fase)!==f.estado) return false;
+    if(f.kpi){ const act = fase!==9 && fase!==-1; if(!act) return false;
+      if(f.kpi==='transito' && fase!==6) return false;
+      if(f.kpi==='prox'){ const d = b.eta ? (new Date(b.eta+'T12:00:00')-Date.now())/86400000 : null; if(!(d!=null && d>=0 && d<=15)) return false; }
+      if(f.kpi==='sinrim' && !(fase>=7 && !(b.registro && b.registro.numero))) return false;
+      if(f.kpi==='sinvig' && !(b.items||[]).some(cblSinVig)) return false; }
     if(q){ const txt = [b.bl,b.agente,b.po,b.pd,b.cont,...(b.items||[]).map(it=>it.oc+' '+it.ref+' '+it.desc)].join(' ').toLowerCase(); if(!txt.includes(q)) return false; }
     return true; }).sort((a,b)=>String(a.eta||'9999').localeCompare(String(b.eta||'9999')));
 }
 function cblHtmlCE(){
-  cblCss(); const f = CBL.f, sel = (v,a)=>v===a?'selected':'', lista = cblBLsFiltrados(), hoy = Date.now();
+  cblCupoMapa(); cblCss(); const f = CBL.f, sel = (v,a)=>v===a?'selected':'', lista = cblBLsFiltrados(), hoy = Date.now();
   const act = CBL.bls.filter(b=>cblFaseBL(b)!==9 && cblFaseBL(b)!==-1);
   const transito = act.filter(b=>cblFaseBL(b)===6).length, prox = act.filter(b=>{ const d = b.eta ? (new Date(b.eta+'T12:00:00')-hoy)/86400000 : null; return d!=null && d>=0 && d<=15; }).length;
   const sinRim = CBL.bls.filter(b=>cblFaseBL(b)>=7 && !(b.registro && b.registro.numero)).length;
-  const tile = (v,l,c)=>`<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;min-width:140px;"><div style="font-size:20px;font-weight:800;color:${c||'var(--tx)'};">${v}</div><div style="font-size:10px;color:var(--mu);">${l}</div></div>`;
+  const sinVig = CBL.bls.filter(b=>cblFaseBL(b)!==9 && cblFaseBL(b)!==-1).reduce((a,b)=>a+(b.items||[]).filter(cblSinVig).length,0);
+  const tile = (v,l,c,k)=>`<div class="sc" onclick="cblKpi('${k}')" title="Clic para ver y gestionar" style="cursor:pointer;background:${f.kpi===k?'#eff6ff':'#fff'};border:${f.kpi===k?'2px solid var(--bl)':'1px solid var(--b1)'};border-radius:10px;padding:${f.kpi===k?'7px 13px':'8px 14px'};min-width:140px;"><div style="font-size:20px;font-weight:800;color:${c||'var(--tx)'};">${v}</div><div style="font-size:10px;color:var(--mu);">${l}</div></div>`;
   const cbmDe = b => (b.items||[]).reduce((a,it)=>a+(it.cbm>0?it.cant*it.cbm:0),0);
   return `<div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">${tile(act.length,'BL activos','var(--bl)')}${tile(transito,'en tránsito')}${tile(prox,'llegan en 15 días','#16a34a')}${tile(sinRim,'en nacionalización sin registro de importación',sinRim?'#b45309':'var(--tx)')}</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">${tile(act.length,'BL activos','var(--bl)','act')}${tile(transito,'en tránsito','','transito')}${tile(prox,'llegan en 15 días','#16a34a','prox')}${tile(sinRim,'en nacionalización sin registro de importación',sinRim?'#b45309':'var(--tx)','sinrim')}${tile(sinVig,'ítems sin registro de importación vigente',sinVig?'#991b1b':'var(--tx)','sinvig')}${f.kpi?`<button class="btn btn-g btn-sm" style="align-self:center;" onclick="cblKpi('')">✕ Quitar filtro</button>`:''}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
       <div style="display:inline-flex;border:1px solid var(--b2);border-radius:8px;overflow:hidden;"><button class="btn btn-sm ${f.vista==='oc'?'btn-bl':'btn-g'}" style="border-radius:0;" onclick="CBL.f.vista='oc';reabastPintar()">📑 Órdenes de compra</button><button class="btn btn-sm ${f.vista==='bl'?'btn-bl':'btn-g'}" style="border-radius:0;" onclick="CBL.f.vista='bl';reabastPintar()">🚢 Por BL</button></div>
       ${f.vista==='oc'?`<label style="font-size:11.5px;font-weight:600;display:flex;gap:5px;align-items:center;"><input type="checkbox" ${f.agrupar?'checked':''} onchange="CBL.f.agrupar=this.checked;reabastPintar()"> Agrupar por BL</label>`:''}
-      <input class="inp" placeholder="🔎 Buscar BL, OC, referencia, agente…" value="${reabastEsc(f.q)}" style="flex:1;min-width:220px;max-width:400px;" oninput="CBL.f.q=this.value;clearTimeout(window.__cblT);window.__cblT=setTimeout(()=>{ const c=document.getElementById('cbl-tabla'); if(c) c.innerHTML = CBL.f.vista==='oc' ? cblHtmlTablaOC() : cblHtmlTabla(); },250)">
+      <input class="inp" placeholder="🔎 Buscar BL, OC, referencia, agente…" value="${reabastEsc(f.q)}" style="flex:1;min-width:220px;max-width:400px;" oninput="CBL.f.q=this.value;clearTimeout(window.__cblT);window.__cblT=setTimeout(()=>{ const c=document.getElementById('cbl-tabla'); if(c) c.innerHTML = CBL.f.vista==='oc' ? cblHtmlTablaOC() : cblHtmlTablaX(); },250)">
       <select class="inp" style="width:auto;" onchange="CBL.f.estado=this.value;reabastPintar()"><option value="activos" ${sel(f.estado,'activos')}>Activos (sin ingresar)</option><option value="todos" ${sel(f.estado,'todos')}>Todos</option>${f.vista==='oc'?`<option value="3" ${sel(f.estado,'3')}>Producción</option>`:''}<option value="5" ${sel(f.estado,'5')}>Embarque</option><option value="6" ${sel(f.estado,'6')}>Tránsito</option><option value="7" ${sel(f.estado,'7')}>Nacionalización</option><option value="ingresados" ${sel(f.estado,'ingresados')}>Ingreso a bodega</option></select>
       ${cblPuede() && (CE._blsBase||[]).length ? `<button class="btn btn-g btn-sm" onclick="cblMigrarExcel()" title="Crea los BL nuevos del último Excel de Comercio Exterior y actualiza ETD/ETA/planta de los que ya existen">📥 Cargar BL / fechas del Excel</button><span class="arte-mu" style="font-size:10.5px;" title="Para usar el de hoy, súbelo primero en Órdenes de compra → 🚢 Seguimiento comercio exterior">Excel: ${CE.meta?reabastEsc(CE.meta.archivo||'—')+' · '+new Date(CE.meta.fecha).toLocaleDateString('es-CO')+' · '+reabastEsc(CE.meta.usuario||''):'sin cargar'}</span>`:''}
       <span class="arte-mu" style="font-size:11px;margin-left:auto;">${f.vista==='oc'?cblFilasOC().length+' OC':lista.length+' BL'}</span></div>
-    <div id="cbl-tabla">${f.vista==='oc'?cblHtmlTablaOC():cblHtmlTabla()}</div></div>`;
+    <div id="cbl-tabla">${f.vista==='oc'?cblHtmlTablaOC():cblHtmlTablaX()}</div></div>`;
 }
 // ── Vista por orden de compra: todas las OC activas con su estado, BL y fechas (BL del ERP + lo ya cargado del Excel) ──
 function cblFilasOC(){
@@ -12067,7 +12076,26 @@ function cblHtmlTablaOC(){
     const cbm = L.reduce((a,x)=>a+x.cbm,0);
     return `<tr style="background:var(--s1);${b0?'cursor:pointer;':''}" ${b0?`onclick="cblAbrir('${b0.id}')" title="Clic para editar este BL"`:''}><td colspan="10" style="font-weight:800;padding:7px 8px;">${b0?`<button class="btn btn-bl btn-xs" style="float:right;" onclick="event.stopPropagation();cblAbrir('${b0.id}')">✏️ Editar BL</button>`:''}${k?'🚢 BL <span style="font-family:monospace;">'+reabastEsc(k)+'</span>'+(b0&&cblPuede()?` <span style="cursor:pointer;" title="Cambiar el número de BL" onclick="event.stopPropagation();cblRenombrar('${b0.id}')">✏️</span>`:''):'📭 Sin BL aún'} <span class="arte-mu" style="font-weight:600;font-size:11px;">· ${L.length} OC${b0?` · ${reabastEsc(b0.agente||'sin agente')} · ${reabastEsc((b0.po||'—')+' → '+(b0.pd||'—'))} · ETD ${cblFd(b0.etd)} · ETA ${cblFd(b0.eta)}`:''}${k?'':` · ${cblN(cbm,0)} m³ por embarcar`}</span></td></tr>${L.map(fila).join('')}`; }).join('')}</tbody></table></div>`;
 }
+function cblKpi(k){ const f = CBL.f; if(k==='act') k = ''; f.kpi = (f.kpi===k ? '' : k); f.vista = 'bl'; f.estado = 'activos'; f.q = ''; reabastPintar(); }
+function cblHtmlTablaX(){ return CBL.f.kpi==='sinvig' ? cblHtmlSinVig() : cblHtmlTabla(); }
+// Lista de referencias (sin repetir) con registro/vigencia pendiente en BL activos: se llena aquí y se aplica a toda la referencia
+function cblHtmlSinVig(){
+  cblCupoMapa();
+  const q = (CBL.f.q||'').toLowerCase().trim(), M = {}; let nIt = 0;
+  CBL.bls.filter(b=>cblFaseBL(b)!==9 && cblFaseBL(b)!==-1).forEach(b=>{ (b.items||[]).forEach((it,ix)=>{ if(!cblSinVig(it)) return; nIt++; const k = ceNum(it.ref); const m = M[k] = M[k] || {ref:it.ref, desc:it.desc, bls:[], ocs:new Set(), cant:0, id:b.id, ix, it, eta:b.eta||'9999'};
+    if(!m.bls.includes(b.bl)) m.bls.push(b.bl); m.ocs.add(it.oc); m.cant += Number(it.cant)||0; if((b.eta||'9999')<m.eta) m.eta = b.eta||'9999'; }); });
+  let L = Object.values(M).filter(m=>!q || (m.ref+' '+m.desc+' '+m.bls.join(' ')+' '+[...m.ocs].join(' ')).toLowerCase().includes(q)).sort((a,b)=>String(a.eta).localeCompare(String(b.eta)));
+  if(!L.length) return '<div class="empty">✅ Todas las referencias de los BL activos tienen registro de importación.</div>';
+  const dis = cblPuede() ? '' : 'disabled';
+  return `<div class="arte-mu" style="font-size:11px;margin-bottom:6px;">${L.length} referencia(s) sin registro vigente · ${nIt} ítem(s) en BL activos. Un registro cubre 1.000.000 u o 6 meses; el cupo se gasta por orden de ETA. Lo que escribas se aplica a los ítems de esa referencia que no tengan registro vigente. Ordenado por la llegada más próxima.</div><div class="tw"><table class="cbl-t"><thead><tr><th>Referencia</th><th>Descripción</th><th>BL</th><th>OC</th><th style="text-align:right;">Unidades</th><th>Motivo</th><th>N.º registro importación</th><th>Fecha del registro</th></tr></thead><tbody>
+  ${L.map(m=>`<tr><td><b>${reabastEsc(m.ref)}</b></td><td style="font-size:11px;">${reabastEsc(m.desc||'')}</td><td style="font-size:11px;font-family:monospace;" title="${reabastEsc(m.bls.join(', '))}">${reabastEsc(m.bls.slice(0,2).join(', '))}${m.bls.length>2?' +'+(m.bls.length-2):''}<div class="arte-mu" style="font-size:10px;">ETA ${m.eta==='9999'?'—':m.eta}</div></td><td style="font-size:11px;">${reabastEsc([...m.ocs].slice(0,3).join(', '))}${m.ocs.size>3?' +'+(m.ocs.size-3):''}</td><td style="text-align:right;">${cblN(m.cant,0)}</td>
+    <td style="font-size:11px;font-weight:700;color:#991b1b;">${m.it.rim ? (cblEstReg(m.it).est==='agotado' ? 'Cupo de 1.000.000 u agotado' : 'Vencido a la ETA') : 'Sin registro'}</td>
+    <td><input class="inp" style="font-size:11px;width:150px;" placeholder="N.º registro" value="${reabastEsc(cblRimEf(m.it).rim)}" ${dis} onchange="cblItemRim('${m.id}',${m.ix},this.value)"></td>
+    <td style="white-space:nowrap;"><input type="date" class="inp" style="font-size:11px;" value="${cblRimEf(m.it).rimf}" ${dis} onchange="cblItemRimF('${m.id}',${m.ix},this.value)"></td></tr>`).join('')}
+  </tbody></table></div>`;
+}
 function cblHtmlTabla(){
+  cblCupoMapa();
   const lista = cblBLsFiltrados(), hoy = Date.now();
   if(!lista.length) return '<div class="empty">No hay BL. Créalos en la pestaña 🚢 Embarque (BL).</div>';
   return `<div class="tw"><table class="cbl-t"><thead><tr><th>BL</th><th>OC</th><th>Agente</th><th>Origen → Destino</th><th>ETD</th><th>ETA</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th>Estado</th><th>Registro de importación</th><th>Siguiente paso</th></tr></thead><tbody>
@@ -12076,7 +12104,7 @@ function cblHtmlTabla(){
     <td style="white-space:nowrap;" onclick="event.stopPropagation()"><b>${cblFd(b.eta)}</b>${fase!==9&&fase!==-1?` <span style="cursor:pointer;" title="Actualizar ETA" onclick="cblEditarFecha('${b.id}','eta')">✏️</span>`:''}${fase!==9 && d!=null?`<div style="font-size:10px;color:${d<0?'#991b1b':d<=15?'#1e40af':'var(--mu)'};">${d<0?'hace '+(-d)+' d':d===0?'hoy':'en '+d+' d'}</div>`:''}</td>
     <td style="text-align:right;">${(b.items||[]).length}</td><td style="text-align:right;">${cblN(cbm,1)}</td>
     <td><span class="cbl-pill" style="${fase===9?'background:#dcfce7;color:#166534;':fase===5?'background:#ede9fe;color:#5b21b6;':fase===6?'background:#dbeafe;color:#1e40af;':fase===7?'background:#fef3c7;color:#92400e;':''}">${reabastEsc(cblEstadoBL(b))}</span></td>
-    <td>${rim?`<b>${reabastEsc(b.registro.numero)}</b>${b.registro.aprobado?' ✅':''}`:'<span class="arte-mu">—</span>'}</td><td style="white-space:nowrap;" onclick="event.stopPropagation()">${cblBotonAvanzar(b,true)}</td></tr>`; }).join('')}
+    <td>${rim?`<b>${reabastEsc(b.registro.numero)}</b>${b.registro.aprobado?' ✅':''}`:'<span class="arte-mu">—</span>'}${(nSV=>nSV?`<div style="font-size:10px;font-weight:700;color:#991b1b;" title="Ítems sin registro de importación">⚠️ ${nSV} ítem(s) sin registro</div>`:'')((b.items||[]).filter(cblSinVig).length)}</td><td style="white-space:nowrap;" onclick="event.stopPropagation()">${cblBotonAvanzar(b,true)}</td></tr>`; }).join('')}
   </tbody></table></div>`;
 }
 // ── Avance del BL con un clic: zarpó → llegó a Buenaventura → ingresó a bodega ──
@@ -12117,6 +12145,7 @@ function cblEditarFecha(id, campo){
 function cblAbrir(id){ CBL.det = id; cblPintarDetalle(); }
 function cblCerrarDetalle(){ CBL.det = null; const m = document.getElementById('cbl-det'); if(m) m.remove(); reabastPintar(); }
 function cblPintarDetalle(){
+  cblCupoMapa();
   const b = CBL.bls.find(x=>x.id===CBL.det); if(!b){ cblCerrarDetalle(); return; } cblCss();
   const puede = cblPuede(), dis = puede ? '' : 'disabled', fase = cblFaseBL(b), aduana = fase!=null && fase>=7;
   let m = document.getElementById('cbl-det'); if(!m){ m = document.createElement('div'); m.id = 'cbl-det'; m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:10000;display:flex;align-items:flex-start;justify-content:center;padding:3vh 12px;overflow:auto;'; document.body.appendChild(m); }
@@ -12130,9 +12159,13 @@ function cblPintarDetalle(){
     <div class="cbl-in">${inp('bl','Número de BL')}${inp('agente','Agente de carga')}${inp('po','Puerto de origen')}${inp('pd','Puerto de destino')}${inp('cont','Contenedor(es)')}${inp('etd','ETD (salida)','date')}${inp('eta','ETA (llegada)','date','onchange="cblPlantaSug()"')}${plantaInp}</div>
     <div style="margin:8px 0 14px;"><button class="btn btn-bl btn-sm" ${dis} onclick="cblGuardarCab('${b.id}')">💾 Guardar fechas y logística</button></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;"><b style="font-size:12px;">Ítems del BL y su estado</b><span class="arte-mu" style="font-size:11px;">Poner todos en:</span><select id="cbld-todos" class="inp" style="width:auto;" ${dis}>${CBL_ESTADOS.map(e=>`<option>${e}</option>`).join('')}</select><button class="btn btn-g btn-xs" ${dis} onclick="cblTodosEstado('${b.id}')">Aplicar a todos</button></div>
-    <div class="tw" style="max-height:340px;"><table class="cbl-t"><thead><tr><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Cajas</th><th>Estado</th><th>Llegada a planta</th><th>Ingreso a bodega</th><th></th></tr></thead><tbody>
+    ${(()=>{ const sv = (b.items||[]).filter(cblSinVig); const ven = (b.items||[]).filter(it=>{ if(!it.rimf) return false; const v = new Date(it.rimf+'T12:00:00'); v.setMonth(v.getMonth()+6); return v < new Date(); });
+      return (sv.length||ven.length) ? `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;">⚠️ ${sv.length?sv.length+' ítem(s) sin registro de importación: '+[...new Set(sv.map(i=>i.ref))].join(', ')+'. Ninguna referencia puede llegar sin registro.':''}${ven.length?' · '+ven.length+' con el registro VENCIDO: '+[...new Set(ven.map(i=>i.ref))].join(', ')+'.':''}</div>` : ''; })()}
+    <div class="tw" style="max-height:340px;"><table class="cbl-t"><thead><tr><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Cajas</th><th>Estado</th><th>Reg. importación</th><th>Vigencia (6 meses)</th><th>Llegada a planta</th><th>Ingreso a bodega</th><th></th></tr></thead><tbody>
     ${(b.items||[]).map((it,ix)=>`<tr><td><b>${reabastEsc(it.oc)}</b></td><td>${reabastEsc(it.ref||'')}</td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${reabastEsc(it.desc||'')}">${reabastEsc(it.desc||'')}</td><td style="text-align:right;">${cblN(it.cant)}</td><td style="text-align:right;">${it.cbm>0?cblN(it.cant*it.cbm,2):'—'}</td><td style="text-align:right;">${it.cajas!=null&&it.cajas!==''?cblN(it.cajas):'—'}</td>
       <td><select class="inp" style="width:auto;font-size:11px;" ${dis} onchange="cblItemEstado('${b.id}',${ix},this.value)">${opts(it.estado)}</select></td>
+      <td><input class="inp" style="font-size:11px;width:130px;" placeholder="N.º registro" value="${reabastEsc(cblRimEf(it).rim)}" ${dis} onchange="cblItemRim('${b.id}',${ix},this.value)"></td>
+      <td style="white-space:nowrap;"><input type="date" class="inp" style="font-size:11px;" title="Fecha del registro de importación" value="${cblRimEf(it).rimf}" ${dis} onchange="cblItemRimF('${b.id}',${ix},this.value)"><div>${cblVigRim(it)}</div></td>
       <td><input type="date" class="inp" style="font-size:11px;" value="${it.planta||''}" ${dis} onchange="cblItemFecha('${b.id}',${ix},'planta',this.value)"></td>
       <td><input type="date" class="inp" style="font-size:11px;" value="${it.ingreso||''}" ${dis} onchange="cblItemFecha('${b.id}',${ix},'ingreso',this.value)"></td>
       <td>${puede?`<button class="btn btn-g btn-xs" title="Sacar este ítem del BL (vuelve a 'por embarcar')" onclick="cblQuitarItem('${b.id}',${ix})">✕</button>`:''}</td></tr>`).join('')}
@@ -12198,7 +12231,7 @@ async function cblMutar(id, fn, msg){
   const antes = (orig.items||[]).map(it=>it.oc);
   const r = fn(b); if(r===false) return;
   try{ await cblPersistir(b, antes); if(msg && typeof toast==='function') toast(msg,'ok'); }catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); }
-  if(CBL.det===id && document.getElementById('cbl-det')) cblPintarDetalle(); else if(REABAST.tab==='comext'){ const c=document.getElementById('cbl-tabla'); if(c) c.innerHTML=cblHtmlTabla(); }
+  if(CBL.det===id && document.getElementById('cbl-det')) cblPintarDetalle(); else if(REABAST.tab==='comext'){ const c=document.getElementById('cbl-tabla'); if(c) c.innerHTML=cblHtmlTablaX(); }
 }
 function cblRenombrar(id){
   const b = CBL.bls.find(x=>x.id===id); if(!b) return;
@@ -12219,13 +12252,68 @@ function cblGuardarCab(id){
     cblLog(b,'Fechas/logística: '+ant); }, 'Guardado · el tablero se actualizó con el nuevo ETD/ETA');
 }
 function cblItemEstado(id, ix, est){
-  cblMutar(id, b=>{ const it = b.items[ix]; if(!it) return false; it.estado = est; if(ceFaseLinea(est,'').fase===9 && !it.ingreso) it.ingreso = _prodfIso(new Date()); cblLog(b, 'Ítem '+it.ref+' ('+it.oc+') → '+est); }, 'Estado actualizado');
+  cblMutar(id, b=>{ const it = b.items[ix]; if(!it) return false; it.estado = est; if(ceFaseLinea(est,'').fase===9 && !it.ingreso) it.ingreso = _prodfIso(new Date()); cblLog(b, 'Ítem '+it.ref+' ('+it.oc+') → '+est); if(ceFaseLinea(est,'').fase>=7 && cblSinVig(it) && typeof toast==='function') toast('⚠️ La ref. '+it.ref+' no tiene registro de importación','wa'); }, 'Estado actualizado');
 }
 function cblTodosEstado(id){
   const est = (document.getElementById('cbld-todos')||{}).value; if(!est) return;
-  cblMutar(id, b=>{ (b.items||[]).forEach(it=>{ it.estado = est; if(ceFaseLinea(est,'').fase===9 && !it.ingreso) it.ingreso = _prodfIso(new Date()); }); cblLog(b,'Todos los ítems → '+est); }, 'Todos los ítems en: '+est);
+  cblMutar(id, b=>{ (b.items||[]).forEach(it=>{ it.estado = est; if(ceFaseLinea(est,'').fase===9 && !it.ingreso) it.ingreso = _prodfIso(new Date()); }); cblLog(b,'Todos los ítems → '+est); const sv = (b.items||[]).filter(cblSinVig); if(ceFaseLinea(est,'').fase>=7 && sv.length && typeof toast==='function') toast('⚠️ '+sv.length+' ítem(s) sin registro de importación','wa'); }, 'Todos los ítems en: '+est);
 }
 function cblItemFecha(id, ix, campo, val){ cblMutar(id, b=>{ const it = b.items[ix]; if(!it) return false; it[campo] = val; cblLog(b,'Ítem '+it.ref+' · '+(campo==='planta'?'llegada a planta':'ingreso')+' '+(val||'—')); }); }
+// Registro de importación y su fecha: un solo dato por referencia → se aplica a esa referencia en TODOS los BL y queda guardado para los que entren después.
+async function cblRimPorRef(id, ix, campo, val){
+  if(!cblPuede()){ if(typeof toast==='function') toast('Solo Compras, Comercio Exterior, Administración o un administrador','wa'); return; }
+  val = String(val||'').trim(); cblCupoMapa();
+  const orig = CBL.bls.find(x=>x.id===id), it0 = orig && orig.items[ix]; if(!it0) return;
+  const k = ceNum(it0.ref), it0Sin = cblSinVig(it0), oldRim = it0.rim||'';
+  const esT = it => ceNum(it.ref)===k && (it0Sin ? cblSinVig(it) : (cblSinVig(it) ? campo==='rim' : (it.rim||'')===oldRim));
+  const plan = []; CBL.bls.forEach(b=>{ const ixs = []; (b.items||[]).forEach((it,i)=>{ if(esT(it) && (it[campo]||'')!==val) ixs.push(i); }); if(ixs.length) plan.push({b, ixs, sin: ixs.map(i=>cblSinVig(b.items[i]))}); });
+  const cambiados = []; let n = 0;
+  plan.forEach(p=>{ const c = JSON.parse(JSON.stringify(p.b)); p.ixs.forEach((i,q)=>{ const it = c.items[i]; it[campo] = val; if(campo==='rim' && p.sin[q]) it.rimf = ''; n++; });
+    cblLog(c, 'Ref. '+it0.ref+' · '+(campo==='rim'?'registro de importación':'fecha del registro')+' '+(val||'—')+' ('+p.ixs.length+' ítem(s))'); cambiados.push(c); });
+  CBL.rimRef = CBL.rimRef || {}; const R = CBL.rimRef[k] = CBL.rimRef[k] || {};
+  if(campo==='rim'){ R.rim = val; R.rimf = it0Sin ? '' : (it0.rimf||''); } else { R.rimf = val; if(!R.rim) R.rim = it0.rim||''; }
+  if(!R.rim) delete CBL.rimRef[k];
+  try{ if(cambiados.length) await cblGuardar(cambiados);
+    await sb.upsert('configuracion', {clave:'rim_por_ref', valor:JSON.stringify(CBL.rimRef), tipo:'json'}, 'clave');
+    if(typeof toast==='function') toast((campo==='rim'?'Registro':'Fecha del registro')+' de la ref. '+it0.ref+' guardado en '+n+' ítem(s) de '+cambiados.length+' BL','ok'); }
+  catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); }
+  if(CBL.det && document.getElementById('cbl-det')) cblPintarDetalle(); else reabastPintar();
+}
+function cblItemRim(id, ix, val){ cblRimPorRef(id, ix, 'rim', val); }
+function cblItemRimF(id, ix, val){ cblRimPorRef(id, ix, 'rimf', val); }
+// Registro de importación: vigencia 6 meses y cupo de 1.000.000 u por registro. El cupo se consume por referencia en orden de ETA (la que llega primero a Buenaventura lo usa primero).
+const CBL_CUPO = 1000000;
+function cblCupoMapa(){
+  const M = new Map(), G = {};
+  (CBL.bls||[]).forEach(b=>{ const f = cblFaseBL(b); if(f===-1) return; (b.items||[]).forEach(it=>{ if(!it.rim) return; const k = ceNum(it.ref)+'|'+String(it.rim).trim().toUpperCase(); (G[k] = G[k]||[]).push({it, b, eta:b.eta||'', ing:ceFaseLinea(it.estado||'Embarque','').fase===9}); }); });
+  Object.values(G).forEach(L=>{
+    L.sort((x,y)=>(x.eta||'9999').localeCompare(y.eta||'9999') || String(x.b.bl).localeCompare(String(y.b.bl)));
+    let cum = 0;
+    L.forEach(e=>{ const rimf = e.it.rimf; let venc = ''; if(rimf){ const d = new Date(rimf+'T12:00:00'); d.setMonth(d.getMonth()+6); venc = d.toISOString().slice(0,10); }
+      const cuenta = rimf ? (!e.eta || e.eta>=rimf) : !e.ing;
+      if(!cuenta){ M.set(e.it,{est:'ok'}); return; }
+      if(venc && e.eta && e.eta>venc){ M.set(e.it,{est:'vencido', venc}); return; }
+      cum += Number(e.it.cant)||0;
+      if(cum>CBL_CUPO) M.set(e.it,{est:'agotado', exceso:Math.min(Number(e.it.cant)||0, cum-CBL_CUPO), usado:cum});
+      else M.set(e.it,{est:'ok', usado:cum, saldo:CBL_CUPO-cum, venc}); }); });
+  CBL._cm = M; return M;
+}
+function cblEstReg(it){ const M = CBL._cm || cblCupoMapa(); return M.get(it) || {est: it.rim ? 'ok' : 'sin'}; }
+function cblSinVig(it){ return !it.rim || cblEstReg(it).est!=='ok'; } // sin registro de importación vigente (sin número, vencido a la ETA, o cupo agotado)
+function cblRimEf(it){ return cblSinVig(it) ? {rim:'', rimf:''} : {rim:it.rim||'', rimf:it.rimf||''}; }
+// Vigencia del registro de importación: 6 meses desde la fecha del registro.
+function cblVigRim(it){
+  if(!it.rim) return '<span class="arte-mu" style="font-size:10px;">Sin registro</span>';
+  const E = cblEstReg(it), N = n => Number(n||0).toLocaleString('es-CO');
+  if(E.est==='agotado') return '<span style="font-size:10px;font-weight:700;color:#991b1b;">Cupo agotado (excede '+N(E.exceso)+' u) · requiere nuevo registro</span>';
+  if(E.est==='vencido') return '<span style="font-size:10px;font-weight:700;color:#991b1b;">Vencido a la llegada (ETA) · requiere nuevo registro</span>';
+  const cupo = E.usado!=null ? '<div class="arte-mu" style="font-size:10px;">Cupo: '+N(E.usado)+' de '+N(CBL_CUPO)+' u · quedan '+N(E.saldo)+'</div>' : '';
+  if(!it.rimf) return '<span style="font-size:10px;color:#166534;">Vigente · sin fecha aún</span>'+cupo;
+  const f = new Date(it.rimf+'T12:00:00'), v = new Date(f); v.setMonth(v.getMonth()+6);
+  const d = Math.ceil((v - new Date())/86400000), fv = v.toLocaleDateString('es-CO');
+  const col = d<0 ? '#991b1b' : d<=30 ? '#b45309' : '#166534';
+  return '<span style="font-size:10.5px;font-weight:700;color:'+col+';">'+(d<0 ? 'Vencido hace '+(-d)+' d' : 'Quedan '+d+' d')+'</span> <span class="arte-mu" style="font-size:10px;">· vence '+fv+'</span>'+cupo;
+}
 function cblQuitarItem(id, ix){
   cblMutar(id, b=>{ const it = b.items[ix]; if(!it) return false; b.items.splice(ix,1); cblLog(b,'Ítem '+it.ref+' ('+it.oc+') sacado del BL'); }, 'Ítem devuelto a "por embarcar"');
 }
@@ -12274,8 +12362,11 @@ const INFP = { q:'', cat:'', oc:'', fecha:'', minq:'', sinCbm:false, grp:'ref', 
 function infLunes(iso){ const d = new Date(iso+'T12:00:00'); const w = (d.getDay()+6)%7; d.setDate(d.getDate()-w); return d.toISOString().slice(0,10); }
 function infSemNum(iso){ const d = new Date(iso+'T12:00:00'); d.setDate(d.getDate()+3-((d.getDay()+6)%7)); const y0 = new Date(d.getFullYear(),0,4); return 1+Math.round(((d-y0)/86400000-3+((y0.getDay()+6)%7))/7); }
 const INF_MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+const INF_CBM_FIJO = { 'OCI146':100 };   // CBM total confirmado por Compras para la OC (no toca el CBM unitario por referencia)
 function infCbmOc(o){
   let t = 0, sin = 0, n = 0;
+  const fijo = INF_CBM_FIJO[String(o.numero_oc||'').replace(/\s+/g,'')];
+  if(fijo!=null) return {cbm:fijo, sin:0, n:(REABAST.ocItems[o.id]||[]).length};
   (REABAST.ocItems[o.id]||[]).forEach(it=>{ n++; const v = cbmDe(ocPendItem(o,it), cbmRefInfo(it.referencia).cbm); if(v==null) sin++; else t += v; });
   return {cbm:t, sin, n};
 }
@@ -12297,6 +12388,41 @@ function infDatos(){
     let etapa = ''; try{ etapa = ceEtapaActualTxt(o); }catch(e){}
     res.push({o, fecha, iso, mes: iso ? (f.vista==='semana' ? infLunes(iso) : iso.slice(0,7)) : 'sin', cbm:c.cbm, sin:c.sin, nItems:c.n, estimada: !!(L && (L.estimada||L.corregida)), confirmada: !!(L && L.r), emb, etapa});
   });
+  return res.sort((a,b)=> (a.iso||'9999').localeCompare(b.iso||'9999'));
+}
+// ═══ Programación de llegada de noviembre 2026 (correo de Logística del 20/10/2026): es la referencia correcta ═══
+// Reemplaza en la vista por OC lo que el sistema calcula para noviembre. El CBM unitario por referencia no se toca.
+const INF_PLAN = { mes:'2026-11', fuente:'Correo Logística 20/10/2026',
+  grupos:[
+    {s:1, f:'2026-11-04', cbm:10,   ocs:['OCI97','OCI108','OCI118','OI1888']},
+    {s:1, f:'2026-11-04', cbm:274,  ocs:['OCI106','OI1895']},
+    {s:1, f:'2026-11-04', cbm:137,  ocs:['OCI106-1']},
+    {s:1, f:'2026-11-04', cbm:4,    ocs:['OCI125','OCI128']},
+    {s:2, f:'2026-11-11', cbm:10,   ocs:['OCI96','OCI133','OCI138','OCI143']},
+    {s:2, f:'2026-11-11', cbm:67,   ocs:['OCI106-2','OI1887','OCI111','OCI106','OCI136']},
+    {s:2, f:'2026-11-11', cbm:67,   ocs:['OCI106-3']},
+    {s:2, f:'2026-11-11', cbm:25,   ocs:['OCI115','OCI120','OCI124','OCI127']},
+    {s:3, f:'2026-11-18', cbm:4,    ocs:['OCI100','OCI110']},
+    {s:3, f:'2026-11-18', cbm:1,    ocs:['OCI121']},
+    {s:3, f:'2026-11-18', cbm:3,    ocs:['OCI102','OCI122']},
+    {s:3, f:'2026-11-18', cbm:33.5, ocs:['OCI126']},
+    {s:4, f:'2026-11-25', cbm:37,   ocs:['OI1838','OI1867','OCI95','OCI114']},
+    {s:4, f:'2026-11-25', cbm:263,  ocs:['OCI119-1','OCI94-2','OCI137','OCI84']}],
+  // lo que esas mismas órdenes tienen FUERA de noviembre (cálculo del sistema), para no perderlo
+  resto:[ {f:'2026-10-16', cbm:13.1,  ocs:['OCI106'], t:'Octubre'}, {f:'2026-10-23', cbm:321.0, ocs:['OI1887'], t:'Octubre'},
+          {f:'2026-10-24', cbm:309.7, ocs:['OCI119'], t:'Octubre'}, {f:'2026-12-02', cbm:254.8, ocs:['OCI136'], t:'Diciembre'},
+          {f:'2026-12-07', cbm:26.9,  ocs:['OCI111'], t:'Diciembre'} ] };
+function infDatosPlan(){
+  const d = infDatos(), f = INF;
+  if(f.prov || f.q) return d;
+  const base = x => String(x||'').replace(/\s*-\s*\d+\s*$/,'').trim();
+  const set = new Set(); INF_PLAN.grupos.concat(INF_PLAN.resto).forEach(g=>g.ocs.forEach(o=>set.add(base(o))));
+  const res = d.filter(x=>!set.has(base(x.o.numero_oc)) && !(x.iso||'').startsWith(INF_PLAN.mes));
+  const add = (g, etapa) => { const iso = g.f; if(f.desde && iso < f.desde) return; if(f.hasta && iso > f.hasta) return;
+    const nombre = g.ocs.join(' · ');
+    res.push({o:{id:'plan_'+iso+'_'+nombre, numero_oc:nombre, proveedor:'', estado_general:'activa'}, fecha:new Date(iso+'T12:00:00'), iso, mes: f.vista==='semana' ? infLunes(iso) : iso.slice(0,7), cbm:g.cbm, sin:0, nItems:'', estimada:false, confirmada:true, emb:null, etapa}); };
+  INF_PLAN.grupos.forEach(g=>add(g, 'Semana '+g.s+' de noviembre · '+INF_PLAN.fuente));
+  INF_PLAN.resto.forEach(g=>add(g, 'Resto fuera de noviembre (cálculo del sistema)'));
   return res.sort((a,b)=> (a.iso||'9999').localeCompare(b.iso||'9999'));
 }
 function infFmt(n,d){ return Number(n||0).toLocaleString('es-CO',{minimumFractionDigits:d||0, maximumFractionDigits:d==null?1:d}); }
@@ -12323,7 +12449,7 @@ function infHtmlShell(){
       <div class="fg" style="margin:0;"><div class="fl">Hasta</div><input type="date" class="inp" value="${INF.hasta}" onchange="INF.hasta=this.value;infPintar()"></div>
       <div class="fg" style="margin:0;flex:1;min-width:230px;"><div class="fl">🔎 Buscar ítem (referencia, descripción, OC, proveedor)</div><input class="inp" autocomplete="off" placeholder="ej: 2664 panel led" value="${reabastEsc(INF.q)}" oninput="INF.q=this.value;clearTimeout(INF._t);INF._t=setTimeout(infPintar,250)"></div>
       <div class="fg" style="margin:0;"><div class="fl">Proveedor</div><select class="inp" onchange="INF.prov=this.value;infPintar()"><option value="">Todos</option>${provs.map(p=>`<option ${INF.prov===p?'selected':''}>${reabastEsc(p)}</option>`).join('')}</select></div>
-      <div style="display:flex;gap:4px;"><button class="btn btn-sm ${INF.modo!=='ref'?'btn-p':'btn-g'}" onclick="INF.modo='oc';reabastPintar()">📦 Por OC</button><button class="btn btn-sm ${INF.modo==='ref'?'btn-p':'btn-g'}" onclick="INF.modo='ref';reabastPintar()">🧮 Por referencia (tabla dinámica)</button><button class="btn btn-sm ${INF.modo==='ing'?'btn-p':'btn-g'}" onclick="INF.modo='ing';reabastPintar()">📥 Ingresos recientes</button></div>
+      <div style="display:flex;gap:4px;"><button class="btn btn-sm ${INF.modo!=='ref'?'btn-p':'btn-g'}" onclick="INF.modo='oc';reabastPintar()">📦 Por OC</button><button class="btn btn-sm ${INF.modo==='ref'?'btn-p':'btn-g'}" onclick="INF.modo='ref';reabastPintar()">🧮 Por referencia (tabla dinámica)</button><button class="btn btn-sm ${INF.modo==='ing'?'btn-p':'btn-g'}" onclick="INF.modo='ing';reabastPintar()">📥 Ingresos recientes</button><button class="btn btn-sm ${INF.modo==='siesa'?'btn-p':'btn-g'}" onclick="INF.modo='siesa';reabastPintar()" title="Entradas que reporta el inventario de Siesa cruzadas con las órdenes de compra">🏭 Ingresos desde Siesa</button></div>
       <div style="display:flex;gap:4px;"><button class="btn btn-sm ${INF.vista==='mes'?'btn-p':'btn-g'}" onclick="INF.vista='mes';INF.abierto={};reabastPintar()">Por mes</button><button class="btn btn-sm ${INF.vista==='semana'?'btn-p':'btn-g'}" onclick="INF.vista='semana';INF.abierto={};reabastPintar()">Por semana</button></div>
       <button class="btn btn-g btn-sm" onclick="INF.desde='';INF.hasta='';INF.prov='';INF.q='';reabastPintar()">Limpiar</button>
       <button class="btn btn-gr btn-sm" onclick="infExcel()">⬇️ Excel</button>
@@ -12423,9 +12549,10 @@ async function infIngConfirmar(ocId, ref, qEsp, fecha, qDet){
 }
 function infPintar(){
   const b = document.getElementById('inf-body'); if(!b) return;
-  const d = infDatos();
+  const d = INF.modo==='oc' ? infDatosPlan() : infDatos();
   if(!INF_ING.cargado && !INF_ING.cargando) infIngCargar(d);
   if(INF.modo==='ing'){ infIngRecientes(b); return; }
+  if(INF.modo==='siesa'){ infIngSiesa(b, d); return; }
   if(INF.modo==='ref'){ infRefShell(b, d); return; }
   const cap = (typeof CBM_CAPAS!=='undefined' ? CBM_CAPAS[2].cap : 68);
   const tot = d.reduce((a,x)=>a+x.cbm,0), sin = d.reduce((a,x)=>a+x.sin,0);
@@ -12436,14 +12563,14 @@ function infPintar(){
   const prox = d.filter(x=>x.iso && x.iso.slice(0,7)===hoyMes).reduce((a,x)=>a+x.cbm,0);
   const semK = infLunes(hoyIso), proxSem = d.filter(x=>x.iso && infLunes(x.iso)===semK).reduce((a,x)=>a+x.cbm,0);
   const nm = k => { if(k==='sin') return 'Sin fecha estimada'; if(INF.vista==='semana'){ const a = new Date(k+'T12:00:00'), z = new Date(a); z.setDate(z.getDate()+6); const f = x=>x.getDate()+' '+SEG_MES[x.getMonth()]; return 'Sem '+infSemNum(k)+' · '+f(a)+' – '+f(z)+(k===infLunes(new Date().toISOString().slice(0,10))?' (esta semana)':''); } return INF_MESES[Number(k.slice(5,7))-1]+' '+k.slice(0,4); };
-  const tile = (v,l,c)=>`<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:10px 14px;min-width:150px;"><div class="sv" style="font-size:22px;font-weight:800;color:${c||'var(--tx)'};">${v}</div><div class="sl" style="font-size:10px;color:var(--mu);">${l}</div></div>`;
+  const tile = (v,l,c,k)=>`<div class="sc" onclick="infKpi('${k}')" title="Clic para ver el detalle" style="cursor:pointer;background:#fff;border:1px solid var(--b1);border-radius:10px;padding:10px 14px;min-width:150px;"><div class="sv" style="font-size:22px;font-weight:800;color:${c||'var(--tx)'};">${v}</div><div class="sl" style="font-size:10px;color:var(--mu);">${l}</div></div>`;
   let h = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-    ${tile(infFmt(tot)+' m³','CBM por llegar (total)','var(--bl)')}
-    ${tile(d.length,'OC en camino / por llegar')}
-    ${tile('≈ '+Math.ceil(tot/cap),"contenedores 40' HC aprox.")}
-    ${tile(infFmt(prox)+' m³','llegan este mes ('+INF_MESES[new Date().getMonth()]+')','#16a34a')}
-    ${tile(infFmt(proxSem)+' m³','llegan esta semana','#16a34a')}
-    ${sin?tile(sin,'ítems sin CBM (no suman)','#b45309'):''}
+    ${tile(infFmt(tot)+' m³','CBM por llegar (total)','var(--bl)','tot')}
+    ${tile(d.length,'OC en camino / por llegar','','oc')}
+    ${tile('≈ '+Math.ceil(tot/cap),"contenedores 40' HC aprox.",'','cont')}
+    ${tile(infFmt(prox)+' m³','llegan este mes ('+INF_MESES[new Date().getMonth()]+')','#16a34a','mes')}
+    ${tile(infFmt(proxSem)+' m³','llegan esta semana','#16a34a','sem')}
+    ${sin?tile(sin,'ítems sin CBM (no suman)','#b45309','sin'):''}
   </div>`;
   if(!d.length){ b.innerHTML = h+'<div class="empty">No hay órdenes por llegar con esos filtros.</div>'; return; }
   const kPer = INF.vista==='semana' ? 'semana' : 'mes';
@@ -12538,6 +12665,62 @@ function infIngRecientes(b){
   </div></div>
   <div class="card"><div class="cb"><div style="font-weight:800;font-size:13px;margin-bottom:6px;">📦 Entradas detectadas en inventario (Siesa) que no están en el Seguimiento</div>
     ${invF.length?`<div class="tw"><table style="font-size:12px;"><thead><tr><th>Fecha</th><th>Ref.</th><th>Bodega</th><th style="text-align:right;">Existencia</th></tr></thead><tbody>${invF.map(r=>`<tr><td>${fd(r.fecha)}</td><td style="font-family:monospace;">${E(r.ref)}</td><td>${E(r.bd)}</td><td style="text-align:right;">${fn(r.exist)}</td></tr>`).join('')}</tbody></table></div>`:`<div class="arte-mu">${INF_ING.cargado?'Ninguna en el periodo.':'Cargando inventario…'}</div>`}
+  </div></div>`;
+}
+// ═══ Informes: detalle al hacer clic en los cuadros de arriba ═══
+function infKpi(k){
+  const d = infDatosPlan(), hoyIso = new Date().toISOString().slice(0,10), hoyMes = hoyIso.slice(0,7), semK = infLunes(hoyIso), E = reabastEsc, fn = infFmt;
+  const cap = (typeof CBM_CAPAS!=='undefined' ? CBM_CAPAS[2].cap : 68);
+  let L = d, ti = '', sub = '';
+  if(k==='mes'){ L = d.filter(x=>x.iso && x.iso.slice(0,7)===hoyMes); ti = '📅 Llegan este mes ('+INF_MESES[new Date().getMonth()]+')'; }
+  else if(k==='sem'){ L = d.filter(x=>x.iso && infLunes(x.iso)===semK); ti = '🗓️ Llegan esta semana'; }
+  else if(k==='sin'){ L = d.filter(x=>x.sin>0); ti = '⚠️ Ítems sin CBM (no suman al total)'; }
+  else if(k==='cont'){ ti = "🚢 Contenedores 40' HC aprox."; sub = 'Se calcula con el CBM total por llegar ÷ '+cap+' m³ por contenedor.'; }
+  else if(k==='oc'){ ti = '📦 Órdenes en camino / por llegar'; }
+  else { ti = '📐 CBM por llegar (total)'; }
+  const items = infItemsFilas(L), por = {}; items.forEach(r=>{ (por[r.oc] = por[r.oc] || []).push(r); });
+  const totCbm = L.reduce((a,x)=>a+x.cbm,0), fd = s => s ? new Date(s+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}) : 'sin fecha';
+  const filas = L.map(x=>{ const its = (por[x.o.numero_oc]||[]).filter(r=>k!=='sin' || r.sinCbm).sort((a,b)=>b.cbm-a.cbm);
+    return `<tr style="background:#eff6ff;"><td colspan="2" style="font-weight:800;"><b>${E(x.o.numero_oc)}</b> <span class="arte-mu" style="font-weight:400;">${E(x.o.proveedor||'')}</span></td><td>${fd(x.iso)}${x.estimada?' <span class="arte-mu" style="font-size:10px;">(est.)</span>':''}</td><td>${E(x.etapa||'')}</td><td style="text-align:right;">${its.length} ítem(s)</td><td style="text-align:right;font-weight:800;">${fn(its.reduce((a,r)=>a+r.cbm,0),1)} m³</td></tr>`
+      + its.map(r=>`<tr><td style="font-family:monospace;padding-left:18px;">${E(r.ref)}</td><td colspan="3">${E(r.desc)}${r.sinCbm?' <span style="color:#b45309;font-weight:700;font-size:10px;">sin CBM</span>':''}</td><td style="text-align:right;">${fn(r.qty)} u</td><td style="text-align:right;">${r.sinCbm?'—':fn(r.cbm,1)+' m³'}</td></tr>`).join(''); }).join('');
+  let ov = document.getElementById('infk-ov'); if(!ov){ ov = document.createElement('div'); ov.id = 'infk-ov'; document.body.appendChild(ov); }
+  ov.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(15,23,42,.55);display:flex;justify-content:center;align-items:flex-start;padding:4vh 14px;overflow:auto;';
+  ov.onclick = e=>{ if(e.target===ov) ov.remove(); };
+  ov.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:1000px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;padding:14px 18px;display:flex;align-items:center;gap:10px;"><div><div style="font-size:16px;font-weight:800;">${ti}</div><div style="font-size:11.5px;opacity:.9;">${L.length} orden(es) · ${fn(totCbm,1)} m³${k==='cont'?' · ≈ '+Math.ceil(totCbm/cap)+' contenedor(es)':''}${sub?' · '+sub:''}</div></div><button class="btn btn-sm" style="margin-left:auto;background:rgba(255,255,255,.2);color:#fff;" onclick="document.getElementById('infk-ov').remove()">✕ Cerrar</button></div>
+    <div style="padding:12px 18px 18px;max-height:78vh;overflow:auto;">${L.length?`<div class="tw"><table style="font-size:12px;"><thead><tr><th>OC / Ref.</th><th></th><th>Llegada</th><th>Etapa / Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">CBM</th></tr></thead><tbody>${filas}</tbody></table></div>`:'<div class="empty">No hay órdenes en este grupo.</div>'}</div></div>`;
+}
+// ═══ Informes: ingresos desde Siesa (entradas del inventario cruzadas con las órdenes de compra) ═══
+function infIngSiesa(b, d){
+  INF.ingDias = INF.ingDias || 45;
+  const E = reabastEsc, fn = infFmt, fd = s => s ? new Date(s+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}) : '—';
+  if(!INF_ING.cargado){ b.innerHTML = cargaHtml('Leyendo el inventario de Siesa'); return; }
+  const corte = new Date(Date.now()-INF.ingDias*86400000).toISOString().slice(0,10), tk = (INF.q||'').toLowerCase().split(/[\s,;]+/).filter(Boolean);
+  const filas = [], usadas = new Set(), vistos = new Set();
+  (d||[]).forEach(x=>{ const o = x.o; if(!o || vistos.has(o.id)) return; vistos.add(o.id);
+    const porRef = {}; (REABAST.ocItems[o.id]||[]).forEach(it=>{ const k = pvClaveRef(it.referencia), p = ocPendItem(o,it); if(p>0) (porRef[k] = porRef[k] || {ref:String(it.referencia||'').trim(), desc:it.descripcion||'', q:0}).q += p; });
+    Object.keys(porRef).forEach(k=>{ const r = porRef[k], g = INF_ING.byRef[k]; if(!g) return;
+      const st = infIngEstado(o.id, r.ref, o.fecha_orden, Math.round(r.q)); if(!st.ing && !st.conf) return;
+      const fecha = st.ing ? st.ing.fecha : (st.conf && st.conf.fecha_ingreso) || ''; if(!fecha || fecha<corte) return;
+      const M = (REABAST.referenciasMaestro||{})[r.ref]||{}, desc = M.descripcion_en||M.descripcion||r.desc;
+      if(tk.length && !tk.every(t=>(o.numero_oc+' '+r.ref+' '+desc+' '+(o.proveedor||'')).toLowerCase().includes(t))) return;
+      usadas.add(k); filas.push({o, ref:r.ref, desc, q:Math.round(r.q), st, fecha}); }); });
+  filas.sort((a,c)=>String(c.fecha).localeCompare(String(a.fecha)));
+  const sinOc = []; Object.keys(INF_ING.byRef||{}).forEach(k=>{ if(usadas.has(k)) return; Object.keys(INF_ING.byRef[k].bod).forEach(bd=>{ const x = INF_ING.byRef[k].bod[bd]; if(x.fecha && x.fecha>=corte && x.exist>0 && (!tk.length || tk.every(t=>k.toLowerCase().includes(t)))) sinOc.push({ref:k, bd, fecha:x.fecha, exist:x.exist}); }); });
+  sinOc.sort((a,c)=>c.fecha.localeCompare(a.fecha));
+  const nPos = filas.filter(f=>!f.st.conf && f.st.pos).length, nConf = filas.filter(f=>f.st.conf).length, nDif = filas.filter(f=>!f.st.conf && !f.st.pos).length;
+  const chip = (v,l,c)=>`<div style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:${c};">${v}</div><div style="font-size:10px;color:var(--mu);">${l}</div></div>`;
+  const tr = f=>{ const bods = (f.st.ing ? f.st.ing.mejor : []).map(x=>'<b>'+E(x.bod)+'</b> '+fn(x.exist)).join(' + '), pct = f.st.ing && f.q>0 ? Math.round(f.st.ing.ratio*100) : null;
+    return `<tr><td style="white-space:nowrap;font-weight:700;">${fd(f.fecha)}</td><td><b>${E(f.o.numero_oc)}</b><div class="arte-mu" style="font-size:10px;">${E(f.o.proveedor||'')}</div></td><td style="font-family:monospace;">${E(f.ref)}</td><td>${E(f.desc)}</td><td style="text-align:right;">${fn(f.q)}</td><td style="text-align:right;font-weight:700;">${f.st.ing?fn(f.st.ing.suma):'—'}<div class="arte-mu" style="font-size:10px;font-weight:400;">${bods}</div></td><td style="text-align:right;font-weight:700;color:${pct!=null&&pct>=97&&pct<=103?'#16a34a':'#b45309'};">${pct!=null?pct+'%':'—'}</td><td>${infIngCelda(f.o.id, f.ref, f.q, f.st)}</td></tr>`; };
+  b.innerHTML = `<div class="card" style="margin-bottom:12px;"><div class="cb">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px;"><div style="font-weight:800;font-size:14px;">🏭 Ingresos desde Siesa</div>
+      <select class="inp" style="width:auto;" onchange="INF.ingDias=Number(this.value);infPintar()">${[15,30,45,90,180].map(n=>`<option value="${n}" ${INF.ingDias===n?'selected':''}>Últimos ${n} días</option>`).join('')}</select></div>
+    <div class="arte-mu" style="font-size:11.5px;margin-bottom:10px;">Entradas a inventario que reporta Siesa (fecha de última entrada por referencia y bodega) cruzadas con las órdenes de compra que aún tienen saldo por llegar. Si la cantidad que entró está entre el 85 % y el 115 % de lo esperado, se propone como ingreso de esa orden y tú lo confirmas.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">${chip(nPos,'por confirmar (coinciden con la OC)','#b45309')}${chip(nDif,'entraron pero la cantidad no coincide','#991b1b')}${chip(nConf,'ya confirmadas','#16a34a')}${chip(sinOc.length,'entradas sin OC pendiente','#475569')}</div>
+    ${filas.length?`<div class="tw"><table style="font-size:12px;"><thead><tr><th>Entrada Siesa</th><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Esperado</th><th style="text-align:right;">Entró</th><th style="text-align:right;">% de lo esperado</th><th>Confirmación</th></tr></thead><tbody>${filas.map(tr).join('')}</tbody></table></div>`:'<div class="empty">No hay entradas de Siesa que cruzar con órdenes pendientes en este período.</div>'}
+  </div></div>
+  <div class="card"><div class="cb"><div style="font-weight:800;font-size:13px;margin-bottom:6px;">📦 Entradas en Siesa sin una orden pendiente que coincida</div>
+    ${sinOc.length?`<div class="tw"><table style="font-size:12px;"><thead><tr><th>Fecha</th><th>Ref.</th><th>Bodega</th><th style="text-align:right;">Existencia</th></tr></thead><tbody>${sinOc.slice(0,200).map(r=>`<tr><td>${fd(r.fecha)}</td><td style="font-family:monospace;">${E(r.ref)}</td><td>${E(r.bd)}</td><td style="text-align:right;">${fn(r.exist)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="arte-mu">Ninguna en este período.</div>'}
   </div></div>`;
 }
 // ═══ Informes: tabla dinámica por referencia (qué llega, cuánto y cuándo) ═══
@@ -12635,7 +12818,7 @@ function infPivExcel(){
 
 function infExcel(){
   if(typeof XLSX==='undefined'){ if(typeof toast==='function') toast('SheetJS no está cargado','er'); return; }
-  const rows = infDatos().map(x=>({OC:x.o.numero_oc, Proveedor:x.o.proveedor||'', 'Llegada estimada':x.iso, [INF.vista==='semana'?'Semana (lunes)':'Mes']:x.mes, Etapa:x.etapa, Ítems:x.nItems, 'CBM (m³)':Math.round(x.cbm*100)/100, 'Ítems sin CBM':x.sin, Contenedor:(x.emb&&x.emb.contenedor)||(x.cbm>0?cbmContenedores(x.cbm).txt:'')}));
+  const rows = infDatosPlan().map(x=>({OC:x.o.numero_oc, Proveedor:x.o.proveedor||'', 'Llegada estimada':x.iso, [INF.vista==='semana'?'Semana (lunes)':'Mes']:x.mes, Etapa:x.etapa, Ítems:x.nItems, 'CBM (m³)':Math.round(x.cbm*100)/100, 'Ítems sin CBM':x.sin, Contenedor:(x.emb&&x.emb.contenedor)||(x.cbm>0?cbmContenedores(x.cbm).txt:'')}));
   const wb = XLSX.utils.book_new(); const rs = {}; rows.forEach(r=>{ const k = r[INF.vista==='semana'?'Semana (lunes)':'Mes']; const q = rs[k] = rs[k] || {Periodo:k, 'N° OC':0, 'CBM (m³)':0, Órdenes:[]}; q['N° OC']++; q['CBM (m³)'] = Math.round((q['CBM (m³)']+r['CBM (m³)'])*100)/100; q.Órdenes.push(r.OC); });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.values(rs).map(q=>({...q, Órdenes:q.Órdenes.join(', ')}))), 'Resumen');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'CBM por llegar');
@@ -12751,7 +12934,7 @@ function reabastPintar(){
       <div style="display:flex;gap:6px;">
         ${CU&&CU.rol==='admin'?'<button class="btn btn-g" onclick="reabastAccesosAbrir()" title="Dar a otra persona los mismos permisos que tú en Abastecimiento">👥 Accesos</button>':''}
         ${MODO_ABAST?'':'<button class="btn btn-g" onclick="abrirAbastecimientoAparte()" title="Abrir Abastecimiento en su propia ventana (más ágil)">↗ Ventana aparte</button>'}
-        <button class="btn btn-g" onclick="ocExportarReporte()">⬇️ Exportar reporte</button>
+        <button class="btn btn-bl" onclick="infComAbrir()" title="Informe comercial: BL, órdenes, referencias, estados y fechas">📊 Informe comercial</button>
         <button class="btn btn-bl" onclick="abrirModalReabast()">+ Nueva solicitud</button>
       </div>
     </div>
@@ -14551,7 +14734,7 @@ function embModal(titulo, sub, label, fechaDef, textoBtn, onOk, conNota){
 // ── CBM por caja master (m³): datos de CBM_2.xlsx + cálculo de contenedor en la prealerta ──
 const CBM_ARCHIVO = {"253":0.00020665593129361246,"598":0.0021000000000000003,"603":0.00025,"731":0.0075201999999999995,"738":0.002095,"743":0.00086,"794":0.0138192,"804":0.00020833333333333332,"807":0.00023541666666666665,"808":0.0009849666666666666,"862":0.0002866666666666667,"877":0.0017102194899817852,"903":0.0009305555555555555,"960":0.003932142857142858,"961":0.003929203539823009,"980":0.000975,"984":0.002285,"1060":0.0005529558823529412,"1064":0.0003,"1065":0.0003,"1072":0.0011907894736842106,"1075":0.0007099999999999999,"1088":0.004465989776069837,"1090":0.00047974683544303796,"1091":0.0004982456140350877,"1103":0.001352,"1139":0.00181,"1167":0.00325,"1168":0.00325,"1169":0.00325,"1170":0.0032533333333333333,"1178":0.00011999999999999999,"1179":0.00011999999999999999,"1222":0.0009282027447392498,"1229":0.004393939393939394,"1378":0.0007000000000000001,"1380":0.0008992805755395684,"1405":0.0006392931392931393,"1504":0.0018563939393939394,"1790":0.0008008333333333333,"1791":0.0008010000000000001,"1811":0.006830545454545454,"1820":0.000575984251968504,"1821":0.0005762237762237762,"1854":0.0018564227642276423,"1938":0.0006427321882951654,"1940":0.00393,"1944":0.0015666666666666665,"1946":0.0009871428571428572,"1947":0.0009880000000000002,"1980":0.0022123015873015874,"1991":0.0010198019801980198,"1992":0.0016307692307692308,"1996":0.0016153846153846155,"2004":0.0028,"2010":0.0016200000000000001,"2061":0.0004766355140186916,"2078":0.00049609375,"2103":0.0006278280542986425,"2108":0.00124,"2165":0.0008266666666666666,"2181":0.00204,"2182":0.001075,"2184":0.001588,"2190":0.0141236,"2193":0.00413,"2209":0.0013558333333333332,"2211":0.0006934895833333333,"2218":0.000992063492063492,"2223":0.0056500000000000005,"2258":0.00362828947368421,"2268":0.0014756,"2274":0.00274,"2276":0.00102,"2278":0.0010192307692307692,"2283":0.0016318268599999999,"2285":0.0010175000000000002,"2294":0.003205,"2298":0.013817600000000001,"2304":0.009649470899470899,"2307":0.0007999999999999999,"2308":0.0017090395480225987,"2310":0.0007485029940119761,"2311":0.0011153846153846153,"2312":0.0019633333333333334,"2313":0.004256,"2314":0.005126356589147287,"2315":0.008013999999999999,"2329":0.0045414,"2330":0.00588,"2331":0.008640000000000002,"2379":0.0016083333333333331,"2461":0.0016324324324324324,"2462":0.002625,"2466":0.0012342857142857145,"2467":0.0005250000000000001,"2468":0.0009266666666666666,"2480":0.0005468770070648684,"2482":0.0004962,"2483":0.004849344569288389,"2522":0.00147,"2531":0.0006519999999999999,"2532":0.003,"2533":0.003916666666666666,"2534":0.005233333333333334,"2535":0.0008529411764705882,"2536":0.0008529411764705882,"2538":0.001408,"2539":0.0002483333333333333,"2540":0.00029749999999999997,"2541":0.000345,"2547":0.0010249999999999999,"2549":0.0013010204081632653,"2566":0.0012306547619047618,"2567":0.0014391999999999999,"2568":0.0030696,"2569":0.00821,"2570":0.00821,"2571":0.00821,"2572":0.001132936507936508,"2573":0.0010337301587301589,"2574":0.0026866666666666666,"2575":0.004961538461538462,"2576":0.0045209580838323354,"2577":0.00282,"2578":0.001701,"2579":0.00272025,"2580":0.00024056603773584906,"2585":0.0042658730158730155,"2586":0.0035077519379844964,"2588":0.0007,"2589":0.002551,"2590":0.0038154761904761907,"2592":0.0013043912175648702,"2593":0.0010718562874251498,"2594":0.00189,"2596":0.001,"2599":0.0013591269841269843,"2600":0.022819000000000002,"2601":0.007312375249500998,"2603":0.0002372248427672956,"2609":0.0008894808,"2610":0.0013031928000000002,"2611":0.0017169048};
 // Referencias cuyo CBM unitario viene del Consolidado CBM unitario (Excel 22-oct-2026): sirven para el filtro "CBM actualizado" de Referencias.
-const CBM_EXCEL_OCT26 = new Set(["253", "598", "603", "731", "738", "743", "794", "804", "807", "808", "862", "877", "903", "960", "961", "980", "984", "1060", "1064", "1065", "1072", "1075", "1088", "1090", "1091", "1103", "1139", "1167", "1168", "1169", "1170", "1178", "1179", "1222", "1229", "1378", "1380", "1405", "1504", "1790", "1791", "1811", "1820", "1821", "1854", "1938", "1940", "1944", "1946", "1947", "1980", "1991", "1992", "1996", "2004", "2010", "2061", "2078", "2103", "2108", "2165", "2181", "2182", "2184", "2190", "2193", "2209", "2211", "2218", "2223", "2258", "2268", "2274", "2276", "2278", "2283", "2285", "2294", "2298", "2304", "2307", "2308", "2310", "2311", "2312", "2313", "2314", "2315", "2329", "2330", "2331", "2379", "2461", "2462", "2466", "2467", "2468", "2480", "2482", "2483", "2522", "2531", "2532", "2533", "2534", "2535", "2536", "2538", "2539", "2540", "2541", "2547", "2549", "2566", "2567", "2568", "2569", "2570", "2571", "2572", "2573", "2574", "2575", "2576", "2577", "2578", "2579", "2580", "2585", "2586", "2588", "2589", "2590", "2592", "2593", "2594", "2596", "2599", "2600", "2601", "2603", "2609", "2610", "2611"]);
+const CBM_EXCEL_OCT26 = new Set(["253", "466", "504", "598", "603", "731", "738", "743", "794", "804", "807", "808", "848", "862", "877", "903", "904", "905", "918", "960", "961", "969", "980", "984", "1060", "1064", "1065", "1072", "1074", "1075", "1088", "1090", "1091", "1097", "1103", "1106", "1138", "1139", "1167", "1168", "1169", "1170", "1178", "1179", "1222", "1229", "1230", "1264", "1378", "1380", "1388", "1390", "1405", "1460", "1504", "1790", "1791", "1804", "1805", "1807", "1811", "1820", "1821", "1827", "1830", "1832", "1854", "1920", "1921", "1938", "1939", "1940", "1943", "1944", "1946", "1947", "1959", "1980", "1988", "1989", "1991", "1992", "1993", "1994", "1996", "1997", "1999", "2000", "2001", "2002", "2003", "2004", "2009", "2010", "2060", "2061", "2062", "2078", "2093", "2094", "2095", "2096", "2103", "2108", "2159", "2160", "2161", "2162", "2165", "2180", "2181", "2182", "2183", "2184", "2185", "2186", "2190", "2193", "2195", "2196", "2209", "2211", "2212", "2217", "2218", "2219", "2223", "2224", "2234", "2245", "2246", "2247", "2258", "2262", "2268", "2270", "2274", "2276", "2277", "2278", "2279", "2280", "2283", "2284", "2285", "2287", "2288", "2294", "2298", "2299", "2300", "2304", "2307", "2308", "2310", "2311", "2312", "2313", "2314", "2315", "2319", "2320", "2322", "2323", "2324", "2329", "2330", "2331", "2336", "2337", "2364", "2365", "2379", "2459", "2460", "2461", "2462", "2463", "2464", "2465", "2466", "2467", "2468", "2470", "2473", "2476", "2478", "2480", "2482", "2483", "2521", "2522", "2530", "2531", "2532", "2533", "2534", "2535", "2536", "2537", "2538", "2539", "2540", "2541", "2543", "2547", "2549", "2551", "2552", "2553", "2554", "2556", "2557", "2559", "2563", "2566", "2567", "2568", "2569", "2570", "2571", "2572", "2573", "2574", "2575", "2576", "2577", "2578", "2579", "2580", "2584", "2585", "2586", "2588", "2589", "2590", "2592", "2593", "2594", "2596", "2599", "2600", "2601", "2603", "2604", "2609", "2610", "2611", "2612", "2613", "2615", "2616", "2617", "2618", "2619", "2620", "2621", "2622", "2623", "2624", "2626", "2627", "2628", "2629", "2630", "2631", "2632", "2633", "2634", "2635", "2636", "2637", "2638", "2639", "2640", "2641", "2642", "2643", "2646", "2647", "2648", "2649", "2650", "2652", "2653", "2654", "2660", "2661", "2662", "2663", "2664", "2665", "2666", "2667", "2668", "2669", "2670", "2671", "2672", "2673", "2674", "2675", "2676", "2677", "2678", "2679", "2680", "2681", "2682", "2683", "2684", "2685", "2686", "2687", "2688", "2689", "2690", "2691", "2692", "2693", "2694", "2695"]);
 const CBM_CAPAS = [{n:"20'", cap:28}, {n:"40'", cap:58}, {n:"40' HC", cap:68}];   // m³ aprovechables por contenedor
 async function cbmAplicar(mapa, origen){
   if(!reabastEsAdmin()){ if(typeof toast==='function') toast('Solo un administrador puede actualizar el CBM','er'); return; }
@@ -17561,9 +17744,11 @@ function ceValidar(o, r){
     if(!window.__cvp){ try{ window.__cvp = 1; const cel = {}; SEG_COLS.forEach(c=>{ cel[c.id] = segCelda(o, c); }); planAuto = segPlanFechas(o, cel); }catch(e){} finally{ window.__cvp = 0; }
       if(planAuto && planAuto.embarque){ sale = new Date(planAuto.embarque); pasos.push(`cadena automática del tablero → sale ${dm(sale)}`); minEta = mas(sale, CE_TRANSITO_MIN - TOL); } }
   }
-  const usaPlan = !zarpo && planAuto && planAuto.embarque && planAuto.transito;
-  const incons = usaPlan ? !!(etaCE && etaCE < new Date(planAuto.transito).getTime() - 3*86400000) : !!(etaCE && etaCE < minEta);
-  const etaOk = usaPlan ? new Date(planAuto.transito) : (etaCE && !incons ? etaCE : mas(sale, zarpo ? CE_TRANSITO_MIN : CE_TRANSITO));
+  // Regla de KD (22-oct-2026): en proceso de embarque, tránsito y nacionalización la ETA es la de la sábana de Com. Ext., sin recalcular
+  const usaCE = !!(etaCE && (fase===5 || fase===6 || fase===7));
+  const usaPlan = !usaCE && !zarpo && planAuto && planAuto.embarque && planAuto.transito;
+  const incons = usaCE ? false : usaPlan ? !!(etaCE && etaCE < new Date(planAuto.transito).getTime() - 3*86400000) : !!(etaCE && etaCE < minEta);
+  const etaOk = usaCE ? etaCE : usaPlan ? new Date(planAuto.transito) : (etaCE && !incons ? etaCE : mas(sale, zarpo ? CE_TRANSITO_MIN : CE_TRANSITO));
   // planta: si la fecha de Com. Ext. es posible se respeta; si no, arribo (1 d) + nacionalización y transporte (7 días hábiles)
   const planta = usaPlan && planAuto.recepcion ? new Date(planAuto.recepcion) : (!incons && plantaCE && plantaCE >= etaOk ? plantaCE : ocSumarHabiles(mas(etaOk, 1), 7));
   const motivo = incons ? `Com. Ext. dice ETA ${dm(etaCE)}${plantaCE?' / planta '+dm(plantaCE):''}, pero ${pasos.join(' · ')} → sale ≈ ${dm(sale)}, + ${CE_TRANSITO_MIN}–${CE_TRANSITO} d de tránsito → ETA ≈ ${dm(etaOk)}, planta ≈ ${dm(planta)}` : null;
@@ -20720,6 +20905,89 @@ async function refCompletarDesdePanelCompras(){
   }
 }
 
+
+// ═══ Informe comercial (BL · orden · referencia · estado · fechas) ═══
+const ICOM = { f:{q:'', est:'activos', bl:'', dias:7, soloNov:false}, sort:{k:'eta', d:1}, rows:[] };
+function infComNovedad(b){
+  const dias = Number(ICOM.f.dias)||7, desde = Date.now()-dias*86400000, rx = /\d{4}-\d{2}-\d{2}/;
+  const ev = (b.hist||[]).filter(h=>h && h.t && new Date(h.t).getTime()>=desde).sort((x,y)=>String(x.t).localeCompare(String(y.t)));
+  let ant = null, nue = null;
+  ev.forEach(h=>{ const a = String(h.accion||''); let m;
+    if((m = a.match(/(?:Llegada a planta|Planta)\s+(\d{4}-\d{2}-\d{2}|—)\s*(?:→|->)\s*(\d{4}-\d{2}-\d{2})/))){ if(ant==null) ant = m[1]==='—' ? '' : m[1]; nue = m[2]; return; }
+    if(!b.planta && (m = a.match(/ETA\s+(\d{4}-\d{2}-\d{2}|—)\s*(?:→|->)\s*(\d{4}-\d{2}-\d{2}|—)/))){ const o = m[1]==='—' ? '' : cblPlantaEst(m[1]), n2 = m[2]==='—' ? '' : cblPlantaEst(m[2]); if(ant==null) ant = o; nue = n2; } });
+  if(ant==null || !nue || ant===nue) return '';
+  const F = x => new Date(x+'T12:00:00').toLocaleDateString('es-CO',{day:'numeric',month:'long'});
+  return ant ? 'Estaba para el '+F(ant)+', se movió para el '+F(nue) : 'Llegada a planta definida para el '+F(nue);
+}
+function infComFilas(){
+  const ords = REABAST.ordenesCompra||[], D = x => x ? String(x).slice(0,10) : '', out = [];
+  (CBL.bls||[]).forEach(b=>{ (b.items||[]).forEach(it=>{
+    const o = ords.find(x=>String(x.id)===String(it.ocId)) || ords.find(x=>ceNum(x.numero_oc)===ceNum(it.oc));
+    const fase = ceFaseLinea(it.estado||'Embarque','').fase, est = fase===-1 ? 'Cancelado' : (CBL_FASE_TXT[fase] || it.estado || '—');
+    const planta = D(it.planta) || D(b.planta) || cblPlantaEst(b.eta);
+    out.push({bl:b.bl, oc:it.oc, nov:infComNovedad(b), ref:String(it.ref||''), desc:it.desc||'', cant:Number(it.cant)||0, est, fase,
+      transito: fase===6, nacio: fase===7, etd:D(b.etd), eta:D(b.eta), planta, ing:D(it.ingreso)}); }); });
+  return out;
+}
+function infComFiltradas(){
+  const f = ICOM.f, q = (f.q||'').toLowerCase().trim();
+  let L = ICOM.rows.filter(r=>{
+    if(f.est==='activos' && (r.fase===9 || r.fase===-1)) return false;
+    if(['3','5','6','7','9'].includes(f.est) && String(r.fase)!==f.est) return false;
+    if(f.bl && r.bl!==f.bl) return false;
+    if(f.soloNov && !r.nov) return false;
+    if(q && !(r.bl+' '+r.oc+' '+r.ref+' '+r.desc+' '+r.est+' '+r.nov).toLowerCase().includes(q)) return false;
+    return true; });
+  const k = ICOM.sort.k, d = ICOM.sort.d;
+  return L.sort((a,b)=>{ const x = a[k], y = b[k]; let c = (typeof x==='number' && typeof y==='number') ? x-y : String(x==null?'':x).localeCompare(String(y==null?'':y),'es',{numeric:true}); if(!c) c = String(a.bl).localeCompare(String(b.bl)); return c*d; });
+}
+async function infComAbrir(){
+  try{ if(!CBL.cargado) await cblCargar(); }catch(e){}
+  ICOM.f = {q:'', est:'activos', bl:'', dias:7, soloNov:false}; ICOM.rows = infComFilas();
+  let ov = document.getElementById('icom-ov'); if(!ov){ ov = document.createElement('div'); ov.id = 'icom-ov'; document.body.appendChild(ov); }
+  ov.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(15,23,42,.55);display:flex;align-items:stretch;justify-content:center;padding:18px;';
+  ov.onclick = e=>{ if(e.target===ov) infComCerrar(); };
+  infComPintar();
+}
+function infComCerrar(){ const ov = document.getElementById('icom-ov'); if(ov) ov.remove(); }
+function infComPintar(){
+  const ov = document.getElementById('icom-ov'); if(!ov) return;
+  const R = ICOM.rows, f = ICOM.f, L = infComFiltradas();
+  const act = R.filter(r=>r.fase!==9 && r.fase!==-1), cnt = n => act.filter(r=>r.fase===n).length;
+  const bls = [...new Set(R.map(r=>r.bl))].sort();
+  const chip = (lbl, val, est, col) => `<div onclick="ICOM.f.est='${est}';infComPintar()" style="cursor:pointer;flex:1;min-width:120px;background:${f.est===est?'#dbeafe':'#fff'};border:${f.est===est?'2px solid #2563eb':'1px solid #bfdbfe'};border-radius:12px;padding:8px 12px;box-shadow:0 1px 3px rgba(37,99,235,.12);"><div style="font-size:22px;font-weight:800;color:${col};">${val}</div><div style="font-size:11px;color:#475569;font-weight:600;">${lbl}</div></div>`;
+  const th = (k,l,al,cl) => `<th class="${cl||''}" onclick="infComOrden('${k}')" style="cursor:pointer;position:sticky;top:0;background:linear-gradient(#2563eb,#1d4ed8);color:#fff;padding:10px 10px;font-size:11.5px;text-align:${al||'left'};white-space:nowrap;border-right:1px solid rgba(255,255,255,.18);">${l}${ICOM.sort.k===k?(ICOM.sort.d>0?' ▲':' ▼'):' <span style="opacity:.5">⇅</span>'}</th>`;
+  const pill = r => { const c = r.fase===6?['#dbeafe','#1e40af']:r.fase===7?['#fef3c7','#92400e']:r.fase===9?['#dcfce7','#166534']:r.fase===5?['#ede9fe','#5b21b6']:r.fase===-1?['#fee2e2','#991b1b']:['#e0f2fe','#075985']; return `<span style="background:${c[0]};color:${c[1]};padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700;white-space:nowrap;">${reabastEsc(r.est)}</span>`; };
+  const F = x => x ? new Date(x+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  const si = (v,c) => v ? `<span style="color:${c};font-weight:800;">● Sí</span>` : '<span style="color:#94a3b8;">—</span>';
+  const tot = L.reduce((a,r)=>a+r.cant,0);
+  ov.innerHTML = `<div style="background:#f8fafc;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.35);width:100%;max-width:1500px;display:flex;flex-direction:column;overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div><div style="font-size:18px;font-weight:800;">📊 Informe comercial de importaciones</div><div style="font-size:11.5px;opacity:.85;">Qué viene en cada BL, en qué estado está y cuándo llega · ${new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})}</div></div>
+      <div style="margin-left:auto;display:flex;gap:8px;"><button class="btn btn-sm" style="background:#fff;color:#1d4ed8;font-weight:700;" onclick="infComExcel()">⬇️ Descargar Excel</button><button class="btn btn-sm" style="background:rgba(255,255,255,.18);color:#fff;" onclick="infComCerrar()">✕ Cerrar</button></div></div>
+    <div style="padding:14px 20px 6px;display:flex;gap:10px;flex-wrap:wrap;">${chip('Líneas activas',act.length,'activos','#1e3a8a')}${chip('En producción',cnt(3),'3','#0369a1')}${chip('En embarque',cnt(5),'5','#5b21b6')}${chip('En tránsito',cnt(6),'6','#1d4ed8')}${chip('En nacionalización',cnt(7),'7','#b45309')}${chip('Ingresadas',R.filter(r=>r.fase===9).length,'9','#166534')}</div>
+    <div style="padding:8px 20px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <input class="inp" placeholder="🔎 Buscar BL, orden, referencia o descripción…" value="${reabastEsc(f.q)}" style="flex:1;min-width:240px;max-width:420px;" oninput="ICOM.f.q=this.value;clearTimeout(window.__icT);window.__icT=setTimeout(infComTabla,200)">
+      <select class="inp" style="width:auto;" onchange="ICOM.f.est=this.value;infComPintar()">${[['activos','Activos (sin ingresar)'],['todos','Todos'],['3','Producción'],['5','Embarque'],['6','Tránsito'],['7','Nacionalización'],['9','Ingresadas']].map(o=>`<option value="${o[0]}" ${f.est===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select>
+      <select class="inp" style="width:auto;max-width:200px;" onchange="ICOM.f.bl=this.value;infComPintar()"><option value="">Todos los BL</option>${bls.map(x=>`<option ${f.bl===x?'selected':''}>${reabastEsc(x)}</option>`).join('')}</select>
+      <label style="font-size:11.5px;font-weight:600;display:flex;gap:5px;align-items:center;color:#1e3a8a;"><input type="checkbox" ${f.soloNov?'checked':''} onchange="ICOM.f.soloNov=this.checked;infComPintar()"> Solo con novedades</label>
+      <select class="inp" style="width:auto;" title="Ventana de tiempo para las novedades" onchange="ICOM.f.dias=Number(this.value);ICOM.rows=infComFilas();infComPintar()">${[[7,'Novedades: últimos 7 días'],[15,'Novedades: últimos 15 días'],[30,'Novedades: últimos 30 días']].map(o=>`<option value="${o[0]}" ${f.dias===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select>
+      <span id="icom-n" style="margin-left:auto;font-size:11.5px;color:#475569;font-weight:600;">${L.length} líneas · ${Math.round(tot).toLocaleString('es-CO')} u</span></div>
+    <div id="icom-t" style="padding:0 20px 16px;overflow:auto;max-height:calc(100vh - 290px);">${infComTablaHtml(L,th,pill,F,si)}</div></div>`;
+}
+function infComTabla(){ const L = infComFiltradas(), c = document.getElementById('icom-t'); if(!c) return;
+  const n = document.getElementById('icom-n'); if(n) n.textContent = L.length+' líneas · '+Math.round(L.reduce((a,r)=>a+r.cant,0)).toLocaleString('es-CO')+' u'; infComPintar(); const i = document.querySelector('#icom-ov input.inp'); if(i){ i.focus(); const v = i.value; i.value = ''; i.value = v; } }
+function infComTablaHtml(L,th,pill,F,si){
+  if(!L.length) return '<div style="padding:30px;text-align:center;color:#64748b;">No hay líneas con esos filtros.</div>';
+  return `<style>#icom-t td,#icom-t th{width:1%;white-space:nowrap}#icom-t td.w,#icom-t th.w{width:auto;white-space:normal}</style><table style="width:100%;border-collapse:separate;border-spacing:0;font-size:12px;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);"><thead><tr>${th('bl','BL')}${th('oc','Orden')}${th('ref','Referencia')}${th('desc','Descripción','left','w')}${th('cant','Cant. en el BL','right')}${th('fase','Estado')}${th('etd','ETD')}${th('eta','ETA')}${th('planta','Llegada a planta (est.)')}${th('nov','Novedades','left','w')}</tr></thead><tbody>
+  ${L.map((r,i)=>`<tr style="background:${i%2?'#eff6ff':'#fff'};" onmouseover="this.style.background='#dbeafe'" onmouseout="this.style.background='${i%2?'#eff6ff':'#fff'}'"><td style="padding:8px 10px;font-family:monospace;font-weight:800;color:#1e3a8a;">${reabastEsc(r.bl)}</td><td style="padding:8px 10px;font-weight:700;">${reabastEsc(r.oc)}</td><td style="padding:8px 10px;font-weight:700;">${reabastEsc(r.ref)}</td><td class="w" style="padding:8px 10px;min-width:200px;">${reabastEsc(r.desc)}</td><td style="padding:8px 10px;text-align:right;font-weight:700;">${Math.round(r.cant).toLocaleString('es-CO')}</td><td style="padding:8px 10px;">${pill(r)}</td><td style="padding:8px 10px;">${F(r.etd)}</td><td style="padding:8px 10px;font-weight:700;">${F(r.eta)}</td><td style="padding:8px 10px;">${F(r.planta)}</td><td class="w" style="padding:8px 10px;min-width:200px;font-size:11.5px;${r.nov?'color:#92400e;font-weight:700;background:#fffbeb;':'color:#94a3b8;'}">${r.nov?'⚠️ '+reabastEsc(r.nov):'—'}</td></tr>`).join('')}</tbody></table>`;
+}
+function infComOrden(k){ ICOM.sort = {k, d: ICOM.sort.k===k ? -ICOM.sort.d : 1}; infComPintar(); }
+function infComExcel(){
+  try{ const L = infComFiltradas(), rows = L.map(r=>({'BL':r.bl,'Orden':r.oc,'Referencia':r.ref,'Descripción':r.desc,'Cantidad en el BL':r.cant,'Estado':r.est,'ETD':r.etd,'ETA':r.eta,'Llegada a planta (est.)':r.planta,'Novedades':r.nov}));
+    const wb = XLSX.utils.book_new(), ws = XLSX.utils.json_to_sheet(rows.length?rows:[{BL:'Sin datos'}]); ws['!cols'] = [18,12,11,42,14,16,12,12,20,45].map(w=>({wch:w})); XLSX.utils.book_append_sheet(wb, ws, 'Informe comercial');
+    XLSX.writeFile(wb, 'Informe_comercial_importaciones_'+new Date().toISOString().slice(0,10)+'.xlsx'); }catch(e){ if(typeof toast==='function') toast('No se pudo generar el Excel: '+e.message,'er'); }
+}
 // ═══ Exportar reporte (Excel: Urgentes, ABC, Estado de OC) ═══
 function ocExportarReporte(){
   try{
