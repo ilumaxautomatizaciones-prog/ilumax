@@ -11814,6 +11814,16 @@ function cblDesdeExcel(){
       if(l.f===9){ const ing = l.ing || l.pl || it.ingreso || ''; if(ing && it.ingreso!==ing){ it.ingreso = ing; m = true; } }
       if(l.pl && it.planta!==l.pl){ it.planta = l.pl; m = true; }
       if(m) n++; });
+    // líneas del Excel que son de este BL pero no están como ítem (el BL se cargó con solo parte de sus líneas): se agregan
+    const nuevos = new Map();
+    ls.forEach(l=>{ if(l.f==null || l.f<0) return; const num = ceNum(l.oc), key = num+'|'+ceRefKey(l.r);
+      if((b.items||[]).some(it=>ceNum(it.oc)===num && ceRefKey(it.ref)===ceRefKey(l.r))) return;
+      if(nuevos.has(key)){ nuevos.get(key).cant += Number(l.c)||0; return; }
+      const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===num); if(!oc) return;
+      const it0 = (REABAST.ocItems[oc.id]||[]).find(i=>ceRefKey(i.referencia)===ceRefKey(l.r)), inf = typeof cbmRefInfo==='function' ? cbmRefInfo(l.r) : {cbm:null}, M = (REABAST.referenciasMaestro||{})[String(l.r||'').trim()] || {};
+      nuevos.set(key, {oc:oc.numero_oc, ocId:oc.id, ref:String(l.r||'').trim(), desc:(it0&&it0.descripcion)||M.descripcion_en||'', cant:Number(l.c)||0, cbm:inf.cbm||null, cajas:null, estado:cblEstadoNorm(l.e, l.f), planta:l.pl||'', ingreso:l.f===9 ? (l.ing||l.pl||'') : ''}); });
+    nuevos.forEach(it=>{ const u = cblUxCaja(it.ref); it.cajas = u ? Math.ceil(it.cant/u) : null; b.items.push(it); n++; });
+    if(nuevos.size) ch.push(nuevos.size+' línea(s) del Excel agregadas al BL ('+[...new Set([...nuevos.values()].map(i=>i.oc))].join(', ')+')');
     const mx = k => ls.map(x=>x[k]).filter(Boolean).sort().pop()||'';
     [['etd','d1'],['eta','d2']].forEach(([k,e])=>{ const v = mx(e); if(v && v!==b[k]){ ch.push(k.toUpperCase()+' '+(b[k]||'—')+' → '+v); b[k] = v; } });
     const rm = ls.map(x=>x.rm).find(Boolean); if(rm && !(b.registro && b.registro.numero)){ b.registro = {numero:String(rm), fecha:'', aprobado:false, quien:'Excel Com. Ext.', t:new Date().toISOString()}; ch.push('registro '+rm); }
