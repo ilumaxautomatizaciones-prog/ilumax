@@ -29188,6 +29188,7 @@ function renderPVShell(el, canales, todosLosCanales) {
         `}
         <button id="pv-btn-xcli" class="btn btn-pu btn-sm" style="display:${pvModo()==='cliente'?'':'none'};" onclick="pvExportarPorCliente()" title="Excel a color de TODOS los canales de esta persona, con un bloque de meses por cada cliente (Cant, Precio, Venta, Resumen con fórmulas)">📥 Excel por cliente</button>
         ${PV_SOLO_LECTURA ? '' : `<button class="btn btn-g btn-sm" onclick="pvHistAbrir()" title="Mira las copias de este presupuesto de los últimos 5 días y recupera lo que se borró o se cambió por error">🕘 Historial</button>`}
+        <button class="btn btn-pu btn-sm" onclick="pvExportarClientesMes()" title="Excel con TODOS los clientes (Home Center, Ara, Olímpica, Cencosud, Mecanelectro…) y cuánto se presupuesta vender cada mes, sin IVA — para contabilidad">👥 Excel por cliente (mes a mes)</button>
         <button class="btn btn-g btn-sm" onclick="pvExportar()" title="Excel a color de TODOS los canales de esta persona, un bloque por canal (Cant, Precio, Venta, Resumen) — para juntar a todas las personas usa 'Excel combinado (todos)'">📊 Excel</button>
         ${(CU?.rol==='admin' || pvEsAprobador()) ? `<button class="btn btn-g btn-sm" onclick="pvExportarPorPersona()" title="Un Excel con una hoja por cada persona que manda su presupuesto (canal), tal como se ve en pantalla, y una hoja final con todo combinado">🧾 Consolidado por persona</button>` : ''}
         <button class="btn btn-g btn-sm" onclick="pvExportarCombinadoTodo()" title="Excel a color con las mismas hojas que el botón Excel (Cant, Precio, Venta, Resumen) más una hoja de todas las filas juntas — con fórmulas en vivo (Venta = Cant × Precio) y una hoja de Instrucciones">📋 Excel combinado (todos)</button>
@@ -32162,6 +32163,66 @@ async function pvExcelDatosJefe(anio, conCli){
   const getPrice = (c, sku) => { const f = filas(c, sku)[0]; return parseFloat(f && f.precio_lista)||0; };
   const dueno = (hdrs[0] && (hdrs[0].jefe_zona || hdrs[0].email_jefe)) || (CU&&(CU.nombre||CU.email)) || '';
   return {canales, skuList, getVal, getPrice, dueno, nCanales: hdrs.length};
+}
+// ── Excel "Presupuesto por cliente, mes a mes" (para contabilidad): TODOS los presupuestos del año, una fila por cliente ──
+// Valores sin IVA = unidades × precio de lista. Cliente = el repartido por SKU (pv_cli_/pv_clisplit_), si no el de la lista de precios, si no el canal.
+async function pvExportarClientesMes() {
+  await reabastCargarExcelJS().catch(()=>{});
+  if(typeof ExcelJS === 'undefined'){ toast('No pude cargar el generador de Excel — revisa tu conexión','er'); return; }
+  toast('⏳ Generando Excel de presupuesto por cliente, mes a mes...','inf');
+  try {
+    const anio = PV.anio, MES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    await pvListaCliCargar();
+    const todos = (await sb.get('presupuesto_ventas', `anio=eq.${anio}&order=creado_en.desc`)) || [];
+    const hdrs = [], vistos = new Set();
+    todos.forEach(h=>{ const k = h.canal+'|'+(h.email_jefe||h.jefe_zona||''); if(!vistos.has(k)){ vistos.add(k); hdrs.push(h); } });
+    const cli = {};   // nombre → {v:[12], u:[12], canales:Set}
+    for(const h of hdrs){
+      const det = (await sb.get('presupuesto_detalle', `presupuesto_id=eq.${h.id}`)) || [];
+      if(!det.length) continue;
+      let map = {}, split = {};
+      try{
+        const a = await sb.get('configuracion','clave=eq.pv_cli_'+h.id); if(a&&a[0]&&a[0].valor) map = JSON.parse(a[0].valor)||{};
+        const b = await sb.get('configuracion','clave=eq.pv_clisplit_'+h.id); if(b&&b[0]&&b[0].valor) split = JSON.parse(b[0].valor)||{};
+      }catch(e){}
+      const base = pvClienteDeLista(h.lista_id) || (h.canal + ' (sin cliente asignado)');
+      det.forEach(r=>{
+        const k = String(r.referencia), precio = parseFloat(r.precio_lista)||0;
+        pvCliRepartoDe(r, split[k], map[k] || base).forEach(x=>{
+          const p = x.p || precio, c = (cli[x.cli] = cli[x.cli] || {v:Array(12).fill(0), u:Array(12).fill(0), canales:new Set()});
+          x.u.forEach((q,i)=>{ c.u[i] += q; c.v[i] += q*p; });
+          c.canales.add(h.canal + (h.jefe_zona ? ' · '+h.jefe_zona : ''));
+        });
+      });
+    }
+    const nombres = Object.keys(cli).filter(n=>cli[n].v.some(v=>v>0)||cli[n].u.some(v=>v>0)).sort((a,b)=> (a.includes('sin cliente')-b.includes('sin cliente')) || cli[b].v.reduce((s,v)=>s+v,0)-cli[a].v.reduce((s,v)=>s+v,0));
+    if(!nombres.length){ toast('No hay presupuestos guardados para '+anio,'er'); return; }
+    const EST = pvExcelEstilos(), wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX'; wb.created = new Date();
+    const hoja = (nombre, campo, titulo, fmt) => {
+      const ws = wb.addWorksheet(nombre, {views:[{state:'frozen', xSplit:1, ySplit:3}]});
+      const nc = 1+12+1+1+1;   // cliente + 12 meses + total + % + canal
+      ws.mergeCells(1,1,1,nc); ws.getCell(1,1).value = titulo+' — '+anio; ws.getCell(1,1).style = EST.canalHdr; ws.getRow(1).height = 24;
+      ws.mergeCells(2,1,2,nc); ws.getCell(2,1).value = 'Valores sin IVA (unidades × precio de lista). Generado el '+new Date().toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})+'. Los totales son fórmulas.'; ws.getCell(2,1).font = {italic:true, size:9, color:{argb:'FF64748B'}};
+      ['Cliente',...MES,'Total año','% del total','Canal / responsable'].forEach((t,i)=>{ const c = ws.getCell(3,i+1); c.value = t; c.style = EST.th; });
+      const ult = 3+nombres.length, filaT = ult+1;
+      nombres.forEach((n,j)=>{
+        const f = 4+j, row = ws.getRow(f);
+        row.getCell(1).value = n; row.getCell(1).style = EST.cat;
+        cli[n][campo].forEach((v,i)=>{ const c = row.getCell(2+i); c.value = Math.round(v*100)/100; c.numFmt = fmt; c.border = EST.bordeCelda; });
+        const t = row.getCell(14); t.value = {formula:`SUM(B${f}:M${f})`}; t.numFmt = fmt; t.style = Object.assign({}, EST.total, {numFmt:fmt});
+        const p = row.getCell(15); p.value = {formula:`IF($N$${filaT}=0,0,N${f}/$N$${filaT})`}; p.numFmt = '0.0%'; p.border = EST.bordeCelda;
+        const cn = row.getCell(16); cn.value = [...cli[n].canales].join(' / '); cn.border = EST.bordeCelda; cn.font = {size:9, color:{argb:'FF64748B'}};
+      });
+      const rt = ws.getRow(filaT); rt.getCell(1).value = 'TOTAL'; rt.getCell(1).style = EST.total;
+      for(let c=2;c<=14;c++){ const L = pvColLetra(c), x = rt.getCell(c); x.value = {formula:`SUM(${L}4:${L}${ult})`}; x.style = Object.assign({}, EST.total, {numFmt:fmt}); }
+      const pt = rt.getCell(15); pt.value = {formula:`SUM(O4:O${ult})`}; pt.numFmt = '0.0%'; pt.style = Object.assign({}, EST.total, {numFmt:'0.0%'});
+      ws.getColumn(1).width = 34; for(let c=2;c<=13;c++) ws.getColumn(c).width = 14; ws.getColumn(14).width = 17; ws.getColumn(15).width = 11; ws.getColumn(16).width = 44;
+    };
+    hoja('Venta por cliente', 'v', '💰 PRESUPUESTO DE VENTA POR CLIENTE, MES A MES', '#,##0');
+    hoja('Unidades por cliente', 'u', '📦 UNIDADES PRESUPUESTADAS POR CLIENTE, MES A MES', '#,##0');
+    await pvExcelDescargar(wb, `Presupuesto_por_cliente_mes_a_mes_ILUMAX_${anio}.xlsx`);
+    toast(`✅ Excel generado — ${nombres.length} cliente(s)`,'ok');
+  } catch(e){ console.error(e); toast('No se pudo generar el Excel: '+e.message,'er'); }
 }
 // ── Exportar Excel (a color, con fórmulas vivas: Cant, Precio, Venta y Resumen) ─────────────
 // Este botón exporta SOLO el canal que está abierto en la sesión (el que ve/edita la persona
