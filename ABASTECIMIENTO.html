@@ -1876,8 +1876,76 @@ const sbReabast = {
 
 // Cualquier escritura invalida la caché de esa tabla
 ['post','patch','delete','upsert'].forEach(m=>{
-  [[sb,''],[sbReabast,'R_']].forEach(([o,pre])=>{ const f = o[m]; if(!f) return; o[m] = async function(t, ...a){ try{ return await f.apply(this, [t, ...a]); } finally { sbcClear(pre+t); } }; });
+  [[sb,''],[sbReabast,'R_']].forEach(([o,pre])=>{ const f = o[m]; if(!f) return; o[m] = async function(t, ...a){ try{ return await f.apply(this, [t, ...a]); } finally { sbcClear(pre+t); try{ swrEscritura(pre, t); }catch(e){} } }; });
 });
+
+// ═══ Arranque instantáneo de Abastecimiento ═══════════════════════════════════════════════════
+// Guarda en el equipo (IndexedDB) la última carga del módulo y, al entrar, pinta ESO al instante mientras
+// los datos frescos se descargan en segundo plano (después se repinta). Si algo falla o falta, se carga como siempre.
+// Solo guarda respuestas de lectura de las tablas del módulo; nunca escribe en la base.
+const SWR = { db:null, mem:null, modo:false, fallo:false, tEscr:0, tSnap:0, cola:[], timer:null, pre:null };
+const SWR_V = 'v1', SWR_TTL_H = 12;
+const SWR_CFG = /^clave=eq\.(ce_resumen|ce_bl|rim_por_ref|cbl_embarques|oc_prod_fechas|oc_arte_pasos|oc_insp_pasos|oc_embarques|oc_ref_checks)$/;
+const SWR_TB_M = new Set(['ventas_promedio_mensual','ventas_abc','ventas_cliente_producto','presupuesto_mensual_referencia']);
+const SWR_TB_R = new Set(['solicitudes_reabastecimiento','politica_inventario','ordenes_compra','oc_etapas','oc_items','proveedores','fichas_tecnicas','panel_compras','llegadas_confirmadas']);
+function swrDB(){ return SWR.db || (SWR.db = new Promise(res=>{ try{ const rq = indexedDB.open('ilumax_swr',1); rq.onupgradeneeded = ()=>{ const d = rq.result; d.createObjectStore('s'); d.createObjectStore('f'); }; rq.onsuccess = ()=>res(rq.result); rq.onerror = ()=>res(null); rq.onblocked = ()=>res(null); }catch(e){ res(null); } })); }
+function swrUsuario(){ try{ return (CU && CU.email) || ''; }catch(e){ return ''; } }
+function swrPref(){ return SWR_V+'|'+swrUsuario()+'|'; }
+function swrClave(base, tabla, params){
+  const p = String(params||'');
+  if(base==='M'){ if(tabla==='configuracion'){ if(!SWR_CFG.test(p)) return null; } else if(!SWR_TB_M.has(tabla)) return null; }
+  else { if(tabla==='referencias_maestro'){ if(p.indexOf('descripcion_en')<0) return null; } else if(!SWR_TB_R.has(tabla)) return null; }
+  return swrPref()+base+'|'+tabla+'?'+p;
+}
+function swrGuardar(k, v){
+  if(SWR.modo || !k) return;
+  try{ SWR.cola.push([k, JSON.stringify(v)]); }catch(e){ return; }   // se serializa YA: el resto del código modifica estos objetos después
+  if(!SWR.timer) SWR.timer = setTimeout(swrVolcar, 1200);
+}
+async function swrVolcar(){
+  SWR.timer = null; const cola = SWR.cola; SWR.cola = []; if(!cola.length) return;
+  const db = await swrDB(); if(!db) return;
+  try{ const st = db.transaction('s','readwrite').objectStore('s'), t = Date.now(); cola.forEach(([k,s])=>st.put({t, s}, k)); }catch(e){}
+}
+function swrLeerTodo(){
+  return swrDB().then(db=>{ if(!db) return null; return new Promise(res=>{ const m = new Map(); try{ const rq = db.transaction('s').objectStore('s').openCursor(); rq.onsuccess = ()=>{ const c = rq.result; if(c){ m.set(c.key, c.value); c.continue(); } else res(m); }; rq.onerror = ()=>res(null); }catch(e){ res(null); } }); });
+}
+function swrLimpiar(){ swrDB().then(db=>{ if(!db) return; try{ db.transaction('s','readwrite').objectStore('s').clear(); }catch(e){} }); }
+// Una escritura propia en las tablas del módulo deja la copia local desactualizada: se anota para descartarla al salir si no se recargó después.
+function swrEscritura(pre, tabla){
+  const t = String(tabla||'');
+  if(pre==='R_' ? (SWR_TB_R.has(t) || t==='referencias_maestro') : (t==='configuracion' || SWR_TB_M.has(t))) SWR.tEscr = Date.now();
+}
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden' && SWR.tEscr && SWR.tEscr >= SWR.tSnap){ SWR.cola = []; swrLimpiar(); } });
+// Envoltura de lectura: (1) modo copia local, (2) bloque de configuración ya descargado de una vez, (3) red; y guarda lo que baja.
+[[sb,'M'],[sbReabast,'R']].forEach(([o,base])=>{
+  const f = o.get; if(!f) return;
+  o.get = async function(t, p, opts){
+    const k = swrClave(base, t, p);
+    if(SWR.modo && k){
+      const e = SWR.mem && SWR.mem.get(k);
+      if(!e){ SWR.fallo = true; throw new Error('sin copia local'); }
+      return JSON.parse(e.s);
+    }
+    if(base==='M' && t==='configuracion' && SWR.pre && (Date.now()-SWR.pre.__t) < 30000){
+      const m = /^clave=eq\.([A-Za-z0-9_.-]+)$/.exec(String(p||''));
+      if(m && Object.prototype.hasOwnProperty.call(SWR.pre, m[1])){ const r = SWR.pre[m[1]]; delete SWR.pre[m[1]]; const res = r ? [r] : []; if(k) swrGuardar(k, res); return res; }
+    }
+    const res = await f.call(this, t, p, opts);
+    if(k && Array.isArray(res)) swrGuardar(k, res);
+    return res;
+  };
+});
+// Todas las claves de configuración que usa el módulo, en UNA sola consulta (antes eran ~11 consultas una detrás de otra).
+const SWR_CLAVES_PRE = ['ce_resumen','ce_bl','rim_por_ref','cbl_embarques','oc_prod_fechas','oc_arte_pasos','oc_insp_pasos','oc_embarques','oc_ref_checks','cbm_archivo_aplicado'];
+async function cfgPrefetch(){
+  SWR.pre = null; if(SWR.modo) return;
+  try{
+    const rows = await sb.get('configuracion', 'clave=in.('+SWR_CLAVES_PRE.join(',')+')');
+    const m = {}; SWR_CLAVES_PRE.forEach(c=>{ m[c] = null; }); (rows||[]).forEach(r=>{ m[r.clave] = r; }); m.__t = Date.now();
+    SWR.pre = m;
+  }catch(e){ SWR.pre = null; }
+}
 
 // ── Helpers de caché local (usados por apiLocal y por el fallback offline) ──
 function dbGet(k){ try{return JSON.parse(localStorage.getItem('ilx_'+k)||'null');}catch(e){return null;} }
@@ -2843,6 +2911,13 @@ async function startApp(){
   qs('#u-av').style.background=CU.color||'#2563eb';
   qs('#u-nm').textContent=CU.nombre.split(' ')[0];
 
+  // Lo que no depende de lo demás arranca YA, en paralelo con la configuración
+  const areaIni = CU.area;
+  const pPerm = sb.get('permisos_modulos','order=tipo.asc,clave.asc').catch(()=>[]);
+  const pEd = reabastEditoresCargar().catch(()=>{});
+  const pSol = MODO_ABAST ? null : cargarSolicitudes().catch(()=>{});
+  let pPres = MODO_ABAST ? null : api('getPresupuestos',{area:CU.area,rol:CU.rol}).catch(()=>null);
+
   // Cargar config
   try {
     const [catR,provR,concR,cfgR,usrR] = await Promise.all([
@@ -2871,7 +2946,7 @@ async function startApp(){
 
   // Cargar permisos de módulos (3 niveles: rol → área → empleado)
   try {
-    const pmRows = await sb.get('permisos_modulos','order=tipo.asc,clave.asc').catch(()=>[]);
+    const pmRows = await pPerm;
     const pmMap  = {};
     (pmRows||[]).forEach(r => { pmMap[`${r.tipo}:${r.clave}`] = Array.isArray(r.modulos)?r.modulos:(r.modulos||'').split(',').filter(Boolean); });
     // Resolver módulos efectivos: empleado > área > rol
@@ -2882,11 +2957,11 @@ async function startApp(){
     CU.modulos = modsEmp.length ? modsEmp : [...new Set([...modsRol,...modsArea])];
   } catch(e) { CU.modulos = []; }
 
-  try{ await reabastEditoresCargar(); }catch(e){}
+  try{ await pEd; }catch(e){}
   buildNav();
   try{ vaInit(); }catch(e){}
   buildCatTags();buildDcTags();
-  if(!MODO_ABAST) await cargarSolicitudes();
+  if(pSol){ await pSol; try{ updBadges(); }catch(e){} }
   updSyncSt();
 
   const hoy=new Date().toISOString().split('T')[0];
@@ -2894,7 +2969,8 @@ async function startApp(){
 
   // Cargar presupuestos del Sheets si hay conexión
   if(!MODO_ABAST) try {
-    const presR = await api('getPresupuestos',{area:CU.area,rol:CU.rol});
+    if(CU.area !== areaIni) pPres = api('getPresupuestos',{area:CU.area,rol:CU.rol});
+    const presR = await pPres;
     if(presR.presupuestos && presR.presupuestos.length > 0){
       // Fusionar con locales (Sheets tiene prioridad)
       const locales = JSON.parse(localStorage.getItem('ilx_presupuestos')||'[]');
@@ -11277,15 +11353,26 @@ function reabastRefrescarFotosUI(){
   // Solo repinta la lista (tabla / tarjetas / lista), sin tocar los filtros ni el buscador, para no quitarle el foco a quien esté escribiendo.
   REF_FOTOS.timer = setTimeout(()=>{ if(REABAST.tab!=='referencias') return; ['reabastActualizarTbodyReferencias','reabastActualizarCardsReferencias','reabastActualizarListaReferencias'].forEach(fn=>{ try{ if(typeof window[fn]==='function') window[fn](); }catch(e){} }); }, 500);
 }
+// Las fotos (base64) pesan ~20 MB en total: se guardan en el equipo y solo se descargan las que cambiaron.
+async function fotosIDBCargar(){
+  if(REF_FOTOS._idb) return; REF_FOTOS._idb = true;
+  const db = await swrDB(); if(!db) return;
+  await new Promise(res=>{ try{ const rq = db.transaction('f').objectStore('f').openCursor(); rq.onsuccess = ()=>{ const c = rq.result; if(c){ if(!REF_FOTOS.cache[c.key]) REF_FOTOS.cache[c.key] = c.value; c.continue(); } else res(); }; rq.onerror = ()=>res(); }catch(e){ res(); } });
+}
+function fotoIDBGuardar(ref, url, act){
+  swrDB().then(db=>{ if(!db) return; try{ db.transaction('f','readwrite').objectStore('f').put({url, act}, ref); }catch(e){} });
+}
 async function reabastCargarFotosRef(){
   if(REF_FOTOS.cargando) return REF_FOTOS.cargando;
   REF_FOTOS.cargando = (async()=>{
     try{
       const M = REABAST.referenciasMaestro || {};
+      await fotosIDBCargar();
+      Object.keys(M).forEach(k=>{ const c = REF_FOTOS.cache[k]; if(c && M[k].foto_url===undefined && c.act===M[k].actualizado){ M[k].foto_url = c.url; M[k]._fotoPend = false; } });
       const conFoto = await sbReabast.get('referencias_maestro', 'select=referencia,actualizado&foto_url=not.is.null&limit=10000');
       const faltan = (conFoto||[]).filter(x=>M[x.referencia] && M[x.referencia].foto_url===undefined);
       faltan.forEach(x=>{ M[x.referencia]._fotoPend = true; });
-      const poner = rows => (rows||[]).forEach(x=>{ const r = REABAST.referenciasMaestro[x.referencia]; if(!r) return; r.foto_url = x.foto_url; r._fotoPend = false; REF_FOTOS.cache[x.referencia] = {url:x.foto_url, act:r.actualizado}; });
+      const poner = rows => (rows||[]).forEach(x=>{ const r = REABAST.referenciasMaestro[x.referencia]; if(!r) return; r.foto_url = x.foto_url; r._fotoPend = false; REF_FOTOS.cache[x.referencia] = {url:x.foto_url, act:r.actualizado}; fotoIDBGuardar(x.referencia, x.foto_url, r.actualizado); });
       // fotos livianas (enlaces normales): una sola consulta
       poner(await sbReabast.get('referencias_maestro', 'select=referencia,foto_url&foto_url=not.is.null&foto_url=not.like.data*&limit=10000'));
       reabastRefrescarFotosUI();
@@ -11363,6 +11450,7 @@ function ocConOrden(filas, desde){
 function ocSiguienteOrden(ocId){ return Math.max(0, ...(REABAST.ocItems[ocId]||[]).map(i=>Number(i.orden)||0)) + 1; }
 
 async function cargarOC(){
+  const cfgP = cfgPrefetch();   // bloque de configuración en paralelo con el resto
   const [ordenes, etapasRows, itemsRows, proveedores, fichasRows, refsRows, panelFilas] = await Promise.all([
     sbReabastTodo('ordenes_compra', 'select=*&order=creado_en.desc').catch(e=>{ console.warn('Error cargando OC:', e.message); return []; }),
     sbReabastTodo('oc_etapas', 'select=*&order=oc_id.asc,orden.asc').catch(e=>{ console.warn('Error cargando etapas OC:', e.message); return []; }),
@@ -11384,8 +11472,9 @@ async function cargarOC(){
   REABAST.proveedores = proveedores||[];
   REABAST.fichasTecnicas = {}; (fichasRows||[]).forEach(f => { REABAST.fichasTecnicas[f.referencia] = f.datos||{}; });
   REABAST.referenciasMaestro = {}; (refsRows||[]).forEach(r => { REABAST.referenciasMaestro[r.referencia] = r; });
-  reabastCargarFotosRef();
+  if(!REABAST._pasadaCache) setTimeout(()=>{ try{ reabastCargarFotosRef(); }catch(e){} }, 2500);   // las fotos pesadas no compiten con la carga principal
   REABAST.panelCompras = panelFilas||[];
+  await cfgP;
   await ocMigrarEtapasEmbarque();
   await ocRepararEtapasHuerfanas();
   try{ await ocRepararRamas(); }catch(e){ console.warn('Ramas:', e.message); }
@@ -11413,6 +11502,7 @@ function ocFechaInicioOC(o){
 // creó la OC. Si quedaron con una fecha de inicio posterior (por un "deshacer", un cambio de
 // plantilla o porque la OC se cargó días después), se corrige y se recalcula su duración real.
 async function ocCorregirInicioEtapas(){
+  if(REABAST._pasadaCache) return;   // la pasada con copia local solo lee: las reparaciones corren en la carga fresca
   const tareas = [];
   for(const o of (REABAST.ordenesCompra||[])){
     const ini = ocFechaInicioOC(o); if(!ini || isNaN(ini)) continue;
@@ -11496,6 +11586,7 @@ function ocEditarFechasEtapa(ocId, etapaId){
 // Migración: se quitaron Booking y Transporte a bodega (la nacionalización de 7 días hábiles ya incluye el transporte),
 // embarque pasa a 15 días desde que termina producción, y "Recepción" se llama "Ingreso a bodega".
 async function ocMigrarEtapasEmbarque(){
+  if(REABAST._pasadaCache) return;
   const tareas = [];
   for(const ocId in REABAST.ocEtapas){
     const es = REABAST.ocEtapas[ocId], by = {}; es.forEach(e=>{ by[e.etapa_id] = e; });
@@ -11521,6 +11612,7 @@ async function ocMigrarEtapasEmbarque(){
   await Promise.all(Array.from({length:6}, trab));
 }
 async function ocRepararEtapasHuerfanas(){
+  if(REABAST._pasadaCache) return;
   const ahora = new Date().toISOString();
   const tareas = [];
   for(const ocId in REABAST.ocEtapas){
@@ -11545,17 +11637,80 @@ async function ocRepararEtapasHuerfanas(){
 // (lo que en promedio se demoran en llegar los productos importados de Ilumax).
 const REABAST_DIAS_ENTREGA_DEFECTO = 180;
 
+// Inventario consolidado por referencia que usa Abastecimiento: la base lo entrega YA sumado (≈80 KB) en vez de bajar las 26.000 filas (11 MB) del inventario completo.
+var INV_ABAST = null;
+async function cargarInventarioAbast(){
+  const k = swrPref()+'M|rpc|inv_abast_por_ref';
+  try{
+    let rows;
+    if(SWR.modo){ const e = SWR.mem && SWR.mem.get(k); if(!e){ SWR.fallo = true; return false; } rows = JSON.parse(e.s); }
+    else{
+      const ctl = new AbortController(), tm = setTimeout(()=>ctl.abort(), 20000);
+      const r = await fetch(SB_URL+'/rest/v1/rpc/inv_abast_por_ref', {method:'POST', headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json'}, body:'{}', signal:ctl.signal});
+      clearTimeout(tm); if(!r.ok) throw new Error('RPC '+r.status);
+      const t = await r.text(); rows = JSON.parse(t); try{ descMedir('inv_abast_por_ref', t.length, 'red'); }catch(e){} swrGuardar(k, rows);
+    }
+    if(!Array.isArray(rows)) return false;
+    INV_ABAST = rows.map(g=>{ const b = (g.bodegas_con_stock||[]).slice().sort(); return {referencia:g.referencia, descripcion:g.descripcion||'', existencia:Number(g.existencia)||0, bodegas:b, bodega:b.join(', ')}; });
+    return true;
+  }catch(e){ console.warn('Inventario (resumen):', e.message); return false; }
+}
+
+// Pinta ya con la copia local de la última carga (misma lógica de carga, leyendo del equipo y SIN escribir nada en la base).
+async function reabastPasadaCache(){
+  const m = await swrLeerTodo(); if(!m || !m.size) return false;
+  const pref = swrPref(), mem = new Map(); let tmin = Infinity;
+  m.forEach((v,k)=>{ if(String(k).startsWith(pref)){ mem.set(k,v); if(v && v.t<tmin) tmin = v.t; } });
+  if(!mem.size || (Date.now()-tmin) > SWR_TTL_H*3600e3) return false;
+  SWR.mem = mem; SWR.fallo = false; SWR.modo = true; REABAST._pasadaCache = true;
+  let ok = false;
+  try{
+    await Promise.all([cargarReabast(), cargarInventarioAbast()]);
+    ok = !SWR.fallo && Array.isArray(REABAST.ordenesCompra) && REABAST.ordenesCompra.length > 0 && !!REABAST.lista && Array.isArray(INV_ABAST);
+  }catch(e){ ok = false; }
+  finally{ SWR.modo = false; REABAST._pasadaCache = false; SWR.mem = null; }
+  if(!ok){ REABAST.ordenesCompra = null; }
+  return ok;
+}
+function reabastChipSync(on){
+  let c = document.getElementById('reabast-sync-chip');
+  if(!on){ if(c) c.remove(); return; }
+  if(!c){ c = document.createElement('div'); c.id = 'reabast-sync-chip'; c.style.cssText = 'position:fixed;top:64px;right:18px;z-index:60;background:var(--w,#fff);border:1px solid var(--b1,#e2e8f0);border-radius:99px;padding:4px 12px;font-size:11.5px;font-weight:600;color:var(--bl,#2563eb);box-shadow:0 2px 10px rgba(15,23,42,.15);pointer-events:none;'; c.textContent = '↻ Actualizando datos…'; document.body.appendChild(c); }
+}
+// Repinta al terminar la carga fresca, sin pisar a quien esté escribiendo en un campo.
+function reabastRepintarSeguro(n){
+  n = n||0;
+  const pg = document.getElementById('pg-reabast'); if(!pg || !pg.classList.contains('on')) return;
+  const a = document.activeElement, cont = document.getElementById('reabast-content');
+  const escribiendo = !!(a && cont && cont.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+  if(escribiendo){ if(n < 8) setTimeout(()=>reabastRepintarSeguro(n+1), 1500); return; }
+  reabastGoTab(REABAST.tab || 'urgentes');
+}
+
 async function renderReabastMod(){
   const el = document.getElementById('reabast-content');
   if(!el) return;
   const fresco = REABAST._cargadoEn && (Date.now()-REABAST._cargadoEn) < 60000; // 60s
-  if(!fresco) el.innerHTML = cargaHtml('Cargando');
-  if(!INV_DATA || !INV_DATA.length){ try{ await cargarInventarioSupa(); }catch(e){} }
-  if(!fresco){
-    await cargarReabast();
-    REABAST._cargadoEn = Date.now();
+  if(fresco){ reabastGoTab(REABAST.tab || 'urgentes'); return; }
+  if(REABAST._cargando){   // ya hay una carga en curso: no se repite
+    if(REABAST.ordenesCompra && REABAST.lista) reabastGoTab(REABAST.tab || 'urgentes'); else el.innerHTML = cargaHtml('Cargando');
+    return REABAST._cargando;
   }
-  reabastGoTab(REABAST.tab || 'urgentes');
+  // 1) ¿ya hay datos? (en memoria por una visita anterior, o la copia local de la última carga) → se pinta al instante
+  let pintado = !!(REABAST.ordenesCompra && REABAST.ordenesCompra.length && REABAST.lista);
+  if(!pintado){ try{ pintado = await reabastPasadaCache(); }catch(e){ pintado = false; } }
+  if(pintado){ reabastGoTab(REABAST.tab || 'urgentes'); reabastChipSync(true); }
+  else el.innerHTML = cargaHtml('Cargando');
+  // 2) carga fresca (inventario resumido y datos del módulo al mismo tiempo)
+  const tarea = (async()=>{
+    const inv = (async()=>{ if(await cargarInventarioAbast()) return; if(!INV_DATA || !INV_DATA.length){ try{ await cargarInventarioSupa(); }catch(e){} } })();
+    await Promise.all([cargarReabast(), inv]);
+    REABAST._cargadoEn = Date.now(); SWR.tSnap = Date.now();
+  })();
+  REABAST._cargando = tarea;
+  try{ await tarea; }catch(e){ console.warn('Abastecimiento:', e && e.message); }
+  finally{ REABAST._cargando = null; reabastChipSync(false); }
+  if(pintado) reabastRepintarSeguro(); else reabastGoTab(REABAST.tab || 'urgentes');
 }
 
 function reabastGoTab(tab){ REABAST.tab = tab; reabastPintar(); if(typeof guardarUltimaVista==='function') guardarUltimaVista('reabast'); }
@@ -11630,6 +11785,7 @@ function reabastRotacion(promedio){
 // ── Inventario consolidado por REFERENCIA (las ventas no se registran por bodega) ──
 let _invPorRefCache = null, _invPorRefCacheSrc = null;
 function reabastInventarioPorReferencia(){
+  if(typeof INV_ABAST!=='undefined' && INV_ABAST) return INV_ABAST;   // viene ya consolidado desde la base
   if(_invPorRefCache && _invPorRefCacheSrc === INV_DATA) return _invPorRefCache; // evita recalcular sobre miles de filas en cada llamada
   const invCuenta = (INV_DATA||[]).filter(r => invBodegaCuenta(r.bodega));
   const porRef = {};
@@ -13486,7 +13642,7 @@ function ocRefsBuscadas(qq){
 }
 let _ocInvMapSrc = null, _ocInvMap = null;
 function ocInvDeRef(ref){
-  if(!(typeof INV_DATA!=='undefined' && INV_DATA && INV_DATA.length)) return null;
+  if(!(typeof INV_ABAST!=='undefined' && INV_ABAST) && !(typeof INV_DATA!=='undefined' && INV_DATA && INV_DATA.length)) return null;
   const arr = reabastInventarioPorReferencia();   // devuelve una LISTA de {referencia, descripcion, existencia, bodegas}
   if(_ocInvMapSrc !== arr){ _ocInvMap = {}; (arr||[]).forEach(g=>{ _ocInvMap[String(g.referencia).trim().toUpperCase()] = g; }); _ocInvMapSrc = arr; }
   return _ocInvMap[String(ref).trim().toUpperCase()] || {existencia:0, bodegas:[], descripcion:''};
@@ -13503,7 +13659,7 @@ function ocAbrirRefDetalle(ref){
 function ocHtmlInventarioRefs(refs){
   if(!refs.length) return '';
   const fn = n=>Number(n||0).toLocaleString('es-CO');
-  const cargado = typeof INV_DATA!=='undefined' && INV_DATA && INV_DATA.length;
+  const cargado = (typeof INV_ABAST!=='undefined' && INV_ABAST) || (typeof INV_DATA!=='undefined' && INV_DATA && INV_DATA.length);
   const filas = refs.slice(0,8).map(r=>{
     const inv = ocInvDeRef(r); const m = (REABAST.referenciasMaestro||{})[r]||{};
     const desc = (inv && inv.descripcion) || m.descripcion || m.nombre || '';
@@ -13838,7 +13994,7 @@ async function ocRepararRama(o){
   try{ const r = await sbReabast.post('oc_etapas',[fila]); es.push((r && r[0]) || fila); es.sort((a,b)=>(a.orden||0)-(b.orden||0)); }catch(e){ console.warn('Rama sin producción:', o.numero_oc, e.message); }
 }
 async function ocRepararRamas(){
-  if(!reabastEsAdmin()) return;
+  if(!reabastEsAdmin() || REABAST._pasadaCache) return;
   for(const o of (REABAST.ordenesCompra||[])){ const es = REABAST.ocEtapas[o.id]||[]; if(!ocEsRama(o) || !es.length) continue; await ocRepararRama(o); }
 }
 // ── Mover ítems entre la OC y sus ramas (OCI137, OCI137-1, OCI137-2…), o crear una rama nueva ──
@@ -14482,6 +14638,7 @@ const REFCHK = { datos:{}, cols:[{id:'arte',lbl:'Artes'},{id:'produccion',lbl:'P
 async function refchkCargar(){
   try{ const r = await sb.get('configuracion','clave=eq.oc_ref_checks'); REFCHK.datos = (r && r[0] && r[0].valor) ? (JSON.parse(r[0].valor)||{}) : {}; }
   catch(e){ console.warn('Confirmación por referencia:', e.message); return; }
+  if(REABAST._pasadaCache) return;
   // chulitos que ya estaban completos antes de existir esta regla: termina la etapa ahora
   try{ for(const ocId of Object.keys(REFCHK.datos)){ if(!(REABAST.ocItems||{})[ocId]) continue; for(const c of REFCHK.cols){ const its = REABAST.ocItems[ocId]||[]; if(its.length && its.every(it=>((REFCHK.datos[ocId]||{})[refchkKey(it)]||{})[c.id])) await refchkSincEtapa(ocId, c.id); } } }catch(e){}
 }
@@ -14754,6 +14911,7 @@ async function cbmAplicar(mapa, origen){
 
 // Al cargar el ERP: el CBM de CBM_2.xlsx rellena las referencias sin CBM (siempre) y, una sola vez, un administrador lo graba en la base y pisa los valores distintos.
 async function cbmAutoAplicar(){
+  if(REABAST._pasadaCache) return;
   const M = REABAST.referenciasMaestro || {}; let vacios = 0;
   Object.entries(CBM_ARCHIVO).forEach(([ref,v])=>{ const r = M[ref] || M[String(Number(ref))]; if(r && !(Number(r.cbm)>0)){ r.cbm = v; r._cbmLocal = true; vacios++; } });
   if(!reabastEsAdmin()) return;
@@ -16984,10 +17142,12 @@ async function pciEjecutar(){
 }
 // Trae TODAS las filas de una tabla (Supabase entrega máximo 1.000 por consulta).
 async function sbReabastTodo(tabla, params){
-  const out = []; const PAG = 1000;
-  for(let off=0; off<100000; off+=PAG){
-    const lote = await sbReabast.get(tabla, (params?params+'&':'')+'limit='+PAG+'&offset='+off);
-    out.push(...(lote||[])); if(!lote || lote.length<PAG) break;
+  const out = []; const PAG = 1000, ONDA = 4;   // 4 páginas a la vez (antes: una detrás de otra)
+  for(let off=0; off<100000; off+=PAG*ONDA){
+    const lotes = await Promise.all(Array.from({length:ONDA}, (_,i)=> sbReabast.get(tabla, (params?params+'&':'')+'limit='+PAG+'&offset='+(off+i*PAG))));
+    let fin = false;
+    for(const lote of lotes){ out.push(...(lote||[])); if(!lote || lote.length<PAG){ fin = true; break; } }
+    if(fin) break;
   }
   return out;
 }
