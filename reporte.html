@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
+<link rel="preconnect" href="https://vgjsfbudhrytvcgptdij.supabase.co" crossorigin>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
@@ -157,6 +158,13 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;
 const dmy = iso => { const [y, m, d] = iso.split('-'); return d + '/' + m + '/' + y; };
 const fh = ts => { try { return new Date(ts).toLocaleString('es-CO', {timeZone:'America/Bogota', day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:true}); } catch (e) { return ''; } };
 const cls = r => r >= 1 ? 'ok' : r >= .7 ? 'mid' : 'bad';
+// ── Copia local: pinta al instante lo último visto y refresca por detrás ──
+const RVC = {
+  k(u){ try{ let h=0; const t=token()+'|'+u; for(let i=0;i<t.length;i++){ h=(h*31+t.charCodeAt(i))|0; } return 'rvc_'+h; }catch(e){ return ''; } },
+  get(u){ try{ const o=JSON.parse(localStorage.getItem(this.k(u))||'null'); return o && o.d && (Date.now()-o.t<864e5*2) ? o.d : null; }catch(e){ return null; } },
+  put(u,d){ try{ localStorage.setItem(this.k(u),JSON.stringify({t:Date.now(),d:d})); }catch(e){ try{ Object.keys(localStorage).filter(x=>x.indexOf('rvc_')===0).forEach(x=>localStorage.removeItem(x)); }catch(e2){} } },
+  del(u){ try{ localStorage.removeItem(this.k(u)); }catch(e){} }
+};
 function token() {
   const h = new URLSearchParams(location.hash.replace(/^#/, '')), q = new URLSearchParams(location.search);
   const u = h.get('k') || q.get('k') || '';
@@ -284,19 +292,25 @@ function pintar(d0) {
 async function cargar() {
   const k = token();
   if (!k) { pinForm(''); return; }
+  const uC = API + '?k=' + encodeURIComponent(k);
   try {
+    const cC = RVC.get(uC);
+    let pintoCache = false;
+    if (cC && !LAST) { try { ACC = cC.acceso || null; if (cC.sinHC) { const i = GR.findIndex(g => g[0] === 'HOM'); if (i >= 0) GR.splice(i, 1); } pintar(cC); if (TAB === 'cum') pintarCum(); pintoCache = true; } catch (e) { pintoCache = false; } }
     const r = await fetch(API + '?k=' + encodeURIComponent(k), { cache: 'no-store' });
     const d = await r.json();
-    if (r.status === 401 || r.status === 429) {
+    if (r.status === 401 || r.status === 429) { RVC.del(uC);
       const url = new URLSearchParams(location.hash.replace(/^#/, '')).get('k') || new URLSearchParams(location.search).get('k');
       if (!url) { try { localStorage.removeItem('rv_pin'); } catch (e) {} pinForm(d.error || 'Código no válido'); return; }
     }
     if (!r.ok || d.error) throw new Error(d.error || 'Error');
+    RVC.put(uC, d);
     ACC = d.acceso || null;
     if (d.sinHC) { const i = GR.findIndex(g => g[0] === 'HOM'); if (i >= 0) GR.splice(i, 1); }
-    pintar(d); if (TAB === 'cum') pintarCum();
+    if (!pintoCache || JSON.stringify(cC) !== JSON.stringify(d)) { pintar(d); if (TAB === 'cum') pintarCum(); }
     if (ACC && ACC.rol !== 'admin') { const el = document.getElementById('sub'); if (el && !el.querySelector('.acc')) el.innerHTML += ' · <span class="acc">👤 ' + esc(ACC.nombre) + ' · <a href="#" onclick="pinSalir();return false" style="color:inherit;text-decoration:underline">Salir</a></span>'; }
   } catch (e) {
+    if (!LAST) RVC.del(uC);
     if (!document.querySelector('.kpis')) { document.getElementById('sub').textContent = ''; document.getElementById('app').innerHTML = '<div class="err"><b>No se pudo abrir el reporte.</b><br>' + esc(e.message) + '<br><span style="color:#64748b;font-size:12px">Pide el link actualizado a Duvier.</span></div>'; }
   }
 }
@@ -320,10 +334,12 @@ function pintarCum() {
 const API_MIX = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/reporte-ventas-mix';
 const MIX = { d: null, mes: '', ase: '' };
 async function cargarMix(mes) {
-  const el = document.getElementById('mix'); el.innerHTML = '<div class="err">Cargando mix…</div>';
+  const el = document.getElementById('mix'); const uC = API_MIX + '?k=' + encodeURIComponent(token()) + (mes ? '&mes=' + mes : ''), cC = RVC.get(uC);
+  if (cC) { try { MIX.d = cC; MIX.mes = cC.mes; if (!cC.ejecutivos.some(e => e.nombre === MIX.ase)) MIX.ase = cC.ejecutivos.length ? cC.ejecutivos[0].nombre : ''; pintarMix(); } catch (e) { el.innerHTML = '<div class="err">Cargando mix…</div>'; } } else el.innerHTML = '<div class="err">Cargando mix…</div>';
   try {
-    const r = await fetch(API_MIX + '?k=' + encodeURIComponent(token()) + (mes ? '&mes=' + mes : ''), { cache: 'no-store' });
+    const r = await fetch(uC, { cache: 'no-store' });
     const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'Error');
+    RVC.put(uC, d);
     MIX.d = d; MIX.mes = d.mes; if (!d.ejecutivos.some(e => e.nombre === MIX.ase)) MIX.ase = d.ejecutivos.length ? d.ejecutivos[0].nombre : '';
     pintarMix();
   } catch (e) { el.innerHTML = '<div class="err"><b>No se pudo cargar el mix.</b><br>' + esc(e.message) + '</div>'; }
@@ -386,10 +402,19 @@ function verTab(t) {
   if (t === 'ase') { if (!DET.cargado) cargarDet(DET.mes); else pintarDet(); }
 }
 async function cargarDet(mes) {
-  const el = document.getElementById(TAB === 'sem' ? 'sem' : TAB === 'res' ? 'app' : 'det'); if (TAB !== 'res') el.innerHTML = '<div class="err">Cargando detalle…</div>';
+  const el = document.getElementById(TAB === 'sem' ? 'sem' : TAB === 'res' ? 'app' : 'det');
+  const uC = API_DET + '?k=' + encodeURIComponent(token()) + (mes ? '&mes=' + mes : ''), cC = RVC.get(uC);
+  const aplicarDet = d => { DET.mes = d.mes; DET.prev = d.prev; DET.meses = d.meses; DET.corte = d.corte; DET.rows = d.facturas; DET.cargado = true;
+    if (DET.ase !== 'TODOS' && !DET.rows.some(f => f[3] === DET.ase)) DET.ase = 'TODOS';
+    if (TAB === 'ase') pintarDet(); else if (TAB === 'sem') pintarSem(); else if (TAB === 'res') { if (LAST) pintar(LAST); } };
+  let pintoC = false;
+  if (cC) { try { aplicarDet(cC); pintoC = true; } catch (e) { pintoC = false; } }
+  if (!pintoC && TAB !== 'res') el.innerHTML = '<div class="err">Cargando detalle…</div>';
   try {
-    const r = await fetch(API_DET + '?k=' + encodeURIComponent(token()) + (mes ? '&mes=' + mes : ''), { cache: 'no-store' });
+    const r = await fetch(uC, { cache: 'no-store' });
     const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'Error');
+    RVC.put(uC, d);
+    if (pintoC && JSON.stringify(cC) === JSON.stringify(d)) return;
     DET.mes = d.mes; DET.prev = d.prev; DET.meses = d.meses; DET.corte = d.corte; DET.rows = d.facturas; DET.cargado = true;
     if (DET.ase !== 'TODOS' && !DET.rows.some(f => f[3] === DET.ase)) DET.ase = 'TODOS';
     if (TAB === 'ase') pintarDet(); else if (TAB === 'sem') pintarSem(); else if (TAB === 'res') { if (LAST) pintar(LAST); }
@@ -739,10 +764,15 @@ const API_PER = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/reporte-v
 const PER = { mes: '', d: null, ase: 'TODOS', tipo: 'FA', q: '', sub: 'sku', ord: 'v', dir: -1 };
 const PT = { F: 'Cerrado con faltante', A: 'Anulado', P: 'Pendiente' };
 async function cargarPer(mes, force) {
-  const el = document.getElementById('per'); el.innerHTML = '<div class="err">Consultando pedidos en Siesa… puede tardar hasta un minuto la primera vez.</div>';
+  const el = document.getElementById('per'); const uC = API_PER + '?k=' + encodeURIComponent(token()) + (mes ? '&mes=' + mes : ''), cC = force ? null : RVC.get(uC);
+  let pintoC = false;
+  if (cC) { try { PER.d = cC; PER.mes = cC.mes; if (TAB === 'per') pintarPer(); pintoC = true; } catch (e) { pintoC = false; } }
+  if (!pintoC) el.innerHTML = '<div class="err">Consultando pedidos en Siesa… puede tardar hasta un minuto la primera vez.</div>';
   try {
     const r = await fetch(API_PER + '?k=' + encodeURIComponent(token()) + (mes ? '&mes=' + mes : '') + (force ? '&f=1' : ''), { cache: 'no-store' });
     const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'Error');
+    RVC.put(uC, d);
+    if (pintoC && JSON.stringify(cC) === JSON.stringify(d)) return;
     PER.d = d; PER.mes = d.mes; if (TAB === 'per') pintarPer();
   } catch (e) { el.innerHTML = '<div class="err"><b>No se pudo cargar.</b><br>' + esc(e.message) + ' <button class="btn" onclick="cargarPer(PER.mes)">Reintentar</button></div>'; }
 }
@@ -836,10 +866,15 @@ const API_IMP = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/reporte-i
 const IMP = { d: null, q: '', est: 'activos', soloNov: false, dias: 7, k: 8, dir: 1 };
 const IMP_COL = [['bl', 'BL', 0], ['oc', 'Orden', 1], ['ref', 'Referencia', 2], ['desc', 'Descripción', 3], ['cant', 'Cant. en el BL', 4], ['est', 'Estado', 6], ['etd', 'ETD', 7], ['eta', 'ETA', 8], ['pl', 'Llegada a planta (est.)', 9], ['nov', 'Novedades', 10]];
 async function cargarImp() {
-  const el = document.getElementById('imp'); el.innerHTML = '<div class="err">Cargando importaciones…</div>';
+  const el = document.getElementById('imp'); const uC = API_IMP + '?k=' + encodeURIComponent(token()) + '&dias=' + IMP.dias, cC = RVC.get(uC);
+  let pintoC = false;
+  if (cC) { try { IMP.d = cC; if (TAB === 'imp') pintarImp(); pintoC = true; } catch (e) { pintoC = false; } }
+  if (!pintoC) el.innerHTML = '<div class="err">Cargando importaciones…</div>';
   try {
-    const r = await fetch(API_IMP + '?k=' + encodeURIComponent(token()) + '&dias=' + IMP.dias, { cache: 'no-store' });
+    const r = await fetch(uC, { cache: 'no-store' });
     const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'Error');
+    RVC.put(uC, d);
+    if (pintoC && JSON.stringify(cC) === JSON.stringify(d)) return;
     IMP.d = d; if (TAB === 'imp') pintarImp();
   } catch (e) { el.innerHTML = '<div class="err"><b>No se pudo cargar.</b><br>' + esc(e.message) + ' <button class="btn" onclick="cargarImp()">Reintentar</button></div>'; }
 }
