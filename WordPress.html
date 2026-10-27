@@ -53,6 +53,7 @@ tr:hover td{background:#fafcff}
 <select class="inp" id="dias"><option value="30">30 días</option><option value="60">60 días</option><option value="90" selected>90 días</option><option value="180">180 días</option><option value="365">12 meses</option></select>
 <button class="btn" id="bX">⬇ Excel</button></div>
 <div class="bar" style="margin-bottom:8px"><span class="mini">Bodegas SIESA que cuentan:</span><span id="bods" class="bar"></span></div>
+<div class="bar" style="margin-bottom:8px"><span class="mini">Lista de precios SIESA para comparar:</span><select class="inp" id="lst" style="min-width:230px"></select><span class="mini">(precio SIESA sin IVA · precio web = el que ve el cliente)</span></div>
 <div class="bar" style="margin-bottom:8px"><span class="mini">Filtro:</span><span id="flt" class="bar"></span></div>
 <div class="bar"><span class="mini">Regla de publicación (la misma del sync automático):</span><span>% de BA <input class="inp pc" id="gp" type="number" min="0" max="100"></span><span>Tope por producto <input class="inp pc" id="gt" type="number" min="0"></span><span class="mini">Ej.: BA 500 → 50 en la web; BA 6.000 → 100. El nivel A/B/C/D es solo informativo (A = 60 % de las unidades vendidas, B = siguiente 30 %, C = resto, D = sin ventas).</span></div>
 </div></div>
@@ -63,9 +64,9 @@ tr:hover td{background:#fafcff}
 </div>
 <script>
 var ACC='https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/wordpress-acceso';
-async function api(op,dias){
+async function api(op,dias,lista){
  var pin=ls('wp_pin')||'';
- var r=await fetch(ACC,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:pin,op:op,dias:Number(dias)||90})});
+ var r=await fetch(ACC,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:pin,op:op,dias:Number(dias)||90,lista:lista||''})});
  var j=await r.json().catch(function(){return{error:'Sin respuesta del servidor'}});
  if(r.status===401||r.status===429){ if(r.status===401)ls('wp_pin',''); pedirPin(j.error); throw new Error(j.error||'PIN requerido') }
  j._status=r.status; return j;
@@ -83,11 +84,11 @@ async function load(){
  if(!ls('wp_pin')){pedirPin('');return}
  $('cfg').style.display='none';msg('');$('meta').textContent='Cargando…';
  try{
-  var r=[await api('web',$('dias').value),null];r[1]=await api('siesa');
+  var r=[await api('web',$('dias').value),null];r[1]=await api('siesa',null,ls('wp_lista')||'4');
   var a=r[0],b=r[1];
   if(a.error||!a.items){msg('WordPress: '+(a.error||'sin datos')+'. Revisa que el fragmento esté activo en WPCode.','err')}
   if(b.error||!b.items){msg('SIESA: '+(b.error||'sin datos'),'err')}
-  S.wp=a.items||[];S.si=b.items||{};
+  S.wp=a.items||[];S.si=b.items||{};S.pr={};Object.keys(b.precios||{}).forEach(function(k){S.pr[nz(k)]=b.precios[k]});fillListas(b.listas||[],b.lista);
   (function(){var w=b.woo,el=$('syncbar');if(!w){el.innerHTML='<div class="alert">Sync automático hacia la tienda: todavía sin corridas registradas.</div>';return}
    var mal=w.estado!=='ok',h=(Date.now()-new Date(w.creado_en))/36e5;
    el.innerHTML='<div class="alert '+(mal||h>3?'err':'')+'" style="'+(!mal&&h<=3?'background:var(--grd);color:#14532d':'')+'">'+(mal?'⚠ Último sync con problemas · ':'✔ Sync automático a la tienda · ')+'última corrida '+new Date(w.creado_en).toLocaleString('es-CO')+' · '+nf(w.cambios)+' cambios, '+nf(w.aplicados)+' aplicados, '+nf(w.ya_correctos)+' ya correctos'+(w.errores?' · errores: '+esc(JSON.stringify(w.errores).slice(0,160)):'')+(h>3?' · lleva más de 3 h sin correr':'')+'</div>'})();
@@ -108,19 +109,23 @@ function build(){
  rows.forEach(function(r){r.pct=(r.si>0&&r.wp!=null)?r.wp/r.si*100:null;r.sug=r.si!=null?Math.min(S.gt,Math.floor(Math.max(0,r.si)*S.gp/100)):null;r.dif=(r.sug!=null&&r.wp!=null)?r.wp-r.sug:null});
  S.rows=rows;render();
 }
-var COLS=[['sku','SKU'],['nombre','Producto'],['uds','Vendidas','n'],['pedidos','Pedidos','n'],['wp','Inv. WordPress','n'],['si','Inv. SIESA','n'],['pct','% en WordPress','n'],['lv','Nivel'],['sug','Sugerido web','n'],['dif','Dif. vs sugerido','n']];
+var COLS=[['sku','SKU'],['nombre','Producto'],['uds','Vendidas','n'],['pedidos','Pedidos','n'],['wp','Inv. WordPress','n'],['si','Inv. SIESA','n'],['pct','% en WordPress','n'],['lv','Nivel'],['sug','Sugerido web','n'],['dif','Dif. vs sugerido','n'],['pw','Precio web','n'],['ps','Precio SIESA','n'],['pd','Web vs SIESA','n']];
+function fillListas(L,sel){var el=$('lst');if(!el)return;var cur=String(sel||ls('wp_lista')||'4');el.innerHTML=L.filter(function(x){return x.activa!==false}).map(function(x){return'<option value="'+esc(x.lista_id)+'"'+(String(x.lista_id)===cur?' selected':'')+'>'+esc(x.nombre)+' — '+esc(x.canal||'')+'</option>'}).join('')}
+function precios(r){var f=FOT[nz(r.sku)];r.pw=f&&f.p!=null?f.p:null;r.ps=(S.pr&&S.pr[nz(r.sku)]!=null)?S.pr[nz(r.sku)]:null;r.pd=(r.pw!=null&&r.ps>0)?(r.pw/r.ps-1)*100:null}
+function m$$(n){return n==null?'—':'$'+Number(n).toLocaleString('es-CO',{maximumFractionDigits:0})}
 function render(){
  var q=$('q').value.trim().toLowerCase(),f=S.f,R=S.rows.filter(function(r){
   if(q&&(r.sku+' '+r.nombre).toLowerCase().indexOf(q)<0)return false;
   if(f==='vend')return r.uds>0;if(f==='sinsiesa')return r.si==null;if(f==='sincontrol')return !r.gest;
   if(f==='exceso')return r.dif!=null&&r.dif>0;if(f==='falta')return r.dif!=null&&r.dif<0;if(f==='agotado')return r.gest&&(r.wp||0)<=0&&(r.si||0)>0;return true});
+ S.rows.forEach(precios);
  var k=S.sort.k,d=S.sort.d;R.sort(function(a,b){var x=a[k],y=b[k];if(x==null)x=-Infinity;if(y==null)y=-Infinity;return (x<y?-1:x>y?1:0)*d});
  $('th').innerHTML='<th class="n">#</th>'+COLS.map(function(c){return'<th class="'+(c[2]||'')+'" data-k="'+c[0]+'">'+c[1]+(S.sort.k===c[0]?(S.sort.d>0?' ▲':' ▼'):'')+'</th>'}).join('');
  $('tb').innerHTML=R.length?R.map(function(r,i){
   var pc=r.pct==null?'<span class="pb g">—</span>':'<span class="pb '+(r.pct>50?'r':r.pct>25?'a':'v')+'">'+r.pct.toFixed(1)+'%</span>';
   var dif=r.dif==null?'—':(r.dif>0?'+':'')+nf(r.dif);
-  return'<tr><td class="n mini">'+(i+1)+'</td><td class="sku">'+foto(r.sku)+lnk(r.sku,esc(r.sku))+'</td><td class="nm">'+lnk(r.sku,esc(r.nombre))+'</td><td class="n"><b>'+nf(r.uds)+'</b></td><td class="n">'+nf(r.pedidos)+'</td><td class="n">'+(r.gest?nf(r.wp):'<span class="mini">sin control</span>')+'</td><td class="n">'+(r.si==null?'<span class="mini">sin SIESA</span>':nf(r.si))+'</td><td class="n">'+pc+'</td><td><span class="lv '+r.lv+'">'+r.lv+'</span></td><td class="n">'+nf(r.sug)+'</td><td class="n">'+dif+'</td></tr>'}).join('')
-  :'<tr><td colspan="11" class="mini" style="padding:20px;text-align:center">Sin resultados</td></tr>';
+  return'<tr><td class="n mini">'+(i+1)+'</td><td class="sku">'+foto(r.sku)+lnk(r.sku,esc(r.sku))+'</td><td class="nm">'+lnk(r.sku,esc(r.nombre))+'</td><td class="n"><b>'+nf(r.uds)+'</b></td><td class="n">'+nf(r.pedidos)+'</td><td class="n">'+(r.gest?nf(r.wp):'<span class="mini">sin control</span>')+'</td><td class="n">'+(r.si==null?'<span class="mini">sin SIESA</span>':nf(r.si))+'</td><td class="n">'+pc+'</td><td><span class="lv '+r.lv+'">'+r.lv+'</span></td><td class="n">'+nf(r.sug)+'</td><td class="n">'+dif+'</td><td class="n">'+m$$(r.pw)+'</td><td class="n">'+m$$(r.ps)+'</td><td class="n">'+(r.pd==null?'—':(r.pd>0?'+':'')+r.pd.toFixed(1)+'%')+'</td></tr>'}).join('')
+  :'<tr><td colspan="14" class="mini" style="padding:20px;text-align:center">Sin resultados</td></tr>';
  var all=S.rows,vend=all.filter(function(r){return r.uds>0}),sw=0,ss=0;all.forEach(function(r){if(r.wp!=null&&r.si>0){sw+=r.wp;ss+=r.si}});
  $('kpis').innerHTML=[['Productos con SKU',nf(all.length)],['Con ventas ('+$('dias').value+' d)',nf(vend.length)],['Unidades vendidas',nf(all.reduce(function(a,r){return a+r.uds},0))],['Inv. WordPress',nf(sw)],['Inv. SIESA (mismos)',nf(ss)],['% publicado',ss?(sw/ss*100).toFixed(1)+'%':'—'],['Sin SIESA',nf(all.filter(function(r){return r.si==null}).length)]].map(function(x){return'<div class="sc"><div class="sv">'+x[1]+'</div><div class="sl">'+x[0]+'</div></div>'}).join('');
  var fl=[['todos','Todos'],['vend','Con ventas'],['agotado','Agotado web con stock SIESA'],['exceso','Web sobre lo sugerido'],['falta','Web bajo lo sugerido'],['sincontrol','Sin control de stock'],['sinsiesa','Sin SIESA']];
@@ -137,10 +142,11 @@ document.addEventListener('click',function(e){var t=e.target;
 document.addEventListener('change',function(e){var t=e.target;if(t.id==='gp'||t.id==='gt'){S.gp=Math.max(0,Math.min(100,+$('gp').value||0));S.gt=Math.max(0,+$('gt').value||0);ls('wp_regla',JSON.stringify({gp:S.gp,gt:S.gt}));build()}});
 $('q').oninput=render;$('dias').onchange=load;$('bRef').onclick=load;
 $('bSalir').onclick=function(){ls('wp_pin','');location.reload()};
+$('lst').onchange=function(){ls('wp_lista',this.value);load()};
 $('iP').onkeydown=function(e){if(e.key==='Enter')$('bSave').click()};
 $('bSave').onclick=async function(){var p=$('iP').value.trim();if(!/^\d{4,8}$/.test(p)){$('pinErr').textContent='Escribe tu PIN numérico';return}ls('wp_pin',p);$('pinErr').textContent='Verificando…';try{await api('ping');$('pinErr').textContent='';load()}catch(e){}};
 $('bX').onclick=function(){
- function go(){var d=[['SKU','Producto','Vendidas','Pedidos','Inv. WordPress','Inv. SIESA','% en WordPress','Nivel','Sugerido web','Dif. vs sugerido']].concat((S.view||[]).map(function(r){return[r.sku,r.nombre,r.uds,r.pedidos,r.gest?r.wp:'sin control',r.si,r.pct==null?'':+r.pct.toFixed(1),r.lv,r.sug,r.dif]}));
+ function go(){var d=[['SKU','Producto','Vendidas','Pedidos','Inv. WordPress','Inv. SIESA','% en WordPress','Nivel','Sugerido web','Dif. vs sugerido','Precio web','Precio SIESA','Web vs SIESA %']].concat((S.view||[]).map(function(r){return[r.sku,r.nombre,r.uds,r.pedidos,r.gest?r.wp:'sin control',r.si,r.pct==null?'':+r.pct.toFixed(1),r.lv,r.sug,r.dif,r.pw,r.ps,r.pd==null?'':+r.pd.toFixed(1)]}));
   var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(d),'WordPress');XLSX.writeFile(wb,'WordPress_inventario_'+new Date().toISOString().slice(0,10)+'.xlsx')}
  if(window.XLSX)return go();var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=go;document.head.appendChild(s)};
 
@@ -245,7 +251,7 @@ async function loadFotos(){
  try{
   for(var p=1;p<=15;p++){
    var r=await fetch('https://ilumax.com.co/wp-json/wc/store/v1/products?per_page=100&page='+p);if(!r.ok)break;var j=await r.json();
-   j.forEach(function(x){if(x.sku&&!FOT[nz(x.sku)])FOT[nz(x.sku)]={i:x.images&&x.images[0]?x.images[0].thumbnail:'',u:x.permalink}});
+   j.forEach(function(x){if(x.sku&&!FOT[nz(x.sku)])FOT[nz(x.sku)]={i:x.images&&x.images[0]?x.images[0].thumbnail:'',u:x.permalink,p:(x.prices&&x.prices.price!==''&&x.prices.price!=null)?Number(x.prices.price)/Math.pow(10,x.prices.currency_minor_unit||0):null}});
    if(j.length<100)break}
  }catch(e){}
  if(S.rows&&S.rows.length)render();if(M.d&&$('vM').style.display!=='none')mRender();
