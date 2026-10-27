@@ -10336,11 +10336,14 @@ var INV_LISTAS_CAT = [];               // catálogo de listas_catalogo, cargado 
 
 /* ===== Fotos de producto (copia diaria de la tienda en Supabase: woo_fotos) ===== */
 var WFOT={m:{},ok:false,p:null};
+function wfIndex(){ WFOT.g={}; try{ for(var k in WFOT.m){ var f=WFOT.m[k]; if(f[0]&&f[3]) WFOT.g[f[0]]=f[3]; } }catch(e){} }
+function wfGrande(u){ return (WFOT.g&&WFOT.g[u])||u; }
+function wfotoUrl(ref){ var f=WFOT.m[wfNz(ref)]; return (f&&f[0])||''; }
 function wfNz(s){return String(s==null?'':s).trim().replace(/^0+(?=.)/,'')}
 function wfoto(ref,px){
   var f=WFOT.m[wfNz(ref)]; if(!f||!f[0]) return '';
   px=px||36;
-  return '<img src="'+String(f[0]).replace(/"/g,'&quot;')+'" data-wf="'+String(f[0]).replace(/"/g,'&quot;')+'" loading="lazy" decoding="async" alt="" style="width:'+px+'px;height:'+px+'px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:8px;border:1px solid var(--b1);background:#fff">';
+  return '<img src="'+String(f[0]).replace(/"/g,'&quot;')+'" data-wf="'+String(f[0]).replace(/"/g,'&quot;')+'" onclick="event.stopPropagation();reabastVerFotoGrande(this.src)" loading="lazy" decoding="async" alt="" style="cursor:zoom-in;width:'+px+'px;height:'+px+'px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:8px;border:1px solid var(--b1);background:#fff">';
 }
 function wlnk(ref,h){return h}
 (function(){var z=document.createElement('img');z.id='wfz';z.alt='';z.style.cssText='display:none;position:fixed;z-index:99999;width:260px;height:260px;object-fit:contain;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.28);pointer-events:none';document.body.appendChild(z);
@@ -10352,16 +10355,84 @@ function wfotosCargar(){
   if(WFOT.p) return WFOT.p;
   WFOT.p=(async function(){
     try{
-      var c=null; try{ c=JSON.parse(localStorage.getItem('ilx_woo_fotos')||'null'); }catch(e){}
-      if(c&&c.d){ WFOT.m=c.d; WFOT.ok=true; if(Date.now()-c.t<6*3600*1000) return; }
-      var rows=await sb.get('woo_fotos','select=sku,foto,url&foto=not.is.null&limit=3000');
-      var m={}; (rows||[]).forEach(function(r){ m[wfNz(r.sku)]=[r.foto,r.url]; });
-      WFOT.m=m; WFOT.ok=true;
-      try{ localStorage.setItem('ilx_woo_fotos',JSON.stringify({t:Date.now(),d:m})); }catch(e){}
-    }catch(e){ console.warn('Fotos tienda:',e); WFOT.ok=true; }
+      var c=null; try{ c=JSON.parse(localStorage.getItem('ilx_woo_fotos3')||'null'); }catch(e){}
+      if(c&&c.d){ WFOT.m=c.d; WFOT.ok=true; wfIndex(); if(Date.now()-c.t<6*3600*1000) return; }
+      var rows=await sb.get('woo_fotos','select=sku,foto,url,nombre,foto_grande&limit=3000');
+      var m={}; (rows||[]).forEach(function(r){ m[wfNz(r.sku)]=[r.foto,r.url,r.nombre,r.foto_grande]; });
+      WFOT.m=m; WFOT.ok=true; wfIndex();
+      try{ localStorage.setItem('ilx_woo_fotos3',JSON.stringify({t:Date.now(),d:m})); }catch(e){}
+    }catch(e){ console.warn('Fotos tienda:',e); WFOT.ok=true; WFOT.err=Date.now(); }
   })();
   return WFOT.p;
 }
+
+
+/* ===== Fotos y descripción junto a cada referencia/SKU (en todo el ERP) =====
+   Recorre lo que se pinta y, donde ve una referencia conocida, le pone la foto al lado y la descripción si la fila no la trae.
+   Fuentes: foto/nombre comercial del maestro de referencias, foto/nombre de la tienda web y descripción de SIESA.
+   Para apagarlo en un equipo:  localStorage.setItem('skx_off','1')  */
+var SKX={map:null,t:0,q:[],tm:null,t0:0};
+function skxKey(s){return String(s==null?'':s).trim().toUpperCase().replace(/^0+(?=.)/,'')}
+function skxMapa(){
+  if(SKX.map&&Date.now()-SKX.t<4000) return SKX.map;
+  var m={}; function put(r){var k=skxKey(r);return m[k]||(m[k]={f:'',d:'',s:'',e:''})}
+  try{ var M=(typeof REABAST!=='undefined'&&REABAST.referenciasMaestro)||{}; for(var r in M){var o=put(r),x=M[r]; if(x.foto_url)o.f=x.foto_url; o.d=x.nombre_comercial||''; o.e=x.descripcion_en||''} }catch(e){}
+  try{ for(var k in WFOT.m){var o=put(k),f=WFOT.m[k]; if(!o.f&&f[0])o.f=f[0]; if(!o.d&&f[2])o.d=f[2]} }catch(e){}
+  try{ (typeof INV_DATA!=='undefined'?INV_DATA:[]).forEach(function(r){ if(!r.referencia)return; var o=put(r.referencia); if(!o.s&&r.descripcion)o.s=r.descripcion }) }catch(e){}
+  Object.keys(m).forEach(function(k){var o=m[k]; o.desc=o.d||o.s||o.e||''});
+  SKX.map=m; SKX.t=Date.now(); return m;
+}
+function skxTabla(tb){
+  if(!tb) return null; if(tb._skx) return tb._skx;
+  var hs=[],row=tb.querySelector('thead tr')||(tb.rows&&tb.rows[0]); if(row) hs=[].map.call(row.cells,function(c){return (c.textContent||'').toLowerCase()});
+  var t={ref:hs.map(function(h){return /(^|[^a-z])(ref|sku|c[oó]d|[ií]tem)/.test(h)}),desc:hs.some(function(h){return /descrip|nombre|producto|detalle/.test(h)})};
+  tb._skx=t; return t;
+}
+function skxCtx(el,tx){
+  if(/[A-Za-z]/.test(tx)&&tx.length>=3) return true;
+  try{ if(/mono/i.test(getComputedStyle(el).fontFamily)) return true }catch(e){}
+  if(/(^|[\s_-])(sku|ref|referencia)([\s_-]|$)/i.test(el.className||'')) return true;
+  var td=el.closest&&el.closest('td'); if(td){ var t=skxTabla(td.closest('table')); if(t&&t.ref[td.cellIndex]) return true }
+  return false;
+}
+function skxElem(el,m){
+  if(el.hasAttribute('data-skx')||el.children.length) return;
+  var tx=(el.textContent||'').trim(); if(tx.length<2||tx.length>24) return;
+  var o=m[skxKey(tx)]; if(!o||(!o.f&&!o.desc)) return;
+  if(el.closest('th,select,option,textarea,button,nav,.hdr,.nt,[data-c],[contenteditable]')) return;
+  if(!skxCtx(el,tx)) return;
+  el.setAttribute('data-skx','1');
+  var esTd=el.tagName==='TD', par=el.parentElement; if(!par) return;
+  var tr=esTd?el.closest('tr'):null, yaFoto=false;
+  if(esTd){ yaFoto=!!(tr&&tr.querySelector('img')) } else { var p=el.previousElementSibling; yaFoto=!!(p&&p.tagName==='IMG') }
+  if(o.f&&!yaFoto){
+    var i=document.createElement('img'); i.src=o.f; i.setAttribute('data-wf',o.f); i.setAttribute('data-skx','1'); i.loading='lazy'; i.alt=''; i.onclick=function(e){e.stopPropagation();reabastVerFotoGrande(this.src)};
+    i.style.cssText='cursor:zoom-in;width:28px;height:28px;object-fit:cover;border-radius:5px;vertical-align:middle;margin-right:6px;border:1px solid var(--b1);background:#fff';
+    if(esTd) el.insertBefore(i,el.firstChild); else par.insertBefore(i,el);
+  }
+  var d=o.desc; if(!d) return; d=String(d).slice(0,70);
+  var cont=el.closest('tr')||par, frag=d.slice(0,14).toLowerCase();
+  var tb=esTd?skxTabla(el.closest('table')):null;
+  if((tb&&tb.desc)||(cont.textContent||'').toLowerCase().indexOf(frag)>=0) return;
+  if(esTd){ var dv=document.createElement('div'); dv.className='skx-d'; dv.setAttribute('data-skx','1'); dv.textContent=d; el.appendChild(dv) }
+  else { var sp=document.createElement('span'); sp.className='skx-di'; sp.setAttribute('data-skx','1'); sp.textContent=' · '+d; par.insertBefore(sp,el.nextSibling) }
+}
+function skxProcesar(){
+  SKX.tm=null; var nodos=SKX.q.splice(0); if(!nodos.length) return;
+  try{
+    if(typeof WFOT!=='undefined'&&WFOT.err&&Date.now()-WFOT.err>20000){ WFOT.err=0; WFOT.p=null; wfotosCargar().then(function(){SKX.t=0;skxEncolar(document.body)}) }
+    var m=skxMapa(); if(!Object.keys(m).length) return;
+    nodos.forEach(function(n){ if(!n.isConnected) return; skxElem(n,m); var h=n.querySelectorAll?n.querySelectorAll('td,span,b,strong,div,a,code,p'):[]; for(var i=0;i<h.length;i++) skxElem(h[i],m) });
+  }catch(e){ console.warn('skx:',e) }
+}
+function skxEncolar(n){ if(!n||n.nodeType!==1||n.hasAttribute('data-skx')) return; SKX.q.push(n); if(!SKX.tm) SKX.tm=setTimeout(skxProcesar,150) }
+function skxIniciar(){
+  try{ if(localStorage.getItem('skx_off')==='1') return }catch(e){}
+  var st=document.createElement('style'); st.textContent='.skx-d{display:block;font-size:10.5px;color:var(--mu);font-weight:400;white-space:normal;line-height:1.25;max-width:320px}.skx-di{font-size:10.5px;color:var(--mu);font-weight:400}'; document.head.appendChild(st);
+  new MutationObserver(function(ms){ ms.forEach(function(r){ for(var i=0;i<r.addedNodes.length;i++) skxEncolar(r.addedNodes[i]) }) }).observe(document.body,{childList:true,subtree:true});
+  wfotosCargar().then(function(){ SKX.t=0; skxEncolar(document.body); setTimeout(function(){SKX.t=0;skxEncolar(document.body)},5000) });
+}
+setTimeout(skxIniciar,2500);
 
 async function renderInventarioMod() {
   const el = document.getElementById('inv-content');
@@ -12607,10 +12678,49 @@ function infDatosPlan(){
   const res = d.filter(x=>!set.has(base(x.o.numero_oc)) && !(x.iso||'').startsWith(INF_PLAN.mes));
   const add = (g, etapa) => { const iso = g.f; if(f.desde && iso < f.desde) return; if(f.hasta && iso > f.hasta) return;
     const nombre = g.ocs.join(' · ');
-    res.push({o:{id:'plan_'+iso+'_'+nombre, numero_oc:nombre, proveedor:'', estado_general:'activa'}, fecha:new Date(iso+'T12:00:00'), iso, mes: f.vista==='semana' ? infLunes(iso) : iso.slice(0,7), cbm:g.cbm, sin:0, nItems:'', estimada:false, confirmada:true, emb:null, etapa}); };
+    res.push({o:{id:'plan_'+iso+'_'+nombre, numero_oc:nombre, proveedor:'', estado_general:'activa'}, fecha:new Date(iso+'T12:00:00'), iso, mes: f.vista==='semana' ? infLunes(iso) : iso.slice(0,7), cbm:g.cbm, sin:0, nItems:'', estimada:false, confirmada:true, emb:null, etapa, ocs:g.ocs}); };
   INF_PLAN.grupos.forEach(g=>add(g, 'Semana '+g.s+' de noviembre · '+INF_PLAN.fuente));
   INF_PLAN.resto.forEach(g=>add(g, 'Resto fuera de noviembre (cálculo del sistema)'));
   return res.sort((a,b)=> (a.iso||'9999').localeCompare(b.iso||'9999'));
+}
+// ── Estado de lo que llega: reparte el CBM de cada periodo por etapa real (producción, embarque, tránsito…) ──
+const INF_EST = [['Antes de producción','#94a3b8'],['Producción','#f59e0b'],['Proceso de embarque','#3b82f6'],['En tránsito','#8b5cf6'],['Nacionalización','#0ea5e9'],['Ingresó','#16a34a'],['Sin identificar','#cbd5e1']];
+function infBucketOc(o){
+  let r = null; try{ r = ceDe(o.numero_oc); }catch(e){}
+  let fase = r && r.fase!=null ? r.fase : null;
+  if(fase==null && typeof CBL!=='undefined' && CBL.bls){ const num = ceNum(o.numero_oc); const fs = CBL.bls.filter(b=>(b.items||[]).some(it=>ceNum(it.oc)===num)).map(b=>{ try{ return cblFaseBL(b); }catch(e){ return null; } }).filter(v=>v!=null&&v>=0); if(fs.length) fase = Math.min(...fs); }
+  if(fase===3) return 'Producción'; if(fase===5) return 'Proceso de embarque'; if(fase===6) return 'En tránsito'; if(fase===7) return 'Nacionalización'; if(fase===9) return 'Ingresó';
+  let t = ''; try{ t = ceEtapaActualTxt(o)||''; }catch(e){}
+  if(/produc/i.test(t)) return 'Producción'; if(/embarq/i.test(t)) return 'Proceso de embarque'; if(/tr[aá]nsito/i.test(t)) return 'En tránsito'; if(/nacional|zona/i.test(t)) return 'Nacionalización';
+  return 'Antes de producción';
+}
+function infOcPorNombre(n){
+  const k = ceNum(n), b = k.replace(/-\d+$/,''), L = REABAST.ordenesCompra||[];
+  return L.find(o=>ceNum(o.numero_oc)===k) || L.find(o=>ceNum(o.numero_oc).replace(/-\d+$/,'')===b) || null;
+}
+function infEstCbm(x){
+  if(x._est) return x._est;
+  const res = {};
+  if(x.ocs && x.ocs.length){
+    const par = x.ocs.map(n=>{ const o = infOcPorNombre(n); return {b: o ? infBucketOc(o) : 'Sin identificar', w: o ? (infCbmOc(o).cbm||0) : 0}; });
+    let tw = par.reduce((a,p)=>a+p.w,0); if(!(tw>0)){ par.forEach(p=>p.w=1); tw = par.length; }
+    par.forEach(p=>{ res[p.b] = (res[p.b]||0) + x.cbm*p.w/tw; });
+  } else res[infBucketOc(x.o)] = x.cbm;
+  return x._est = res;
+}
+function infEstChips(x){
+  if(!x.o || String(x.o.id).indexOf('plan_')===0 && !(x.ocs&&x.ocs.length)) return '';
+  const e = infEstCbm(x), c = INF_EST.filter(([n])=>e[n]>0.0001);
+  return c.length ? '<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;">'+c.map(([n,col])=>`<span style="font-size:10px;font-weight:700;border-radius:8px;padding:1px 7px;background:${col}22;color:#334155;border:1px solid ${col};">${n}${c.length>1?' '+infFmt(e[n])+' m³':''}</span>`).join('')+'</div>' : '';
+}
+function infEstadoCard(claves, meses, nm){
+  const tot = {}, filas = claves.map(k=>{ const e = {}; meses[k].forEach(x=>{ const r = infEstCbm(x); for(const n in r){ e[n] = (e[n]||0)+r[n]; tot[n] = (tot[n]||0)+r[n]; } }); return {k, e, t: Object.values(e).reduce((a,v)=>a+v,0)}; });
+  const cols = INF_EST.filter(([n])=>tot[n]>0.0001); if(!cols.length) return '';
+  const leg = cols.map(([n,c])=>`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;margin-right:10px;"><span style="width:10px;height:10px;border-radius:2px;background:${c};display:inline-block;"></span>${n}</span>`).join('');
+  return `<div class="card" style="margin-bottom:14px;"><div class="cb"><div style="font-weight:800;font-size:14px;margin-bottom:4px;">🧭 Estado de lo que llega (CBM por etapa)</div>
+    <div style="font-size:11px;color:var(--mu);margin-bottom:8px;">Para cada periodo: cuánto ya viaja y cuánto sigue en producción o embarque (lo más fácil de mover está a la izquierda). En las líneas del plan de Logística con varias OC el CBM se reparte en proporción al CBM de cada OC.</div>
+    <div style="margin-bottom:8px;">${leg}</div>
+    <div class="tw"><table style="font-size:12px;"><thead><tr><th>Periodo</th><th style="text-align:right;">Total</th><th style="min-width:200px;">Distribución</th>${cols.map(([n])=>`<th style="text-align:right;">${n}</th>`).join('')}</tr></thead><tbody>${filas.map(f=>`<tr><td style="white-space:nowrap;font-weight:700;">${nm(f.k)}</td><td style="text-align:right;font-weight:800;">${infFmt(f.t)} m³</td><td><div style="display:flex;height:14px;border-radius:5px;overflow:hidden;background:var(--s1);">${cols.map(([n,c])=>f.e[n]>0?`<div title="${n}: ${infFmt(f.e[n])} m³" style="width:${f.e[n]*100/f.t}%;background:${c};"></div>`:'').join('')}</div></td>${cols.map(([n])=>{ const v = f.e[n]||0; return `<td style="text-align:right;">${v>0.0001?`<b>${infFmt(v)}</b> <span class="arte-mu">${Math.round(v*100/f.t)}%</span>`:'<span class="arte-mu">—</span>'}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div></div></div>`;
 }
 function infFmt(n,d){ return Number(n||0).toLocaleString('es-CO',{minimumFractionDigits:d||0, maximumFractionDigits:d==null?1:d}); }
 function infManual(){
@@ -12764,6 +12874,7 @@ function infPintar(){
   h += `<div class="card" style="margin-bottom:14px;"><div class="cb"><div style="font-weight:800;font-size:14px;margin-bottom:8px;">🗓️ Resumen: cuántas OC llegan por ${kPer}</div><div class="tw"><table style="font-size:12.5px;"><thead><tr><th>${kPer==='mes'?'Mes':'Semana'}</th><th style="text-align:center;"># OC que llegan</th><th>Órdenes</th><th style="text-align:right;">CBM</th><th style="text-align:right;">≈ 40' HC</th></tr></thead><tbody>${claves.map(k=>{
     const L = meses[k], cbm = L.reduce((a,x)=>a+x.cbm,0), hoyK = (kPer==='mes' ? hoyMes : semK)===k;
     return `<tr style="${hoyK?'background:#f0fdf4;':''}"><td style="white-space:nowrap;font-weight:700;">${nm(k)}${hoyK&&kPer==='mes'?' <span class="arte-mu">(este mes)</span>':''}</td><td style="text-align:center;font-size:16px;font-weight:800;color:var(--bl);">${L.length}</td><td style="font-size:11px;">${L.map(x=>reabastEsc(x.o.numero_oc)).join(', ')}</td><td style="text-align:right;font-weight:700;">${infFmt(cbm)} m³</td><td style="text-align:right;">${k==='sin'?'—':'≈ '+infFmt(cbm/cap,1)}</td></tr>`; }).join('')}<tr style="border-top:2px solid var(--b1);font-weight:800;"><td>Total</td><td style="text-align:center;font-size:16px;">${d.length}</td><td></td><td style="text-align:right;">${infFmt(tot)} m³</td><td style="text-align:right;">≈ ${infFmt(tot/cap,1)}</td></tr></tbody></table></div></div></div>`;
+  h += infEstadoCard(claves, meses, nm);
   h += claves.map(k=>{
     const L = meses[k], cbm = L.reduce((a,x)=>a+x.cbm,0), ab = !!INF.abierto[k] || !!INF.q;
     const pct = Math.round(cbm*100/max);
@@ -12782,7 +12893,7 @@ function infPintar(){
         const tk = INF.q ? INF.q.toLowerCase().split(/[\s,;]+/).filter(Boolean) : [];
         const itsOc = (REABAST.ocItems[x.o.id]||[]).map(it=>{ const ref = String(it.referencia||'').trim(), M = (REABAST.referenciasMaestro||{})[ref]||{}, desc = it.descripcion||M.descripcion_en||'', cu = cbmRefInfo(ref).cbm, q = Number(it.cantidad)||0; return {ref, desc, q, st: infIngEstado(x.o.id, ref, x.o.fecha_orden, q), cbm: cu ? q*cu : null, hit: tk.length && tk.every(k=>(x.o.numero_oc+' '+(x.o.proveedor||'')+' '+ref+' '+desc).toLowerCase().includes(k))}; });
         const subf = abOc ? `<tr><td colspan="8" style="background:var(--s1);padding:6px 14px;"><table style="font-size:11px;width:100%;"><thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th style="text-align:right;">CBM</th><th>Llega</th><th style="text-align:right;">Inventario hoy</th><th>Ingreso a inventario</th></tr></thead><tbody>${itsOc.map(i=>`<tr style="${i.hit?'background:#fef9c3;':''}"><td><b>${reabastEsc(i.ref)}</b></td><td>${reabastEsc(i.desc)}</td><td style="text-align:right;font-weight:700;">${infFmt(i.q)}</td><td style="text-align:right;">${i.cbm==null?'<span style="color:#b45309;">sin CBM</span>':infFmt(i.cbm,2)+' m³'}</td><td style="white-space:nowrap;">${x.fecha?x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'2-digit'}):'—'}${x.estimada?' ≈':''}</td><td style="text-align:right;font-weight:700;">${(()=>{ const v = infInvHoy(i.ref); return v==null?'<span class="arte-mu">—</span>':infFmt(v); })()}</td><td>${infIngCelda(x.o.id, i.ref, i.q, i.st)}</td></tr>`).join('')}</tbody></table></td></tr>` : '';
-        return `<tr onclick="INF.ocAb['${x.o.id}']=!INF.ocAb['${x.o.id}'];infPintar()" style="cursor:pointer;"><td><b>${abOc?'▾':'▸'} ${reabastEsc(x.o.numero_oc)}</b>${(()=>{ const its=itsOc, pend=its.filter(i=>i.st.pos&&!i.st.conf).length, ok=its.length&&its.every(i=>i.st.conf); return ok?' <span style="color:#16a34a;font-size:10px;font-weight:700;">✅ ingresó</span>':pend?' <span style="color:#b45309;font-size:10px;font-weight:700;" title="Ítems con ingreso a inventario por confirmar">📦 '+pend+'</span>':''; })()}</td><td>${reabastEsc(x.o.proveedor||'')}</td><td style="white-space:nowrap;">${x.fecha?x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short'}):'—'}${x.estimada?' <span class="arte-mu" title="Fecha estimada/recalculada">≈</span>':''}</td><td>${reabastEsc(x.etapa||'')}</td><td style="text-align:right;">${x.nItems}</td><td style="text-align:right;font-weight:700;">${infFmt(x.cbm)} m³${x.sin?` <span style="color:#b45309;" title="${x.sin} ítem(s) sin CBM">⚠️</span>`:''}</td><td>${reabastEsc(cont)}</td><td>${pre}</td></tr>`+subf; }).join('')}</tbody></table></div>`:''}
+        return `<tr onclick="INF.ocAb['${x.o.id}']=!INF.ocAb['${x.o.id}'];infPintar()" style="cursor:pointer;"><td><b>${abOc?'▾':'▸'} ${reabastEsc(x.o.numero_oc)}</b>${(()=>{ const its=itsOc, pend=its.filter(i=>i.st.pos&&!i.st.conf).length, ok=its.length&&its.every(i=>i.st.conf); return ok?' <span style="color:#16a34a;font-size:10px;font-weight:700;">✅ ingresó</span>':pend?' <span style="color:#b45309;font-size:10px;font-weight:700;" title="Ítems con ingreso a inventario por confirmar">📦 '+pend+'</span>':''; })()}</td><td>${reabastEsc(x.o.proveedor||'')}</td><td style="white-space:nowrap;">${x.fecha?x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short'}):'—'}${x.estimada?' <span class="arte-mu" title="Fecha estimada/recalculada">≈</span>':''}</td><td>${reabastEsc(x.etapa||'')}${infEstChips(x)}</td><td style="text-align:right;">${x.nItems}</td><td style="text-align:right;font-weight:700;">${infFmt(x.cbm)} m³${x.sin?` <span style="color:#b45309;" title="${x.sin} ítem(s) sin CBM">⚠️</span>`:''}</td><td>${reabastEsc(cont)}</td><td>${pre}</td></tr>`+subf; }).join('')}</tbody></table></div>`:''}
     </div>`; }).join('');
   b.innerHTML = h;
 }
@@ -15520,7 +15631,7 @@ function segHtmlCelda(o, c, d, prev){
 }
 
 // ── Zoom de una etapa ──
-// Estado del arte de una OC (para el zoom de la columna Arte): refs listas y en qué paso va el resto
+// Estado del arte de una OC (resumido) para el zoom de la columna Arte
 function segEstadoArteHtml(o){
   try{
     const its = REABAST.ocItems[o.id]||[]; if(!its.length) return '';
@@ -15528,18 +15639,35 @@ function segEstadoArteHtml(o){
     its.forEach(it=>{
       let on = false; try{ on = refchkEstado(o,it,'arte').on; }catch(e){}
       if(on || artepasosPct(o,it)===100){ listas++; return; }
-      const d = artepasosDe(o.id,it); const p = ARTEPASOS_DEF.find(p=>!d[p.n]); if(p) cnt[p.n] = (cnt[p.n]||0)+1;
+      const d = artepasosDe(o.id,it), p = ARTEPASOS_DEF.find(p=>!d[p.n]); if(p) cnt[p.n] = (cnt[p.n]||0)+1;
     });
-    const pct = artepasosPctOC(o);
     const pasos = Object.keys(cnt).map(Number).sort((a,b)=>a-b);
-    let txt;
-    if(!pasos.length) txt = '<span style="color:var(--gr);font-weight:700;">✓ Arte completo</span> · '+listas+'/'+its.length+' refs';
-    else {
-      const p0 = ARTEPASOS_DEF.find(p=>p.n===pasos[0]);
-      txt = '<b>'+listas+'/'+its.length+' refs listas</b> ('+(pct==null?0:pct)+'%) · va en el paso '+p0.n+' de 7: <b>'+reabastEsc(p0.t)+'</b> — '+reabastEsc(p0.area)+' ('+cnt[p0.n]+' ref'+(cnt[p0.n]===1?'':'s')+')'
-        + (pasos.length>1 ? ' <span title="'+reabastEsc(pasos.map(n=>{const p=ARTEPASOS_DEF.find(x=>x.n===n);return 'Paso '+n+' ('+p.t+'): '+cnt[n]+' ref'+(cnt[n]===1?'':'s');}).join(' · '))+'" style="cursor:help;">+ '+(pasos.length-1)+' paso'+(pasos.length>2?'s':'')+' más</span>' : '');
-    }
-    return '<div class="arte-mu" style="font-size:10.5px;white-space:normal;margin-top:2px;">🎨 '+txt+'</div>';
+    if(!pasos.length) return '<div class="arte-mu" style="font-size:10.5px;margin-top:2px;">🎨 <span style="color:var(--gr);font-weight:700;">✓ Arte completo</span></div>';
+    const p0 = ARTEPASOS_DEF.find(p=>p.n===pasos[0]);
+    return '<div class="arte-mu" style="font-size:10.5px;margin-top:2px;">🎨 '+listas+'/'+its.length+' refs · paso '+p0.n+'/7: '+reabastEsc(p0.t)+' ('+reabastEsc(p0.area)+')</div>';
+  }catch(e){ return ''; }
+}
+// Desplegable de ítems de una OC (resumido): referencia con foto, descripción, cantidad y valor en US$
+function segItemsHtml(o, c){
+  try{
+    const its = REABAST.ocItems[o.id]||[]; if(!its.length) return '';
+    const M = REABAST.referenciasMaestro||{}, fn = n=>Number(n||0).toLocaleString('es-CO'), us = n=>'US$ '+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    let tot = 0, usd = 0;
+    const filas = its.map(it=>{
+      const ref = String(it.referencia||'').trim(), mm = M[ref]||{}, cant = Number(it.cantidad)||0, fob = it.precio_fob_usd!=null ? Number(it.precio_fob_usd) : null;
+      const sk = (typeof skxMapa==='function' ? (skxMapa()[skxKey(ref)]||{}) : {});
+      const desc = mm.nombre_comercial || sk.desc || it.descripcion || mm.descripcion_en || mm.descripcion || '';
+      const foto = mm.foto_url || (typeof wfotoUrl==='function' ? wfotoUrl(ref) : '');
+      tot += cant; if(fob!=null) usd += fob*cant;
+      return '<tr style="border-top:1px solid var(--b1);"><td style="padding:3px 6px;white-space:nowrap;font-family:monospace;">'+(foto?reabastFotoMiniHtml(foto,28):'')+'<b>'+reabastEsc(ref)+'</b></td>'
+        + '<td style="padding:3px 6px;white-space:normal;">'+reabastEsc(String(desc).slice(0,80))+'</td>'
+        + '<td style="padding:3px 6px;text-align:right;white-space:nowrap;"><b>'+fn(cant)+'</b></td>'
+        + '<td style="padding:3px 6px;text-align:right;white-space:nowrap;" '+(fob!=null?'title="'+us(fob)+' c/u"':'')+'>'+(fob!=null?us(fob*cant):'—')+'</td></tr>';
+    }).join('');
+    const sub = its.length+' ítem'+(its.length===1?'':'s')+' · '+fn(tot)+' unid. · '+us(usd);
+    return '<details onclick="event.stopPropagation()" style="margin-top:4px;font-weight:400;"><summary style="cursor:pointer;font-size:11px;color:var(--bl);font-weight:700;">📋 '+sub+'</summary>'
+      + '<div style="overflow-x:auto;max-height:260px;overflow-y:auto;margin-top:4px;"><table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="color:var(--mu);font-size:9.5px;text-transform:uppercase;"><th style="text-align:left;padding:3px 6px;">Referencia</th><th style="text-align:left;padding:3px 6px;">Descripción</th><th style="text-align:right;padding:3px 6px;">Cant.</th><th style="text-align:right;padding:3px 6px;">Valor US$</th></tr></thead><tbody>'+filas
+      + '<tr style="border-top:2px solid var(--b1);font-weight:800;"><td style="padding:3px 6px;" colspan="2">Total</td><td style="padding:3px 6px;text-align:right;">'+fn(tot)+'</td><td style="padding:3px 6px;text-align:right;">'+us(usd)+'</td></tr></tbody></table></div></details>';
   }catch(e){ return ''; }
 }
 
@@ -15557,7 +15685,7 @@ function segZoom(colId){
     const fecha = tipo==='pend' ? (d.ini?'desde '+new Date(d.ini).toLocaleDateString('es-CO'):'') : tipo==='espera' ? '' : (d.fin?new Date(d.fin).toLocaleDateString('es-CO'):'');
     const com = d.ref && d.ref.comentario_extra ? `<div class="arte-mu" style="font-size:10px;white-space:normal;">${reabastEsc(String(d.ref.comentario_extra).slice(0,140))}</div>` : '';
     return `<div class="seg-z-row" onclick="document.getElementById('seg-zoom').classList.remove('on');reabastAbrirDetalleOC('${o.id}')">
-      <span style="min-width:0;"><strong>${reabastEsc(o.numero_oc)}</strong> <span class="arte-mu">· ${reabastEsc(o.proveedor||'—')}</span>${com}${c.id==='arte'?segEstadoArteHtml(o):''}</span>
+      <span style="min-width:0;"><strong>${reabastEsc(o.numero_oc)}</strong> <span class="arte-mu">· ${reabastEsc(o.proveedor||'—')}</span>${com}${c.id==='arte'?segEstadoArteHtml(o):''}${segItemsHtml(o,c)}</span>
       <span style="white-space:nowrap;display:flex;gap:8px;align-items:center;">${c.usd&&segAnticipo(o)>0?`<strong>${segUsd(segAnticipo(o))}</strong>`:''}<span class="arte-mu" style="font-size:10.5px;">${fecha}</span>${tag}</span></div>`; };
   const sec = (n, titulo, arr, tipo, color, abierto)=>`<details class="seg-z-sec" ${abierto?'open':''}><summary style="cursor:pointer;font-weight:800;font-size:12.5px;margin-bottom:6px;color:${color};">${n} ${titulo} (${arr.length})${usdTot(arr)}</summary>
     ${arr.length ? arr.map(x=>fila(x,tipo)).join('') : '<div class="arte-mu" style="font-size:11px;padding:4px 8px;">Ninguna</div>'}</details>`;
@@ -16423,7 +16551,7 @@ const COMP_TABK = {pi:'pi', artes:'arte', anticipos:'anticipo', produccion:'prod
 const COMP_FIL_DEF = [['oci','Enviar OCI'],['pi','PI confirmada'],['anticipo','Anticipo pagado'],['arte','Artes confirmadas'],['produccion','Producción terminada'],['inspeccion','Inspección'],['embarque','Embarque']];
 function comprasListo(o, k){
   const et = id=>{ const e = comprasEtapa(o,id); return !e || e.estado==='completada'; };
-  if(k==='oci') return et('oc_creada'); if(k==='pi') return et('pi_confirmada'); if(k==='anticipo') return et('anticipo_pagado');
+  if(k==='oci') return et('oc_creada'); if(k==='pi') return et('pi_confirmada'); if(k==='anticipo') return et('anticipo_pagado') || segSinAnticipo(o, comprasEtapa(o,'anticipo_pagado'));
   if(k==='produccion') return et('produccion'); if(k==='inspeccion') return et('inspeccion_calidad');
   if(k==='arte'){ const c = refchkConteo(o,'arte'); return refchkEtapaOk(o,'arte') || (c.t>0 && c.n===c.t); }
   if(k==='embarque'){ const c = refchkConteo(o,'embarque'); return refchkEtapaOk(o,'embarque') || et('embarque') && !!comprasEtapa(o,'embarque') || (c.t>0 && c.n===c.t); }
@@ -20074,7 +20202,7 @@ function reabastActualizarListaReferencias(){
     ${filas.map(r=>{
       const activo = r.activo!==false;
       return `<div data-c="${reabastEsc(r.referencia)}" onclick="reabastVerDetalleReferenciaPorCodigo(this.dataset.c)" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--b1);cursor:pointer;${activo?'':'opacity:.55;'}">
-        ${reabastFotoMiniHtml(r.foto_url, 32)}
+        ${reabastFotoMiniHtml(r.foto_url||wfotoUrl(r.referencia), 32)}
         <div style="min-width:0;flex:1;">
           <div style="font-size:12px;"><strong style="font-family:monospace;">${reabastEsc(r.referencia)}</strong> ${r.nombre_comercial?'— '+reabastEsc(r.nombre_comercial):''}</div>
           <div style="font-size:10px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${reabastEsc(r.categoria||'—')}${r.proveedor_predeterminado?' · '+reabastEsc(r.proveedor_predeterminado):''}${r.fob_usd!=null?' · US$'+r.fob_usd:''}</div>
@@ -20100,7 +20228,7 @@ function reabastActualizarTbodyReferencias(){
   if(!filas.length){ tbody.innerHTML = `<tr><td colspan="${cols.length+3}" style="padding:16px;text-align:center;color:var(--mu);">Sin referencias que coincidan con los filtros.</td></tr>`; return; }
   tbody.innerHTML = filas.map(r=>{
     const activo = r.activo!==false; // por defecto activo (dato viejo sin la columna aún)
-    const fotoTd = `<td style="white-space:nowrap;">${reabastFotoMiniHtml(r.foto_url, 36)}</td>`;
+    const fotoTd = `<td style="white-space:nowrap;">${reabastFotoMiniHtml(r.foto_url||wfotoUrl(r.referencia), 36)}</td>`;
     const estadoTd = `<td style="white-space:nowrap;">
       <label class="sw" title="${activo?'Activo — clic para desactivar':'Inactivo — clic para activar'}">
         <input type="checkbox" ${activo?'checked':''} onchange="reabastToggleActivoReferencia('${r.id}',this.checked)"><span class="sw-sl"></span>
@@ -20129,7 +20257,7 @@ function reabastActualizarCardsReferencias(){
   cont.innerHTML = filas.map(r=>{
     const activo = r.activo!==false;
     return `<div class="card" data-c="${reabastEsc(r.referencia)}" onclick="reabastVerDetalleReferenciaPorCodigo(this.dataset.c)" style="cursor:pointer;padding:10px;display:flex;flex-direction:column;gap:6px;${activo?'':'opacity:.55;'}">
-      <div style="display:flex;justify-content:center;">${reabastFotoMiniHtml(r.foto_url, 96)}</div>
+      <div style="display:flex;justify-content:center;">${reabastFotoMiniHtml(r.foto_url||wfotoUrl(r.referencia), 96)}</div>
       <div style="font-family:monospace;font-weight:700;font-size:12.5px;text-align:center;">${reabastEsc(r.referencia)}</div>
       <div style="font-size:11.5px;text-align:center;color:var(--tx);min-height:15px;">${reabastEsc(r.nombre_comercial||'—')}</div>
       <div style="font-size:10px;color:var(--mu);text-align:center;">${reabastEsc(r.categoria||'—')}${r.canal?' · '+reabastEsc(r.canal):''}</div>
@@ -20257,7 +20385,7 @@ function reabastPintarDetalleReferencia(r){
   const campo = (label, val) => `<div class="rd-campo"><div style="font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.03em;">${reabastEsc(label)}</div><div class="rd-val" style="font-size:13px;">${(val!=null && val!=='') ? reabastEsc(val) : '—'}</div></div>`;
   document.getElementById('rd-body').innerHTML = `
     <div class="rd-top">
-      <div>${reabastFotoMiniHtml(r.foto_url, 120)}</div>
+      <div>${reabastFotoMiniHtml(r.foto_url||wfotoUrl(r.referencia), 120)}</div>
       <div class="rd-top-info">
         ${campo('Estado', activo?'Activo':'Inactivo')}
         ${campo('Canal', r.canal)}
@@ -20787,6 +20915,7 @@ function reabastQuitarFoto(){
 // Amplía cualquier foto de producto (miniatura de tabla, tarjeta o del formulario) en un visor de pantalla completa.
 function reabastVerFotoGrande(url){
   if(!url) return;
+  try{ if(typeof wfGrande==='function') url = wfGrande(url); }catch(e){}
   const previo = document.getElementById('foto-lb'); if(previo) previo.remove();
   // Lista navegable: las referencias con foto que hoy se ven con los filtros de la pestaña Referencias
   let lista = [], idx = -1;
@@ -26044,7 +26173,7 @@ async function ocLlenarFilaDesdeReferencia(row, referencia){
   row.querySelector('.oc-item-ean14m').textContent = r.ean14_master || '—';
   row.querySelector('.oc-item-internalpack').textContent = r.internal_packaging || '—';
   row.querySelector('.oc-item-ean14i').textContent = r.ean14_internal || '—';
-  row.querySelector('.oc-item-foto').innerHTML = reabastFotoMiniHtml(r.foto_url, 34);
+  row.querySelector('.oc-item-foto').innerHTML = reabastFotoMiniHtml(r.foto_url||wfotoUrl(r.referencia), 34);
   row.querySelector('.oc-item-cant').value = sug ? sug.sugerido : 1;
   // Precarga la Observación de esta línea con la Observaciones guardada en la ficha del SKU
   // (ej. "Pedir 4 color box adicionales") para que salga sola en cada OC — el usuario puede
