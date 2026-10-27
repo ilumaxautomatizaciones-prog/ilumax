@@ -10333,6 +10333,30 @@ var INV_RESALTADOS_TIMER = null;      // timer para quitar el resaltado tras 3 m
 var INV_LISTA_SEL = '';                // lista_id seleccionada para mostrar precio (columna "Precio lista")
 var INV_LISTAS_CAT = [];               // catálogo de listas_catalogo, cargado una vez
 
+
+/* ===== Fotos de producto (copia diaria de la tienda en Supabase: woo_fotos) ===== */
+var WFOT={m:{},ok:false,p:null};
+function wfNz(s){return String(s==null?'':s).trim().replace(/^0+(?=.)/,'')}
+function wfoto(ref,px){
+  var f=WFOT.m[wfNz(ref)]; if(!f||!f[0]) return '';
+  px=px||36;
+  return '<a href="'+String(f[1]||f[0]).replace(/"/g,'&quot;')+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Ver en la tienda"><img src="'+String(f[0]).replace(/"/g,'&quot;')+'" loading="lazy" decoding="async" alt="" style="width:'+px+'px;height:'+px+'px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:8px;border:1px solid var(--b1);background:#fff"></a>';
+}
+function wfotosCargar(){
+  if(WFOT.p) return WFOT.p;
+  WFOT.p=(async function(){
+    try{
+      var c=null; try{ c=JSON.parse(localStorage.getItem('ilx_woo_fotos')||'null'); }catch(e){}
+      if(c&&c.d){ WFOT.m=c.d; WFOT.ok=true; if(Date.now()-c.t<6*3600*1000) return; }
+      var rows=await sb.get('woo_fotos','select=sku,foto,url&foto=not.is.null&limit=3000');
+      var m={}; (rows||[]).forEach(function(r){ m[wfNz(r.sku)]=[r.foto,r.url]; });
+      WFOT.m=m; WFOT.ok=true;
+      try{ localStorage.setItem('ilx_woo_fotos',JSON.stringify({t:Date.now(),d:m})); }catch(e){}
+    }catch(e){ console.warn('Fotos tienda:',e); WFOT.ok=true; }
+  })();
+  return WFOT.p;
+}
+
 async function renderInventarioMod() {
   const el = document.getElementById('inv-content');
   if(!el) return;
@@ -10340,6 +10364,7 @@ async function renderInventarioMod() {
   el.innerHTML = '<div style="padding:14px;" id="inv-inner"><div style="max-width:460px;margin:40px auto;text-align:center;"><div id="inv-pb-txt" style="font-size:13px;color:var(--mu);margin-bottom:8px;">Cargando inventario… 0%</div><div style="height:14px;background:var(--s1);border:1px solid var(--b1);border-radius:8px;overflow:hidden;"><div id="inv-pb-bar" style="width:0%;height:100%;background:var(--bl);transition:width .2s;"></div></div></div></div>';
 
   // Cargar desde Supabase
+  try{ await wfotosCargar(); }catch(e){}
   await cargarInventarioSupa();
   renderInvVista();
 }
@@ -10888,7 +10913,7 @@ function _renderFilasInv(mostrar, preciosMap) {
       : 'border-bottom:1px solid var(--b1);';
     const precioLista = INV_LISTA_SEL ? (preciosMap[r.referencia] || preciosMap[pvClaveRef(r.referencia)]) : undefined;
     return `<tr style="${rowStyle}" ${resaltada ? 'data-resaltada="1"' : ''}>
-      <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${r.referencia||''}${resaltada?' <span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">SIESA</span>':''}${esItemNuevo(r.fecha_creacion)?' <span style="background:#0891b2;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">🆕 NUEVO</span>':''}</td>
+      <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${wfoto(r.referencia)}${r.referencia||''}${resaltada?' <span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">SIESA</span>':''}${esItemNuevo(r.fecha_creacion)?' <span style="background:#0891b2;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">🆕 NUEVO</span>':''}</td>
       <td style="padding:9px 12px;max-width:220px;font-weight:600;font-size:11px;">${(r.descripcion||'').substring(0,50)}</td>
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.categoria||''}</td>
       <td style="padding:9px 12px;text-align:right;${existColor}">${fmtN(exist)}</td>
@@ -13048,6 +13073,7 @@ function acToggleMenu(){
 }
 
 function reabastPintar(){
+  if(!WFOT.p){ wfotosCargar().then(function(){ if(Object.keys(WFOT.m).length) reabastPintar(); }); }
   try{ const pc = document.getElementById('pg-compras'); if(pc && pc.classList.contains('on') && typeof comprasPintar==='function') comprasPintar(); }catch(e){}
   const el = document.getElementById('reabast-content');
   if(!el) return;
@@ -13361,7 +13387,7 @@ function reabastRepintarAgotados(){
       const prom = a.ventas ? a.ventas.promedio_mensual : 0;
       const rot = reabastRotacion(prom);
       return `<tr>
-        <td style="font-family:monospace;">${reabastEsc(a.referencia)}</td>
+        <td style="font-family:monospace;">${wfoto(a.referencia,32)}${reabastEsc(a.referencia)}</td>
         <td>${reabastEsc((a.descripcion||'').slice(0,60))}</td>
         <td style="text-align:right;">${reabastFmtN(prom)}</td>
         <td><span class="bdg ${rot.cls}">${rot.lbl}</span></td>
@@ -13388,7 +13414,7 @@ function reabastRepintarSobrestock(){
   wrap.innerHTML = `<div class="tw"><table>
     <thead><tr><th>Referencia</th><th>Existencia</th><th>Máximo</th><th>Cobertura actual</th></tr></thead>
     <tbody>${filas.map(s=>`<tr>
-      <td style="font-family:monospace;">${reabastEsc(s.referencia)}</td>
+      <td style="font-family:monospace;">${wfoto(s.referencia,32)}${reabastEsc(s.referencia)}</td>
       <td style="text-align:right;">${reabastFmtN(s.existencia)}</td>
       <td style="text-align:right;">${reabastFmtN(s.maximo)}</td>
       <td style="text-align:right;color:var(--or);font-weight:700;">${s.cobertura.lbl}</td>
@@ -13425,7 +13451,7 @@ function reabastRepintarVendidos(){
       const cob = reabastCobertura(f2.existencia, f2.promedio_mensual);
       return `<tr>
         <td style="color:var(--mu);">${i+1}</td>
-        <td style="font-family:monospace;">${reabastEsc(f2.referencia)}</td>
+        <td style="font-family:monospace;">${wfoto(f2.referencia,32)}${reabastEsc(f2.referencia)}</td>
         <td>${reabastEsc((f2.descripcion||'').slice(0,45))}</td>
         <td style="text-align:right;font-weight:700;">${reabastFmtN(f2.promedio_mensual)}</td>
         <td style="text-align:right;">${f2.pct_variacion!=null?f2.pct_variacion+'%':'—'}</td>
@@ -13476,7 +13502,7 @@ function reabastRepintarAbc(){
       <thead><tr><th>Clase</th><th>Referencia</th><th>Valor vendido</th><th>% del total</th><th>% acumulado</th><th>Unidades</th></tr></thead>
       <tbody>${filas.slice(0,300).map(x=>`<tr>
         <td><span class="bdg ${claseColor[x.clase]}">${x.clase}</span></td>
-        <td style="font-family:monospace;">${reabastEsc(x.referencia)}</td>
+        <td style="font-family:monospace;">${wfoto(x.referencia,32)}${reabastEsc(x.referencia)}</td>
         <td style="text-align:right;">$${reabastFmtN(x.valor_total)}</td>
         <td style="text-align:right;">${x.pct_valor}%</td>
         <td style="text-align:right;color:var(--mu);">${x.pct_acumulado}%</td>
