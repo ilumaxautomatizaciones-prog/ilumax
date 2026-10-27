@@ -15671,6 +15671,51 @@ function segItemsHtml(o, c){
   }catch(e){ return ''; }
 }
 
+// Texto buscable de una OC: número, proveedor y, de sus ítems, referencia + descripción
+// Estado actual de la OC: lo que dice Comercio Exterior (producción, embarque, tránsito…) o, si no hay, la etapa en curso del ERP
+function segEstadoOcTxt(o){
+  let t = ''; try{ const r = ceDe(o.numero_oc); if(r && r.fase!=null && CE_FASE_TXT[r.fase]) t = CE_FASE_TXT[r.fase]; }catch(e){}
+  if(!t){ try{ t = ceEtapaActualTxt(o); }catch(e){} }
+  return t && t!=='—' ? t : 'Sin estado';
+}
+function segEstadoOcHtml(o){
+  const t = segEstadoOcTxt(o), col = /ingres|termin/i.test(t) ? '#16a34a' : /tr[aá]nsito|nacional|zona/i.test(t) ? '#8b5cf6' : /embarq/i.test(t) ? '#3b82f6' : /produc/i.test(t) ? '#f59e0b' : '#64748b';
+  return `<span style="font-size:11px;font-weight:700;border-radius:10px;padding:2px 9px;background:${col}22;color:#334155;border:1px solid ${col};white-space:nowrap;" title="Estado actual de la orden">${reabastEsc(t)}</span>`;
+}
+function segZoomNorm(t){ return String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+function segZoomTexto(o){
+  const M = REABAST.referenciasMaestro||{}; let t = (o.numero_oc||'')+' '+(o.proveedor||'')+' '+segEstadoOcTxt(o);
+  (REABAST.ocItems[o.id]||[]).forEach(it=>{ const ref = String(it.referencia||'').trim(), mm = M[ref]||{}; t += ' '+ref+' '+(it.descripcion||'')+' '+(mm.nombre_comercial||'')+' '+(mm.descripcion_en||'')+' '+(mm.descripcion||''); });
+  return segZoomNorm(t);
+}
+function segZoomTog(row){ const d = row.nextElementSibling, ch = row.querySelector('.seg-z-chev'); if(!d || !ch || !ch.textContent) return; const ab = d.style.display==='none'; d.style.display = ab ? 'block' : 'none'; ch.textContent = ab ? '▾' : '▸'; }
+function segZoomFiltrar(q){
+  const ks = segZoomNorm(q).split(/[\s,;]+/).filter(Boolean); let n = 0, tot = 0;
+  document.querySelectorAll('#seg-zoom .seg-z-item').forEach(it=>{ tot++; const ok = !ks.length || ks.every(k=>(it.dataset.q||'').includes(k)); it.style.display = ok ? '' : 'none'; if(ok) n++; });
+  document.querySelectorAll('#seg-zoom details.seg-z-sec').forEach(s=>{ const v = [...s.querySelectorAll('.seg-z-item')].filter(i=>i.style.display!=='none').length; s.style.display = (ks.length && !v) ? 'none' : ''; if(ks.length && v) s.open = true; });
+  const e = document.getElementById('seg-z-n'); if(e) e.textContent = ks.length ? n+' de '+tot+' OC' : '';
+}
+// Tabla de ítems de una OC (resumida): referencia con foto, descripción, cantidad y valor en US$
+function segItemsTabla(o){
+  try{
+    const its = REABAST.ocItems[o.id]||[]; if(!its.length) return '';
+    const M = REABAST.referenciasMaestro||{}, fn = n=>Number(n||0).toLocaleString('es-CO'), us = n=>'US$ '+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    let tot = 0, usd = 0;
+    const filas = its.map(it=>{
+      const ref = String(it.referencia||'').trim(), mm = M[ref]||{}, cant = Number(it.cantidad)||0, fob = it.precio_fob_usd!=null ? Number(it.precio_fob_usd) : null;
+      const sk = (typeof skxMapa==='function' ? (skxMapa()[skxKey(ref)]||{}) : {});
+      const desc = mm.nombre_comercial || sk.desc || it.descripcion || mm.descripcion_en || mm.descripcion || '';
+      const foto = mm.foto_url || (typeof wfotoUrl==='function' ? wfotoUrl(ref) : '');
+      tot += cant; if(fob!=null) usd += fob*cant;
+      return '<tr style="border-top:1px solid var(--b1);"><td style="padding:3px 6px;white-space:nowrap;font-family:monospace;">'+(foto?reabastFotoMiniHtml(foto,28):'')+'<b>'+reabastEsc(ref)+'</b></td>'
+        + '<td style="padding:3px 6px;white-space:normal;">'+reabastEsc(String(desc).slice(0,90))+'</td>'
+        + '<td style="padding:3px 6px;text-align:right;white-space:nowrap;"><b>'+fn(cant)+'</b></td>'
+        + '<td style="padding:3px 6px;text-align:right;white-space:nowrap;" '+(fob!=null?'title="'+us(fob)+' c/u"':'')+'>'+(fob!=null?us(fob*cant):'—')+'</td></tr>';
+    }).join('');
+    return '<div style="overflow-x:auto;max-height:320px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;font-size:11.5px;"><thead><tr style="color:var(--mu);font-size:9.5px;text-transform:uppercase;"><th style="text-align:left;padding:3px 6px;">Referencia</th><th style="text-align:left;padding:3px 6px;">Descripción</th><th style="text-align:right;padding:3px 6px;">Cant.</th><th style="text-align:right;padding:3px 6px;">Valor US$</th></tr></thead><tbody>'+filas
+      + '<tr style="border-top:2px solid var(--b1);font-weight:800;"><td style="padding:3px 6px;" colspan="2">Total · '+its.length+' ítem'+(its.length===1?'':'s')+'</td><td style="padding:3px 6px;text-align:right;">'+fn(tot)+'</td><td style="padding:3px 6px;text-align:right;">'+us(usd)+'</td></tr></tbody></table></div>';
+  }catch(e){ return ''; }
+}
 function segZoom(colId){
   const c = SEG_COLS.find(x=>x.id===colId); if(!c) return;
   const filas = segFilas();
@@ -15684,18 +15729,23 @@ function segZoom(colId){
       : tipo==='tarde' ? `<span class="bdg br" style="font-size:9.5px;">${segMas(d.diff)}</span>` : tipo==='ok' ? `<span class="bdg ba" style="font-size:9.5px;">✓ ${reabastFmtDuracion(d.real)}</span>` : '';
     const fecha = tipo==='pend' ? (d.ini?'desde '+new Date(d.ini).toLocaleDateString('es-CO'):'') : tipo==='espera' ? '' : (d.fin?new Date(d.fin).toLocaleDateString('es-CO'):'');
     const com = d.ref && d.ref.comentario_extra ? `<div class="arte-mu" style="font-size:10px;white-space:normal;">${reabastEsc(String(d.ref.comentario_extra).slice(0,140))}</div>` : '';
-    return `<div class="seg-z-row" onclick="document.getElementById('seg-zoom').classList.remove('on');reabastAbrirDetalleOC('${o.id}')">
-      <span style="min-width:0;"><strong>${reabastEsc(o.numero_oc)}</strong> <span class="arte-mu">· ${reabastEsc(o.proveedor||'—')}</span>${com}${c.id==='arte'?segEstadoArteHtml(o):''}${segItemsHtml(o,c)}</span>
-      <span style="white-space:nowrap;display:flex;gap:8px;align-items:center;">${c.usd&&segAnticipo(o)>0?`<strong>${segUsd(segAnticipo(o))}</strong>`:''}<span class="arte-mu" style="font-size:10.5px;">${fecha}</span>${tag}</span></div>`; };
+    const nIt = (REABAST.ocItems[o.id]||[]).length;
+    return `<div class="seg-z-item" data-q="${reabastEsc(segZoomTexto(o))}"><div class="seg-z-row" onclick="segZoomTog(this)">
+      <span style="min-width:0;"><span class="seg-z-chev" style="color:var(--bl);display:inline-block;width:14px;">${nIt?'▸':''}</span><strong>${reabastEsc(o.numero_oc)}</strong> <span class="arte-mu">· ${reabastEsc(o.proveedor||'—')}</span>${nIt?` <span class="arte-mu" style="font-size:10.5px;">· ${nIt} ítem${nIt===1?'':'s'}</span>`:''}</span>
+      <span style="flex:1;text-align:left;padding:0 10px;min-width:0;">${segEstadoOcHtml(o)}</span>
+      <span style="white-space:nowrap;display:flex;gap:8px;align-items:center;">${c.usd&&segAnticipo(o)>0?`<strong>${segUsd(segAnticipo(o))}</strong>`:''}<span class="arte-mu" style="font-size:10.5px;">${fecha}</span>${tag}<button class="btn btn-g btn-xs" title="Abrir la orden" onclick="event.stopPropagation();document.getElementById('seg-zoom').classList.remove('on');reabastAbrirDetalleOC('${o.id}')">↗</button></span></div>
+      <div class="seg-z-its" style="display:none;padding:2px 10px 10px 24px;background:var(--s1);">${segItemsTabla(o)}</div></div>`; };
   const sec = (n, titulo, arr, tipo, color, abierto)=>`<details class="seg-z-sec" ${abierto?'open':''}><summary style="cursor:pointer;font-weight:800;font-size:12.5px;margin-bottom:6px;color:${color};">${n} ${titulo} (${arr.length})${usdTot(arr)}</summary>
     ${arr.length ? arr.map(x=>fila(x,tipo)).join('') : '<div class="arte-mu" style="font-size:11px;padding:4px 8px;">Ninguna</div>'}</details>`;
   let ov = document.getElementById('seg-zoom');
   if(!ov){ ov = document.createElement('div'); ov.className = 'ov'; ov.id = 'seg-zoom'; ov.onclick = e=>{ if(e.target===ov) ov.classList.remove('on'); }; document.body.appendChild(ov); }
   const idx = SEG_COLS.indexOf(c);
-  ov.innerHTML = `<div class="mo" style="max-width:min(900px,96vw);width:96vw;">
+  ov.innerHTML = `<div class="mo" style="max-width:min(1250px,97vw);width:97vw;">
     <div class="mh"><div class="mt">🔍 ${reabastEsc(c.lbl)} <span class="arte-mu" style="font-size:12px;font-weight:600;">· objetivo ${segObjetivoCol(c)} · ${filas.length} OC con los filtros actuales</span></div><div class="mx" onclick="document.getElementById('seg-zoom').classList.remove('on')">✕</div></div>
-    <div class="mb">
-      <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;">
+    <div class="mb" style="max-height:80vh;overflow:auto;">
+      <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+        <input id="seg-z-q" class="inp" placeholder="🔎 Buscar orden, proveedor, referencia o descripción…" oninput="segZoomFiltrar(this.value)" style="flex:1;min-width:240px;max-width:460px;">
+        <span id="seg-z-n" class="arte-mu" style="font-size:11px;"></span>
         ${idx>0?`<button class="btn btn-g btn-sm" onclick="segZoom('${SEG_COLS[idx-1].id}')">← ${reabastEsc(SEG_COLS[idx-1].lbl)}</button>`:''}
         ${idx<SEG_COLS.length-1?`<button class="btn btn-g btn-sm" onclick="segZoom('${SEG_COLS[idx+1].id}')">${reabastEsc(SEG_COLS[idx+1].lbl)} →</button>`:''}
       </div>
