@@ -12692,7 +12692,7 @@ async function cblMigrarExcel(soloBl){
 }
 
 // ═══ Informes: CBM por llegar por mes ═══
-const INF = { desde:'', hasta:'', prov:'', abierto:{}, estado:'todas', vista:'mes', manual:false, modo:'oc', q:'', ocAb:{} };
+const INF = { desde:'', hasta:'', prov:'', abierto:{}, estSel:null, estOc:{}, estado:'todas', vista:'mes', manual:false, modo:'oc', q:'', ocAb:{} };
 const INFP = { q:'', cat:'', oc:'', fecha:'', minq:'', sinCbm:false, grp:'ref', met:'qty', ord:'tot', dir:-1, ab:{}, _keys:[] };
 function infLunes(iso){ const d = new Date(iso+'T12:00:00'); const w = (d.getDay()+6)%7; d.setDate(d.getDate()-w); return d.toISOString().slice(0,10); }
 function infSemNum(iso){ const d = new Date(iso+'T12:00:00'); d.setDate(d.getDate()+3-((d.getDay()+6)%7)); const y0 = new Date(d.getFullYear(),0,4); return 1+Math.round(((d-y0)/86400000-3+((y0.getDay()+6)%7))/7); }
@@ -12761,7 +12761,7 @@ function infDatosPlan(){
   return res.sort((a,b)=> (a.iso||'9999').localeCompare(b.iso||'9999'));
 }
 // ── Estado de lo que llega: reparte el CBM de cada periodo por etapa real (producción, embarque, tránsito…) ──
-const INF_EST = [['Antes de producción','#94a3b8'],['Producción','#f59e0b'],['Proceso de embarque','#3b82f6'],['En tránsito','#8b5cf6'],['Nacionalización','#0ea5e9'],['Ingresó','#16a34a'],['Sin identificar','#cbd5e1']];
+const INF_EST = [['Antes de producción','#94a3b8'],['Producción','#f59e0b'],['Proceso de embarque','#3b82f6'],['En tránsito','#8b5cf6'],['Nacionalización','#0d9488'],['Ingresó','#16a34a'],['Sin identificar','#cbd5e1']];
 function infBucketOc(o){
   let r = null; try{ r = ceDe(o.numero_oc); }catch(e){}
   let fase = r && r.fase!=null ? r.fase : null;
@@ -12790,14 +12790,41 @@ function infEstChips(x){
   const e = infEstCbm(x), c = INF_EST.filter(([n])=>e[n]>0.0001);
   return c.length ? '<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;">'+c.map(([n,col])=>`<span style="font-size:10px;font-weight:700;border-radius:8px;padding:1px 7px;background:${col}22;color:#334155;border:1px solid ${col};">${n}${c.length>1?' '+infFmt(e[n])+' m³':''}</span>`).join('')+'</div>' : '';
 }
+// Clic en una barra/celda de «Estado de lo que llega»: muestra las órdenes (y sus ítems) de ese periodo en esa etapa
+function infEstSel(k, i){ const key = k+'|'+i; INF.estSel = INF.estSel===key ? null : key; infPintar(); }
+function infEstOcs(x, etapa){
+  if(x.ocs && x.ocs.length){
+    const par = x.ocs.map(n=>{ const o = infOcPorNombre(n); return {n, o, b: o ? infBucketOc(o) : 'Sin identificar', w: o ? (infCbmOc(o).cbm||0) : 0}; });
+    let tw = par.reduce((a,p)=>a+p.w,0); if(!(tw>0)){ par.forEach(p=>p.w=1); tw = par.length; }
+    return par.filter(p=>p.b===etapa).map(p=>({o:p.o, nombre:p.n, cbm:x.cbm*p.w/tw, x}));
+  }
+  return infBucketOc(x.o)===etapa ? [{o:x.o, nombre:x.o.numero_oc, cbm:x.cbm, x}] : [];
+}
+function infEstDetalle(k, i, meses, span){
+  const E = reabastEsc, etapa = INF_EST[i][0], col = INF_EST[i][1];
+  const lista = []; (meses[k]||[]).forEach(x=>infEstOcs(x, etapa).forEach(r=>lista.push(r)));
+  lista.sort((a,b)=>b.cbm-a.cbm);
+  const fd = x => x.fecha ? x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short'}) : '—';
+  const filas = lista.map(r=>{
+    const id = r.o ? r.o.id : null, ab = !!(id && INF.estOc[id]);
+    let sub = '';
+    if(ab){
+      const its = REABAST.ocItems[id]||[];
+      sub = `<tr><td colspan="6" style="background:#fff;padding:6px 14px;"><table style="font-size:11px;width:100%;"><thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad pendiente</th><th style="text-align:right;">CBM</th></tr></thead><tbody>${its.map(it=>{ const ref = String(it.referencia||'').trim(), M = (REABAST.referenciasMaestro||{})[ref]||{}, q = ocPendItem(r.o,it), cu = cbmRefInfo(ref).cbm; return `<tr><td><b>${E(ref)}</b></td><td>${E(it.descripcion||M.descripcion_en||'')}</td><td style="text-align:right;font-weight:700;">${infFmt(q)}</td><td style="text-align:right;">${cu?infFmt(q*cu,2)+' m³':'<span style="color:#b45309;">sin CBM</span>'}</td></tr>`; }).join('')||'<tr><td colspan="4" class="arte-mu">Sin ítems cargados</td></tr>'}</tbody></table></td></tr>`;
+    }
+    return `<tr ${id?`onclick="INF.estOc['${id}']=!INF.estOc['${id}'];infPintar()" style="cursor:pointer;"`:''}><td><b>${id?(ab?'▾':'▸')+' ':''}${E(r.nombre)}</b></td><td>${E(r.o?r.o.proveedor||'':'')}</td><td style="white-space:nowrap;">${fd(r.x)}</td><td>${E(r.x.etapa||'')}</td><td style="text-align:right;">${r.o?(REABAST.ocItems[r.o.id]||[]).length:''}</td><td style="text-align:right;font-weight:800;">${infFmt(r.cbm)} m³</td></tr>${sub}`;
+  }).join('');
+  return `<tr><td colspan="${span}" style="background:var(--s1);padding:10px 14px;border-left:4px solid ${col};"><div style="font-weight:800;margin-bottom:6px;">${E(etapa)} · ${E(INF.vista==='semana'?k:INF_MESES[Number(k.slice(5,7))-1]+' '+k.slice(0,4))} — ${lista.length} orden(es), ${infFmt(lista.reduce((a,r)=>a+r.cbm,0))} m³ <span class="arte-mu" style="font-weight:400;">(clic en una orden para ver sus ítems)</span></div><table style="font-size:11.5px;width:100%;background:#fff;"><thead><tr><th>Orden</th><th>Proveedor</th><th>Llegada</th><th>Etapa actual</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM en esta etapa</th></tr></thead><tbody>${filas||'<tr><td colspan="6" class="arte-mu">Sin órdenes</td></tr>'}</tbody></table></td></tr>`;
+}
 function infEstadoCard(claves, meses, nm){
   const tot = {}, filas = claves.map(k=>{ const e = {}; meses[k].forEach(x=>{ const r = infEstCbm(x); for(const n in r){ e[n] = (e[n]||0)+r[n]; tot[n] = (tot[n]||0)+r[n]; } }); return {k, e, t: Object.values(e).reduce((a,v)=>a+v,0)}; });
+  const ix = n => INF_EST.findIndex(z=>z[0]===n);
   const cols = INF_EST.filter(([n])=>tot[n]>0.0001); if(!cols.length) return '';
   const leg = cols.map(([n,c])=>`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;margin-right:10px;"><span style="width:10px;height:10px;border-radius:2px;background:${c};display:inline-block;"></span>${n}</span>`).join('');
   return `<div class="card" style="margin-bottom:14px;"><div class="cb"><div style="font-weight:800;font-size:14px;margin-bottom:4px;">🧭 Estado de lo que llega (CBM por etapa)</div>
     <div style="font-size:11px;color:var(--mu);margin-bottom:8px;">Para cada periodo: cuánto ya viaja y cuánto sigue en producción o embarque (lo más fácil de mover está a la izquierda). En las líneas del plan de Logística con varias OC el CBM se reparte en proporción al CBM de cada OC.</div>
     <div style="margin-bottom:8px;">${leg}</div>
-    <div class="tw"><table style="font-size:12px;"><thead><tr><th>Periodo</th><th style="text-align:right;">Total</th><th style="min-width:200px;">Distribución</th>${cols.map(([n])=>`<th style="text-align:right;">${n}</th>`).join('')}</tr></thead><tbody>${filas.map(f=>`<tr><td style="white-space:nowrap;font-weight:700;">${nm(f.k)}</td><td style="text-align:right;font-weight:800;">${infFmt(f.t)} m³</td><td><div style="display:flex;height:14px;border-radius:5px;overflow:hidden;background:var(--s1);">${cols.map(([n,c])=>f.e[n]>0?`<div title="${n}: ${infFmt(f.e[n])} m³" style="width:${f.e[n]*100/f.t}%;background:${c};"></div>`:'').join('')}</div></td>${cols.map(([n])=>{ const v = f.e[n]||0; return `<td style="text-align:right;">${v>0.0001?`<b>${infFmt(v)}</b> <span class="arte-mu">${Math.round(v*100/f.t)}%</span>`:'<span class="arte-mu">—</span>'}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div></div></div>`;
+    <div class="tw"><table style="font-size:12px;"><thead><tr><th>Periodo</th><th style="text-align:right;">Total</th><th style="min-width:200px;">Distribución</th>${cols.map(([n])=>`<th style="text-align:right;">${n}</th>`).join('')}</tr></thead><tbody>${filas.map(f=>`<tr><td style="white-space:nowrap;font-weight:700;">${nm(f.k)}</td><td style="text-align:right;font-weight:800;">${infFmt(f.t)} m³</td><td><div style="display:flex;height:18px;border-radius:5px;overflow:hidden;background:var(--s1);">${cols.map(([n,c])=>f.e[n]>0?`<div title="${n}: ${infFmt(f.e[n])} m³ — clic para ver qué hay aquí" onclick="infEstSel('${f.k}',${ix(n)})" style="width:${f.e[n]*100/f.t}%;background:${c};cursor:pointer;${INF.estSel===f.k+'|'+ix(n)?'box-shadow:inset 0 0 0 3px #0f172a;':''}"></div>`:'').join('')}</div></td>${cols.map(([n])=>{ const v = f.e[n]||0; return `<td style="text-align:right;${v>0.0001?'cursor:pointer;':''}${INF.estSel===f.k+'|'+ix(n)?'background:#fef9c3;':''}" ${v>0.0001?`onclick="infEstSel('${f.k}',${ix(n)})" title="Clic para ver las órdenes"`:''}>${v>0.0001?`<b>${infFmt(v)}</b> <span class="arte-mu">${Math.round(v*100/f.t)}%</span>`:'<span class="arte-mu">—</span>'}</td>`; }).join('')}</tr>${INF.estSel && INF.estSel.split('|')[0]===f.k ? infEstDetalle(f.k, +INF.estSel.split('|')[1], meses, cols.length+3) : ''}`).join('')}</tbody></table></div></div></div>`;
 }
 function infFmt(n,d){ return Number(n||0).toLocaleString('es-CO',{minimumFractionDigits:d||0, maximumFractionDigits:d==null?1:d}); }
 function infManual(){
