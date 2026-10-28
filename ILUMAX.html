@@ -27222,7 +27222,8 @@ function filtrarTiEntregas() {
       <td style="padding:9px 12px;"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:${badgeCol[e.estado]||'#64748b'}22;color:${badgeCol[e.estado]||'#64748b'};">${tiEsc(e.estado||'')}</span></td>
       <td style="padding:9px 12px;text-align:right;white-space:nowrap;">
         <button class="btn btn-bl btn-sm" style="padding:4px 8px;" onclick="tiAbrirActa('${e.id}')" title="Ver / Imprimir PDF">📄</button>
-        ${e.estado==='Vigente' ? `<button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiMarcarDevuelto('${e.id}')" title="Marcar devuelto">↩️</button>` : ''}
+        ${e.estado==='Vigente' ? `<button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiMarcarDevuelto('${e.id}')" title="Recibir equipo (devolución) y sacar el acta de recepción">📥 Recibir equipo</button>` : ''}
+        ${e.estado==='Devuelto' ? `<button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiAbrirActa('${e.id}','recepcion')" title="Ver / Imprimir acta de recepción">📥 Acta de recepción</button>` : ''}
       </td>
     </tr>`;
   }).join('');
@@ -27646,32 +27647,34 @@ async function tiGuardarEntrega() {
 }
 
 async function tiMarcarDevuelto(id) {
-  if(!confirm('¿Marcar esta acta como devuelta? Los equipos quedarán disponibles de nuevo.')) return;
+  if(!confirm('¿Recibir el equipo? El acta quedará como devuelta, los equipos quedarán disponibles de nuevo y se abrirá el acta de recepción.')) return;
   try {
     await sb.patch('ti_entregas', `id=eq.${id}`, {
       estado: 'Devuelto', fecha_devolucion: new Date().toISOString().split('T')[0],
       actualizado: new Date().toISOString(),
     });
-    toast('↩️ Acta marcada como devuelta', 'ok');
+    toast('📥 Equipo recibido', 'ok');
     await cargarInvTiSupa();
     filtrarTiEntregas();
+    tiAbrirActa(id, 'recepcion');
   } catch(e) {
     toast('❌ Error: ' + e.message, 'er');
   }
 }
 
 // ── GENERADOR DE ACTA EN HTML/PDF (formato RHU-FOR-006) ──
-function tiAbrirActa(entregaId) {
+function tiAbrirActa(entregaId, modo) {
   const entrega = TI.entregas.find(e => e.id === entregaId);
   if(!entrega) { toast('No se encontró la acta', 'er'); return; }
-  const html = tiGenerarHtmlActa(entrega);
+  const html = tiGenerarHtmlActa(entrega, modo);
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   window.open(url, '_blank');
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
-function tiGenerarHtmlActa(entrega) {
+function tiGenerarHtmlActa(entrega, modo) {
+  const rec = modo === 'recepcion'; // acta de recepción (devolución) — mismo formato, otro título/constancia
   // Réplica exacta de la hoja Excel RHU-FOR-006 (Hoja1, A1:Q41): mismas 17 columnas, alturas de fila,
   // celdas combinadas, bordes (grueso en el marco/encabezado, fino en la cuadrícula), Century Gothic,
   // bloque negro del logo, filas vacías de la tabla, notas, firmas. Impresión: carta vertical, márgenes
@@ -27703,7 +27706,7 @@ function tiGenerarHtmlActa(entrega) {
     </tr>`;
   }).join('');
 
-  const cond = !!entrega.condiciones_comercial;
+  const cond = !!entrega.condiciones_comercial && !rec;
   const bloqueCondiciones = cond ? `
     <tr style="height:34.3pt"><td colspan="17" class="t9"><b>Condiciones de la propiedad del equipo:</b> Las siguientes condiciones solo aplican para el área comercial que requiera un equipo especifico: </td></tr>
     <tr style="height:34.3pt"><td colspan="17" class="t9">* En caso de retiro desde el primer día hasta 12 meses se descontará el valor total que fue asumido por la compañía y las cuotas o valor que adeude que correspondan al colaborador.</td></tr>
@@ -27720,7 +27723,7 @@ function tiGenerarHtmlActa(entrega) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Entrega de Equipos — ${tiEsc(entrega.colaborador_nombre)} — ${tiEsc(entrega.folio||'')}</title>
+<title>${rec?'Recepción':'Entrega'} de Equipos — ${tiEsc(entrega.colaborador_nombre)} — ${tiEsc(entrega.folio||'')}</title>
 <style>
   @page{size:letter portrait;margin:0.75in 0.70in;}
   *{box-sizing:border-box;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}
@@ -27774,7 +27777,7 @@ function tiGenerarHtmlActa(entrega) {
     <td colspan="4" class="m b c">Código:RHU-FOR-006</td>
   </tr>
   <tr style="height:17.15pt">
-    <td colspan="9" rowspan="3" class="m b c">ENTREGA DE EQUIPOS Y ACCESORIOS</td>
+    <td colspan="9" rowspan="3" class="m b c">${rec?'RECEPCIÓN':'ENTREGA'} DE EQUIPOS Y ACCESORIOS</td>
     <td colspan="4" class="m b">Fecha: 19-Dic-2022</td>
   </tr>
   <tr style="height:17.15pt"><td colspan="4" class="m b">Edición: 1</td></tr>
@@ -27782,11 +27785,11 @@ function tiGenerarHtmlActa(entrega) {
   <tr style="height:17.15pt"><td colspan="17" style="border-top:2px solid #000;"></td></tr>
   <tr style="height:17.15pt"><td colspan="17" class="t1">Nombres y Apellidos: ${tiEsc(entrega.colaborador_nombre)}</td></tr>
   <tr style="height:17.15pt"><td colspan="17" class="t1">Cargo: ${tiEsc(entrega.colaborador_cargo||'')}</td></tr>
-  <tr style="height:17.15pt"><td colspan="17" class="t1"></td></tr>
+  <tr style="height:17.15pt"><td colspan="17" class="t1">${rec?'Fecha de devolución: '+tiFechaCO(entrega.fecha_devolucion||new Date().toISOString().split('T')[0])+' · Fecha de entrega original: '+tiFechaCO(entrega.fecha):''}</td></tr>
   <tr style="height:17.15pt">
-    <td colspan="3" class="v9">Valor del Equipo: </td><td colspan="2" class="val">${tiCOP(entrega.valor_equipo_total)}</td>
-    <td colspan="3" class="v9">Auxilio Empresa: </td><td colspan="2" class="val">${tiCOP(entrega.auxilio_empresa_total)}</td>
-    <td colspan="4" class="v9">Valor asumido Colaborador:</td><td colspan="2" class="val">${tiCOP(entrega.valor_colaborador_total)}</td><td></td>
+    <td colspan="3" class="v9">${rec?'':'Valor del Equipo: '}</td><td colspan="2" class="${rec?'':'val'}">${rec?'':tiCOP(entrega.valor_equipo_total)}</td>
+    <td colspan="3" class="v9">${rec?'':'Auxilio Empresa: '}</td><td colspan="2" class="${rec?'':'val'}">${rec?'':tiCOP(entrega.auxilio_empresa_total)}</td>
+    <td colspan="4" class="v9">${rec?'':'Valor asumido Colaborador:'}</td><td colspan="2" class="${rec?'':'val'}">${rec?'':tiCOP(entrega.valor_colaborador_total)}</td><td></td>
   </tr>
   <tr style="height:17.15pt"><td colspan="17" class="b"><b>N:</b> Nuevo <b>U:</b> Usado <b>C:</b> Cambio</td></tr>
   <tr style="height:17.15pt"><td colspan="17"></td></tr>
@@ -27813,11 +27816,11 @@ function tiGenerarHtmlActa(entrega) {
     <col style="width:67px"><col style="width:55px"><col style="width:44px"><col style="width:44px">
   </colgroup>
   <tr style="height:17.15pt"><td colspan="17"></td></tr>
-  <tr style="height:70.5pt"><td colspan="17" class="t9"><b>Nota:</b> El trabajador, adquiere responsabilidad y compromiso de informar al jefe de Recursos humanos o jefe inmediato, cualquier tipo de novedad que suceda con dichos(s) activo(s), ya sea daños, necesidad de mantenimiento preventivo, traslado de oficina, punto o persona. El Colaborador autoriza descontar de su salario o liquidación en caso de retiro de la empresa el costo que se origine por el deterioro (daño por mal uso o pérdida) que no sea atribuible por el tiempo de vida útil.</td></tr>
+  <tr style="height:70.5pt"><td colspan="17" class="t9">${rec?'<b>Constancia:</b> El área de Sistemas (TI) recibe del colaborador los equipos y accesorios relacionados en este formato, en las condiciones físicas y de funcionamiento verificadas al momento de la devolución. Con la firma de este documento el colaborador queda a paz y salvo por los activos aquí descritos, salvo daños o faltantes que se identifiquen posteriormente.':'<b>Nota:</b> El trabajador, adquiere responsabilidad y compromiso de informar al jefe de Recursos humanos o jefe inmediato, cualquier tipo de novedad que suceda con dichos(s) activo(s), ya sea daños, necesidad de mantenimiento preventivo, traslado de oficina, punto o persona. El Colaborador autoriza descontar de su salario o liquidación en caso de retiro de la empresa el costo que se origine por el deterioro (daño por mal uso o pérdida) que no sea atribuible por el tiempo de vida útil.'}</td></tr>
   ${bloqueCondiciones}
   <tr style="height:17.15pt"><td colspan="17"></td></tr>
   <tr style="height:17.15pt">
-    <td colspan="2"></td><td colspan="5" class="fir ln">Firma Empleador</td><td colspan="3"></td><td colspan="5" class="fir ln">Firma Colaborador</td><td colspan="2"></td>
+    <td colspan="2"></td><td colspan="5" class="fir ln">${rec?'Firma quien recibe (TI)':'Firma Empleador'}</td><td colspan="3"></td><td colspan="5" class="fir ln">${rec?'Firma Colaborador (entrega)':'Firma Colaborador'}</td><td colspan="2"></td>
   </tr>
   <tr style="height:17.15pt">
     <td colspan="2"></td><td colspan="5" class="fir">Cedula:${ced(entrega.empleador_cedula)}</td><td colspan="3"></td><td colspan="5" class="fir">Cedula:${ced(entrega.colaborador_cedula)}</td><td colspan="2"></td>
