@@ -27672,43 +27672,48 @@ function tiAbrirActa(entregaId) {
 }
 
 function tiGenerarHtmlActa(entrega) {
+  // Réplica exacta de la hoja Excel RHU-FOR-006 (Hoja1, A1:Q41): mismas 17 columnas, alturas de fila,
+  // celdas combinadas, bordes (grueso en el marco/encabezado, fino en la cuadrícula), Century Gothic,
+  // bloque negro del logo, filas vacías de la tabla, notas, firmas. Impresión: carta vertical, márgenes
+  // 0.70" (izq/der) y 0.75" (sup/inf), escala 80 %.
   const items = (entrega.ti_entrega_items || []).slice().sort((a,b) => (a.no_item||0)-(b.no_item||0));
+  const MIN_FILAS = 12; // filas 13–24 de la hoja original
+  const altoFila = i => i === 0 ? 32.25 : (i >= 9 && i <= 11) ? 22.5 : 24.75;
 
-  const filasItems = items.map(it => {
-    const marcaN = it.condicion === 'N' ? 'X' : '';
-    const marcaU = it.condicion === 'U' ? 'X' : '';
-    const marcaC = it.condicion === 'C' ? 'X' : '';
-    let filas = `<tr>
-      <td style="text-align:center;">${it.no_item||''}</td>
-      <td><strong>${tiEsc(it.descripcion)}</strong></td>
-      <td style="text-align:center;">${it.unidades||1}</td>
-      <td style="text-align:center;">${marcaN}</td>
-      <td style="text-align:center;">${marcaU}</td>
-      <td style="text-align:center;">${marcaC}</td>
-      <td style="white-space:pre-line;font-size:10.5px;">${tiEsc(it.observacion||'')}</td>
+  // Filas de la tabla: cada equipo ocupa una fila y, si tiene especificaciones, una fila adicional debajo
+  const filas = [];
+  items.forEach(it => {
+    filas.push({it, spec:false});
+    if(it.especificaciones) filas.push({it, spec:true});
+  });
+  while(filas.length < MIN_FILAS) filas.push(null);
+
+  const filasHtml = filas.map((f, i) => {
+    const h = altoFila(i);
+    if(!f) return `<tr style="height:${h}pt"><td></td><td colspan="7"></td><td></td><td></td><td></td><td></td><td colspan="5"></td></tr>`;
+    const it = f.it;
+    if(f.spec) return `<tr style="height:${h}pt"><td></td><td colspan="7" class="d">${tiEsc(it.especificaciones)}</td><td></td><td></td><td></td><td></td><td colspan="5"></td></tr>`;
+    const x = c => it.condicion === c ? 'X' : '';
+    return `<tr style="height:${h}pt">
+      <td class="n">${it.no_item||''}</td>
+      <td colspan="7" class="d">${tiEsc(it.descripcion)}</td>
+      <td class="n">${it.unidades||1}</td>
+      <td class="n">${x('N')}</td><td class="n">${x('U')}</td><td class="n">${x('C')}</td>
+      <td colspan="5" class="n">${tiEsc(it.observacion||'')}</td>
     </tr>`;
-    if(it.especificaciones) {
-      filas += `<tr>
-        <td></td>
-        <td style="color:#475569;font-style:italic;">${tiEsc(it.especificaciones)}</td>
-        <td colspan="4"></td>
-        <td></td>
-      </tr>`;
-    }
-    return filas;
   }).join('');
 
-  const bloqueCondiciones = entrega.condiciones_comercial ? `
-    <p style="margin-top:12px;"><strong>Condiciones de la propiedad del equipo:</strong> Las siguientes condiciones solo aplican para el área comercial que requiera un equipo especifico:</p>
-    <ul style="margin:6px 0 6px 18px;padding:0;">
-      <li>En caso de retiro desde el primer día hasta 12 meses se descontará el valor total que fue asumido por la compañía y las cuotas o valor que adeude que correspondan al colaborador.</li>
-      <li>En caso de retiro después de 12 meses un día y antes de 18 meses, se descontará el 50% del valor total que fue asumido por la compañía.</li>
-      <li>En caso de retiro después de 18 meses un día y antes de 24 meses, se descontará el 20% del valor total que fue asumido por la compañía.</li>
-      <li>En caso de retiro después de 24 meses un día, NO se descontará nada del valor total que fue asumido por la compañía.</li>
-    </ul>
-    <p>Autorizo a ILUMAX S.A. para que se me descuente de mi liquidación y prestaciones sociales en caso desvinculación de la empresa.</p>` : '';
+  const cond = !!entrega.condiciones_comercial;
+  const bloqueCondiciones = cond ? `
+    <tr style="height:34.3pt"><td colspan="17" class="t9"><b>Condiciones de la propiedad del equipo:</b> Las siguientes condiciones solo aplican para el área comercial que requiera un equipo especifico: </td></tr>
+    <tr style="height:34.3pt"><td colspan="17" class="t9">* En caso de retiro desde el primer día hasta 12 meses se descontará el valor total que fue asumido por la compañía y las cuotas o valor que adeude que correspondan al colaborador.</td></tr>
+    <tr style="height:25.5pt"><td colspan="17" class="t9">* En caso de retiro después de 12 meses un día y antes de 18 meses, se descontará el 50% del valor total que fue asumido por la compañía.</td></tr>
+    <tr style="height:24.75pt"><td colspan="17" class="t9">* En caso de retiro después de 18 meses un día y antes de 24 meses, se descontará el 20% del valor total que fue asumido por la compañía.</td></tr>
+    <tr style="height:27.75pt"><td colspan="17" class="t9">* En caso de retiro después de 24 meses un día, NO se descontará nada del valor total que fue asumido por la compañía.</td></tr>
+    <tr style="height:34.3pt"><td colspan="17" class="aut">Autorizo a ILUMAX S.A. para que se me descuente de  mi liquidación y prestaciones sociales en caso desvinculación de la empresa.</td></tr>` : '';
 
   const generado = new Date().toLocaleDateString('es-CO', { day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const ced = v => v ? ' ' + tiEsc(v) : '';
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -27717,121 +27722,113 @@ function tiGenerarHtmlActa(entrega) {
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Entrega de Equipos — ${tiEsc(entrega.colaborador_nombre)} — ${tiEsc(entrega.folio||'')}</title>
 <style>
-  /* Réplica del formato controlado RHU-FOR-006 (ver .xlsx oficial de Recursos Humanos):
-     encabezado en caja con logo+código/fecha/edición/página, y todo el cuerpo con bordes
-     negros tipo "casillas de formulario" — no el estilo suelto/sin bordes de antes. */
-  *{box-sizing:border-box;}
-  body{font-family:Calibri,Arial,Helvetica,sans-serif;background:#f1f5f9;color:#000;margin:0;padding:0;font-size:12px;line-height:1.42;}
-  .hoja{max-width:800px;margin:18px auto;background:#fff;padding:22px;box-shadow:0 1px 6px rgba(0,0,0,.12);}
-
-  table.rhu{width:100%;border-collapse:collapse;}
-  table.rhu td{border:1px solid #000;padding:5px 10px;}
-
-  table.cab td{vertical-align:middle;}
-  .cab-logo{width:150px;text-align:center;background:#000;padding:8px !important;}
-  .cab-logo img{max-width:100%;max-height:52px;display:block;margin:0 auto;}
-  .cab-rrhh{text-align:center;font-weight:800;font-size:13px;}
-  .cab-titulo{text-align:center;font-weight:800;font-size:14.5px;}
-  .cab-meta{font-size:10.5px;font-weight:700;width:160px;white-space:nowrap;}
-
-  table.datos td{font-size:12px;}
-  table.valores td{font-size:11.5px;}
-  table.valores .leyenda td{font-size:11px;}
-
-  table.items{font-size:11px;margin:0;}
-  table.items th{background:#fff;color:#000;padding:6px 7px;font-size:10.5px;font-weight:800;border:1px solid #000;}
-  table.items td{padding:5px 7px;border:1px solid #000;vertical-align:top;}
-
-  .notas{border:1px solid #000;border-top:none;padding:10px 12px;font-size:10.5px;text-align:justify;}
-  .notas p{margin:0 0 8px;}
-  .notas ul{margin:4px 0 8px 18px;padding:0;}
-  .notas li{margin-bottom:3px;}
-
-  .firmas{display:flex;gap:40px;margin-top:44px;padding:0 4px;}
-  .firma{flex:1;text-align:center;}
-  .firma .linea{border-top:1px solid #000;margin-top:40px;padding-top:5px;font-size:11px;font-weight:700;}
-  .firma .dato{font-size:11px;margin-top:14px;text-align:left;}
-  .pie{text-align:center;font-size:9.5px;color:#94a3b8;margin-top:22px;}
-  *{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important;}
-  @media print {
+  @page{size:letter portrait;margin:0.75in 0.70in;}
+  *{box-sizing:border-box;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}
+  body{background:#f1f5f9;margin:0;padding:0;color:#000;font-family:'Century Gothic','CenturyGothic','URW Gothic','Questrial',Arial,Helvetica,sans-serif;}
+  .hoja{width:799px;margin:18px auto;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.12);}
+  table.x{border-collapse:collapse;table-layout:fixed;width:799px;font-size:11pt;line-height:1.15;}
+  table.x td{padding:0 4px;border:0;vertical-align:middle;overflow:hidden;word-wrap:break-word;}
+  table.x tr>td:first-child{border-left:2px solid #000;}
+  table.x tr>td:last-child{border-right:2px solid #000;}
+  .g td{border:1px solid #000 !important;}
+  .g tr>td:first-child{border-left:2px solid #000 !important;}
+  .g tr>td:last-child{border-right:2px solid #000 !important;}
+  .b{font-weight:700;}
+  .c{text-align:center;}
+  .m{border:2px solid #000 !important;}
+  .t1{border:1px solid #000 !important;font-weight:700;}
+  .logo{background:#000;border:1px solid #000 !important;position:relative;padding:0 !important;overflow:visible !important;}
+  .logo img{position:absolute;left:3px;top:17px;width:159px;height:60px;}
+  .v9{font-size:9pt;font-weight:700;}
+  .val{font-size:9pt;font-weight:700;text-align:center;border-top:1px solid #000;}
+  .n{text-align:center;font-weight:700;}
+  .d{text-align:center;font-weight:700;font-size:10pt;white-space:pre-line;}
+  .t9{font-size:9pt;text-align:left;}
+  .aut{font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt;}
+  .fir{font-weight:700;text-align:left;}
+  .ln{border-top:1px solid #000 !important;}
+  .barra{width:799px;margin:14px auto 0;display:flex;justify-content:flex-end;gap:8px;}
+  .barra button{border:none;background:#0f172a;color:#fff;padding:9px 16px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:Arial,sans-serif;}
+  .pie{width:799px;margin:8px auto 18px;text-align:center;font:11px Arial,sans-serif;color:#94a3b8;}
+  @media print{
     body{background:#fff;}
-    .hoja{box-shadow:none;margin:0;max-width:100%;}
-    .no-print{display:none;}
+    .hoja{margin:0;box-shadow:none;zoom:0.8;}
+    .no-print{display:none !important;}
   }
-  .barra{max-width:800px;margin:14px auto 0;display:flex;justify-content:flex-end;gap:8px;}
-  .barra button{border:none;background:#0f172a;color:#fff;padding:9px 16px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;}
 </style>
 </head>
 <body>
 <div class="barra no-print" id="ti-acta-barra"><button onclick="window.print()">🖨️ Imprimir / Guardar como PDF</button></div>
 <div class="hoja">
-
-  <table class="rhu cab">
-    <tr>
-      <td class="cab-logo" rowspan="4"><img src="${ILUMAX_LOGO_DATAURI}" alt="ILUMAX"></td>
-      <td class="cab-rrhh">RECURSOS HUMANOS</td>
-      <td class="cab-meta">Código: RHU-FOR-006</td>
-    </tr>
-    <tr>
-      <td class="cab-titulo" rowspan="3">Entrega de Equipos y Accesorios</td>
-      <td class="cab-meta">Fecha: 19-Dic-2022</td>
-    </tr>
-    <tr><td class="cab-meta">Edición: 1</td></tr>
-    <tr><td class="cab-meta">Página 1 de 1</td></tr>
-  </table>
-
-  <table class="rhu datos">
-    <tr><td><b>Nombres y Apellidos:</b> ${tiEsc(entrega.colaborador_nombre)}</td></tr>
-    <tr><td><b>Cargo:</b> ${tiEsc(entrega.colaborador_cargo||'')}</td></tr>
-  </table>
-
-  <table class="rhu valores">
-    <tr>
-      <td><b>Valor del Equipo:</b> ${tiCOP(entrega.valor_equipo_total)}</td>
-      <td><b>Auxilio Empresa:</b> ${tiCOP(entrega.auxilio_empresa_total)}</td>
-      <td><b>Valor asumido Colaborador:</b> ${tiCOP(entrega.valor_colaborador_total)}</td>
-    </tr>
-    <tr class="leyenda"><td colspan="3"><b>N:</b> Nuevo &nbsp; <b>U:</b> Usado &nbsp; <b>C:</b> Cambio</td></tr>
-  </table>
-
-  <table class="rhu items">
-    <thead><tr>
-      <th style="width:32px;">No.</th>
-      <th>Descripción Equipo</th>
-      <th style="width:42px;">Unds</th>
-      <th style="width:28px;">N</th>
-      <th style="width:28px;">U</th>
-      <th style="width:28px;">C</th>
-      <th style="width:180px;">Observación</th>
-    </tr></thead>
-    <tbody>${filasItems || '<tr><td colspan="7" style="text-align:center;color:#94a3b8;border:1px solid #000;">Sin equipos</td></tr>'}</tbody>
-  </table>
-
-  <div class="notas">
-    <p><b>Nota:</b> El trabajador, adquiere responsabilidad y compromiso de informar al jefe de Recursos humanos o jefe inmediato, cualquier tipo de novedad que suceda con dichos(s) activo(s), ya sea daños, necesidad de mantenimiento preventivo, traslado de oficina, punto o persona. El Colaborador autoriza descontar de su salario o liquidación en caso de retiro de la empresa el costo que se origine por el deterioro (daño por mal uso o pérdida) que no sea atribuible por el tiempo de vida útil.</p>
-    ${bloqueCondiciones}
-  </div>
-
-  <div class="firmas">
-    <div class="firma">
-      <div class="linea">Firma Empleador</div>
-      <div class="dato">Cédula: ${tiEsc(entrega.empleador_cedula||'')}${entrega.empleador_cedula?'':'____________________'}</div>
-    </div>
-    <div class="firma">
-      <div class="linea">Firma Colaborador</div>
-      <div class="dato">Cédula: ${tiEsc(entrega.colaborador_cedula||'')}${entrega.colaborador_cedula?'':'____________________'}</div>
-      <div class="dato">Fecha: ____________________</div>
-    </div>
-  </div>
-
-  <!-- Fecha de entrega y Folio ya no van en el cuerpo del formato (el documento oficial
-       RHU-FOR-006 no los tiene) — quedan solo como referencia del sistema en el pie. -->
-  <div class="pie">Fecha de entrega: ${tiFechaCO(entrega.fecha)} · Folio ${tiEsc(entrega.folio||'')} · Generado el ${generado} · ILUMAX — Portal de Automatizaciones</div>
+<table class="x">
+  <colgroup>
+    <col style="width:44px"><col style="width:44px"><col style="width:44px"><col style="width:55px">
+    <col style="width:44px"><col style="width:44px"><col style="width:44px"><col style="width:44px">
+    <col style="width:50px">
+    <col style="width:44px"><col style="width:44px"><col style="width:44px"><col style="width:44px">
+    <col style="width:67px"><col style="width:55px"><col style="width:44px"><col style="width:44px">
+  </colgroup>
+  <tr style="height:17.15pt">
+    <td colspan="4" rowspan="4" class="logo"><img src="${ILUMAX_LOGO_DATAURI}" alt="ILUMAX"></td>
+    <td colspan="9" class="m b c">RECURSOS HUMANOS</td>
+    <td colspan="4" class="m b c">Código:RHU-FOR-006</td>
+  </tr>
+  <tr style="height:17.15pt">
+    <td colspan="9" rowspan="3" class="m b c">ENTREGA DE EQUIPOS Y ACCESORIOS</td>
+    <td colspan="4" class="m b">Fecha: 19-Dic-2022</td>
+  </tr>
+  <tr style="height:17.15pt"><td colspan="4" class="m b">Edición: 1</td></tr>
+  <tr style="height:17.15pt"><td colspan="4" class="m b">Página 1 de 1</td></tr>
+  <tr style="height:17.15pt"><td colspan="17" style="border-top:2px solid #000;"></td></tr>
+  <tr style="height:17.15pt"><td colspan="17" class="t1">Nombres y Apellidos: ${tiEsc(entrega.colaborador_nombre)}</td></tr>
+  <tr style="height:17.15pt"><td colspan="17" class="t1">Cargo: ${tiEsc(entrega.colaborador_cargo||'')}</td></tr>
+  <tr style="height:17.15pt"><td colspan="17" class="t1"></td></tr>
+  <tr style="height:17.15pt">
+    <td colspan="3" class="v9">Valor del Equipo: </td><td colspan="2" class="val">${tiCOP(entrega.valor_equipo_total)}</td>
+    <td colspan="3" class="v9">Auxilio Empresa: </td><td colspan="2" class="val">${tiCOP(entrega.auxilio_empresa_total)}</td>
+    <td colspan="4" class="v9">Valor asumido Colaborador:</td><td colspan="2" class="val">${tiCOP(entrega.valor_colaborador_total)}</td><td></td>
+  </tr>
+  <tr style="height:17.15pt"><td colspan="17" class="b"><b>N:</b> Nuevo <b>U:</b> Usado <b>C:</b> Cambio</td></tr>
+  <tr style="height:17.15pt"><td colspan="17"></td></tr>
+</table>
+<table class="x g" style="margin-top:0;">
+  <colgroup>
+    <col style="width:44px"><col style="width:44px"><col style="width:44px"><col style="width:55px">
+    <col style="width:44px"><col style="width:44px"><col style="width:44px"><col style="width:44px">
+    <col style="width:50px">
+    <col style="width:44px"><col style="width:44px"><col style="width:44px"><col style="width:44px">
+    <col style="width:67px"><col style="width:55px"><col style="width:44px"><col style="width:44px">
+  </colgroup>
+  <tr style="height:24.75pt" class="b c">
+    <td>No.</td><td colspan="7">Descripción Equipo</td><td>Unds</td><td>N</td><td>U</td><td>C</td><td colspan="5">Observación</td>
+  </tr>
+  ${filasHtml}
+</table>
+<table class="x">
+  <colgroup>
+    <col style="width:44px"><col style="width:44px"><col style="width:44px"><col style="width:55px">
+    <col style="width:44px"><col style="width:44px"><col style="width:44px"><col style="width:44px">
+    <col style="width:50px">
+    <col style="width:44px"><col style="width:44px"><col style="width:44px"><col style="width:44px">
+    <col style="width:67px"><col style="width:55px"><col style="width:44px"><col style="width:44px">
+  </colgroup>
+  <tr style="height:17.15pt"><td colspan="17"></td></tr>
+  <tr style="height:70.5pt"><td colspan="17" class="t9"><b>Nota:</b> El trabajador, adquiere responsabilidad y compromiso de informar al jefe de Recursos humanos o jefe inmediato, cualquier tipo de novedad que suceda con dichos(s) activo(s), ya sea daños, necesidad de mantenimiento preventivo, traslado de oficina, punto o persona. El Colaborador autoriza descontar de su salario o liquidación en caso de retiro de la empresa el costo que se origine por el deterioro (daño por mal uso o pérdida) que no sea atribuible por el tiempo de vida útil.</td></tr>
+  ${bloqueCondiciones}
+  <tr style="height:17.15pt"><td colspan="17"></td></tr>
+  <tr style="height:17.15pt">
+    <td colspan="2"></td><td colspan="5" class="fir ln">Firma Empleador</td><td colspan="3"></td><td colspan="5" class="fir ln">Firma Colaborador</td><td colspan="2"></td>
+  </tr>
+  <tr style="height:17.15pt">
+    <td colspan="2"></td><td colspan="5" class="fir">Cedula:${ced(entrega.empleador_cedula)}</td><td colspan="3"></td><td colspan="5" class="fir">Cedula:${ced(entrega.colaborador_cedula)}</td><td colspan="2"></td>
+  </tr>
+  <tr style="height:17.15pt">
+    <td colspan="10" style="border-bottom:2px solid #000;"></td><td colspan="5" class="fir" style="border-bottom:1px solid #000;">fecha:</td><td colspan="2" style="border-bottom:2px solid #000;"></td>
+  </tr>
+</table>
 </div>
+<div class="pie no-print">Fecha de entrega: ${tiFechaCO(entrega.fecha)} · Folio ${tiEsc(entrega.folio||'')} · Generado el ${generado} · ILUMAX — Portal de Automatizaciones</div>
 <script>
-  // Respaldo del ".no-print" por si el navegador/servicio de impresión (algunos
-  // "Guardar como PDF" de Android no siempre respetan bien @media print) igual
-  // intenta imprimir el botón — con esto queda oculto también en ese caso.
   window.addEventListener('beforeprint', function(){ var b=document.getElementById('ti-acta-barra'); if(b) b.style.display='none'; });
   window.addEventListener('afterprint',  function(){ var b=document.getElementById('ti-acta-barra'); if(b) b.style.display='flex'; });
 <\/script>
