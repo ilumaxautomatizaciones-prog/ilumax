@@ -12775,11 +12775,19 @@ function infOcPorNombre(n){
   const k = ceNum(n), b = k.replace(/-\d+$/,''), L = REABAST.ordenesCompra||[];
   return L.find(o=>ceNum(o.numero_oc)===k) || L.find(o=>ceNum(o.numero_oc).replace(/-\d+$/,'')===b) || null;
 }
+// Una orden madre sin ítems propios (p. ej. OI1887) ya se repartió en órdenes hijas (OI1887-1, -2…) con sus propias etapas y fechas:
+// se usan las hijas activas con ítems; si no hay, la orden misma.
+function infExpandOc(o){
+  if(!o || (REABAST.ocItems[o.id]||[]).length) return [o];
+  const base = ceNum(o.numero_oc).replace(/-\d+$/,'');
+  const h = (REABAST.ordenesCompra||[]).filter(z=>z.id!==o.id && ceNum(z.numero_oc).replace(/-\d+$/,'')===base && (z.estado_general||'activa')==='activa' && (REABAST.ocItems[z.id]||[]).length);
+  return h.length ? h : [o];
+}
 function infEstCbm(x){
   if(x._est) return x._est;
   const res = {};
   if(x.ocs && x.ocs.length){
-    const par = x.ocs.map(n=>{ const o = infOcPorNombre(n); return {b: o ? infBucketOc(o) : 'Sin identificar', w: o ? (infCbmOc(o).cbm||0) : 0}; });
+    const par = x.ocs.flatMap(n=>{ const o = infOcPorNombre(n); return o ? infExpandOc(o).map(z=>({b: infBucketOc(z), w: infCbmOc(z).cbm||0})) : [{b:'Sin identificar', w:0}]; });
     let tw = par.reduce((a,p)=>a+p.w,0); if(!(tw>0)){ par.forEach(p=>p.w=1); tw = par.length; }
     par.forEach(p=>{ res[p.b] = (res[p.b]||0) + x.cbm*p.w/tw; });
   } else res[infBucketOc(x.o)] = x.cbm;
@@ -12794,7 +12802,7 @@ function infEstChips(x){
 function infEstSel(k, i){ const key = k+'|'+i; INF.estSel = INF.estSel===key ? null : key; infPintar(); }
 function infEstOcs(x, etapa){
   if(x.ocs && x.ocs.length){
-    const par = x.ocs.map(n=>{ const o = infOcPorNombre(n); return {n, o, b: o ? infBucketOc(o) : 'Sin identificar', w: o ? (infCbmOc(o).cbm||0) : 0}; });
+    const par = x.ocs.flatMap(n=>{ const o = infOcPorNombre(n); return o ? infExpandOc(o).map(z=>({n:z.numero_oc, o:z, b:infBucketOc(z), w:infCbmOc(z).cbm||0})) : [{n, o:null, b:'Sin identificar', w:0}]; });
     let tw = par.reduce((a,p)=>a+p.w,0); if(!(tw>0)){ par.forEach(p=>p.w=1); tw = par.length; }
     return par.filter(p=>p.b===etapa).map(p=>({o:p.o, nombre:p.n, cbm:x.cbm*p.w/tw, x}));
   }
@@ -12804,13 +12812,20 @@ function infEstDetalle(k, i, meses, span){
   const E = reabastEsc, etapa = INF_EST[i][0], col = INF_EST[i][1];
   const lista = []; (meses[k]||[]).forEach(x=>infEstOcs(x, etapa).forEach(r=>lista.push(r)));
   lista.sort((a,b)=>b.cbm-a.cbm);
+  const ya = new Set(lista.map(r=>r.o&&r.o.id)); // órdenes que ya salen como fila propia (no repetir sus ítems bajo la madre)
   const fd = x => x.fecha ? x.fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short'}) : '—';
   const filas = lista.map(r=>{
     const id = r.o ? r.o.id : null, ab = !!(id && INF.estOc[id]);
     let sub = '';
     if(ab){
-      const its = REABAST.ocItems[id]||[];
-      sub = `<tr><td colspan="6" style="background:#fff;padding:6px 14px;"><table style="font-size:11px;width:100%;"><thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad pendiente</th><th style="text-align:right;">CBM</th></tr></thead><tbody>${its.map(it=>{ const ref = String(it.referencia||'').trim(), M = (REABAST.referenciasMaestro||{})[ref]||{}, q = ocPendItem(r.o,it), cu = cbmRefInfo(ref).cbm; return `<tr><td><b>${E(ref)}</b></td><td>${E(it.descripcion||M.descripcion_en||'')}</td><td style="text-align:right;font-weight:700;">${infFmt(q)}</td><td style="text-align:right;">${cu?infFmt(q*cu,2)+' m³':'<span style="color:#b45309;">sin CBM</span>'}</td></tr>`; }).join('')||'<tr><td colspan="4" class="arte-mu">Sin ítems cargados</td></tr>'}</tbody></table></td></tr>`;
+      let its = (REABAST.ocItems[id]||[]).map(it=>({it, o:r.o})), nota = '';
+      if(!its.length){ // la orden madre no trae ítems propios: están en sus órdenes hijas (OI1887-1, -2, …) que siguen activas
+        const base = ceNum(r.o.numero_oc).replace(/-\d+$/,'');
+        const hijas = (REABAST.ordenesCompra||[]).filter(h=>h.id!==id && !ya.has(h.id) && ceNum(h.numero_oc).replace(/-\d+$/,'')===base && (h.estado_general||'activa')==='activa');
+        hijas.forEach(h=>(REABAST.ocItems[h.id]||[]).forEach(it=>its.push({it, o:h})));
+        if(its.length) nota = `<div class="arte-mu" style="margin-bottom:4px;">Esta orden no tiene ítems propios; se muestran los de sus órdenes asociadas (${hijas.filter(h=>(REABAST.ocItems[h.id]||[]).length).map(h=>E(h.numero_oc)).join(', ')}).</div>`;
+      }
+      sub = `<tr><td colspan="6" style="background:#fff;padding:6px 14px;">${nota}<table style="font-size:11px;width:100%;"><thead><tr><th>Orden</th><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad pendiente</th><th style="text-align:right;">CBM</th></tr></thead><tbody>${its.map(({it,o:oo})=>{ const ref = String(it.referencia||'').trim(), M = (REABAST.referenciasMaestro||{})[ref]||{}, q = ocPendItem(oo,it), cu = cbmRefInfo(ref).cbm; return `<tr><td class="arte-mu">${E(oo.numero_oc)}</td><td><b>${E(ref)}</b></td><td>${E(it.descripcion||M.descripcion_en||'')}</td><td style="text-align:right;font-weight:700;">${infFmt(q)}</td><td style="text-align:right;">${cu?infFmt(q*cu,2)+' m³':'<span style="color:#b45309;">sin CBM</span>'}</td></tr>`; }).join('')||'<tr><td colspan="5" class="arte-mu">Sin ítems cargados</td></tr>'}</tbody></table></td></tr>`;
     }
     return `<tr ${id?`onclick="INF.estOc['${id}']=!INF.estOc['${id}'];infPintar()" style="cursor:pointer;"`:''}><td><b>${id?(ab?'▾':'▸')+' ':''}${E(r.nombre)}</b></td><td>${E(r.o?r.o.proveedor||'':'')}</td><td style="white-space:nowrap;">${fd(r.x)}</td><td>${E(r.x.etapa||'')}</td><td style="text-align:right;">${r.o?(REABAST.ocItems[r.o.id]||[]).length:''}</td><td style="text-align:right;font-weight:800;">${infFmt(r.cbm)} m³</td></tr>${sub}`;
   }).join('');
