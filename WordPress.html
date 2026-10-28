@@ -44,7 +44,7 @@ tr:hover td{background:#fafcff}
 <div id="msg"></div><div id="syncbar"></div>
 <div class="card" id="cfg" style="display:none;max-width:340px;margin:60px auto"><div class="cb" style="text-align:center"><b>Ingresa tu PIN</b><p class="mini">Solo personal autorizado de ILUMAX.</p><div class="bar" style="justify-content:center"><input class="inp" id="iP" type="password" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="PIN" style="width:120px;text-align:center;letter-spacing:6px;font-size:18px"><button class="btn btn-p" id="bSave">Entrar</button></div><div id="pinErr" class="mini" style="color:var(--rd);margin-top:8px;min-height:16px"></div></div></div>
 
-<div class="bar" id="tabs" style="margin-bottom:12px"><span class="chip on" data-t="inv">📦 Inventario</span><span class="chip" data-t="pedidos">🧾 Pedidos</span><span class="chip" data-t="carritos">🛒 Carritos abiertos</span><span class="chip" data-t="busquedas">🔎 Búsquedas</span><span class="chip" data-t="nuevas">🆕 Nuevas sin subir</span><span class="chip" data-t="mercado">📈 Mercado</span></div>
+<div class="bar" id="tabs" style="margin-bottom:12px"><span class="chip on" data-t="inv">📦 Inventario</span><span class="chip" data-t="pedidos">🧾 Pedidos</span><span class="chip" data-t="movimientos">🔁 Movimientos de la página</span><span class="chip" data-t="carritos">🛒 Carritos abiertos</span><span class="chip" data-t="busquedas">🔎 Búsquedas</span><span class="chip" data-t="nuevas">🆕 Nuevas sin subir</span><span class="chip" data-t="mercado">📈 Mercado</span></div>
 <div id="vInv">
 <div class="sg" id="kpis"></div>
 <div class="card"><div class="cb">
@@ -113,7 +113,26 @@ async function load(){
    el.innerHTML='<div class="alert '+(mal||h>3?'err':'')+'" style="'+(!mal&&h<=3?'background:var(--grd);color:#14532d':'')+'">'+(mal?'⚠ Último sync con problemas · ':'✔ Sync automático a la tienda · ')+'última corrida '+new Date(w.creado_en).toLocaleString('es-CO')+' · '+nf(w.cambios)+' cambios, '+nf(w.aplicados)+' aplicados, '+nf(w.ya_correctos)+' ya correctos'+(w.errores?' · errores: '+esc(JSON.stringify(w.errores).slice(0,160)):'')+(h>3?' · lleva más de 3 h sin correr':'')+'</div>'})();
   $('meta').textContent='SIESA: '+(b.sync?new Date(b.sync).toLocaleString('es-CO'):'—')+' · Web: '+(a.generado?new Date(a.generado).toLocaleString('es-CO'):'—');
  }catch(e){msg('No se pudo conectar: '+e.message,'err');$('meta').textContent=''}
- build();if(typeof X!=='undefined'&&X.tab==='nuevas'){$('vN').dataset.ok='';renderN()}
+ build();loadMov();if(typeof X!=='undefined'&&X.tab==='nuevas'){$('vN').dataset.ok='';renderN()}
+}
+var _mvBusy=false;
+async function loadMov(){
+ if(_mvBusy||!ls('wp_pin'))return;_mvBusy=true;
+ try{var j=await api('movimientos',$('dias').value);if(j&&j.items){S.mov=j.resumen||{};if(typeof X!=='undefined'){X.d.movimientos=j;if(X.tab==='movimientos')xr()}build()}}catch(e){}
+ _mvBusy=false;
+}
+function mvCell(m){
+ if(!m)return'<span class="mini">—</span>';var p=[];
+ if(m.v>0)p.push('<b>−'+nf(m.v)+'</b> vend.');
+ if(m.ag>0)p.push('<span class="pb r" style="min-width:0">agotado'+(m.ag>1?' ×'+m.ag:'')+'</span>');
+ if(m.rp>0)p.push('<span class="pb v" style="min-width:0">repuesto'+(m.rp>1?' ×'+m.rp:'')+'</span>');
+ if(!p.length)p.push('<span class="mini">'+esc(String(m.tag||'').replace(/ \(.*\)/,''))+'</span>');
+ return p.join(' ')+'<div class="mini">'+ago(m.u)+'</div>';
+}
+function pname(sku){var n=nz(sku);if(!pname._m||pname._s!==S.wp){pname._m={};(S.wp||[]).forEach(function(p){if(p.sku)pname._m[nz(p.sku)]=p.nombre});pname._s=S.wp}return pname._m[n]||''}
+function movHead(j){
+ var tg=[['','Todos'],['Venta','Venta en la tienda'],['Agotado','Agotado / se sacó'],['Repuesto','Repuesto'],['Bajó','Bajó por Siesa'],['Subió','Subió por Siesa'],['Ajuste','Ajuste masivo']];
+ return'<div class="alert" style="background:#eff6ff;color:#1e3a8a">Qué le pasó a cada SKU en la tienda, según cada corrida del sync automático (desde '+(j.items.length?fd(j.items[j.items.length-1].t):'—')+'). <b>Venta en la tienda</b> = lo que la tienda tenía de menos frente a lo que el sync había dejado la vez anterior (ventas web entre corridas). <b>Agotado</b> = el SKU se sacó de la tienda por falta de inventario en BA. <b>Bajó/Subió por Siesa</b> = cambió el inventario de bodega.</div><div class="bar" style="margin:8px 0">'+tg.map(function(x){return'<span class="chip'+((X.mf||'')===x[0]?' on':'')+'" data-mf="'+x[0]+'">'+x[1]+'</span>'}).join('')+'<button class="btn" id="bMv" style="margin-left:auto">⬇ Excel</button></div>';
 }
 function nz(s){return String(s==null?'':s).trim().replace(/^0+/,'')}
 function siIdx(){if(S._ix&&S._ixsrc===S.si)return S._ix;var m={};Object.keys(S.si||{}).forEach(function(k){var n=nz(k);if(!m[n])m[n]=S.si[k];else{var b=S.si[k].b;Object.keys(b).forEach(function(x){m[n].b[x]=(m[n].b[x]||0)+b[x]})}});S._ix=m;S._ixsrc=S.si;return m}
@@ -125,9 +144,10 @@ function build(){
  rows.slice().sort(function(a,b){return b.uds-a.uds}).forEach(function(r){
   if(r.uds<=0){r.lv='D';return}cum+=r.uds;r.lv=(cum-r.uds)/tot<.6?'A':(cum-r.uds)/tot<.9?'B':'C'});
  rows.forEach(function(r){r.pct=(r.si>0&&r.wp!=null)?r.wp/r.si*100:null;r.sug=r.si!=null?Math.min(S.gt,Math.floor(Math.max(0,r.si)*S.gp/100)):null;r.dif=(r.sug!=null&&r.wp!=null)?r.wp-r.sug:null});
+ rows.forEach(function(r){var m=(S.mov||{})[nz(r.sku)];r.mvx=m||null;r.mov=m?m.v:null});
  S.rows=rows;render();
 }
-var COLS=[['sku','SKU'],['nombre','Producto'],['uds','Vendidas','n'],['pedidos','Pedidos','n'],['wp','Inv. WordPress','n'],['si','Inv. SIESA','n'],['pct','% en WordPress','n'],['lv','Nivel'],['sug','Sugerido web','n'],['dif','Dif. vs sugerido','n'],['pw','Precio web','n'],['ps','Precio SIESA','n'],['pd','Web vs SIESA','n']];
+var COLS=[['sku','SKU'],['nombre','Producto'],['uds','Vendidas','n'],['pedidos','Pedidos','n'],['wp','Inv. WordPress','n'],['si','Inv. SIESA','n'],['pct','% en WordPress','n'],['lv','Nivel'],['sug','Sugerido web','n'],['dif','Dif. vs sugerido','n'],['mov','Mov. tienda','n'],['pw','Precio web','n'],['ps','Precio SIESA','n'],['pd','Web vs SIESA','n']];
 function fillListas(L,sel){var el=$('lst');if(!el)return;var cur=String(sel||ls('wp_lista')||'4');el.innerHTML=L.filter(function(x){return x.activa!==false}).map(function(x){return'<option value="'+esc(x.lista_id)+'"'+(String(x.lista_id)===cur?' selected':'')+'>'+esc(x.nombre)+' — '+esc(x.canal||'')+'</option>'}).join('')}
 function precios(r){var f=FOT[nz(r.sku)];r.pw=f&&f.p!=null?f.p:null;r.ps=(S.pr&&S.pr[nz(r.sku)]!=null)?S.pr[nz(r.sku)]:null;r.pd=(r.pw!=null&&r.ps>0)?(r.pw/r.ps-1)*100:null}
 function m$$(n){return n==null?'—':'$'+Number(n).toLocaleString('es-CO',{maximumFractionDigits:0})}
@@ -142,8 +162,8 @@ function render(){
  $('tb').innerHTML=R.length?R.map(function(r,i){
   var pc=r.pct==null?'<span class="pb g">—</span>':'<span class="pb '+(r.pct>50?'r':r.pct>25?'a':'v')+'">'+r.pct.toFixed(1)+'%</span>';
   var dif=r.dif==null?'—':(r.dif>0?'+':'')+nf(r.dif);
-  return'<tr><td class="n mini">'+(i+1)+'</td><td class="sku">'+foto(r.sku)+lnk(r.sku,esc(r.sku))+'</td><td class="nm">'+lnk(r.sku,esc(r.nombre))+'</td><td class="n"><b>'+nf(r.uds)+'</b></td><td class="n">'+nf(r.pedidos)+'</td><td class="n">'+(r.gest?nf(r.wp):'<span class="mini">sin control</span>')+'</td><td class="n">'+(r.si==null?'<span class="mini">sin SIESA</span>':nf(r.si))+'</td><td class="n">'+pc+'</td><td><span class="lv '+r.lv+'">'+r.lv+'</span></td><td class="n">'+nf(r.sug)+'</td><td class="n">'+dif+'</td><td class="n">'+m$$(r.pw)+'</td><td class="n">'+m$$(r.ps)+'</td><td class="n">'+(r.pd==null?'—':(r.pd>0?'+':'')+r.pd.toFixed(1)+'%')+'</td></tr>'}).join('')
-  :'<tr><td colspan="14" class="mini" style="padding:20px;text-align:center">Sin resultados</td></tr>';
+  return'<tr><td class="n mini">'+(i+1)+'</td><td class="sku">'+foto(r.sku)+lnk(r.sku,esc(r.sku))+'</td><td class="nm">'+lnk(r.sku,esc(r.nombre))+'</td><td class="n"><b>'+nf(r.uds)+'</b></td><td class="n">'+nf(r.pedidos)+'</td><td class="n">'+(r.gest?nf(r.wp):'<span class="mini">sin control</span>')+'</td><td class="n">'+(r.si==null?'<span class="mini">sin SIESA</span>':nf(r.si))+'</td><td class="n">'+pc+'</td><td><span class="lv '+r.lv+'">'+r.lv+'</span></td><td class="n">'+nf(r.sug)+'</td><td class="n">'+dif+'</td><td class="n" style="white-space:nowrap">'+mvCell(r.mvx)+'</td><td class="n">'+m$$(r.pw)+'</td><td class="n">'+m$$(r.ps)+'</td><td class="n">'+(r.pd==null?'—':(r.pd>0?'+':'')+r.pd.toFixed(1)+'%')+'</td></tr>'}).join('')
+  :'<tr><td colspan="15" class="mini" style="padding:20px;text-align:center">Sin resultados</td></tr>';
  var all=S.rows,vend=all.filter(function(r){return r.uds>0}),sw=0,ss=0;all.forEach(function(r){if(r.wp!=null&&r.si>0){sw+=r.wp;ss+=r.si}});
  $('kpis').innerHTML=[['Productos con SKU',nf(all.length)],['Con ventas ('+$('dias').value+' d)',nf(vend.length)],['Unidades vendidas',nf(all.reduce(function(a,r){return a+r.uds},0))],['Inv. WordPress',nf(sw)],['Inv. SIESA (mismos)',nf(ss)],['% publicado',ss?(sw/ss*100).toFixed(1)+'%':'—'],['Sin SIESA',nf(all.filter(function(r){return r.si==null}).length)]].map(function(x){return'<div class="sc"><div class="sv">'+x[1]+'</div><div class="sl">'+x[0]+'</div></div>'}).join('');
  var fl=[['todos','Todos'],['vend','Con ventas'],['agotado','Agotado web con stock SIESA'],['exceso','Web sobre lo sugerido'],['falta','Web bajo lo sugerido'],['sincontrol','Sin control de stock'],['sinsiesa','Sin SIESA']];
@@ -156,6 +176,8 @@ function render(){
 document.addEventListener('click',function(e){var t=e.target;
  if(t.dataset&&t.dataset.k){S.sort.d=S.sort.k===t.dataset.k?-S.sort.d:-1;S.sort.k=t.dataset.k;render()}
  else if(t.dataset&&t.dataset.f){S.f=t.dataset.f;render()}
+ else if(t.dataset&&t.dataset.mf!==undefined){X.mf=t.dataset.mf;xr()}
+ else if(t.id==='bMv'){exportMov()}
  else if(t.dataset&&t.dataset.b){var i=S.bod.indexOf(t.dataset.b);if(i>=0)S.bod.splice(i,1);else S.bod.push(t.dataset.b);ls('wp_bod2',JSON.stringify(S.bod));build()}});
 document.addEventListener('change',function(e){var t=e.target;if(t.id==='gp'||t.id==='gt'){S.gp=Math.max(0,Math.min(100,+$('gp').value||0));S.gt=Math.max(0,+$('gt').value||0);ls('wp_regla',JSON.stringify({gp:S.gp,gt:S.gt}));build()}});
 $('q').oninput=render;$('dias').onchange=load;$('bRef').onclick=refrescar;
@@ -164,12 +186,22 @@ $('lst').onchange=function(){ls('wp_lista',this.value);load()};
 $('iP').onkeydown=function(e){if(e.key==='Enter')$('bSave').click()};
 $('bSave').onclick=async function(){var p=$('iP').value.trim();if(!/^\d{4,8}$/.test(p)){$('pinErr').textContent='Escribe tu PIN numérico';return}ls('wp_pin',p);$('pinErr').textContent='Verificando…';try{await api('ping');$('pinErr').textContent='';load()}catch(e){}};
 $('bX').onclick=function(){
- function go(){var d=[['SKU','Producto','Vendidas','Pedidos','Inv. WordPress','Inv. SIESA','% en WordPress','Nivel','Sugerido web','Dif. vs sugerido','Precio web','Precio SIESA','Web vs SIESA %']].concat((S.view||[]).map(function(r){return[r.sku,r.nombre,r.uds,r.pedidos,r.gest?r.wp:'sin control',r.si,r.pct==null?'':+r.pct.toFixed(1),r.lv,r.sug,r.dif,r.pw,r.ps,r.pd==null?'':+r.pd.toFixed(1)]}));
+ function go(){var d=[['SKU','Producto','Vendidas','Pedidos','Inv. WordPress','Inv. SIESA','% en WordPress','Nivel','Sugerido web','Dif. vs sugerido','Uds. vendidas en la web (mov.)','Agotado (veces)','Precio web','Precio SIESA','Web vs SIESA %']].concat((S.view||[]).map(function(r){return[r.sku,r.nombre,r.uds,r.pedidos,r.gest?r.wp:'sin control',r.si,r.pct==null?'':+r.pct.toFixed(1),r.lv,r.sug,r.dif,r.mvx?r.mvx.v:'',r.mvx?r.mvx.ag:'',r.pw,r.ps,r.pd==null?'':+r.pd.toFixed(1)]}));
   var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(d),'WordPress');XLSX.writeFile(wb,'WordPress_inventario_'+new Date().toISOString().slice(0,10)+'.xlsx')}
  if(window.XLSX)return go();var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=go;document.head.appendChild(s)};
 
-var X={tab:'inv',d:{}};
+var X={tab:'inv',d:{},mf:''};
+function exportMov(){var j=X.d.movimientos;if(!j)return;var q=$('xq').value.trim().toLowerCase();
+ var a=j.items.filter(function(r){if(X.mf?r.tag.indexOf(X.mf)!==0:r.masivo)return false;return!q||XC.movimientos.txt(r).toLowerCase().indexOf(q)>=0});
+ function go(){var d=[['Fecha','SKU','Producto','Movimiento','Tienda antes','Tienda quedó','Vendido en la web','Siesa BA antes','Siesa BA ahora']].concat(a.map(function(r){return[new Date(r.t).toLocaleString('es-CO'),r.sku,pname(r.sku),r.tag,r.antes,r.quedo,r.vendido||0,r.siesaAntes,r.siesa]}));
+  var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(d),'Movimientos');XLSX.writeFile(wb,'Movimientos_tienda_'+new Date().toISOString().slice(0,10)+'.xlsx')}
+ if(window.XLSX)return go();var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=go;document.head.appendChild(s)}
 var XC={
+ movimientos:{cols:['Fecha','SKU','Producto','Movimiento','En la tienda (antes → quedó)','Vendido en la web','Inv. Siesa BA (antes → ahora)'],
+  row:function(r){var cl=/^Agotado/.test(r.tag)?'r':/^Repuesto|^Subió/.test(r.tag)?'v':/^Venta/.test(r.tag)?'a':'g';
+   return[fd(r.t),'<span class="sku">'+foto(r.sku)+lnk(r.sku,esc(r.sku))+'</span>',lnk(r.sku,esc(pname(r.sku))),'<span class="pb '+cl+'">'+esc(r.tag)+'</span>',(r.antes==null?'—':esc(r.antes))+' → <b>'+(r.quedo==null?'—':esc(r.quedo))+'</b>',r.vendido>0?'<b>'+nf(r.vendido)+'</b>':'—',(r.siesaAntes==null?'—':nf(r.siesaAntes))+' → <b>'+(r.siesa==null?'—':nf(r.siesa))+'</b>']},
+  txt:function(r){return [r.sku,pname(r.sku),r.tag].join(' ')},
+  kp:function(a){return[['Movimientos',nf(a.length)],['Uds. vendidas en la web',nf(a.reduce(function(x,r){return x+(r.vendido||0)},0))],['Agotados / sacados',nf(a.filter(function(r){return/^Agotado/.test(r.tag)}).length)],['Repuestos',nf(a.filter(function(r){return/^Repuesto/.test(r.tag)}).length)]]}},
  pedidos:{cols:['Pedido','Fecha','Estado','Cliente','Ciudad','Productos','Total','Envío'],
   row:function(r){return['<b>#'+r.id+'</b>',fd(r.fecha),esc(r.estado_txt),esc(r.cliente)+'<div class="mini">'+esc(r.email)+(r.tel?' · '+esc(r.tel):'')+'</div>',esc(r.ciudad),r.items.map(function(i){return esc(i[2]+'× '+i[1])}).join('<br>'),'<b>'+m$(r.total)+'</b>',m$(r.envio)]},
   txt:function(r){return [r.id,r.cliente,r.email,r.ciudad,r.estado_txt,r.items.map(function(i){return i[0]+' '+i[1]}).join(' ')].join(' ')},
@@ -197,8 +229,8 @@ async function loadX(t,force){
 }
 function xr(){
  var t=X.tab,c=XC[t],j=X.d[t];if(!j)return;var q=$('xq').value.trim().toLowerCase();
- var a=j.items.filter(function(r){return!q||c.txt(r).toLowerCase().indexOf(q)>=0});
- $('xm').innerHTML=t==='busquedas'?'<div class="alert">'+(j.desde_registro?'Registrando desde '+esc(fd(j.desde_registro+'Z'))+'. Solo se cuentan las búsquedas hechas después de activar el fragmento.':'Todavía no hay búsquedas registradas: aparecerán a medida que los clientes usen el buscador de la tienda.')+'</div>':t==='carritos'?'<div class="alert">Carritos activos en las últimas 48 h. Si el cliente no ha iniciado sesión ni escrito su correo, aparece como anónimo.</div>':'';
+ var a=j.items.filter(function(r){if(t==='movimientos'){if(X.mf?r.tag.indexOf(X.mf)!==0:r.masivo)return false}return!q||c.txt(r).toLowerCase().indexOf(q)>=0});
+ $('xm').innerHTML=t==='movimientos'?movHead(j):t==='busquedas'?'<div class="alert">'+(j.desde_registro?'Registrando desde '+esc(fd(j.desde_registro+'Z'))+'. Solo se cuentan las búsquedas hechas después de activar el fragmento.':'Todavía no hay búsquedas registradas: aparecerán a medida que los clientes usen el buscador de la tienda.')+'</div>':t==='carritos'?'<div class="alert">Carritos activos en las últimas 48 h. Si el cliente no ha iniciado sesión ni escrito su correo, aparece como anónimo.</div>':'';
  $('xk').innerHTML=c.kp(a).map(function(x){return'<div class="sc"><div class="sv">'+x[1]+'</div><div class="sl">'+x[0]+'</div></div>'}).join('');
  $('xh').innerHTML=c.cols.map(function(h){return'<th>'+h+'</th>'}).join('');
  $('xb').innerHTML=a.length?a.map(function(r){return'<tr>'+c.row(r).map(function(v){return'<td>'+v+'</td>'}).join('')+'</tr>'}).join(''):'<tr><td colspan="9" class="mini" style="padding:20px;text-align:center">Sin resultados</td></tr>';
