@@ -12014,7 +12014,7 @@ function reabastCalcularSobrestock(){
 // ═══ Embarque (BL) + Comercio Exterior ═══
 // Los BL se crean aquí (Embarque), se siguen en Comercio Exterior y alimentan el tablero (reemplazan al Excel de Seguimiento).
 // Se guardan en configuracion.cbl_embarques = {bls:[{id, bl, agente, etd, eta, po, pd, cont, planta, registro, items:[{oc, ocId, ref, desc, cant, cbm, cajas, estado, planta, ingreso}], hist}]}
-const CBL = { bls:[], cargado:false, sel:{}, abiertas:{}, f:{q:'', oc:'', estado:'activos', vista:'oc', agrupar:true, kpi:''}, form:{bl:'', etd:'', eta:'', agente:'', po:'', pd:'Buenaventura', cont:''}, det:null };
+const CBL = { bls:[], cargado:false, sel:{}, abiertas:{}, f:{q:'', oc:'', estado:'activos', vista:'oc', agrupar:true, kpi:''}, form:{bl:'', etd:'', eta:'', agente:'', po:'', pd:'Buenaventura', cont:'', cbmc:''}, det:null, ingAb:{}, ingQ:'' };
 // Los 5 estados de la orden: Producción → Embarque (hasta que zarpa) → Tránsito (hasta llegar a Buenaventura) → Nacionalización → Ingreso a bodega
 const CBL_ESTADOS = ['Producción','Embarque','Tránsito','Nacionalización','Ingreso a bodega'];
 const CBL_FASE_TXT = {3:'Producción', 5:'Embarque', 6:'Tránsito', 7:'Nacionalización', 9:'Ingreso a bodega'};
@@ -12295,7 +12295,7 @@ function cblHtmlEmbarque(){
     <div class="arte-mu" style="font-size:12px;margin-bottom:8px;">Aquí armas el <b>BL</b>: marca los ítems de las órdenes pendientes (aunque sean de varias OC o solo parte de cada una), asígnales el BL, ETD, ETA y agente de carga. Desde ahí el seguimiento pasa a <b>🌐 Comercio Exterior</b>.</div>
     <div class="cbl-card cbl-sticky" style="padding:10px 12px;border-color:var(--bl);">
       <div style="font-weight:800;font-size:13px;margin-bottom:6px;">🚢 Nuevo BL / agrupar en un BL existente</div>
-      <div class="cbl-in">${inp('bl','Número de BL *','text','Ej. COSU123456')}${inp('etd','ETD (salida) *','date')}${inp('eta','ETA (llegada) *','date')}${inp('agente','Agente de carga','text')}${inp('po','Puerto de origen','text','Ej. Shanghái')}${inp('pd','Puerto de destino','text','Ej. Buenaventura')}${inp('cont','Contenedor(es)','text')}</div>
+      <div class="cbl-in">${inp('bl','Número de BL *','text','Ej. COSU123456')}${inp('etd','ETD (salida) *','date')}${inp('eta','ETA (llegada) *','date')}${inp('agente','Agente de carga','text')}${inp('po','Puerto de origen','text','Ej. Shanghái')}${inp('pd','Puerto de destino','text','Ej. Buenaventura')}${inp('cont','Contenedor(es)','text')}${inp('cbmc','CBM confirmado (m³)','number','Ej. 58')}</div>
       <div id="cbl-resumen" style="margin-top:8px;font-size:12px;"></div>
       <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-bl" ${puede?'':'disabled title="Solo Compras, Comercio Exterior, Administración o un administrador"'} onclick="cblCrear()">✅ Crear BL con lo marcado</button><button class="btn btn-g btn-sm" onclick="CBL.sel={};reabastPintar()">Quitar todas las marcas</button><span class="arte-mu" style="font-size:11px;">Si el número de BL ya existe, los ítems se agregan a ese BL.</span></div>
     </div>
@@ -12323,13 +12323,14 @@ async function cblCrear(){
   if(!b) b = {id:'bl_'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), bl:num, agente:'', etd:'', eta:'', po:'', pd:'Buenaventura', cont:'', planta:'', registro:null, creado:t, quien, items:[], hist:[]};
   else b = JSON.parse(JSON.stringify(b));
   ['agente','po','pd','cont'].forEach(k=>{ if(F[k]) b[k] = F[k]; }); b.etd = F.etd; b.eta = F.eta;
+  if(F.cbmc!=='' && F.cbmc!=null && Number(F.cbmc)>=0){ const nc = Number(F.cbmc); if(b.cbmc!==nc){ b.cbmc = nc; } }
   items.forEach(n=>{ const e = b.items.find(x=>ceNum(x.oc)===ceNum(n.oc) && ceRefKey(x.ref)===ceRefKey(n.ref)); if(e){ e.cant += n.cant; if(n.cajas!=null) e.cajas = (Number(e.cajas)||0)+n.cajas; } else b.items.push(n); });
   b.hist = [...(b.hist||[]), {t, quien, accion:(nuevo?'BL creado':'Ítems agregados')+' · '+items.length+' ítem(s) · ETD '+F.etd+' · ETA '+F.eta}];
   try{
     await cblPersistir(b);
     // las prealertas de esas OC pasan a "en gestión" (ya tienen BL)
     for(const ocId of new Set(items.map(i=>i.ocId))){ if(EMB.datos[ocId] && EMB.datos[ocId].estado==='por_gestionar'){ try{ await embGuardar(ocId, d=>{ d.estado='en_gestion'; d.gestiona = quien; d.t_gestion = t; d.hist = [...(d.hist||[]), {t, quien, accion:'BL '+num+' creado en Embarque'}]; }); }catch(e){} } }
-    CBL.sel = {}; CBL.form = {bl:'', etd:'', eta:'', agente:'', po:'', pd:'Buenaventura', cont:''};
+    CBL.sel = {}; CBL.form = {bl:'', etd:'', eta:'', agente:'', po:'', pd:'Buenaventura', cont:'', cbmc:''};
     if(typeof toast==='function') toast('BL '+num+(nuevo?' creado':' actualizado')+' · '+items.length+' ítem(s) · el tablero ya usa su ETD/ETA','ok');
   }catch(e){ if(typeof toast==='function') toast('No se pudo guardar el BL: '+e.message,'er'); return; }
   reabastPintar();
@@ -12486,7 +12487,7 @@ function cblPintarDetalle(){
   m.innerHTML = `<div style="background:var(--w,#fff);color:var(--tx);border-radius:12px;max-width:1100px;width:100%;padding:16px 18px;box-shadow:0 20px 50px rgba(0,0,0,.35);">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;"><div style="font-weight:800;font-size:16px;">🌐 BL <span style="font-family:monospace;">${reabastEsc(b.bl)}</span>${puede?` <span style="cursor:pointer;font-size:13px;" title="Cambiar el número de BL" onclick="cblRenombrar('${b.id}')">✏️</span>`:''}</div><span class="cbl-pill">${reabastEsc(cblEstadoBL(b))}</span><span class="arte-mu" style="font-size:11px;">${(b.items||[]).length} ítem(s) · ${cblN(cbm,2)} m³ · ${cblN(cajas)} cajas</span><span style="margin-left:auto;display:flex;gap:8px;align-items:center;">${cblBotonAvanzar(b)}<button class="btn btn-g btn-sm" onclick="cblCerrarDetalle()">✕ Cerrar</button></span></div>
     <div style="font-weight:700;font-size:12px;margin-bottom:4px;">Fechas y logística <span class="arte-mu" style="font-weight:500;">· el ETD y el ETA que guardes mueven el tablero de Abastecimiento</span></div>
-    <div class="cbl-in">${inp('bl','Número de BL')}${inp('dim','DIM (declaración de importación)')}${inp('agente','Agente de carga')}${inp('po','Puerto de origen')}${inp('pd','Puerto de destino')}${inp('cont','Contenedor(es)')}${inp('etd','ETD (salida)','date')}${inp('eta','ETA (llegada)','date','onchange="cblPlantaSug()"')}${plantaInp}</div>
+    <div class="cbl-in">${inp('bl','Número de BL')}${inp('dim','DIM (declaración de importación)')}${inp('agente','Agente de carga')}${inp('po','Puerto de origen')}${inp('pd','Puerto de destino')}${inp('cont','Contenedor(es)')}<div><label>CBM confirmado (m³)</label><input id="cbld-cbmc" class="inp" type="number" step="0.01" min="0" value="${b.cbmc!=null?b.cbmc:''}" ${dis} placeholder="Ej. 58" style="width:100%;"><div class="arte-mu" style="font-size:10px;margin-top:2px;">Calculado por el sistema: ${cblN(cbm,2)} m³${b.cbmc!=null&&cbm>0?' · diferencia '+cblN(b.cbmc-cbm,2)+' m³':''}</div></div>${inp('etd','ETD (salida)','date')}${inp('eta','ETA (llegada)','date','onchange="cblPlantaSug()"')}${plantaInp}</div>
     <div style="margin:8px 0 14px;"><button class="btn btn-bl btn-sm" ${dis} onclick="cblGuardarCab('${b.id}')">💾 Guardar fechas y logística</button></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;"><b style="font-size:12px;">Ítems del BL y su estado</b><span class="arte-mu" style="font-size:11px;">Poner todos en:</span><select id="cbld-todos" class="inp" style="width:auto;" ${dis}>${CBL_ESTADOS.map(e=>`<option>${e}</option>`).join('')}</select><button class="btn btn-g btn-xs" ${dis} onclick="cblTodosEstado('${b.id}')">Aplicar a todos</button></div>
     ${(()=>{ const sv = (b.items||[]).filter(cblSinVig); const ven = (b.items||[]).filter(it=>{ if(!it.rimf) return false; const v = new Date(it.rimf+'T12:00:00'); v.setMonth(v.getMonth()+6); return v < new Date(); });
@@ -12500,7 +12501,6 @@ function cblPintarDetalle(){
       <td><input type="date" class="inp" style="font-size:11px;" value="${it.ingreso||''}" ${dis} onchange="cblItemFecha('${b.id}',${ix},'ingreso',this.value)"></td>
       <td>${puede?`<button class="btn btn-g btn-xs" title="Sacar este ítem del BL (vuelve a 'por embarcar')" onclick="cblQuitarItem('${b.id}',${ix})">✕</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>
-    ${cblIngHtml(b)}
     <div style="border:1px solid var(--b1);border-radius:10px;padding:10px 12px;margin-top:14px;${aduana?'':'opacity:.75;'}">
       <div style="font-weight:800;font-size:12.5px;margin-bottom:4px;">🛃 Registro de importación</div>
       <div class="arte-mu" style="font-size:11px;margin-bottom:6px;">${aduana?'Cuando cuentes con la aprobación, relaciona aquí el número del registro de importación oficial.':'Es el trámite de la etapa de Nacionalización (puedes adelantarlo si ya tienes la aprobación).'}</div>
@@ -12512,6 +12512,22 @@ function cblPintarDetalle(){
     ${puede?`<div style="margin-top:10px;"><button class="btn btn-rd btn-sm" onclick="cblEliminarBL('${b.id}')" title="Borra el BL; sus ítems vuelven a 'por embarcar'">🗑 Eliminar este BL</button></div>`:''}
   </div>`;
 }
+// ───────────── Pestaña: Ingreso a inventario (antes iba dentro del detalle del BL) ─────────────
+function cblHtmlIng(){
+  return `<div><div class="arte-mu" style="font-size:12px;margin-bottom:8px;">Aquí se confirma lo que <b>ingresó a inventario</b> de cada BL. Compara lo del BL con lo que ya entró a bodega, ajusta las cantidades y confirma: cada línea queda asociada a su orden y a su BL; el saldo pendiente pasa al siguiente BL.</div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;"><input class="inp" placeholder="🔎 Buscar BL, OC, referencia…" value="${reabastEsc(CBL.ingQ||'')}" style="flex:1;min-width:220px;max-width:420px;" oninput="CBL.ingQ=this.value;clearTimeout(window.__cblIT);window.__cblIT=setTimeout(cblPintarIng,250)"></div>
+    <div id="cbl-ing">${cblHtmlIngLista()}</div></div>`;
+}
+function cblHtmlIngLista(){
+  const q = (CBL.ingQ||'').toLowerCase().trim();
+  const L = (CBL.bls||[]).filter(b=>(b.items||[]).length && cblFaseBL(b)!==-1)
+    .filter(b=>!q || String(b.bl).toLowerCase().includes(q) || (b.items||[]).some(it=>String(it.oc||'').toLowerCase().includes(q) || String(it.ref||'').toLowerCase().includes(q) || String(it.desc||'').toLowerCase().includes(q)))
+    .sort((a,b)=>(a.eta||'9999').localeCompare(b.eta||'9999'));
+  if(!L.length) return '<div class="empty">No hay BL para mostrar.</div>';
+  return L.map(b=>{ const fase = cblFaseBL(b), ab = !!CBL.ingAb[b.id] || !!q;
+    return `<details class="cbl-card" ${ab?'open':''} ontoggle="CBL.ingAb['${b.id}']=this.open"><summary style="cursor:pointer;display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><b style="font-family:monospace;">${reabastEsc(b.bl)}</b><span class="cbl-pill">${reabastEsc(cblEstadoBL(b))}</span><span class="arte-mu" style="font-size:11px;">${(b.items||[]).length} ítem(s) · ETA ${reabastEsc(b.eta||'—')}${b.cont?' · '+reabastEsc(b.cont):''}</span></summary>${cblIngHtml(b)}</details>`; }).join('');
+}
+function cblPintarIng(){ const c = document.getElementById('cbl-ing'); if(c) c.innerHTML = cblHtmlIngLista(); }
 function cblIngOc(n){ return (REABAST.ordenesCompra||[]).find(o=>String(o.numero_oc)===String(n)); }
 function cblIngHtml(b){
   if(typeof INF_ING==='undefined') return '';
@@ -12525,7 +12541,7 @@ function cblIngHtml(b){
     if(i){ val = Math.round(i.suma); det = '<b>'+infFmt(i.suma)+'</b> <span style="color:var(--mu);font-size:10px;">'+i.mejor.map(x=>reabastEsc(x.bod)+' '+fd(x.fecha)).join(' + ')+' · '+Math.round(i.ratio*100)+'%</span>'; }
     const est = cb ? '<span style="color:#16a34a;font-weight:700;">✅ '+infFmt(cb.cantidad_ingresada)+'</span><div style="font-size:10px;color:var(--mu);">'+reabastEsc(cb.confirmado_por||'')+'</div>'
       : !id ? '<span class="arte-mu">OC no encontrada</span>'
-      : '<input type="number" id="cbli-'+ix+'" class="inp" style="width:90px;font-size:11px;" value="'+val+'" min="0">';
+      : '<input type="number" id="cbli-'+b.id+'-'+ix+'" class="inp" style="width:90px;font-size:11px;" value="'+val+'" min="0">';
     const sal = tot && parseFloat(tot.cantidad_esperada)>parseFloat(tot.cantidad_ingresada) ? '<span style="color:#b45309;font-size:10px;">saldo OC: '+infFmt(parseFloat(tot.cantidad_esperada)-parseFloat(tot.cantidad_ingresada))+'</span>' : '';
     return '<tr><td><b>'+reabastEsc(it.oc)+'</b></td><td>'+reabastEsc(it.ref||'')+'</td><td style="text-align:right;">'+infFmt(it.cant)+'</td><td>'+det+'</td><td>'+est+'</td><td>'+sal+'</td></tr>';
   }).join('');
@@ -12539,7 +12555,7 @@ async function cblIngConfirmar(id){
   (b.items||[]).forEach((it,ix)=>{
     const o = cblIngOc(it.oc); if(!o) return;
     const k = o.id+'|'+pvClaveRef(it.ref); if(INF_ING.confBL[k+'|'+b.bl]) return;
-    const el = document.getElementById('cbli-'+ix), q = el ? parseFloat(el.value) : NaN;
+    const el = document.getElementById('cbli-'+b.id+'-'+ix), q = el ? parseFloat(el.value) : NaN;
     if(isNaN(q) || q<=0) return;
     const st = infIngEstado(o.id, it.ref, b.etd||'', it.cant);
     lin.push({ o:o, it:it, q:q, f:(st.ing&&st.ing.fecha)||new Date().toISOString().slice(0,10) });
@@ -12552,7 +12568,7 @@ async function cblIngConfirmar(id){
     try{ await sbReabast.post('llegadas_confirmadas', row); row.confirmado_en = new Date().toISOString(); infIngAcum(row); n++; if(l.q>=(parseFloat(l.it.cant)||0)-0.5) await ingMarcarTablero(l.o.id, l.it.ref, l.f); }catch(e){ toast('No se pudo guardar '+l.it.ref+': '+e.message,'er'); }
   }
   if(n){ cblMutar(id, bb=>{ cblLog(bb,'Confirmó ingreso a inventario: '+n+' línea(s)'+(nota?' · '+nota:'')); }, '✅ BL confirmado: '+n+' línea(s)'); }
-  else cblPintarDetalle();
+  else if(REABAST.tab==='ingbl') cblPintarIng(); else cblPintarDetalle();
 }
 function cblLog(b, accion){ b.hist = [...(b.hist||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion}]; }
 async function cblMutar(id, fn, msg){
@@ -12561,6 +12577,7 @@ async function cblMutar(id, fn, msg){
   const antes = (orig.items||[]).map(it=>it.oc);
   const r = fn(b); if(r===false) return;
   try{ await cblPersistir(b, antes); if(msg && typeof toast==='function') toast(msg,'ok'); }catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); }
+  if(REABAST.tab==='ingbl') cblPintarIng();
   if(CBL.det===id && document.getElementById('cbl-det')) cblPintarDetalle(); else if(REABAST.tab==='comext'){ const c=document.getElementById('cbl-tabla'); if(c) c.innerHTML=cblHtmlTablaX(); }
 }
 function cblRenombrar(id){
@@ -12581,7 +12598,7 @@ function cblGuardarCab(id){
   const nbl = v('bl').trim();
   if(!nbl){ if(typeof toast==='function') toast('El número de BL no puede quedar vacío','er'); return; }
   if(CBL.bls.some(x=>x.id!==id && String(x.bl).trim().toLowerCase()===nbl.toLowerCase())){ if(typeof toast==='function') toast('Ya existe otro BL con el número '+nbl,'er'); return; }
-  cblMutar(id, b=>{ const ant = `ETD ${b.etd||'—'}→${v('etd')||'—'} · ETA ${b.eta||'—'}→${v('eta')||'—'}`; if(b.bl!==nbl){ cblLog(b,'Número de BL '+(b.bl||'—')+' → '+nbl); b.bl = nbl; } const antPl = b.planta||''; const antDim = b.dim||''; ['agente','po','pd','cont','dim','etd','eta'].forEach(k=>{ b[k] = v(k); }); b.dim = (b.dim||'').trim(); if(b.dim!==antDim) cblLog(b,'DIM '+(antDim||'—')+' → '+(b.dim||'—')); if(!b.pd) b.pd = 'Buenaventura';
+  cblMutar(id, b=>{ const ant = `ETD ${b.etd||'—'}→${v('etd')||'—'} · ETA ${b.eta||'—'}→${v('eta')||'—'}`; if(b.bl!==nbl){ cblLog(b,'Número de BL '+(b.bl||'—')+' → '+nbl); b.bl = nbl; } const antPl = b.planta||''; const antDim = b.dim||''; ['agente','po','pd','cont','dim','etd','eta'].forEach(k=>{ b[k] = v(k); }); b.dim = (b.dim||'').trim(); if(b.dim!==antDim) cblLog(b,'DIM '+(antDim||'—')+' → '+(b.dim||'—')); { const antC = b.cbmc!=null?b.cbmc:null, nuC = v('cbmc')===''?null:Number(v('cbmc')); if(antC!==nuC){ b.cbmc = nuC; cblLog(b,'CBM confirmado '+(antC!=null?antC:'—')+' → '+(nuC!=null?nuC:'—')+' m³'); } } if(!b.pd) b.pd = 'Buenaventura';
     const pl = v('planta'); b.planta = (pl && pl!==cblPlantaEst(b.eta)) ? pl : '';
     if(b.planta && b.planta!==antPl){ (b.items||[]).forEach(it=>{ if(!it.ingreso) it.planta = b.planta; }); cblLog(b,'Llegada a planta '+(antPl||'—')+' → '+b.planta+' (aplicada a los ítems sin ingreso)'); }
     cblLog(b,'Fechas/logística: '+ant); }, 'Guardado · el tablero se actualizó con el nuevo ETD/ETA');
@@ -12715,6 +12732,8 @@ function infDatos(){
     if(f.q){ const tk = f.q.toLowerCase().split(/[\s,;]+/).filter(Boolean); const base = (o.numero_oc+' '+(o.proveedor||'')).toLowerCase(); const its = REABAST.ocItems[o.id]||[]; if(!its.some(it=>{ const t = base+' '+String(it.referencia||'')+' '+String(it.descripcion||'')+' '+(((REABAST.referenciasMaestro||{})[String(it.referencia||'').trim()]||{}).descripcion_en||''); return tk.every(k=>t.toLowerCase().includes(k)); })) return; }
     const c = infCbmOc(o);
     { const its = REABAST.ocItems[o.id]||[]; if(its.length && its.reduce((a,it)=>a+ocPendItem(o,it),0)<=0) return; }
+    // Madre que se separó del todo (sin ítems y con hijas activas que sí los tienen): queda archivada, solo cuentan las hijas
+    if(!(REABAST.ocItems[o.id]||[]).length && !/-\d+$/.test(ceNum(o.numero_oc))){ const bs = ceNum(o.numero_oc); if((REABAST.ordenesCompra||[]).some(z=>z.id!==o.id && ceNum(z.numero_oc).replace(/-\d+$/,'')===bs && (z.estado_general||'activa')==='activa' && (REABAST.ocItems[z.id]||[]).length)) return; }
     const fecha = L ? L.fecha : null;
     const iso = fecha ? fecha.toISOString().slice(0,10) : '';
     if(f.desde && (!iso || iso < f.desde)) return;
@@ -12775,13 +12794,17 @@ function infOcPorNombre(n){
   const k = ceNum(n), b = k.replace(/-\d+$/,''), L = REABAST.ordenesCompra||[];
   return L.find(o=>ceNum(o.numero_oc)===k) || L.find(o=>ceNum(o.numero_oc).replace(/-\d+$/,'')===b) || null;
 }
-// Una orden madre sin ítems propios (p. ej. OI1887) ya se repartió en órdenes hijas (OI1887-1, -2…) con sus propias etapas y fechas:
-// se usan las hijas activas con ítems; si no hay, la orden misma.
+// Una orden del plan (p. ej. OI1887) puede haberse repartido en órdenes hijas (OI1887-1, -2…) con sus propias etapas y fechas,
+// y a veces la madre se queda con algunos ítems. Se cuentan la madre (si tiene ítems) y las hijas activas con ítems que el plan
+// de Logística no nombra aparte; si no hay nada, la orden misma.
 function infExpandOc(o){
-  if(!o || (REABAST.ocItems[o.id]||[]).length) return [o];
+  if(!o) return [o];
+  const nom = new Set(); INF_PLAN.grupos.concat(INF_PLAN.resto).forEach(g=>g.ocs.forEach(n=>nom.add(ceNum(n))));
   const base = ceNum(o.numero_oc).replace(/-\d+$/,'');
-  const h = (REABAST.ordenesCompra||[]).filter(z=>z.id!==o.id && ceNum(z.numero_oc).replace(/-\d+$/,'')===base && (z.estado_general||'activa')==='activa' && (REABAST.ocItems[z.id]||[]).length);
-  return h.length ? h : [o];
+  const mia = (REABAST.ocItems[o.id]||[]).length ? [o] : [];
+  const h = (REABAST.ordenesCompra||[]).filter(z=>z.id!==o.id && ceNum(z.numero_oc).replace(/-\d+$/,'')===base && !/-\d+$/.test(ceNum(o.numero_oc)) && (z.estado_general||'activa')==='activa' && (REABAST.ocItems[z.id]||[]).length && !nom.has(ceNum(z.numero_oc)));
+  const r = mia.concat(h);
+  return r.length ? r : [o];
 }
 function infEstCbm(x){
   if(x._est) return x._est;
@@ -12904,6 +12927,7 @@ async function infIngCargar(d){
   INF_ING.cargando = false;
   infPintar();
   if(typeof CBL!=='undefined' && CBL.det && document.getElementById('cbl-det')) cblPintarDetalle();
+  if(typeof REABAST!=='undefined' && REABAST.tab==='ingbl' && typeof cblPintarIng==='function') cblPintarIng();
 }
 function infIngAcum(c){
   ING_C = null;
@@ -13328,6 +13352,7 @@ function reabastPintar(){
     {id:'pagos', lbl:'💵 Programación de pagos'},
     {id:'embarquebl', lbl:'🚢 Embarque (BL)'},
     {id:'comext', lbl:'🌐 Comercio Exterior'},
+    {id:'ingbl', lbl:'📦 Ingreso a inventario'},
     {id:'calendario', lbl:'📅 Calendario de llegadas'},
     {id:'novedades', lbl:'📋 Novedades'},
     {id:'agotados', lbl:'📦 Agotados ('+REABAST._agotados.length+')'},
@@ -13384,7 +13409,7 @@ function reabastPintar(){
   else if(REABAST.tab==='proveedores'){ body.innerHTML = reabastHtmlProveedores(); reabastRepintarProveedores(); }
   else if(REABAST.tab==='panelcompras'){ body.innerHTML = reabastHtmlPanelCompras(); reabastCargarPanelCompras(); }
   else if(REABAST.tab==='referencias'){ body.innerHTML = reabastHtmlReferenciasShell(); reabastRepintarReferencias(); }
-  else if(REABAST.tab==='embarquebl' || REABAST.tab==='comext'){ const tb = REABAST.tab; body.innerHTML = cargaHtml('Cargando'); cblCargar().then(()=>{ if(REABAST.tab!==tb) return; body.innerHTML = tb==='embarquebl' ? cblHtmlEmbarque() : cblHtmlCE(); if(tb==='embarquebl') cblPintarResumen(); }); }
+  else if(REABAST.tab==='embarquebl' || REABAST.tab==='comext' || REABAST.tab==='ingbl'){ const tb = REABAST.tab; body.innerHTML = cargaHtml('Cargando'); cblCargar().then(()=>{ if(REABAST.tab!==tb) return; body.innerHTML = tb==='embarquebl' ? cblHtmlEmbarque() : tb==='ingbl' ? cblHtmlIng() : cblHtmlCE(); if(tb==='embarquebl') cblPintarResumen(); }); }
   else if(REABAST.tab==='informes'){ body.innerHTML = infHtmlShell(); infPintar(); }
   else if(REABAST.tab==='dashboard') body.innerHTML = reabastHtmlDashboard();
   else if(REABAST.tab==='politica'){ REABAST._combinados = null; body.innerHTML = reabastHtmlPolitica(); reabastRepintarPolitica(); }
