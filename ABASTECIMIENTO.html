@@ -3272,13 +3272,6 @@ function cblPintarDetalle(){
       <td><input type="date" class="inp" style="font-size:11px;" value="${it.ingreso||''}" ${dis} onchange="cblItemFecha('${b.id}',${ix},'ingreso',this.value)"></td>
       <td>${puede?`<button class="btn btn-g btn-xs" title="Sacar este ítem del BL (vuelve a 'por embarcar')" onclick="cblQuitarItem('${b.id}',${ix})">✕</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>
-    <div style="border:1px solid var(--b1);border-radius:10px;padding:10px 12px;margin-top:14px;${aduana?'':'opacity:.75;'}">
-      <div style="font-weight:800;font-size:12.5px;margin-bottom:4px;">🛃 Registro de importación</div>
-      <div class="arte-mu" style="font-size:11px;margin-bottom:6px;">${aduana?'Cuando cuentes con la aprobación, relaciona aquí el número del registro de importación oficial.':'Es el trámite de la etapa de Nacionalización (puedes adelantarlo si ya tienes la aprobación).'}</div>
-      <div class="cbl-in"><div><label>Número de registro</label><input id="cbld-rim" class="inp" value="${reabastEsc(R.numero||'')}" ${dis} style="width:100%;"></div><div><label>Fecha del registro</label><input id="cbld-rimf" type="date" class="inp" value="${R.fecha||''}" ${dis} style="width:100%;"></div>
-      <div><label>Aprobación</label><label style="display:flex;gap:6px;align-items:center;font-size:12px;font-weight:600;color:var(--tx);"><input id="cbld-rima" type="checkbox" ${R.aprobado?'checked':''} ${dis}> Aprobado</label></div></div>
-      <div style="margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><button class="btn btn-bl btn-sm" ${dis} onclick="cblGuardarRegistro('${b.id}')">💾 Guardar registro</button>${R.numero?`<span class="arte-mu" style="font-size:11px;">Registrado por ${reabastEsc(R.quien||'')} · ${R.t?new Date(R.t).toLocaleString('es-CO'):''}</span>`:''}</div>
-    </div>
     ${(b.hist||[]).length?`<details style="margin-top:10px;"><summary class="arte-mu" style="cursor:pointer;font-size:11px;">Historial (${b.hist.length})</summary><div style="font-size:11px;margin-top:4px;">${[...b.hist].reverse().map(h=>`<div>${new Date(h.t).toLocaleString('es-CO')} · <b>${reabastEsc(h.quien||'')}</b> · ${reabastEsc(h.accion||'')}</div>`).join('')}</div></details>`:''}
     ${puede?`<div style="margin-top:10px;"><button class="btn btn-rd btn-sm" onclick="cblEliminarBL('${b.id}')" title="Borra el BL; sus ítems vuelven a 'por embarcar'">🗑 Eliminar este BL</button></div>`:''}
   </div>`;
@@ -3434,11 +3427,6 @@ function cblVigRim(it){
 }
 function cblQuitarItem(id, ix){
   cblMutar(id, b=>{ const it = b.items[ix]; if(!it) return false; b.items.splice(ix,1); cblLog(b,'Ítem '+it.ref+' ('+it.oc+') sacado del BL'); }, 'Ítem devuelto a "por embarcar"');
-}
-function cblGuardarRegistro(id){
-  const num = ((document.getElementById('cbld-rim')||{}).value||'').trim(), f = (document.getElementById('cbld-rimf')||{}).value||'', ok = !!(document.getElementById('cbld-rima')||{}).checked;
-  if(num && !ok){ if(typeof toast==='function') toast('Marca "Aprobado" para registrar el número oficial','wa'); return; }
-  cblMutar(id, b=>{ b.registro = num ? {numero:num, fecha:f, aprobado:ok, quien:(CU&&CU.nombre)||'', t:new Date().toISOString()} : null; cblLog(b, num ? 'Registro de importación '+num : 'Registro de importación quitado'); }, num ? 'Registro de importación guardado' : 'Registro quitado');
 }
 async function cblEliminarBL(id){
   if(!cblPuede()) return; const b0 = CBL.bls.find(x=>x.id===id), nn = b0 && b0.items ? b0.items.length : 0;
@@ -8336,7 +8324,12 @@ async function ceCrearRamasFaltantes(){
       const L = falt[num], lote = null, conEspacio = /\s-\d+$/.test(base.numero_oc||'');
       const ramaOc = {...base, id:null, numero_oc: String(base.numero_oc).replace(/\s*-\d+$/,'')+(conEspacio?' -':'-')+num.slice(ob.length+1), _nueva:true, _baseId:base.id, _baseNumero:base.numero_oc, _impo:num, _refsAMover:[]};
       const m = new Map(); L.forEach(x=>{ const k = ceRefKey(x.r); const o = m.get(k) || {ref:String(x.r).trim(), desc:'', qty:0}; o.qty += Number(x.c)||0; m.set(k,o); });
+      const _famIds = Object.keys(erp).filter(k=>k===ob||k.startsWith(ob+'-')).map(k=>erp[k]&&erp[k].id).filter(Boolean);
+      const _refsOC = new Set(); _famIds.forEach(id=>(REABAST.ocItems[id]||[]).forEach(i=>_refsOC.add(ceRefKey(i.referencia||i.sku||i.codigo))));
+      const _fuera = [...m.values()].filter(o=>o.qty>0 && !_refsOC.has(ceRefKey(o.ref)));
+      if(_fuera.length){ (CBL._errSync = CBL._errSync || []).push(num+': refs que no están en la OC, no se crean ('+_fuera.map(o=>o.ref).join(', ')+')'); for(const o of _fuera) m.delete(ceRefKey(o.ref)); }
       ramaOc._nuevosItems = [...m.values()].filter(o=>o.qty>0).map(o=>({...o, plantilla: ceItemPlantilla(o.ref, ob)}));
+      if(!ramaOc._nuevosItems.length) continue;
       const oc = await ceCrearRama(ramaOc); erp[num] = oc;
       // OC base: sus ítems pasan a la cantidad realmente enviada (el saldo vive ahora en la rama)
       for(const o of ramaOc._nuevosItems){
