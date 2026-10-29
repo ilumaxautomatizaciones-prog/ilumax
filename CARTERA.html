@@ -412,13 +412,15 @@ function plMas(seq, tipo, cons, cuenta, nit, m, notas) {
 // items: [{d, cartera, monto, ica, rte, bruto, iva}], o: {tipo, cons, fecha, nit, ctaIca, ctaRte, ctaBanco, notas}
 // Recibo completo: banco (lo pagado) + ICA + RTE IVA = créditos a cartera por el valor cartera de cada factura
 function conPlano(items, o) {
-  const its = items.filter(x => x.d), mas = o.mas || [], pagC = its.reduce((s, x) => s + x.monto, 0), pag = pagC + mas.reduce((s, x) => s + x.monto, 0), ica = its.reduce((s, x) => s + x.ica, 0), rte = its.reduce((s, x) => s + x.rte, 0), car = its.reduce((s, x) => s + x.cartera, 0);
+  const its = items.filter(x => x.d), mas = o.mas || [], pagC = its.reduce((s, x) => s + x.monto, 0), pag = o.banco != null ? o.banco : pagC + mas.reduce((s, x) => s + x.monto, 0) + (o.otros || []).reduce((s, x) => s + x.monto, 0), ica = its.reduce((s, x) => s + x.ica, 0), rte = its.reduce((s, x) => s + x.rte, 0), car = its.reduce((s, x) => s + x.cartera, 0);
   const dif = Math.round((pagC + ica + rte - car) * 100) / 100;
   const lines = []; let n = 2;
   lines.push(plCab(n++, o.tipo, o.cons, o.fecha, o.nit, o.notas, o.elab));
   if (pag !== 0) lines.push(plBanco(n++, o.tipo, o.cons, o.ctaBanco, pag, o.fecha, o.notas));
   // Retenciones: facturas → débito; notas crédito (valores negativos) → crédito, cada una en su propia línea
   mas.forEach(m => lines.push(plMas(n++, o.tipo, o.cons, o.ctaMas || '23359590', o.nit, m, o.notas)));
+  // Descuentos del cliente sin documento en Siesa (ej. SAPND, SAPINC): débito a la cuenta indicada, para que el banco quede igual al pago real
+  (o.otros || []).forEach(x => lines.push(plRet(n++, o.tipo, o.cons, x.cta, o.nit, -x.monto, 0, x.notas)));
   [[o.ctaIca, 'ica', 'bruto', x => x.zona !== 'Y'], [o.ctaIcaY || o.ctaIca, 'ica', 'bruto', x => x.zona === 'Y'], [o.ctaRte, 'rte', 'iva', () => true]].forEach(([cta, k, b, zf]) => {
     [1, -1].forEach(sg => {
       const g = its.filter(x => zf(x) && x[k] * sg > 0), v = g.reduce((s, x) => s + x[k], 0);
@@ -445,8 +447,9 @@ function conCtaMasBuscar(nit, cli, mas) {
   const ids = new Set(mas.map(x => String(x.consec))), d = (D.docsL || []).find(x => /^(MAS|VPP)/i.test(x.tipo) && ids.has(String(+x.consec)) && x.cuenta);
   return d ? String(d.cuenta) : '';
 }
+function conCtaOtrosMapa() { try { return JSON.parse(localStorage.getItem('cart_ctaotros') || '{}'); } catch (e) { return {}; } }
 function conPlanoGen() {
-  const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d), its = ok.filter(conIncl), isMas = r => !r.ok && /^(MAS|VPP)-\d+$/.test(r.num), mas = CON.rows.filter(isMas).filter(r => CON.inc == null || CON.inc[r.num] !== false).map(r => ({ monto: r.monto, consec: +r.num.slice(4), fecha: r.fecha })), fuera = ok.length - its.length + CON.rows.filter(r => !r.ok && !isMas(r)).length;
+  const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d), its = ok.filter(conIncl), isMas = r => !r.ok && /^(MAS|VPP)-\d+$/.test(r.num), mas = CON.rows.filter(isMas).filter(r => CON.inc == null || CON.inc[r.num] !== false).map(r => ({ monto: r.monto, consec: +r.num.slice(4), fecha: r.fecha })), otrosR = CON.rows.filter(r => !r.ok && !isMas(r) && (CON.inc == null || CON.inc[r.num] !== false)); let fuera = ok.length - its.length;
   if (!its.length || !its.some(r => r.ica + r.rte > 0)) { alert('No hay diferencias de ICA / RTE IVA para cuadrar.'); return; }
   if (!P.cons) P.cons = conSig();
   const nitC = its[0].d.nit; let ctaMas = String(P.ctaMas || '').trim();
@@ -455,12 +458,21 @@ function conPlanoGen() {
     else ctaMas = conCtaMasBuscar(nitC, its[0].cli, mas);
     if (!ctaMas) { ctaMas = (prompt('No encontré la cuenta contable de los ' + mas.length + ' documento(s) MAS/VPP de ' + (its[0].cli || nitC) + '.\nEscribe el número de cuenta (se recordará para este cliente):') || '').replace(/\D/g, ''); if (!ctaMas) return; conCtaMasGuardar(nitC, ctaMas); }
   }
-  const o = { tipo: P.tipo.toUpperCase(), cons: +P.cons, fecha: P.fecha, nit: its[0].d.nit, ctaIca: P.ctaIca, ctaIcaY: P.ctaIcaY, ctaRte: P.ctaRte, ctaBanco: P.ctaBanco, ctaMas: ctaMas || '23359590', elab: P.elab !== false, mas, notas: 'PAGO FACTURAS ' + (its[0].cli || '').slice(0, 30) };
+  // Otros descuentos del cliente (no están en la cartera ni son MAS/VPP): se agrupan por prefijo y cada grupo lleva su cuenta
+  const otros = [], mapO = conCtaOtrosMapa(), grp = {};
+  otrosR.forEach(r => { const pf = (String(r.num).replace(/[-\s]?\d+$/, '') || 'OTROS').toUpperCase(); (grp[pf] = grp[pf] || []).push(r); });
+  for (const pf of Object.keys(grp)) {
+    const L = grp[pf], tot = L.reduce((a, r) => a + r.monto, 0), k = nitC + '|' + pf; let cta = mapO[k] || '';
+    if (!cta) { cta = (prompt('Hay ' + L.length + ' línea(s) ' + pf + ' del cliente por ' + fm(tot) + ' que no están en la cartera de Siesa (descuentos que el cliente aplicó al pago).\nPara que el banco del plano sea igual al pago real, escribe el número de cuenta contable donde se registran (se recordará para este cliente).\nDéjalo vacío para dejarlas fuera del plano.') || '').replace(/\D/g, ''); if (cta) { mapO[k] = cta; try { localStorage.setItem('cart_ctaotros', JSON.stringify(mapO)); } catch (e) { } } }
+    if (cta) otros.push({ cta, monto: tot, notas: 'DESCUENTO CLIENTE ' + pf, n: L.length }); else fuera += L.length;
+  }
+  const o = { banco: CON.total != null ? CON.total : null, otros, tipo: P.tipo.toUpperCase(), cons: +P.cons, fecha: P.fecha, nit: its[0].d.nit, ctaIca: P.ctaIca, ctaIcaY: P.ctaIcaY, ctaRte: P.ctaRte, ctaBanco: P.ctaBanco, ctaMas: ctaMas || '23359590', elab: P.elab !== false, mas, notas: 'PAGO FACTURAS ' + (its[0].cli || '').slice(0, 30) };
   const r = conPlano(its.map(x => ({ d: x.d, cartera: x.cartera, monto: x.monto, ica: x.ica, rte: x.rte, bruto: x.bruto, iva: x.iva, zona: x.zona })), o);
-  if (Math.abs(r.dif) > 2 || r.chk !== 0) { alert('El plano no cuadra (diferencia ' + fm(r.dif) + ' · en el archivo ' + fm(r.chk) + '). Revisa la conciliación.'); return; }
+  if (Math.abs(r.dif) > 2) { alert('Las facturas no cuadran con ICA / RTE IVA (diferencia ' + fm(r.dif) + '). Revisa la conciliación.'); return; }
+  if (r.chk !== 0 && !confirm('El banco va por el monto pagado del archivo (' + fm(r.pag) + '), pero el plano queda descuadrado por ' + fm(r.chk) + ' (descuentos del cliente sin cuenta). Complétalo en Siesa mientras está en elaboración.\n¿Descargar el plano de todos modos?')) return;
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([r.txt], { type: 'text/plain;charset=iso-8859-1' })); a.download = 'Plano_' + o.tipo + '_' + o.cons + '.txt'; a.click();
   CON.pl.hecho = o.tipo + '-' + o.cons; conGuardar(true); CON.pl.cons = '';
-  alert('Plano ' + o.tipo + '-' + o.cons + ' generado: ' + r.n + ' facturas por valor cartera ' + fm(r.car) + '\nBanco ' + fm(r.pag) + (mas.length ? ' · MAS ' + fm(-mas.reduce((s, m) => s + m.monto, 0)) : '') + ' · ICA ' + fm(r.ica) + ' · RTE IVA ' + fm(r.rte) + (o.elab ? '\nVa con estado 0 (elaboración): revísalo y apruébalo en Siesa.' : '\nDébitos = créditos.') + (fuera ? '\n' + fuera + ' línea(s) quedaron fuera del plano' + (function () { const fr = CON.rows.filter(r => !r.ok && !isMas(r)); return fr.length ? ' (incluye ' + fr.map(r => r.num + ' ' + fm(r.monto)).join(', ') + ': el banco del plano no incluye estos valores)' : '.'; })() : ''));
+  alert('Plano ' + o.tipo + '-' + o.cons + ' generado: ' + r.n + ' facturas por valor cartera ' + fm(r.car) + '\nBanco ' + fm(r.pag) + (mas.length ? ' · MAS ' + fm(-mas.reduce((s, m) => s + m.monto, 0)) : '') + (otros.length ? ' · Descuentos cliente ' + fm(-otros.reduce((s, m) => s + m.monto, 0)) : '') + ' · ICA ' + fm(r.ica) + ' · RTE IVA ' + fm(r.rte) + (o.elab ? '\nVa con estado 0 (elaboración): revísalo y apruébalo en Siesa.' : '\nDébitos = créditos.') + (fuera ? '\n' + fuera + ' línea(s) quedaron fuera del plano' + (function () { const fr = otrosR.filter(r => !otros.some(x => x.notas === 'DESCUENTO CLIENTE ' + (String(r.num).replace(/[-\s]?\d+$/, '') || 'OTROS').toUpperCase())); return fr.length ? ' (incluye ' + fr.map(r => r.num + ' ' + fm(r.monto)).join(', ') + ': el banco del plano no incluye estos valores)' : '.'; })() : ''));
 }
 
 async function conApi(b) { try { const r = await fetch(API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } }
