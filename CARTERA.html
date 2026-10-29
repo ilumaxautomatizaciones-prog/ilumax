@@ -267,7 +267,7 @@ async function conFile(inp) {
       r = conParseRows(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true }));
     }
     if (!r.items.length) { box.innerHTML = '<div class="err">No encontré filas con Fecha, Número de documento y Monto en ese archivo.</div>'; return; }
-    CON.items = r.items; CON.total = r.total; CON.nombre = f.name; CON.id = null; conCalc();
+    CON.items = r.items; CON.total = r.total; CON.nombre = f.name; CON.id = null; CON.inc = {}; conCalc();
   } catch (e) { box.innerHTML = '<div class="err">No pude leer el archivo: ' + esc(e.message) + '</div>'; }
 }
 function conCalc() {
@@ -276,14 +276,17 @@ function conCalc() {
   const b = $('conRes'); if (b) b.innerHTML = conHtml();
 }
 const cf = n => n == null ? '–' : (n === 0 ? '–' : fm(n));
+const conIncl = r => r.ok && r.d && (CON.inc && CON.inc[r.num] !== undefined ? CON.inc[r.num] : !r.otro);
+function conInc(num, v) { CON.inc = CON.inc || {}; CON.inc[num] = v; const b = $('conRes'); if (b) b.innerHTML = conHtml(); }
+function conOmitir(v) { CON.inc = CON.inc || {}; CON.rows.forEach(r => { if (r.ok && r.otro) CON.inc[r.num] = v; }); const b = $('conRes'); if (b) b.innerHTML = conHtml(); }
 function conHtml() {
   const R = CON.rows; if (!R.length) return '';
   const ok = R.filter(r => r.ok), s = k => ok.reduce((a, r) => a + (r[k] || 0), 0), sm = R.reduce((a, r) => a + r.monto, 0), sinE = ok.filter(r => r.otro).length, no = R.length - ok.length;
   const chk = CON.total != null ? (sm === CON.total ? '✔ coincide con el total del pago (' + fm(CON.total) + ')' : '⚠ el total del archivo es ' + fm(CON.total)) : '';
-  const rows = R.map(r => '<tr' + (!r.ok || r.otro ? ' style="background:#fef3c7"' : '') + '><td style="text-align:left">' + esc(r.fecha) + '</td><td style="text-align:left"><b>' + esc(r.num) + '</b></td><td>' + fm(r.monto) + '</td><td style="background:#e8eef9">' + (r.cartera == null ? '–' : fm(r.cartera)) + '</td><td>' + (r.dif == null ? '–' : cf(r.dif)) + '</td><td style="background:#e6f3f7">' + (r.bruto == null ? '–' : fm(r.bruto)) + '</td><td style="background:#ece6f3">' + esc(r.suc || '–') + '</td><td>' + (r.iva == null ? '–' : fm(r.iva)) + '</td><td>' + cf(r.rte) + '</td><td>' + cf(r.ica) + '</td><td class="n" style="text-align:left;min-width:160px">' + esc(r.obs) + '</td></tr>').join('');
+  const rows = R.map(r => '<tr' + (!r.ok || r.otro ? ' style="background:#fef3c7"' : '') + '><td>' + (r.ok ? '<input type="checkbox" ' + (conIncl(r) ? 'checked ' : '') + 'onchange="conInc(\'' + esc(r.num) + '\',this.checked)">' : '') + '</td><td style="text-align:left">' + esc(r.fecha) + '</td><td style="text-align:left"><b>' + esc(r.num) + '</b></td><td>' + fm(r.monto) + '</td><td style="background:#e8eef9">' + (r.cartera == null ? '–' : fm(r.cartera)) + '</td><td>' + (r.dif == null ? '–' : cf(r.dif)) + '</td><td style="background:#e6f3f7">' + (r.bruto == null ? '–' : fm(r.bruto)) + '</td><td style="background:#ece6f3">' + esc(r.suc || '–') + '</td><td>' + (r.iva == null ? '–' : fm(r.iva)) + '</td><td>' + cf(r.rte) + '</td><td>' + cf(r.ica) + '</td><td class="n" style="text-align:left;min-width:160px">' + esc(r.obs) + '</td></tr>').join('');
   return '<div class="kpis">' + kpi('Pagado por el cliente', fmc(sm), R.length + ' líneas · ' + chk) + kpi('Valor cartera', fmc(s('cartera')), ok.length + ' documentos encontrados') + kpi('Diferencia', fmc(s('dif')), 'cartera − pagado') + kpi('ICA', fmc(s('ica')), 'tarifa ' + CON.ica + ' ‰ del bruto') + kpi('RTE IVA', fmc(s('rte')), CON.rt + '% del IVA') + kpi('Por revisar', String(no + sinE), no + ' sin cartera · ' + sinE + ' sin explicar') + '</div>'
-    + '<div class="card"><h2>Conciliación · ' + esc(CON.nombre) + '</h2><div class="tw"><table><thead><tr><th style="text-align:left">Fecha Doc.</th><th style="text-align:left">Número</th><th>Monto pagado</th><th>Valor cartera</th><th>Diferencia</th><th>Valor bruto</th><th>Sucursal</th><th>IVA</th><th>RTE IVA</th><th>ICA</th><th style="text-align:left">Observación</th></tr></thead><tbody>' + rows
-    + '<tr class="tot"><td colspan="2">TOTAL</td><td>' + fm(sm) + '</td><td>' + fm(s('cartera')) + '</td><td>' + fm(s('dif')) + '</td><td>' + fm(s('bruto')) + '</td><td></td><td>' + fm(s('iva')) + '</td><td>' + fm(s('rte')) + '</td><td>' + fm(s('ica')) + '</td><td></td></tr></tbody></table></div></div>';
+    + '<div class="card"><h2>Conciliación · ' + esc(CON.nombre) + (sinE ? ' <button class="btn" onclick="conOmitir(false)">Omitir los ' + sinE + ' sin explicar</button> <button class="btn" onclick="conOmitir(true)">Incluir todos</button>' : '') + '</h2><div class="tw"><table><thead><tr><th title="Incluir en el plano">Incluir</th><th style="text-align:left">Fecha Doc.</th><th style="text-align:left">Número</th><th>Monto pagado</th><th>Valor cartera</th><th>Diferencia</th><th>Valor bruto</th><th>Sucursal</th><th>IVA</th><th>RTE IVA</th><th>ICA</th><th style="text-align:left">Observación</th></tr></thead><tbody>' + rows
+    + '<tr class="tot"><td colspan="3">TOTAL</td><td>' + fm(sm) + '</td><td>' + fm(s('cartera')) + '</td><td>' + fm(s('dif')) + '</td><td>' + fm(s('bruto')) + '</td><td></td><td>' + fm(s('iva')) + '</td><td>' + fm(s('rte')) + '</td><td>' + fm(s('ica')) + '</td><td></td></tr></tbody></table></div></div>';
 }
 function conVista() {
   return '<div class="card"><h2>🧮 Conciliación de pagos del cliente</h2><div style="padding:12px 14px"><div style="font-size:12px;color:#64748b;margin-bottom:8px">Sube el Excel o el PDF de pagos que envía el cliente (fecha, número de documento y monto). Se cruza con la cartera de Siesa y se calcula la diferencia: ICA y RTE IVA.</div>'
@@ -384,7 +387,7 @@ function conPlano(items, o) {
 function plCheck(txt) { let d = 0, c = 0; txt.split(/\r?\n/).forEach(l => { if (l.slice(7, 11) !== '0351') return; const a = l.match(/[+-]\d{15}\.\d{4}/g); if (!a) return; d += +a[0]; c += +a[1]; }); return Math.round((d - c) * 100) / 100; }
 
 function conPlanoGen() {
-  const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d), its = ok.filter(r => !r.otro), isMas = r => !r.ok && /^MAS-\d+$/.test(r.num), mas = CON.rows.filter(isMas).map(r => ({ monto: r.monto, consec: +r.num.slice(4), fecha: r.fecha })), fuera = ok.length - its.length + CON.rows.filter(r => !r.ok && !isMas(r)).length;
+  const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d), its = ok.filter(conIncl), isMas = r => !r.ok && /^MAS-\d+$/.test(r.num), mas = CON.rows.filter(isMas).map(r => ({ monto: r.monto, consec: +r.num.slice(4), fecha: r.fecha })), fuera = ok.length - its.length + CON.rows.filter(r => !r.ok && !isMas(r)).length;
   if (!its.length || !its.some(r => r.ica + r.rte > 0)) { alert('No hay diferencias de ICA / RTE IVA para cuadrar.'); return; }
   if (!P.cons) { const tp = P.tipo.toUpperCase(), mx = Math.max(0, ...D.recs.map(r => String(r.doc).toUpperCase().replace(/[\s-]/g, '')).filter(s => s.startsWith(tp) && /^\d+$/.test(s.slice(tp.length))).map(s => parseInt(s.slice(tp.length), 10))); P.cons = mx + 1; }
   const o = { tipo: P.tipo.toUpperCase(), cons: +P.cons, fecha: P.fecha, nit: its[0].d.nit, ctaIca: P.ctaIca, ctaRte: P.ctaRte, ctaBanco: P.ctaBanco, ctaMas: P.ctaMas, elab: P.elab !== false, mas, notas: 'PAGO FACTURAS ' + (its[0].cli || '').slice(0, 30) };
@@ -399,20 +402,20 @@ async function conApi(b) { try { const r = await fetch(API + '?k=' + encodeURICo
 async function conGuardar(callado) {
   const R = CON.rows; if (!R.length) { alert('Primero sube el archivo del cliente.'); return; }
   const s = k => R.reduce((a, r) => a + (r[k] || 0), 0);
-  const j = await conApi({ accion: 'guardar', id: CON.id || '', fila: { archivo: CON.nombre, cliente: (R.find(r => r.cli) || {}).cli || '', nit: (R.find(r => r.d) || { d: {} }).d.nit || '', n: R.length, total_pagado: s('monto'), total_cartera: s('cartera'), ica: s('ica'), rte: s('rte'), plano: CON.pl.hecho || '', datos: { rows: R, total: CON.total, ica: CON.ica, rt: CON.rt, pl: CON.pl } } });
+  const j = await conApi({ accion: 'guardar', id: CON.id || '', fila: { archivo: CON.nombre, cliente: (R.find(r => r.cli) || {}).cli || '', nit: (R.find(r => r.d) || { d: {} }).d.nit || '', n: R.length, total_pagado: s('monto'), total_cartera: s('cartera'), ica: s('ica'), rte: s('rte'), plano: CON.pl.hecho || '', datos: { rows: R, total: CON.total, ica: CON.ica, rt: CON.rt, pl: CON.pl, inc: CON.inc || {} } } });
   if (!j.ok) { alert(j.error || 'No se pudo guardar'); return; }
   CON.id = j.id; if (!callado) alert('Conciliación guardada.'); conLista();
 }
 async function conLista() {
   const b = $('conList'); if (!b) return;
   const j = await conApi({ accion: 'listar' }); if (!j.ok) { b.innerHTML = ''; return; }
-  const rcDe = c => { const nd = x => String(x || '').replace(/\D/g, ''), f0 = String(c.creado).slice(0, 10), m = (D && D.recs || []).filter(r => /^RC/i.test(r.doc) && Math.abs(r.valor - c.total_pagado) <= 2 && r.fecha >= f0).sort((a, b) => a.fecha < b.fecha ? 1 : -1)[0]; return m ? '<b style="color:#15803d">✅ ' + esc(m.doc) + '</b>' : '<span class="n">sin aprobar</span>'; };
+  const rcDe = c => { const nd = x => String(x || '').replace(/\D/g, ''), f0 = String(c.creado).slice(0, 10), m = (D && D.recs || []).filter(r => /^RC/i.test(r.doc) && Math.abs(r.valor - c.total_pagado) <= 2 && r.fecha >= f0).sort((a, b) => a.fecha < b.fecha ? 1 : -1)[0]; return m ? '<b style="color:#15803d">✅ Aprobada · ' + esc(m.doc) + '</b>' : '<span class="n">⏳ sin aprobar</span>'; };
   const rows = j.lista.map(c => '<tr><td style="text-align:left">' + esc(new Date(c.creado).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })) + '</td><td style="text-align:left">' + esc(c.usuario || '') + '</td><td style="text-align:left">' + esc(c.archivo || '') + '</td><td style="text-align:left">' + esc(c.cliente || '') + '</td><td>' + c.n + '</td><td>' + fm(c.total_pagado) + '</td><td>' + fm(c.ica) + '</td><td>' + fm(c.rte) + '</td><td>' + esc(c.plano || '–') + '</td><td>' + rcDe(c) + '</td><td style="white-space:nowrap"><button class="btn" onclick="conAbrir(\'' + c.id + '\')">Abrir</button> <button class="btn" onclick="conBorrar(\'' + c.id + '\')">🗑</button></td></tr>').join('');
   b.innerHTML = '<div class="card"><h2>📁 Conciliaciones realizadas (' + j.lista.length + ')</h2><div class="tw"><table><thead><tr><th style="text-align:left">Guardada</th><th style="text-align:left">Por</th><th style="text-align:left">Archivo</th><th style="text-align:left">Cliente</th><th>Líneas</th><th>Pagado</th><th>ICA</th><th>RTE IVA</th><th>Plano</th><th>RC en Siesa</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="n">Aún no hay conciliaciones guardadas.</td></tr>') + '</tbody></table></div></div>';
 }
 async function conAbrir(id) {
   const j = await conApi({ accion: 'ver', id }); if (!j.ok) { alert(j.error || 'No se pudo abrir'); return; }
-  const d = j.c.datos || {}; CON.rows = d.rows || []; CON.items = []; CON.total = d.total == null ? null : d.total; CON.ica = d.ica || CON.ica; CON.rt = d.rt || CON.rt; CON.nombre = j.c.archivo || ''; CON.id = id; CON.pl = Object.assign(CON.pl, d.pl || {});
+  const d = j.c.datos || {}; CON.rows = d.rows || []; CON.items = []; CON.total = d.total == null ? null : d.total; CON.ica = d.ica || CON.ica; CON.rt = d.rt || CON.rt; CON.nombre = j.c.archivo || ''; CON.id = id; CON.inc = d.inc || {}; CON.pl = Object.assign(CON.pl, d.pl || {});
   const r = $('conRes'); if (r) r.innerHTML = conHtml(); window.scrollTo(0, 0);
 }
 async function conBorrar(id) { if (!confirm('¿Eliminar esta conciliación guardada?')) return; const j = await conApi({ accion: 'borrar', id }); if (!j.ok) { alert(j.error || 'No se pudo borrar'); return; } if (CON.id === id) CON.id = null; conLista(); }
