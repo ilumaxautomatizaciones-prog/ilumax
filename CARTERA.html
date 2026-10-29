@@ -202,12 +202,18 @@ const conNum = s => { s = String(s).trim(); const neg = /-$/.test(s) || /^-/.tes
 const conKey = s => { const m = String(s || '').toUpperCase().replace(/\s+/g, '').match(/^([A-Z]+)-?0*(\d+)$/); return m ? m[1] + '-' + m[2] : ''; };
 // Líneas de texto (PDF): "04.09.2026  VE-51398  Fac Afecta Elec. Rec  1.470.876" (las notas crédito traen el signo al final: 165.666-)
 function conParseLines(lines) {
-  const out = []; let total = null;
+  const out = []; let total = null, fp = '';
   lines.forEach(l => {
+    // Formato Jerónimo Martins: "VE50963  base  retIVA  retICA  retRenta  cree  descPP  importePago" (la fecha está en "Fecha Pago:20.10.2026")
+    const fd = l.match(/Fecha\s*Pago\s*:\s*(\d{2})\.(\d{2})\.(\d{4})/i); if (fd) fp = fd[3] + '-' + fd[2] + '-' + fd[1];
+    const jm = l.trim().match(/^([A-Z]{2,3})\s?(\d{3,})\s+((?:[\d.]+\s+){6}[\d.]+)\s*$/);
+    if (jm) { const nn = jm[3].trim().split(/\s+/); out.push({ fecha: fp, num: jm[1] + '-' + jm[2], monto: conNum(nn[nn.length - 1]) }); return; }
+    const jt = l.match(/^\s*Total\s*\.*\s*([\d.]+)\s*COP\s+([\d.]+)\s*COP/i); if (jt) { total = conNum(jt[2]); return; }
     const t = l.match(/Total del pago\s*:\s*([\d.]+)/i); if (t) total = conNum(t[1]);
     const m = l.trim().match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\S+-\d+)\s+.*?([\d.]+-?)\s*$/);
     if (m) out.push({ fecha: m[3] + '-' + m[2] + '-' + m[1], num: m[4], monto: conNum(m[5]) });
   });
+  out.forEach(x => { if (!x.fecha) x.fecha = fp; });
   return { items: out, total };
 }
 // Filas de Excel: busca el encabezado con "Numero" y "Monto"
@@ -277,16 +283,21 @@ function conCalc() {
 }
 const cf = n => n == null ? '–' : (n === 0 ? '–' : fm(n));
 const conIncl = r => r.ok && r.d && (CON.inc && CON.inc[r.num] !== undefined ? CON.inc[r.num] : !r.otro);
-function conInc(num, v) { CON.inc = CON.inc || {}; CON.inc[num] = v; const b = $('conRes'); if (b) b.innerHTML = conHtml(); }
+function conInc(num, v) { CON.inc = CON.inc || {}; const r = CON.rows.find(x => x.num === num); if (v && r && !r.ok) { alert('El documento ' + num + ' no está en la cartera abierta de Siesa: no hay factura donde aplicar el pago, por eso no se puede incluir en el plano.'); v = false; } CON.inc[num] = v; const b = $('conRes'); if (b) b.innerHTML = conHtml(); }
 function conOmitir(v) { CON.inc = CON.inc || {}; CON.rows.forEach(r => { if (r.ok && r.otro) CON.inc[r.num] = v; }); const b = $('conRes'); if (b) b.innerHTML = conHtml(); }
 function conHtml() {
   const R = CON.rows; if (!R.length) return '';
   const ok = R.filter(r => r.ok), s = k => ok.reduce((a, r) => a + (r[k] || 0), 0), sm = R.reduce((a, r) => a + r.monto, 0), sinE = ok.filter(r => r.otro).length, no = R.length - ok.length;
   const chk = CON.total != null ? (sm === CON.total ? '✔ coincide con el total del pago (' + fm(CON.total) + ')' : '⚠ el total del archivo es ' + fm(CON.total)) : '';
-  const rows = R.map(r => '<tr' + (!r.ok || r.otro ? ' style="background:#fef3c7"' : '') + '><td>' + (r.ok ? '<input type="checkbox" ' + (conIncl(r) ? 'checked ' : '') + 'onchange="conInc(\'' + esc(r.num) + '\',this.checked)">' : '') + '</td><td style="text-align:left">' + esc(r.fecha) + '</td><td style="text-align:left"><b>' + esc(r.num) + '</b></td><td>' + fm(r.monto) + '</td><td style="background:#e8eef9">' + (r.cartera == null ? '–' : fm(r.cartera)) + '</td><td>' + (r.dif == null ? '–' : cf(r.dif)) + '</td><td style="background:#e6f3f7">' + (r.bruto == null ? '–' : fm(r.bruto)) + '</td><td style="background:#ece6f3">' + esc(r.suc || '–') + '</td><td>' + (r.iva == null ? '–' : fm(r.iva)) + '</td><td>' + cf(r.rte) + '</td><td>' + cf(r.ica) + '</td><td class="n" style="text-align:left;min-width:160px">' + esc(r.obs) + '</td></tr>').join('');
+  const rows = R.map(r => '<tr' + (!r.ok || r.otro ? ' style="background:#fef3c7"' : '') + '><td>' + ('<input type="checkbox" ' + (conIncl(r) ? 'checked ' : '') + 'onchange="conInc(\'' + esc(r.num) + '\',this.checked)">') + '</td><td style="text-align:left">' + esc(r.fecha) + '</td><td style="text-align:left"><b>' + esc(r.num) + '</b></td><td>' + fm(r.monto) + '</td><td style="background:#e8eef9">' + (r.cartera == null ? '–' : fm(r.cartera)) + '</td><td>' + (r.dif == null ? '–' : cf(r.dif)) + '</td><td style="background:#e6f3f7">' + (r.bruto == null ? '–' : fm(r.bruto)) + '</td><td style="background:#ece6f3">' + esc(r.suc || '–') + '</td><td>' + (r.iva == null ? '–' : fm(r.iva)) + '</td><td>' + cf(r.rte) + '</td><td>' + cf(r.ica) + '</td><td class="n" style="text-align:left;min-width:160px">' + esc(r.obs) + '</td></tr>').join('');
   return '<div class="kpis">' + kpi('Pagado por el cliente', fmc(sm), R.length + ' líneas · ' + chk) + kpi('Valor cartera', fmc(s('cartera')), ok.length + ' documentos encontrados') + kpi('Diferencia', fmc(s('dif')), 'cartera − pagado') + kpi('ICA', fmc(s('ica')), 'tarifa ' + CON.ica + ' ‰ del bruto') + kpi('RTE IVA', fmc(s('rte')), CON.rt + '% del IVA') + kpi('Por revisar', String(no + sinE), no + ' sin cartera · ' + sinE + ' sin explicar') + '</div>'
     + '<div class="card"><h2>Conciliación · ' + esc(CON.nombre) + (sinE ? ' <button class="btn" onclick="conOmitir(false)">Omitir los ' + sinE + ' sin explicar</button> <button class="btn" onclick="conOmitir(true)">Incluir todos</button>' : '') + '</h2><div class="tw"><table><thead><tr><th title="Incluir en el plano">Incluir</th><th style="text-align:left">Fecha Doc.</th><th style="text-align:left">Número</th><th>Monto pagado</th><th>Valor cartera</th><th>Diferencia</th><th>Valor bruto</th><th>Sucursal</th><th>IVA</th><th>RTE IVA</th><th>ICA</th><th style="text-align:left">Observación</th></tr></thead><tbody>' + rows
     + '<tr class="tot"><td colspan="3">TOTAL</td><td>' + fm(sm) + '</td><td>' + fm(s('cartera')) + '</td><td>' + fm(s('dif')) + '</td><td>' + fm(s('bruto')) + '</td><td></td><td>' + fm(s('iva')) + '</td><td>' + fm(s('rte')) + '</td><td>' + fm(s('ica')) + '</td><td></td></tr></tbody></table></div></div>';
+}
+function conSig() {
+  const tp = String(CON.pl.tipo || 'RC').toUpperCase().replace(/\s/g, '');
+  const mx = Math.max((D.ult && D.ult[tp]) || 0, 0, ...D.recs.map(r => String(r.doc).toUpperCase().replace(/[\s-]/g, '')).filter(s => s.startsWith(tp) && /^\d+$/.test(s.slice(tp.length))).map(s => parseInt(s.slice(tp.length), 10)));
+  return mx + 1;
 }
 function conVista() {
   return '<div class="card"><h2>🧮 Conciliación de pagos del cliente</h2><div style="padding:12px 14px"><div style="font-size:12px;color:#64748b;margin-bottom:8px">Sube el Excel o el PDF de pagos que envía el cliente (fecha, número de documento y monto). Se cruza con la cartera de Siesa y se calcula la diferencia: ICA y RTE IVA.</div>'
@@ -294,7 +305,7 @@ function conVista() {
     + '<label style="font-size:12px;white-space:nowrap">ICA ‰ <input type="number" step="0.01" value="' + CON.ica + '" style="flex:none;min-width:0;width:70px" onchange="CON.ica=+this.value||0;conCalc()"></label>'
     + '<label style="font-size:12px;white-space:nowrap">RTE IVA % del IVA <input type="number" step="0.5" value="' + CON.rt + '" style="flex:none;min-width:0;width:60px" onchange="CON.rt=+this.value||0;conCalc()"></label>'
     + '<button class="btn" onclick="conExcel()">⬇ Excel</button><button class="btn" onclick="conGuardar()">💾 Guardar</button></div>'
-    + '<div class="bar" style="margin-top:8px"><b style="font-size:12px">Plano Siesa</b><label style="font-size:12px">Tipo <input value="' + CON.pl.tipo + '" style="flex:none;min-width:0;width:44px" onchange="CON.pl.tipo=this.value"></label><label style="font-size:12px">Consec. <input type="number" placeholder="automático" title="Vacío = último recibo + 1" style="flex:none;min-width:0;width:100px" onchange="CON.pl.cons=this.value"></label><label style="font-size:12px">Fecha <input type="date" value="' + (CON.pl.fecha = CON.pl.fecha || D.hoy || '') + '" style="flex:none;min-width:0" onchange="CON.pl.fecha=this.value"></label><label style="font-size:12px">Cta ICA <input value="' + CON.pl.ctaIca + '" style="flex:none;min-width:0;width:90px" onchange="CON.pl.ctaIca=this.value"></label><label style="font-size:12px">Cta RTE IVA <input value="' + CON.pl.ctaRte + '" style="flex:none;min-width:0;width:90px" onchange="CON.pl.ctaRte=this.value"></label><label style="font-size:12px">Cta banco <input value="' + CON.pl.ctaBanco + '" style="flex:none;min-width:0;width:90px" onchange="CON.pl.ctaBanco=this.value"></label><label style="font-size:12px">Cta MAS <input value="' + CON.pl.ctaMas + '" style="flex:none;min-width:0;width:90px" onchange="CON.pl.ctaMas=this.value"></label><label style="font-size:12px"><input type="checkbox" ' + (CON.pl.elab !== false ? 'checked' : '') + ' onchange="CON.pl.elab=this.checked"> Dejar en elaboración (estado 0)</label><button class="btn" onclick="conPlanoGen()">⬇ Plano Siesa</button></div></div></div><div id="conRes">' + conHtml() + '</div><div id="conList"></div>';
+    + '<div class="bar" style="margin-top:8px"><b style="font-size:12px">Plano Siesa</b><label style="font-size:12px">Tipo <input value="' + CON.pl.tipo + '" style="flex:none;min-width:0;width:44px" onchange="CON.pl.tipo=this.value"></label><label style="font-size:12px">Consec. <input type="number" value="' + (CON.pl.cons || conSig()) + '" title="Último recibo en Siesa + 1 (puedes editarlo)" style="flex:none;min-width:0;width:100px" onchange="CON.pl.cons=this.value"></label><label style="font-size:12px">Fecha <input type="date" value="' + (CON.pl.fecha = CON.pl.fecha || D.hoy || '') + '" style="flex:none;min-width:0" onchange="CON.pl.fecha=this.value"></label><label style="font-size:12px">Cta ICA <input value="' + CON.pl.ctaIca + '" style="flex:none;min-width:0;width:90px" onchange="CON.pl.ctaIca=this.value"></label><label style="font-size:12px">Cta RTE IVA <input value="' + CON.pl.ctaRte + '" style="flex:none;min-width:0;width:90px" onchange="CON.pl.ctaRte=this.value"></label><label style="font-size:12px">Cta banco <input value="' + CON.pl.ctaBanco + '" style="flex:none;min-width:0;width:90px" onchange="CON.pl.ctaBanco=this.value"></label><label style="font-size:12px">Cta MAS <input value="' + CON.pl.ctaMas + '" style="flex:none;min-width:0;width:90px" onchange="CON.pl.ctaMas=this.value"></label><label style="font-size:12px"><input type="checkbox" ' + (CON.pl.elab !== false ? 'checked' : '') + ' onchange="CON.pl.elab=this.checked"> Dejar en elaboración (estado 0)</label><button class="btn" onclick="conPlanoGen()">⬇ Plano Siesa</button></div></div></div><div id="conRes">' + conHtml() + '</div><div id="conList"></div>';
 }
 async function conExcel() {
   if (!CON.rows.length) { alert('Primero sube el archivo del cliente.'); return; }
@@ -389,12 +400,12 @@ function plCheck(txt) { let d = 0, c = 0; txt.split(/\r?\n/).forEach(l => { if (
 function conPlanoGen() {
   const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d), its = ok.filter(conIncl), isMas = r => !r.ok && /^MAS-\d+$/.test(r.num), mas = CON.rows.filter(isMas).map(r => ({ monto: r.monto, consec: +r.num.slice(4), fecha: r.fecha })), fuera = ok.length - its.length + CON.rows.filter(r => !r.ok && !isMas(r)).length;
   if (!its.length || !its.some(r => r.ica + r.rte > 0)) { alert('No hay diferencias de ICA / RTE IVA para cuadrar.'); return; }
-  if (!P.cons) { const tp = P.tipo.toUpperCase(), mx = Math.max(0, ...D.recs.map(r => String(r.doc).toUpperCase().replace(/[\s-]/g, '')).filter(s => s.startsWith(tp) && /^\d+$/.test(s.slice(tp.length))).map(s => parseInt(s.slice(tp.length), 10))); P.cons = mx + 1; }
+  if (!P.cons) P.cons = conSig();
   const o = { tipo: P.tipo.toUpperCase(), cons: +P.cons, fecha: P.fecha, nit: its[0].d.nit, ctaIca: P.ctaIca, ctaRte: P.ctaRte, ctaBanco: P.ctaBanco, ctaMas: P.ctaMas, elab: P.elab !== false, mas, notas: 'PAGO FACTURAS ' + (its[0].cli || '').slice(0, 30) };
   const r = conPlano(its.map(x => ({ d: x.d, cartera: x.cartera, monto: x.monto, ica: x.ica, rte: x.rte, bruto: x.bruto, iva: x.iva })), o);
   if (Math.abs(r.dif) > 2 || r.chk !== 0) { alert('El plano no cuadra (diferencia ' + fm(r.dif) + ' · en el archivo ' + fm(r.chk) + '). Revisa la conciliación.'); return; }
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([r.txt], { type: 'text/plain;charset=iso-8859-1' })); a.download = 'Plano_' + o.tipo + '_' + o.cons + '.txt'; a.click();
-  CON.pl.hecho = o.tipo + '-' + o.cons; conGuardar(true);
+  CON.pl.hecho = o.tipo + '-' + o.cons; conGuardar(true); CON.pl.cons = '';
   alert('Plano ' + o.tipo + '-' + o.cons + ' generado: ' + r.n + ' facturas por valor cartera ' + fm(r.car) + '\nBanco ' + fm(r.pag) + (mas.length ? ' · MAS ' + fm(-mas.reduce((s, m) => s + m.monto, 0)) : '') + ' · ICA ' + fm(r.ica) + ' · RTE IVA ' + fm(r.rte) + (o.elab ? '\nVa con estado 0 (elaboración): revísalo y apruébalo en Siesa.' : '\nDébitos = créditos.') + (fuera ? '\n' + fuera + ' línea(s) sin explicar quedaron fuera.' : ''));
 }
 
@@ -415,7 +426,7 @@ async function conLista() {
 }
 async function conAbrir(id) {
   const j = await conApi({ accion: 'ver', id }); if (!j.ok) { alert(j.error || 'No se pudo abrir'); return; }
-  const d = j.c.datos || {}; CON.rows = d.rows || []; CON.items = []; CON.total = d.total == null ? null : d.total; CON.ica = d.ica || CON.ica; CON.rt = d.rt || CON.rt; CON.nombre = j.c.archivo || ''; CON.id = id; CON.inc = d.inc || {}; CON.pl = Object.assign(CON.pl, d.pl || {});
+  const d = j.c.datos || {}; CON.rows = d.rows || []; CON.items = []; CON.total = d.total == null ? null : d.total; CON.ica = d.ica || CON.ica; CON.rt = d.rt || CON.rt; CON.nombre = j.c.archivo || ''; CON.id = id; CON.inc = d.inc || {}; CON.pl = Object.assign(CON.pl, d.pl || {}); CON.pl.cons = '';
   const r = $('conRes'); if (r) r.innerHTML = conHtml(); window.scrollTo(0, 0);
 }
 async function conBorrar(id) { if (!confirm('¿Eliminar esta conciliación guardada?')) return; const j = await conApi({ accion: 'borrar', id }); if (!j.ok) { alert(j.error || 'No se pudo borrar'); return; } if (CON.id === id) CON.id = null; conLista(); }
