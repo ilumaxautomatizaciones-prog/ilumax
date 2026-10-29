@@ -317,10 +317,25 @@ function conHtml() {
     + '<div class="card"><h2>Conciliación · ' + esc(CON.nombre) + (sinE ? ' <button class="btn" onclick="conOmitir(false)">Omitir los ' + sinE + ' sin explicar</button> <button class="btn" onclick="conOmitir(true)">Incluir todos</button>' : '') + '</h2><div class="tw"><table><thead><tr><th title="Incluir en el plano">Incluir</th><th style="text-align:left">Fecha Doc.</th><th style="text-align:left">Número</th><th>Monto pagado</th><th>Valor cartera</th><th>Diferencia</th><th>Valor bruto</th><th>Sucursal</th><th>IVA</th><th>RTE IVA</th><th>ICA</th><th style="text-align:left">Observación</th></tr></thead><tbody>' + rows
     + '<tr class="tot"><td colspan="3">TOTAL</td><td>' + fm(sm) + '</td><td>' + fm(s('cartera')) + '</td><td>' + fm(s('dif')) + '</td><td>' + fm(s('bruto')) + '</td><td></td><td>' + fm(s('iva')) + '</td><td>' + fm(s('rte')) + '</td><td>' + fm(s('ica')) + '</td><td></td></tr></tbody></table></div></div>';
 }
+let CON_LISTA = [], CON_NUMS = {};
+function conMaxSiesa(tp) {
+  return Math.max((D.ult && D.ult[tp]) || 0, 0, ...D.recs.map(r => String(r.doc).toUpperCase().replace(/[\s-]/g, '')).filter(s => s.startsWith(tp) && /^\d+$/.test(s.slice(tp.length))).map(s => parseInt(s.slice(tp.length), 10)));
+}
+// RC de Siesa que corresponde a una conciliación guardada (mismo valor, fecha posterior a la creación)
+function conAprob(c) { const f0 = String(c.creado).slice(0, 10); return (D && D.recs || []).filter(r => /^RC/i.test(r.doc) && Math.abs(r.valor - c.total_pagado) <= 2 && r.fecha >= f0).sort((a, b) => a.fecha < b.fecha ? 1 : -1)[0]; }
+// Planos aún sin aprobar: toman los consecutivos libres que siguen al último RC de Siesa, en orden
+function conNums(lista) {
+  const out = {}, nx = {}, nn = c => parseInt(String(c.plano).replace(/\D/g, ''), 10) || 0;
+  lista.filter(c => c.plano && !conAprob(c)).sort((a, b) => nn(a) - nn(b) || String(a.creado).localeCompare(String(b.creado))).forEach(c => {
+    const tp = (String(c.plano).match(/^[A-Za-z]+/) || ['RC'])[0].toUpperCase(); if (nx[tp] == null) nx[tp] = conMaxSiesa(tp) + 1;
+    out[c.id] = { tipo: tp, num: nx[tp]++, antes: c.plano };
+  });
+  return out;
+}
 function conSig() {
   const tp = String(CON.pl.tipo || 'RC').toUpperCase().replace(/\s/g, '');
-  const mx = Math.max((D.ult && D.ult[tp]) || 0, 0, ...D.recs.map(r => String(r.doc).toUpperCase().replace(/[\s-]/g, '')).filter(s => s.startsWith(tp) && /^\d+$/.test(s.slice(tp.length))).map(s => parseInt(s.slice(tp.length), 10)));
-  return mx + 1;
+  if (CON.id && CON_NUMS[CON.id] && CON_NUMS[CON.id].tipo === tp) return CON_NUMS[CON.id].num;
+  return Math.max(conMaxSiesa(tp), ...Object.keys(CON_NUMS).filter(k => k !== CON.id && CON_NUMS[k].tipo === tp).map(k => CON_NUMS[k].num)) + 1;
 }
 function conVista() {
   return '<div class="card"><h2>🧮 Conciliación de pagos del cliente</h2><div style="padding:12px 14px"><div style="font-size:12px;color:#64748b;margin-bottom:8px">Sube el Excel o el PDF de pagos que envía el cliente (fecha, número de documento y monto). Se cruza con la cartera de Siesa y se calcula la diferencia: ICA y RTE IVA.</div>'
@@ -444,14 +459,21 @@ async function conGuardar(callado) {
 async function conLista() {
   const b = $('conList'); if (!b) return;
   const j = await conApi({ accion: 'listar' }); if (!j.ok) { b.innerHTML = ''; return; }
-  const rcDe = c => { const nd = x => String(x || '').replace(/\D/g, ''), f0 = String(c.creado).slice(0, 10), m = (D && D.recs || []).filter(r => /^RC/i.test(r.doc) && Math.abs(r.valor - c.total_pagado) <= 2 && r.fecha >= f0).sort((a, b) => a.fecha < b.fecha ? 1 : -1)[0]; return m ? '<b style="color:#15803d">✅ Aprobada · ' + esc(m.doc) + '</b>' : '<span class="n">⏳ sin aprobar</span>'; };
-  const rows = j.lista.map(c => '<tr><td style="text-align:left">' + esc(new Date(c.creado).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })) + '</td><td style="text-align:left">' + esc(c.usuario || '') + '</td><td style="text-align:left">' + esc(c.archivo || '') + '</td><td style="text-align:left">' + esc(c.cliente || '') + '</td><td>' + c.n + '</td><td>' + fm(c.total_pagado) + '</td><td>' + fm(c.ica) + '</td><td>' + fm(c.rte) + '</td><td>' + esc(c.plano || '–') + '</td><td>' + rcDe(c) + '</td><td style="white-space:nowrap"><button class="btn" onclick="conAbrir(\'' + c.id + '\')">Abrir</button> <button class="btn" onclick="conBorrar(\'' + c.id + '\')">🗑</button></td></tr>').join('');
+  CON_LISTA = j.lista; CON_NUMS = conNums(j.lista);
+  const rcDe = c => { const m = conAprob(c); return m ? '<b style="color:#15803d">✅ Aprobada · ' + esc(m.doc) + '</b>' : '<span class="n">⏳ sin aprobar</span>'; };
+  const rows = j.lista.map(c => '<tr><td style="text-align:left">' + esc(new Date(c.creado).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })) + '</td><td style="text-align:left">' + esc(c.usuario || '') + '</td><td style="text-align:left">' + esc(c.archivo || '') + '</td><td style="text-align:left">' + esc(c.cliente || '') + '</td><td>' + c.n + '</td><td>' + fm(c.total_pagado) + '</td><td>' + fm(c.ica) + '</td><td>' + fm(c.rte) + '</td><td>' + (function () { const q = CON_NUMS[c.id]; if (!q) return esc(c.plano || '–'); const nv = q.tipo + '-' + q.num; return nv === c.plano ? esc(nv) : '<b>' + esc(nv) + '</b><div class="n" style="font-size:10px">antes ' + esc(c.plano) + ' (ya usado en Siesa)</div>'; })() + '</td><td>' + rcDe(c) + '</td><td style="white-space:nowrap"><button class="btn" onclick="conAbrir(\'' + c.id + '\')">Abrir</button> <button class="btn" title="Descarga el plano de Siesa con el siguiente consecutivo libre" onclick="conPlanoLista(\'' + c.id + '\')">⬇ Plano</button> <button class="btn" onclick="conBorrar(\'' + c.id + '\')">🗑</button></td></tr>').join('');
   b.innerHTML = '<div class="card"><h2>📁 Conciliaciones realizadas (' + j.lista.length + ')</h2><div class="tw"><table><thead><tr><th style="text-align:left">Guardada</th><th style="text-align:left">Por</th><th style="text-align:left">Archivo</th><th style="text-align:left">Cliente</th><th>Líneas</th><th>Pagado</th><th>ICA</th><th>RTE IVA</th><th>Plano</th><th>RC en Siesa</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="n">Aún no hay conciliaciones guardadas.</td></tr>') + '</tbody></table></div></div>';
 }
-async function conAbrir(id) {
+async function conAbrir(id, quieto) {
   const j = await conApi({ accion: 'ver', id }); if (!j.ok) { alert(j.error || 'No se pudo abrir'); return; }
   const d = j.c.datos || {}; CON.rows = d.rows || []; CON.items = []; CON.total = d.total == null ? null : d.total; CON.ica = d.ica || CON.ica; CON.ica2 = d.ica2 || CON.ica2; CON.rt = d.rt || CON.rt; CON.nombre = j.c.archivo || ''; CON.id = id; CON.inc = d.inc || {}; CON.pl = Object.assign(CON.pl, d.pl || {}); CON.pl.cons = '';
-  const r = $('conRes'); if (r) r.innerHTML = conHtml(); window.scrollTo(0, 0);
+  const r = $('conRes'); if (r) r.innerHTML = conHtml(); if (!quieto) window.scrollTo(0, 0);
+}
+async function conPlanoLista(id) {
+  await conAbrir(id, true); if (CON.id !== id || !CON.rows.length) return;
+  const q = CON_NUMS[id], c0 = CON_LISTA.find(c => c.id === id) || {}, m = String(c0.plano || '').match(/^([A-Za-z]+)-?(\d+)$/);
+  if (q) { CON.pl.cons = q.num; CON.pl.tipo = q.tipo; } else if (m) { CON.pl.tipo = m[1].toUpperCase(); CON.pl.cons = +m[2]; } else CON.pl.cons = '';
+  conPlanoGen();
 }
 async function conBorrar(id) { if (!confirm('¿Eliminar esta conciliación guardada?')) return; const j = await conApi({ accion: 'borrar', id }); if (!j.ok) { alert(j.error || 'No se pudo borrar'); return; } if (CON.id === id) CON.id = null; conLista(); }
 
