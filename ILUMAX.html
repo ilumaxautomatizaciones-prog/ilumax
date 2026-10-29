@@ -11855,15 +11855,15 @@ function reabastChipSync(on){
 // Repinta al terminar la carga fresca, sin pisar a quien esté escribiendo en un campo.
 function reabastRepintarSeguro(n){
   n = n||0;
-  const pg = document.getElementById('pg-reabast'); if(!pg || !pg.classList.contains('on')) return;
-  const a = document.activeElement, cont = document.getElementById('reabast-content');
+  const pg = document.getElementById(REABAST.vistaCE ? 'pg-comext' : 'pg-reabast'); if(!pg || !pg.classList.contains('on')) return;
+  const a = document.activeElement, cont = document.getElementById(REABAST.vistaCE ? 'comext-content' : 'reabast-content');
   const escribiendo = !!(a && cont && cont.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
   if(escribiendo){ if(n < 8) setTimeout(()=>reabastRepintarSeguro(n+1), 1500); return; }
   reabastGoTab(REABAST.tab || 'urgentes');
 }
 
 async function renderReabastMod(){
-  const el = document.getElementById('reabast-content');
+  const el = document.getElementById(REABAST.vistaCE ? 'comext-content' : 'reabast-content');
   if(!el) return;
   const fresco = REABAST._cargadoEn && (Date.now()-REABAST._cargadoEn) < 60000; // 60s
   if(fresco){ reabastGoTab(REABAST.tab || 'urgentes'); return; }
@@ -11886,6 +11886,71 @@ async function renderReabastMod(){
   try{ await tarea; }catch(e){ console.warn('Abastecimiento:', e && e.message); }
   finally{ REABAST._cargando = null; reabastChipSync(false); }
   if(pintado) reabastRepintarSeguro(); else reabastGoTab(REABAST.tab || 'urgentes');
+}
+
+// ═══ Módulo Comercio Exterior (paso a paso) — reusa las vistas de Embarque (BL), Comercio Exterior e Ingreso ═══
+const CE_MOD_TABS = ['ce_hoy','ce_prealerta','embarquebl','ce_transito','ce_naci','ingbl','comext'];
+function ceModTabs(){
+  let nT = 0, nN = 0; try{ const act = (CBL.bls||[]).filter(b=>{ const f = cblFaseBL(b); return f!==9 && f!==-1; }); nT = act.filter(b=>cblFaseBL(b)===6).length; nN = act.filter(b=>cblFaseBL(b)===7).length; }catch(e){}
+  let nP = 0; try{ nP = embConteo(); }catch(e){}
+  return [
+    {id:'ce_hoy', lbl:'🧭 Qué hacer hoy'},
+    {id:'ce_prealerta', lbl:'1️⃣ Prealertas'+(nP?' ('+nP+')':'')},
+    {id:'embarquebl', lbl:'2️⃣ Armar BL (Embarque)'},
+    {id:'ce_transito', lbl:'3️⃣ En tránsito'+(nT?' ('+nT+')':'')},
+    {id:'ce_naci', lbl:'4️⃣ Nacionalización'+(nN?' ('+nN+')':'')},
+    {id:'ingbl', lbl:'5️⃣ Ingreso a inventario'},
+    {id:'comext', lbl:'🌐 Todos los BL'}
+  ];
+}
+// Ajusta los filtros del BL al entrar a cada paso (solo la primera vez que se entra, para no pisar lo que el usuario cambie)
+function ceModPreset(t){
+  if(REABAST._cePrev === t) return; REABAST._cePrev = t;
+  const f = CBL.f; if(!f) return;
+  if(t==='ce_transito'){ f.kpi = ''; f.vista = 'bl'; f.estado = '6'; f.q = ''; }
+  else if(t==='ce_naci'){ f.kpi = ''; f.vista = 'bl'; f.estado = '7'; f.q = ''; }
+  else if(t==='comext'){ f.kpi = ''; f.vista = 'oc'; f.estado = 'activos'; f.q = ''; }
+}
+function ceModHoyHtml(){
+  const bls = CBL.bls||[], act = bls.filter(b=>{ const f = cblFaseBL(b); return f!==9 && f!==-1; }), n = fa=>act.filter(b=>cblFaseBL(b)===fa).length, hoy = Date.now();
+  let pre = 0; try{ pre = embConteo(); }catch(e){}
+  const prox = act.filter(b=>{ const d = b.eta ? (new Date(b.eta+'T12:00:00')-hoy)/86400000 : null; return d!=null && d>=0 && d<=15; }).length;
+  const sinRim = bls.filter(b=>cblFaseBL(b)>=7 && cblFaseBL(b)!==9 && !(b.registro && b.registro.numero)).length;
+  const sinVig = act.reduce((a,b)=>a+(b.items||[]).filter(cblSinVig).length, 0);
+  const paso = (num, tit, cant, txt, tab, bt)=>`<div style="border:1px solid var(--b1);border-radius:12px;background:#fff;padding:12px 14px;display:flex;flex-direction:column;gap:6px;min-width:210px;flex:1;">
+    <div style="font-size:11px;font-weight:700;color:var(--mu);">${num}</div><div style="font-weight:800;font-size:14px;">${tit}</div>
+    <div style="font-size:26px;font-weight:800;color:${cant?'var(--bl)':'#16a34a'};">${cant}</div><div class="arte-mu" style="font-size:11.5px;flex:1;">${txt}</div>
+    <button class="btn btn-bl btn-sm" onclick="reabastGoTab('${tab}')">${bt} →</button></div>`;
+  const alertas = []; if(sinRim) alertas.push(`🔴 ${sinRim} BL en nacionalización sin registro de importación`); if(sinVig) alertas.push(`🟠 ${sinVig} ítem(s) sin registro vigente en BL activos`); if(prox) alertas.push(`🟢 ${prox} BL llegan en los próximos 15 días`); if(pre) alertas.push(`📣 ${pre} prealerta(s) de Compras por gestionar`);
+  return `<div class="arte-mu" style="font-size:12px;margin-bottom:10px;">Sigue los pasos en orden: cada paso muestra solo lo que está pendiente en esa etapa. Lo que haces aquí es lo mismo de Embarque (BL) y Comercio Exterior en Abastecimiento.</div>
+  ${alertas.length?`<div style="border:2px solid var(--acc);background:#fffbeb;border-radius:12px;padding:10px 14px;margin-bottom:12px;"><div style="font-weight:800;margin-bottom:4px;">📌 Qué hacer hoy</div>${alertas.map(a=>`<div style="font-size:12.5px;margin:2px 0;">${a}</div>`).join('')}</div>`:'<div class="alert a-ok" style="margin-bottom:12px;">✅ No hay pendientes urgentes en Comercio Exterior.</div>'}
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    ${paso('Paso 1','Prealertas',pre,'Avisos de embarque que envió Compras. Toma la prealerta y márcala embarcada cuando salga.','ce_prealerta','Ver prealertas')}
+    ${paso('Paso 2','Armar BL',n(5),'BL en fase de embarque: asigna número de BL, ETD, ETA y agente de carga a las OC.','embarquebl','Armar BL')}
+    ${paso('Paso 3','En tránsito',n(6),'BL navegando. Controla ETA y avisa llegadas próximas.','ce_transito','Ver tránsito')}
+    ${paso('Paso 4','Nacionalización',n(7),'BL en puerto: registro de importación y transporte a bodega.','ce_naci','Ver nacionalización')}
+    ${paso('Paso 5','Ingreso a inventario','','Confirma lo que llegó a bodega y cierra el BL.','ingbl','Ir a ingreso')}
+  </div>`;
+}
+function ceModPrealertaHtml(){
+  let pre = 0; try{ pre = embConteo(); }catch(e){}
+  return `<div style="border:1px solid var(--b1);border-radius:12px;background:#fff;padding:14px;"><div style="font-weight:800;font-size:15px;">1️⃣ Prealertas de embarque</div>
+    <div class="arte-mu" style="font-size:12px;margin:6px 0 10px;">Compras envía una prealerta cuando una OC termina producción. Aquí la tomas (✋ Tomar) y la marcas ⚓ Embarcada cuando sale de China; después se arma el BL en el paso 2.</div>
+    <div style="font-size:26px;font-weight:800;color:${pre?'var(--bl)':'#16a34a'};margin-bottom:8px;">${pre} por gestionar</div>
+    <button class="btn btn-bl" onclick="embPanel()">📣 Abrir prealertas</button> <button class="btn btn-g" onclick="reabastGoTab('embarquebl')">Siguiente: Armar BL →</button></div>`;
+}
+// Devuelve true si el paso lo dibuja este módulo; false si lo dibuja el flujo normal (embarquebl, ingbl, comext)
+function ceModTabRender(body){
+  const t = REABAST.tab;
+  if(!CE_MOD_TABS.includes(t)) return false;
+  if(t==='ce_prealerta'){ body.innerHTML = ceModPrealertaHtml(); return true; }
+  if(t==='ce_hoy' || t==='ce_transito' || t==='ce_naci'){
+    body.innerHTML = cargaHtml('Cargando');
+    cblCargar().then(()=>{ if(REABAST.tab!==t) return; ceModPreset(t); body.innerHTML = t==='ce_hoy' ? ceModHoyHtml() : cblHtmlCE(); });
+    return true;
+  }
+  if(t==='comext' && REABAST.vistaCE) ceModPreset(t);
+  return false;
 }
 
 function reabastGoTab(tab){ REABAST.tab = tab; reabastPintar(); if(typeof guardarUltimaVista==='function') guardarUltimaVista('reabast'); }
@@ -12365,6 +12430,7 @@ function cblHtmlCE(){
       ${f.vista==='oc'?`<label style="font-size:11.5px;font-weight:600;display:flex;gap:5px;align-items:center;"><input type="checkbox" ${f.agrupar?'checked':''} onchange="CBL.f.agrupar=this.checked;reabastPintar()"> Agrupar por BL</label>`:''}
       <input class="inp" placeholder="🔎 Buscar BL, OC, referencia, agente…" value="${reabastEsc(f.q)}" style="flex:1;min-width:220px;max-width:400px;" oninput="CBL.f.q=this.value;clearTimeout(window.__cblT);window.__cblT=setTimeout(()=>{ const c=document.getElementById('cbl-tabla'); if(c) c.innerHTML = CBL.f.vista==='oc' ? cblHtmlTablaOC() : cblHtmlTablaX(); },250)">
       <select class="inp" style="width:auto;" onchange="CBL.f.estado=this.value;reabastPintar()"><option value="activos" ${sel(f.estado,'activos')}>Activos (sin ingresar)</option><option value="todos" ${sel(f.estado,'todos')}>Todos</option>${f.vista==='oc'?`<option value="3" ${sel(f.estado,'3')}>Producción</option>`:''}<option value="5" ${sel(f.estado,'5')}>Embarque</option><option value="6" ${sel(f.estado,'6')}>Tránsito</option><option value="7" ${sel(f.estado,'7')}>Nacionalización</option><option value="ingresados" ${sel(f.estado,'ingresados')}>Ingreso a bodega</option></select>
+      ${reabastEsAdmin()?`<button class="btn btn-bl btn-sm" onclick="ceAbrir()" title="Subir la sábana (Excel Seguimiento comercio exterior) para actualizar fechas, BL e ingresos">📤 Subir sábana (Excel)</button>`:''}
       ${cblPuede() && (CE._blsBase||[]).length ? `<button class="btn btn-g btn-sm" onclick="cblMigrarExcel()" title="Crea los BL nuevos del último Excel de Comercio Exterior y actualiza ETD/ETA/planta de los que ya existen">📥 Cargar BL / fechas del Excel</button><span class="arte-mu" style="font-size:10.5px;" title="Para usar el de hoy, súbelo primero en Órdenes de compra → 🚢 Seguimiento comercio exterior">Excel: ${CE.meta?reabastEsc(CE.meta.archivo||'—')+' · '+new Date(CE.meta.fecha).toLocaleDateString('es-CO')+' · '+reabastEsc(CE.meta.usuario||''):'sin cargar'}</span>`:''}
       <span class="arte-mu" style="font-size:11px;margin-left:auto;">${f.vista==='oc'?cblFilasOC().length+' OC':lista.length+' BL'}</span></div>
     <div id="cbl-tabla">${f.vista==='oc'?cblHtmlTablaOC():cblHtmlTablaX()}</div></div>`;
@@ -13276,7 +13342,7 @@ function reabastVivo(){
   clearTimeout(_vivoT);
   _vivoT = setTimeout(function paso(){
     try{
-      const el = document.getElementById('reabast-content'); if(!el || !el.offsetParent) return;
+      const el = document.getElementById(REABAST.vistaCE ? 'comext-content' : 'reabast-content'); if(!el || !el.offsetParent) return;
       const ae = document.activeElement;
       if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && el.contains(ae) && _vivoN++ < 6){ _vivoT = setTimeout(paso, 1500); return; }
       _vivoN = 0;
@@ -13336,7 +13402,7 @@ function acToggleMenu(){
 function reabastPintar(){
   if(!WFOT.p){ wfotosCargar().then(function(){ if(Object.keys(WFOT.m).length) reabastPintar(); }); }
   try{ const pc = document.getElementById('pg-compras'); if(pc && pc.classList.contains('on') && typeof comprasPintar==='function') comprasPintar(); }catch(e){}
-  const el = document.getElementById('reabast-content');
+  const el = document.getElementById(REABAST.vistaCE ? 'comext-content' : 'reabast-content');
   if(!el) return;
   const esApro = reabastPuedeAprobar();
   const esAdmin = reabastEsAdmin();
@@ -13345,7 +13411,7 @@ function reabastPintar(){
   REABAST._agotados = reabastCalcularAgotados();
   REABAST._sobrestock = reabastCalcularSobrestock();
 
-  const tabs = [
+  let tabs = [
     {id:'kanban', lbl:'📊 Tablero de seguimiento'+(()=>{ try{ const c = prodfConteo(); return c.venc ? ' 🚨'+c.venc : ''; }catch(e){ return ''; } })()},
     {id:'urgentes', lbl:'🚨 Urgentes ('+REABAST._urgentes.length+')'},
     {id:'oc', lbl:'📑 Órdenes de compra ('+(REABAST.ordenesCompra||[]).filter(o=>o.estado_general==='activa').length+')'},
@@ -13368,6 +13434,7 @@ function reabastPintar(){
   ];
   if(esAdmin) tabs.push({id:'referencias', lbl:'🧩 Referencias (SKU)'});
   if(esAdmin) tabs.push({id:'politica', lbl:'⚙️ Política por referencia'});
+  if(REABAST.vistaCE) tabs = ceModTabs();
 
   let html = `<div style="padding:14px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
@@ -13392,10 +13459,12 @@ function reabastPintar(){
       </div>
     </div>
   </div>`;
+  if(REABAST.vistaCE){ html = html.replace('🔁 Abastecimiento','🌐 Comercio Exterior').replace('<button class="btn btn-bl" onclick="abrirModalReabast()">+ Nueva solicitud</button>','').replace(/<div style="font-size:11px;color:var\(--mu\);">[^<]*<\/div>/,'<div style="font-size:11px;color:var(--mu);">Prealerta → BL → Tránsito → Nacionalización → Ingreso</div>'); }
   el.innerHTML = html;
   ilxLatAjustar();
 
   const body = document.getElementById('reabast-tab-body');
+  if(ceModTabRender(body)) return;
   if(REABAST.tab==='kanban'){ body.innerHTML = reabastHtmlSeguimiento(); if(SEG.vista==='seguimiento') segRepintar(); }
   else if(REABAST.tab==='urgentes'){ body.innerHTML = reabastHtmlUrgentesShell(); reabastRepintarUrgentes(); }
   else if(REABAST.tab==='oc'){ body.innerHTML = reabastHtmlOcShell(); reabastRepintarOC(); }
