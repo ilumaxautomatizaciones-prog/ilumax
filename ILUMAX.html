@@ -11943,17 +11943,13 @@ function ceModHoyHtml(){
   </div>`;
 }
 function ceModPrealertaHtml(){
-  let pre = 0; try{ pre = embConteo(); }catch(e){}
-  return `<div style="border:1px solid var(--b1);border-radius:12px;background:#fff;padding:14px;"><div style="font-weight:800;font-size:15px;">1️⃣ Prealertas de embarque</div>
-    <div class="arte-mu" style="font-size:12px;margin:6px 0 10px;">Compras envía una prealerta cuando una OC termina producción. Aquí la tomas (✋ Tomar) y la marcas ⚓ Embarcada cuando sale de China; después se arma el BL en el paso 2.</div>
-    <div style="font-size:26px;font-weight:800;color:${pre?'var(--bl)':'#16a34a'};margin-bottom:8px;">${pre} por gestionar</div>
-    <button class="btn btn-bl" onclick="embPanel()">📣 Abrir prealertas</button> <button class="btn btn-g" onclick="reabastGoTab('embarquebl')">Siguiente: Armar BL →</button></div>`;
+  return `<div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-g btn-sm" onclick="reabastGoTab('embarquebl')">Siguiente: Armar BL →</button></div><div id="emb-inline"></div>`;
 }
 // Devuelve true si el paso lo dibuja este módulo; false si lo dibuja el flujo normal (embarquebl, ingbl, comext)
 function ceModTabRender(body){
   const t = REABAST.tab;
   if(!CE_MOD_TABS.includes(t)) return false;
-  if(t==='ce_prealerta'){ body.innerHTML = ceModPrealertaHtml(); return true; }
+  if(t==='ce_prealerta'){ body.innerHTML = ceModPrealertaHtml(); try{ prodfCss(); }catch(e){} embPanelPintar(); return true; }
   if(t==='ce_hoy' || t==='ce_transito' || t==='ce_naci'){
     body.innerHTML = cargaHtml('Cargando');
     cblCargar().then(()=>{ if(REABAST.tab!==t) return; ceModPreset(t); body.innerHTML = t==='ce_hoy' ? ceModHoyHtml() : cblHtmlCE(); });
@@ -12520,17 +12516,23 @@ function cblHtmlTablaOC(){
   const fila = x=>{ const d = x.eta ? Math.ceil((new Date(x.eta+'T12:00:00')-hoy)/86400000) : null, b0 = x.blsErp[0];
     const delExcel = !b0 && x.blsTxt.length && cblPuede() ? x.blsTxt[0] : '';
     const acc = b0 ? `<button class="btn btn-g btn-xs" onclick="event.stopPropagation();cblAbrir('${b0.id}')">Abrir BL ›</button>` : delExcel ? `<button class="btn btn-bl btn-xs" onclick="event.stopPropagation();cblMigrarExcel('${String(delExcel).replace(/'/g,'')}')" title="Pasa este BL del Excel al ERP para poder actualizar su ETA/ETD y estado aquí">📥 Pasar BL al ERP</button>` : `<button class="btn btn-bl btn-xs" onclick="event.stopPropagation();CBL.f.qe='${String(x.o.numero_oc).replace(/'/g,'')}';REABAST.tab='embarquebl';reabastPintar()" title="Armar el BL con los ítems de esta OC">🚢 Armar BL</button>`;
-    return `<tr ${b0?`style="cursor:pointer;" onclick="cblAbrir('${b0.id}')"`:''}><td><b>${reabastEsc(x.o.numero_oc)}</b></td><td>${reabastEsc(x.o.proveedor||'')}</td><td><span class="cbl-pill" style="${x.fase===9?'background:#dcfce7;color:#166534;':x.fase===5?'background:#ede9fe;color:#5b21b6;':x.fase===6?'background:#dbeafe;color:#1e40af;':x.fase===7?'background:#fef3c7;color:#92400e;':''}">${reabastEsc(x.est||'—')}</span></td>
-      <td style="font-family:monospace;">${x.blsTxt.length?reabastEsc(x.blsTxt.join(', ')):'<span class="arte-mu" style="font-family:inherit;">sin BL</span>'}${x.blsErp.length?'':(x.blsTxt.length?' <span class="arte-mu" title="Viene del Excel; créalo en el ERP con 📥 Cargar BL del Excel actual" style="font-family:inherit;font-size:10px;">(Excel)</span>':'')}</td>
+    const pill = `<span class="cbl-pill" style="${x.fase===9?'background:#dcfce7;color:#166534;':x.fase===5?'background:#ede9fe;color:#5b21b6;':x.fase===6?'background:#dbeafe;color:#1e40af;':x.fase===7?'background:#fef3c7;color:#92400e;':''}">${reabastEsc(x.est||'—')}</span>`;
+    const nSV = b0 ? (b0.items||[]).filter(cblSinVig).length : 0;
+    return `<tr ${b0?`style="cursor:pointer;" onclick="cblAbrir('${b0.id}')"`:''}><td style="font-family:monospace;font-weight:800;">${x.blsTxt.length?reabastEsc(x.blsTxt.join(', ')):'<span class="arte-mu" style="font-family:inherit;font-weight:400;">sin BL</span>'}${x.blsErp.length?'':(x.blsTxt.length?' <span class="arte-mu" title="Viene del Excel; créalo en el ERP con 📥 Cargar BL del Excel actual" style="font-family:inherit;font-weight:400;font-size:10px;">(Excel)</span>':'')}</td>
+      <td onclick="event.stopPropagation()">${b0?`<input class="inp" style="font-size:11px;width:120px;" placeholder="N.º DIM" title="Número de la declaración de importación (DIM) de este BL" value="${reabastEsc(b0.dim||'')}" ${cblPuede()?'':'disabled'} onchange="cblDim('${b0.id}',this.value)">`:'<span class="arte-mu">—</span>'}</td>
+      <td><b>${reabastEsc(x.o.numero_oc)}</b><div class="arte-mu" style="font-size:10px;">${reabastEsc(x.o.proveedor||'')}</div></td>
+      <td>${reabastEsc((b0&&b0.agente)||'—')}</td><td>${b0?reabastEsc((b0.po||'—')+' → '+(b0.pd||'—')):'—'}</td>
       <td>${cblFd(x.etd)}</td><td style="white-space:nowrap;" onclick="event.stopPropagation()">${x.eta?(x.estim?'≈ ':'')+'<b>'+cblFd(x.eta)+'</b>'+(b0&&x.fase!==9?` <span style="cursor:pointer;" title="Actualizar ETA" onclick="cblEditarFecha('${b0.id}','eta')">✏️</span>`:'')+(x.fase!==9&&d!=null?`<div style="font-size:10px;color:${d<0?'#991b1b':d<=15?'#1e40af':'var(--mu)'};">${d<0?'hace '+(-d)+' d':d===0?'hoy':'en '+d+' d'}</div>`:''):'—'}</td>
-      <td style="text-align:right;">${x.enBL?x.enBL+' / ':''}${x.nItems}</td><td style="text-align:right;">${cblN(x.cbm,1)}</td><td>${x.rim?`<b>${reabastEsc(x.rim)}</b>`:'<span class="arte-mu">—</span>'}</td><td>${acc}</td></tr>`; };
-  const cab = '<thead><tr><th>OC</th><th>Proveedor</th><th>Estado</th><th>BL</th><th>ETD</th><th>ETA</th><th style="text-align:right;">Ítems (en BL / total)</th><th style="text-align:right;">CBM</th><th>Registro imp.</th><th></th></tr></thead>';
+      <td style="text-align:right;">${x.enBL?x.enBL+' / ':''}${x.nItems}</td><td style="text-align:right;">${cblN(x.cbm,1)}</td><td>${pill}</td>
+      <td>${x.rim?`<b>${reabastEsc(x.rim)}</b>${b0&&b0.registro&&b0.registro.aprobado?' ✅':''}`:'<span class="arte-mu">—</span>'}${nSV?`<div style="font-size:10px;font-weight:700;color:#991b1b;" title="Ítems sin registro de importación">⚠️ ${nSV} ítem(s) sin registro</div>`:''}</td>
+      <td style="white-space:nowrap;" onclick="event.stopPropagation()">${b0 && x.fase!=null ? cblBotonAvanzar(b0,true) : acc}</td></tr>`; };
+  const cab = '<thead><tr><th>BL</th><th>DIM</th><th>OC</th><th>Agente</th><th>Origen → Destino</th><th>ETD</th><th>ETA</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th>Estado</th><th>Registro de importación</th><th>Siguiente paso</th></tr></thead>';
   if(!f.agrupar){ filas.sort((a,b)=>ocComparar(a.o.numero_oc,b.o.numero_oc)); return `<div class="tw"><table class="cbl-t">${cab}<tbody>${filas.map(fila).join('')}</tbody></table></div>`; }
   const g = new Map(); filas.forEach(x=>{ const k = x.blsTxt.length ? String(x.blsTxt[0]).toUpperCase() : ''; (g.get(k) || g.set(k,[]).get(k)).push(x); });
   const claves = [...g.keys()].sort((a,b)=> a===''?1 : b===''?-1 : a.localeCompare(b));
   return `<div class="tw"><table class="cbl-t">${cab}<tbody>${claves.map(k=>{ const L = g.get(k).sort((a,b)=>ocComparar(a.o.numero_oc,b.o.numero_oc)), b0 = k ? CBL.bls.find(b=>String(b.bl).toUpperCase()===k) : null;
     const cbm = L.reduce((a,x)=>a+x.cbm,0);
-    return `<tr style="background:var(--s1);${b0?'cursor:pointer;':''}" ${b0?`onclick="cblAbrir('${b0.id}')" title="Clic para editar este BL"`:''}><td colspan="10" style="font-weight:800;padding:7px 8px;">${b0?`<button class="btn btn-bl btn-xs" style="float:right;" onclick="event.stopPropagation();cblAbrir('${b0.id}')">✏️ Editar BL</button>`:''}${k?'🚢 BL <span style="font-family:monospace;">'+reabastEsc(k)+'</span>'+(b0&&cblPuede()?` <span style="cursor:pointer;" title="Cambiar el número de BL" onclick="event.stopPropagation();cblRenombrar('${b0.id}')">✏️</span>`:''):'📭 Sin BL aún'} <span class="arte-mu" style="font-weight:600;font-size:11px;">· ${L.length} OC${b0?` · ${reabastEsc(b0.agente||'sin agente')} · ${reabastEsc((b0.po||'—')+' → '+(b0.pd||'—'))} · ETD ${cblFd(b0.etd)} · ETA ${cblFd(b0.eta)}`:''}${k?'':` · ${cblN(cbm,0)} m³ por embarcar`}</span></td></tr>${L.map(fila).join('')}`; }).join('')}</tbody></table></div>`;
+    return `<tr style="background:var(--s1);${b0?'cursor:pointer;':''}" ${b0?`onclick="cblAbrir('${b0.id}')" title="Clic para editar este BL"`:''}><td colspan="12" style="font-weight:800;padding:7px 8px;">${b0?`<button class="btn btn-bl btn-xs" style="float:right;" onclick="event.stopPropagation();cblAbrir('${b0.id}')">✏️ Editar BL</button>`:''}${k?'🚢 BL <span style="font-family:monospace;">'+reabastEsc(k)+'</span>'+(b0&&cblPuede()?` <span style="cursor:pointer;" title="Cambiar el número de BL" onclick="event.stopPropagation();cblRenombrar('${b0.id}')">✏️</span>`:''):'📭 Sin BL aún'} <span class="arte-mu" style="font-weight:600;font-size:11px;">· ${L.length} OC${b0?` · ${reabastEsc(b0.agente||'sin agente')} · ${reabastEsc((b0.po||'—')+' → '+(b0.pd||'—'))} · ETD ${cblFd(b0.etd)} · ETA ${cblFd(b0.eta)}`:''}${k?'':` · ${cblN(cbm,0)} m³ por embarcar`}</span></td></tr>${L.map(fila).join('')}`; }).join('')}</tbody></table></div>`;
 }
 function cblKpi(k){ const f = CBL.f; if(k==='act') k = ''; f.kpi = (f.kpi===k ? '' : k); f.vista = 'bl'; f.estado = 'activos'; f.q = ''; reabastPintar(); }
 function cblHtmlTablaX(){ return CBL.f.kpi==='sinvig' ? cblHtmlSinVig() : cblHtmlTabla(); }
@@ -15477,7 +15479,7 @@ function embPanel(){
   embPanelPintar();
 }
 function embPanelPintar(){
-  const ov = document.getElementById('emb-panel'); if(!ov) return;
+  const inl = !document.getElementById('emb-panel'); const ov = document.getElementById('emb-panel') || document.getElementById('emb-inline'); if(!ov) return;
   const todas = embCola();
   const filtros = [['gestion','Por gestionar',x=>x.e.estado!=='zarpo'],['zarpo','Embarcadas',x=>x.e.estado==='zarpo'],['todas','Todas',()=>true]];
   const act = (filtros.find(f=>f[0]===EMB.filtro)||filtros[0])[2];
@@ -15489,7 +15491,7 @@ function embPanelPintar(){
     const dias = e.estado!=='zarpo' && e.t ? Math.floor((Date.now()-new Date(e.t))/86400000) : null;
     const acc = !puede ? '<span class="arte-mu" style="font-size:10px;">—</span>' : e.estado==='zarpo' ? '' :
       `${e.estado!=='en_gestion'?`<button class="btn btn-g btn-sm" onclick="embTomar('${o.id}')">✋ Tomar</button> `:''}<button class="btn btn-bl btn-sm" onclick="embZarpo('${o.id}')">⚓ Embarcada</button>`;
-    return `<tr><td><a href="javascript:void 0" style="font-weight:800;color:var(--tx);" onclick="document.getElementById('emb-panel').remove();reabastAbrirDetalleOC('${o.id}')">${reabastEsc(o.numero_oc)}</a></td>
+    return `<tr><td><a href="javascript:void 0" style="font-weight:800;color:var(--tx);" onclick="(document.getElementById('emb-panel')||{remove(){}}).remove();reabastAbrirDetalleOC('${o.id}')">${reabastEsc(o.numero_oc)}</a></td>
       <td style="white-space:nowrap;">${reabastEsc(o.proveedor||'—')}</td>
       <td>${e.fin_prod?new Date(e.fin_prod+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short'}):'—'}</td>
       <td style="text-align:center;" title="${reabastEsc((e.items||[]).map(x=>x.ref+' × '+x.cant).join(' · '))}">${e.items?e.items.length+' / '+((REABAST.ocItems[o.id]||[]).length):'—'}</td>
@@ -15497,8 +15499,8 @@ function embPanelPintar(){
       <td style="font-weight:700;">${reabastEsc(e.contenedor||'—')}${(()=>{ const l = (e.cbm_libre!=null) ? e.cbm_libre : (e.cbm_total>0 ? cbmContenedores(e.cbm_total).libre : null); return l>0 ? '<div style="font-size:11px;font-weight:600;color:#b45309;">Libre: '+Number(l).toLocaleString('es-CO',{minimumFractionDigits:2,maximumFractionDigits:2})+' m³ por completar</div>' : ''; })()}</td>
       <td>${fm(e.t)}${dias!=null?`<div class="arte-mu" style="font-size:10px;">hace ${dias} d</div>`:''}<div class="arte-mu" style="font-size:10px;">${reabastEsc(e.quien||'')}</div></td>
       <td>${est}${e.nota?`<div class="arte-mu" style="font-size:10px;">${reabastEsc(e.nota)}</div>`:''}</td><td style="white-space:nowrap;">${acc}</td></tr>`; }).join('');
-  ov.innerHTML = `<div style="background:var(--w,#fff);color:var(--tx);border-radius:12px;max-width:1400px;width:97vw;box-shadow:0 20px 50px rgba(0,0,0,.35);">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--b1);"><div><div style="font-weight:800;font-size:16px;">📣 Prealertas de embarque</div><div class="arte-mu" style="font-size:11px;">Prealertas que Compras envía cuando producción está por terminar · se acumulan aquí para ir adelantando el embarque hasta que se marquen embarcadas.</div></div><span style="cursor:pointer;font-size:18px;" onclick="document.getElementById('emb-panel').remove()">✕</span></div>
+  ov.innerHTML = `<div style="background:var(--w,#fff);color:var(--tx);border-radius:12px;${inl?'width:100%;border:1px solid var(--b1);':'max-width:1400px;width:97vw;box-shadow:0 20px 50px rgba(0,0,0,.35);'}">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--b1);"><div><div style="font-weight:800;font-size:16px;">📣 Prealertas de embarque</div><div class="arte-mu" style="font-size:11px;">Prealertas que Compras envía cuando producción está por terminar · se acumulan aquí para ir adelantando el embarque hasta que se marquen embarcadas.</div></div>${inl?'':'<span style="cursor:pointer;font-size:18px;" onclick="document.getElementById(\'emb-panel\').remove()">✕</span>'}</div>
     <div style="padding:12px 18px;"><div class="arte-chips" style="margin-bottom:10px;">${filtros.map(f=>`<span class="chip ${EMB.filtro===f[0]?'on':''}" onclick="EMB.filtro='${f[0]}';embPanelPintar()">${f[1]} (${todas.filter(f[2]).length})</span>`).join('')}</div>
       ${lista.length?`<div class="tw" style="max-height:60vh;overflow:auto;"><table style="font-size:12px;white-space:nowrap;width:100%;"><thead><tr><th>OC</th><th>Proveedor</th><th>Fin producción (est.)</th><th>Ítems</th><th>CBM</th><th>Contenedor</th><th>Prealerta enviada</th><th>Estado</th><th></th></tr></thead><tbody>${filas}</tbody></table></div>`:`<div class="empty"><div class="empty-t">${todas.length?'No hay embarques con ese filtro':'Aún no hay prealertas de embarque'}</div></div>`}
     </div></div>`;
@@ -45313,6 +45315,98 @@ function mcDescargarReporte() {
       el = el.parentElement;
     }
   }, true);
+})();
+</script>
+<script>
+// ═══ Ordenar cualquier tabla al hacer clic en el encabezado (▲ menor→mayor, ▼ mayor→menor) ═══
+(function(){
+  if(window.__sortTh) return; window.__sortTh = 1;
+  var ST = {}, MES = {ene:0,feb:1,mar:2,abr:3,may:4,jun:5,jul:6,ago:7,sep:8,set:8,oct:9,nov:10,dic:11};
+  var st = document.createElement('style');
+  st.textContent = 'th[data-srt-ok]{cursor:pointer;user-select:none;} th[data-srt-ok]:hover{color:var(--tx,#0f172a);background:rgba(37,99,235,.06);} .srt-ar{font-size:9px;margin-left:3px;color:var(--bl,#2563eb);}';
+  document.head.appendChild(st);
+  function txt(c){
+    var i = c.querySelector('input:not([type=checkbox]),select'); if(i) return (i.tagName==='SELECT' ? (i.options[i.selectedIndex]||{}).text : i.value) || '';
+    return (c.textContent||'').replace(/\s+/g,' ').trim();
+  }
+  function num(s){
+    var t = s.replace(/US\$|COP|\$|u\.?$|m³|%|días?|d$/gi,'').replace(/\s/g,'');
+    if(!/^[-+]?\d[\d.,]*$/.test(t)) return null;
+    var neg = t[0]==='-'; t = t.replace(/^[-+]/,'');
+    var lc = t.lastIndexOf(','), lp = t.lastIndexOf('.');
+    if(lc>-1 && lp>-1){ var dec = lc>lp ? ',' : '.'; t = dec===',' ? t.replace(/\./g,'').replace(',','.') : t.replace(/,/g,''); }
+    else if(lc>-1){ t = (t.match(/,/g).length>1 || /,\d{3}$/.test(t)) ? t.replace(/,/g,'') : t.replace(',','.'); }
+    else if(lp>-1){ t = (t.match(/\./g).length>1 || /\.\d{3}$/.test(t)) ? t.replace(/\./g,'') : t; }
+    var n = parseFloat(t); return isNaN(n) ? null : (neg ? -n : n);
+  }
+  function fecha(s){
+    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return Date.UTC(+m[1],+m[2]-1,+m[3]);
+    m = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})\b/); if(m){ var y = +m[3]; if(y<100) y += 2000; return Date.UTC(y,+m[2]-1,+m[1]); }
+    m = s.match(/^(\d{1,2})[ -]+([a-záéíóú]{3,5})\.?(?:[ -]+(?:de )?(\d{2,4}))?(?![\d])/i);
+    if(m){ var k = MES[m[2].slice(0,3).toLowerCase()]; if(k!=null){ var yy = m[3] ? +m[3] : new Date().getFullYear(); if(yy<100) yy += 2000; return Date.UTC(yy,k,+m[1]); } }
+    return null;
+  }
+  function clave(c){
+    var s = txt(c); if(s===''||s==='—'||s==='-'||/^sin /i.test(s)) return {v:null};
+    var f = fecha(s); if(f!=null) return {v:f,t:'n'};
+    var n = num(s); if(n!=null) return {v:n,t:'n'};
+    return {v:s.toLowerCase(),t:'s'};
+  }
+  function firma(tb){ return Array.prototype.map.call(tb.tHead.rows[0].cells, function(c){ return c.textContent.replace(/[▲▼]/g,'').replace(/\s+/g,' ').trim(); }).join('|'); }
+  function sortable(tb){
+    if(!tb.tHead || tb.tHead.rows.length!==1 || !tb.tBodies.length) return false;
+    for(var i=0;i<tb.tHead.rows[0].cells.length;i++){ var c = tb.tHead.rows[0].cells[i]; if(c.colSpan>1||c.rowSpan>1) return false; }
+    return true;
+  }
+  function thOk(th){
+    if(th.hasAttribute('onclick') || th.querySelector('[onclick],input,button,select')) return false;
+    return (th.textContent||'').trim()!=='';
+  }
+  function aplicar(tb, col, dir){
+    var cuerpo = tb.tBodies[0], filas = Array.prototype.slice.call(cuerpo.rows), seg = [], cur = [];
+    var cab = function(r){ for(var i=0;i<r.cells.length;i++) if(r.cells[i].colSpan>=3) return true; return false; };
+    var out = [];
+    filas.forEach(function(r){ if(cab(r)){ if(cur.length){ out.push({r:cur}); cur = []; } out.push({fija:r}); } else cur.push(r); });
+    if(cur.length) out.push({r:cur});
+    var frag = document.createDocumentFragment();
+    out.forEach(function(g){
+      if(g.fija){ frag.appendChild(g.fija); return; }
+      var ks = g.r.map(function(r,i){ return {r:r,i:i,k:r.cells[col] ? clave(r.cells[col]) : {v:null}}; });
+      ks.sort(function(a,b){
+        if(a.k.v==null && b.k.v==null) return a.i-b.i; if(a.k.v==null) return 1; if(b.k.v==null) return -1;
+        var c;
+        if(a.k.t==='n' && b.k.t==='n') c = a.k.v-b.k.v;
+        else if(a.k.t==='n') c = -1; else if(b.k.t==='n') c = 1;
+        else c = String(a.k.v).localeCompare(String(b.k.v),'es',{numeric:true});
+        return c===0 ? a.i-b.i : (dir==='d' ? -c : c);
+      });
+      ks.forEach(function(x){ frag.appendChild(x.r); });
+    });
+    cuerpo.appendChild(frag);
+    tb.dataset.srt = col+':'+dir;
+    Array.prototype.forEach.call(tb.tHead.rows[0].cells, function(th,i){
+      var a = th.querySelector('.srt-ar'); if(a) a.remove();
+      if(i===col){ var s = document.createElement('span'); s.className = 'srt-ar'; s.textContent = dir==='d' ? '▼' : '▲'; th.appendChild(s); }
+    });
+  }
+  function marcar(){
+    document.querySelectorAll('table').forEach(function(tb){
+      if(!sortable(tb)) return;
+      Array.prototype.forEach.call(tb.tHead.rows[0].cells, function(th){ if(thOk(th)) th.setAttribute('data-srt-ok','1'); });
+      var e = ST[firma(tb)];
+      if(e && tb.dataset.srt !== e.col+':'+e.dir) aplicar(tb, e.col, e.dir);
+    });
+  }
+  document.addEventListener('click', function(ev){
+    var th = ev.target.closest && ev.target.closest('th'); if(!th || !th.hasAttribute('data-srt-ok')) return;
+    var tb = th.closest('table'); if(!tb || !sortable(tb)) return;
+    var col = th.cellIndex, f = firma(tb), e = ST[f];
+    var dir = (e && e.col===col && e.dir==='a') ? 'd' : 'a';
+    ST[f] = {col:col, dir:dir}; aplicar(tb, col, dir);
+  });
+  var t = null;
+  new MutationObserver(function(){ clearTimeout(t); t = setTimeout(marcar, 120); }).observe(document.body, {childList:true, subtree:true});
+  marcar();
 })();
 </script>
 </body>
