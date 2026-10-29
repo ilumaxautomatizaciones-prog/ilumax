@@ -2943,6 +2943,50 @@ function cblDesdeExcel(){
     if(ch.length){ cblLog(b, 'Actualizado desde el Excel de Comercio Exterior'+((CE.meta&&CE.meta.archivo)?' ('+CE.meta.archivo+')':'')+': '+ch.join(' · ')); cam.push(b); items += n; } });
   return {cam, adel, items};
 }
+function cblPlanFaltantes(){
+  const base = CE._blsBase || CE.bls || [], tiene = new Set((CBL.bls||[]).map(b=>String(b.bl||'').toUpperCase().trim()));
+  const por = {}; base.forEach(l=>{ const n = String(l.bl||'').toUpperCase().trim(); if(!n || l.f==null || l.f<0) return; (por[n] = por[n] || []).push(l); });
+  const cachePend = {}, uso = {}, plan = [], omit = [];
+  const pendDe = o => cachePend[o.id] || (cachePend[o.id] = cblPendientes(o));
+  Object.keys(por).sort().forEach(n=>{
+    if(tiene.has(n)) return; const ls = por[n]; if(ls.every(l=>l.f===9)) return;
+    const items = [];
+    ls.forEach(l=>{
+      const num = ceNum(l.oc), key = ceRefKey(l.r), q = Number(l.env)>0 ? Number(l.env) : (Number(l.c)>0 ? Number(l.c) : 0);
+      if(!(q>0)){ omit.push(n+' · '+l.oc+' '+l.r+': sin cantidad enviada en la sábana'); return; }
+      const fam = (REABAST.ordenesCompra||[]).filter(o=>o.estado_general!=='cancelada' && (ceNum(o.numero_oc)===num || ceNum(o.numero_oc).startsWith(num+'-')))
+        .sort((a,b)=>(ceNum(a.numero_oc)===num?0:1)-(ceNum(b.numero_oc)===num?0:1) || String(a.numero_oc).localeCompare(String(b.numero_oc),'es',{numeric:true}));
+      if(!fam.length){ omit.push(n+' · '+l.oc+' '+l.r+': la OC no existe en el ERP'); return; }
+      let falta = q, hubo = false;
+      for(const o of fam){ if(falta<=0) break;
+        pendDe(o).filter(p=>ceRefKey(p.ref)===key).forEach(p=>{ if(falta<=0) return; hubo = true; const k = o.id+'|'+p.ix, libre = p.pend-(uso[k]||0); if(libre<=0) return; const t = Math.min(falta, libre); uso[k] = (uso[k]||0)+t; falta -= t;
+          const u = cblUxCaja(p.ref), inf = typeof cbmRefInfo==='function' ? cbmRefInfo(p.ref) : {cbm:null};
+          const e = items.find(x=>x.ocId===o.id && ceRefKey(x.ref)===key);
+          if(e){ e.cant += t; e.cajas = u ? Math.ceil(e.cant/u) : null; }
+          else items.push({oc:o.numero_oc, ocId:o.id, ref:String(l.r||'').trim(), desc:p.desc||'', cant:t, cbm:inf.cbm||null, cajas:u?Math.ceil(t/u):null, estado:cblEstadoNorm(l.e,l.f), planta:l.pl||'', ingreso:l.f===9?(l.ing||l.pl||''):''}); }); }
+      if(!hubo) omit.push(n+' · '+l.oc+' '+l.r+': la referencia no está en la OC');
+      else if(falta>0) omit.push(n+' · '+l.oc+' '+l.r+': la sábana trae '+q+' y la OC solo permite '+(q-falta)+' (se creó con '+(q-falta)+')');
+    });
+    if(!items.length) return;
+    const mx = k => ls.map(x=>x[k]).filter(Boolean).sort().pop()||'', cont = [...new Set(ls.map(x=>String(x.ct||'').trim()).filter(Boolean))].join(', '), rm = ls.map(x=>x.rm).find(x=>x && /^(REG-|TMR-I-)/i.test(String(x).trim()));
+    const t = new Date().toISOString();
+    plan.push({id:'bl_'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), bl:n, agente:'', etd:mx('d1'), eta:mx('d2'), po:'', pd:'Buenaventura', cont, planta:mx('pl'), registro: rm ? {numero:String(rm).trim(), fecha:'', aprobado:false, quien:'Excel Com. Ext.', t} : null, creado:t, quien:(CU&&CU.nombre)||'', items,
+      hist:[{t, quien:(CU&&CU.nombre)||'', accion:'BL creado desde la sábana de Comercio Exterior · '+items.length+' ítem(s)'}]});
+  });
+  return {plan, omit};
+}
+async function cblCrearFaltantesDesdeExcel(silencioso){
+  if(!cblPuede()){ if(!silencioso && typeof toast==='function') toast('Solo Compras, Comercio Exterior, Administración o un administrador','wa'); return 0; }
+  if(!(CE._blsBase||CE.bls||[]).length){ if(!silencioso && typeof toast==='function') toast('Primero sube la sábana','wa'); return 0; }
+  await cblCargar(true);
+  const R = cblPlanFaltantes();
+  if(!R.plan.length){ if(!silencioso && typeof toast==='function') toast('No hay BL nuevos en la sábana'+(R.omit.length?' · '+R.omit.length+' línea(s) sin cuadrar con la OC':''),'inf'); if(R.omit.length) console.warn('BL sin crear', R.omit); return 0; }
+  await cblGuardar(R.plan); await cblSincronizar(R.plan.flatMap(b=>b.items.map(i=>i.oc)));
+  try{ await cargarOC(); REABAST._cargadoEn = Date.now(); }catch(e){}
+  if(typeof toast==='function') toast('🆕 BL creados desde la sábana: '+R.plan.map(b=>b.bl).join(', '),'ok');
+  if(R.omit.length){ console.warn('Líneas sin cuadrar con la OC', R.omit); if(silencioso){ if(typeof toast==='function') toast(R.omit.length+' línea(s) de la sábana no cuadran con la OC (ver consola o botón Crear BL faltantes)','wa'); } else alert('BL creados: '+R.plan.map(b=>b.bl+' ('+b.items.length+' ítems)').join(', ')+'\n\nLíneas que NO se cargaron porque no cuadran con la OC:\n\n'+R.omit.slice(0,25).join('\n')+(R.omit.length>25?'\n… y '+(R.omit.length-25)+' más (ver consola)':'')); }
+  return R.plan.length;
+}
 async function cblAplicarExcelBL(){
   if(!cblPuede()) return 0;
   let nRamas = 0; try{ nRamas = await ceCrearRamasFaltantes(); if(nRamas){ await cargarOC(); if(typeof toast==='function') toast('🆕 Ramas creadas desde la sábana: '+CE._ramasCreadas.join(', '),'ok'); } }catch(e){ console.warn(e); }
@@ -3139,6 +3183,7 @@ function cblHtmlCE(){
       ${f.vista==='oc'?`<label style="font-size:11.5px;font-weight:600;display:flex;gap:5px;align-items:center;"><input type="checkbox" ${f.agrupar?'checked':''} onchange="CBL.f.agrupar=this.checked;reabastPintar()"> Agrupar por BL</label>`:''}
       <input class="inp" placeholder="🔎 Buscar BL, OC, referencia, agente…" value="${reabastEsc(f.q)}" style="flex:1;min-width:220px;max-width:400px;" oninput="CBL.f.q=this.value;clearTimeout(window.__cblT);window.__cblT=setTimeout(()=>{ const c=document.getElementById('cbl-tabla'); if(c) c.innerHTML = CBL.f.vista==='oc' ? cblHtmlTablaOC() : cblHtmlTablaX(); },250)">
       <select class="inp" style="width:auto;" onchange="CBL.f.estado=this.value;reabastPintar()"><option value="activos" ${sel(f.estado,'activos')}>Activos (sin ingresar)</option><option value="todos" ${sel(f.estado,'todos')}>Todos</option>${f.vista==='oc'?`<option value="3" ${sel(f.estado,'3')}>Producción</option>`:''}<option value="5" ${sel(f.estado,'5')}>Embarque</option><option value="6" ${sel(f.estado,'6')}>Tránsito</option><option value="7" ${sel(f.estado,'7')}>Nacionalización</option><option value="ingresados" ${sel(f.estado,'ingresados')}>Ingreso a bodega</option></select>
+      ${reabastEsAdmin()?`<button class="btn btn-g btn-sm" onclick="cblCrearFaltantesDesdeExcel()" title="Crea los BL que están en la sábana (con número) y aún no existen en el ERP, usando solo lo que nace de la OC">🧩 Crear BL faltantes</button> `:''}
       ${reabastEsAdmin()?`<button class="btn btn-bl btn-sm" onclick="ceAbrir()" title="Subir la sábana (Excel Seguimiento comercio exterior) para actualizar fechas, BL e ingresos">📤 Subir sábana (Excel)</button>`:''}
       ${cblPuede() && (CE._blsBase||[]).length ? `<button class="btn btn-g btn-sm" onclick="cblMigrarExcel()" title="Crea los BL nuevos del último Excel de Comercio Exterior y actualiza ETD/ETA/planta de los que ya existen">📥 Cargar BL / fechas del Excel</button><span class="arte-mu" style="font-size:10.5px;" title="Para usar el de hoy, súbelo primero en Órdenes de compra → 🚢 Seguimiento comercio exterior">Excel: ${CE.meta?reabastEsc(CE.meta.archivo||'—')+' · '+new Date(CE.meta.fecha).toLocaleDateString('es-CO')+' · '+reabastEsc(CE.meta.usuario||''):'sin cargar'}</span>`:''}
       <span class="arte-mu" style="font-size:11px;margin-left:auto;">${f.vista==='oc'?cblFilasOC().length+' OC':lista.length+' BL'}</span></div>
@@ -8461,6 +8506,7 @@ async function ceEjecutar(){
   let nBL = 0, adelBL = 0, numsBL = [];
   try{ if(CE.blsNuevo) CE._blsBase = CE.blsNuevo; await cblCargar(true); const R = cblDesdeExcel(); adelBL = R.adel.length; if(R.cam.length){ await cblGuardar(R.cam); nBL = R.cam.length; } numsBL = (CBL.bls||[]).flatMap(b=>(b.items||[]).map(i=>i.oc)); }
   catch(e){ err.push('BL del ERP: '+e.message); }
+  try{ const nc = await cblCrearFaltantesDesdeExcel(true); if(nc) nBL += nc; }catch(e){ err.push('BL faltantes: '+e.message); }
   // 2) etapas de cada OC
   const pintar = ()=>{ prog.innerHTML = `⏳ ${hechas}/${sel.length}…`; };
   const trabajador = async()=>{ while(idx<sel.length){ const p = sel[idx++]; try{
