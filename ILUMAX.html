@@ -20200,8 +20200,10 @@ const TABLA_REF_COLUMNAS = [
 // pantalla hacia la derecha. "Ver todas las columnas" muestra la tabla completa tipo Excel.
 const TABLA_REF_COLUMNAS_COMPACTA = TABLA_REF_COLUMNAS.filter(c=>c.compacta);
 function reabastHtmlReferenciasShell(){
+  try{ document.body.classList.toggle('solo-lectura', reabastSoloLectura()); }catch(e){}
   const f = reabastFiltro('referencias', {q:'', col:{}});
   return `
+    <style>body.solo-lectura #ref-wrap .sw, body.solo-lectura #ref-wrap button[title="Eliminar"], body.solo-lectura #ref-wrap button[title="Editar"]{display:none !important;}</style>
     <div class="toolbar" style="margin-bottom:8px;justify-content:space-between;flex-wrap:wrap;gap:8px;">
       <input class="inp" style="flex:1;min-width:180px;" id="ref-q" placeholder="Buscar referencia, nombre o categoría…" value="${reabastEsc(f.q)}" oninput="REABAST.filtros.referencias.q=this.value;reabastRepintarReferencias()">
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
@@ -20588,8 +20590,8 @@ function reabastInjectModalDetalleReferencia(){
       <div style="padding:18px;" id="rd-body"></div>
       <div style="padding:14px 18px;border-top:1px solid var(--b1);display:flex;justify-content:flex-end;gap:8px;">
         <button class="btn btn-g btn-sm" onclick="reabastCerrarDetalleReferencia()">Cerrar</button>
-        <button class="btn btn-g btn-sm" onclick="reabastDuplicarDesdeDetalle()" title="Crea una referencia nueva con los mismos datos, con código y EAN nuevos">⧉ Duplicar</button>
-        <button class="btn btn-bl btn-sm" onclick="reabastEditarDesdeDetalle()">✎ Editar</button>
+        ${reabastSoloLectura()?'':`<button class="btn btn-g btn-sm" onclick="reabastDuplicarDesdeDetalle()" title="Crea una referencia nueva con los mismos datos, con código y EAN nuevos">⧉ Duplicar</button>
+        <button class="btn btn-bl btn-sm" onclick="reabastEditarDesdeDetalle()">✎ Editar</button>`}
       </div>
     </div>
   </div>`;
@@ -20680,6 +20682,18 @@ function reabastPintarDetalleReferencia(r){
     ${r.descripcion_en ? `<div style="margin-top:14px;"><div style="font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.03em;">Descripción (EN)</div><div style="font-size:12.5px;white-space:pre-wrap;">${reabastEsc(r.descripcion_en)}</div></div>` : ''}
   `;
   reabastPintarHistorialPrecioFOB(r.referencia, 'rd-fob-historial');
+  // Todas las características guardadas de la referencia (lo que no está en el resumen de arriba)
+  try{
+    const vistos = new Set(); const filas = [];
+    (REFERENCIA_CAMPOS||[]).forEach(c=>{
+      if(!c.campo || c.transient || String(c.campo).charAt(0)==='_' || vistos.has(c.campo)) return; vistos.add(c.campo);
+      const v = r[c.campo]; if(v==null || v==='' || v===false) return;
+      filas.push(campo(c.label||c.campo, v===true?'Sí':v));
+    });
+    if(r.observaciones && !vistos.has('observaciones')) filas.push(campo('Observaciones', r.observaciones));
+    if(r.ean14_adicionales && !vistos.has('ean14_adicionales')) filas.push(campo('EAN 14 adicionales', r.ean14_adicionales));
+    if(filas.length) document.getElementById('rd-body').insertAdjacentHTML('beforeend','<div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--b1);"><div style="font-weight:700;font-size:12px;margin-bottom:8px;">Todas las características</div><div class="rd-grid">'+filas.join('')+'</div></div>');
+  }catch(e){ console.warn('detalle ref', e); }
 }
 // Vuelve a pintar la lista de referencias en el modo actual (tabla o tarjetas).
 function reabastRefrescarVistaActual(){
@@ -20689,6 +20703,7 @@ function reabastRefrescarVistaActual(){
 }
 // Activa/desactiva una referencia sin tener que abrir el formulario.
 async function reabastToggleActivoReferencia(id, activo){
+  if(reabastSoloLectura()) return;
   try{
     await sbReabast.patch('referencias_maestro', 'id=eq.'+id, {activo, actualizado:new Date().toISOString()});
     Object.values(REABAST.referenciasMaestro||{}).forEach(r=>{ if(String(r.id)===String(id)) r.activo = activo; });
@@ -20698,6 +20713,7 @@ async function reabastToggleActivoReferencia(id, activo){
 }
 // Elimina una referencia por completo (irreversible) — pide confirmación explícita.
 async function reabastEliminarReferencia(id, referencia){
+  if(reabastSoloLectura()) return;
   if(!confirm('¿Eliminar definitivamente la referencia '+referencia+'? Esta acción no se puede deshacer.')) return;
   try{
     await sbReabast.delete('referencias_maestro', 'id=eq.'+id);
