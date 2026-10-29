@@ -20289,7 +20289,7 @@ function reabastReferenciasFiltradas(cols){
   let filas = Object.values(REABAST.referenciasMaestro||{});
   if(qq){
     filas = filas.filter(r => String(r.referencia||'').toLowerCase().includes(qq)
-      || (r.nombre_comercial||'').toLowerCase().includes(qq)
+      || refNombre(r).toLowerCase().includes(qq)
       || (r.categoria||'').toLowerCase().includes(qq)
       || (r.referencia_ilumax||'').toLowerCase().includes(qq));
   }
@@ -20376,8 +20376,25 @@ function reabastHtmlAvanzadoReferencias(f){
     <div style="display:flex;align-items:flex-end;"><button class="btn btn-g btn-sm" onclick="reabastLimpiarAvanzadoReferencias()">✖ Limpiar filtros avanzados</button></div>
   </div>`;
 }
+// Nombre comercial: el guardado en la referencia; si está vacío, la descripción que viene de Siesa (lista de precios / inventario).
+const REF_SIESA = { map:null, cargando:false };
+function refNombre(r){ if(!r) return ''; if(r.nombre_comercial) return r.nombre_comercial; const d = REF_SIESA.map && REF_SIESA.map[String(r.referencia||'').trim()]; return d || ''; }
+async function refSiesaCargar(){
+  if(REF_SIESA.map || REF_SIESA.cargando) return; REF_SIESA.cargando = true;
+  try{
+    const m = {};
+    const a = await sb.get('inventario_resumen','select=referencia,descripcion&descripcion=not.is.null&limit=5000') || [];
+    a.forEach(x=>{ const d = String(x.descripcion||'').trim(); if(d && x.referencia) m[String(x.referencia).trim()] = d; });
+    const b = await sb.get('precios_pivote','select=referencia,descripcion&limit=5000') || [];
+    b.forEach(x=>{ const d = String(x.descripcion||'').trim(); if(d && x.referencia) m[String(x.referencia).trim()] = d; });
+    REF_SIESA.map = m;
+    if(typeof reabastRepintarReferencias==='function') reabastRepintarReferencias();
+  }catch(e){ console.warn('refSiesaCargar', e); }
+  REF_SIESA.cargando = false;
+}
 function reabastRepintarReferencias(){
   const wrap = document.getElementById('ref-wrap'); if(!wrap) return;
+  if(!REF_SIESA.map) refSiesaCargar();
   const f = reabastFiltro('referencias', REF_FILTRO_DEFECTO());
   if(!f.col) f.col = {};
   if(!f.fc) f.fc = {};
@@ -20478,7 +20495,7 @@ function reabastActualizarListaReferencias(){
       return `<div data-c="${reabastEsc(r.referencia)}" onclick="reabastVerDetalleReferenciaPorCodigo(this.dataset.c)" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--b1);cursor:pointer;${activo?'':'opacity:.55;'}">
         ${reabastFotoMiniHtml(r.foto_url||wfotoUrl(r.referencia), 32)}
         <div style="min-width:0;flex:1;">
-          <div style="font-size:12px;"><strong style="font-family:monospace;">${reabastEsc(r.referencia)}</strong> ${r.nombre_comercial?'— '+reabastEsc(r.nombre_comercial):''}</div>
+          <div style="font-size:12px;"><strong style="font-family:monospace;">${reabastEsc(r.referencia)}</strong> ${refNombre(r)?'— '+reabastEsc(refNombre(r)):''}</div>
           <div style="font-size:10px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${reabastEsc(r.categoria||'—')}${r.proveedor_predeterminado?' · '+reabastEsc(r.proveedor_predeterminado):''}${r.fob_usd!=null?' · US$'+r.fob_usd:''}</div>
         </div>
         <label class="sw" title="${activo?'Activo — clic para desactivar':'Inactivo — clic para activar'}" onclick="event.stopPropagation()">
@@ -20503,23 +20520,23 @@ function reabastActualizarTbodyReferencias(){
   tbody.innerHTML = filas.map(r=>{
     const activo = r.activo!==false; // por defecto activo (dato viejo sin la columna aún)
     const fotoTd = `<td style="white-space:nowrap;">${reabastFotoMiniHtml(r.foto_url||wfotoUrl(r.referencia), 36)}</td>`;
-    const estadoTd = `<td style="white-space:nowrap;">
+    const estadoTd = `<td style="white-space:nowrap;" onclick="event.stopPropagation()">
       <label class="sw" title="${activo?'Activo — clic para desactivar':'Inactivo — clic para activar'}">
         <input type="checkbox" ${activo?'checked':''} onchange="reabastToggleActivoReferencia('${r.id}',this.checked)"><span class="sw-sl"></span>
       </label>
     </td>`;
     const filaTds = cols.map(c=>{
-      let val = r[c.campo];
+      let val = c.campo==='nombre_comercial' ? refNombre(r) : r[c.campo];
       if(c.fecha) val = val ? new Date(val).toLocaleDateString('es-CO') : null;
       const txt = (val!=null && val!=='') ? reabastEsc(val) : '<span style="color:var(--mu);">—</span>';
       const anchoCss = c.ancho ? 'max-width:280px;white-space:normal;word-break:break-word;' : 'white-space:nowrap;';
       return `<td style="${c.mono?'font-family:monospace;':''}${c.num?'text-align:right;':''}${anchoCss}${activo?'':'opacity:.5;'}">${txt}</td>`;
     }).join('');
-    const accionesTd = `<td style="white-space:nowrap;">
+    const accionesTd = `<td style="white-space:nowrap;" onclick="event.stopPropagation()">
       <button class="btn btn-g btn-sm" data-c="${reabastEsc(r.referencia)}" onclick="reabastEditarReferenciaPorCodigo(this.dataset.c)" title="Editar">✎</button>
       <button class="btn btn-g btn-sm" style="color:var(--rd);" onclick="reabastEliminarReferencia('${r.id}','${String(r.referencia).replace(/'/g,"\\'")}')" title="Eliminar">🗑</button>
     </td>`;
-    return `<tr>${fotoTd}${estadoTd}${filaTds}${accionesTd}</tr>`;
+    return `<tr data-c="${reabastEsc(r.referencia)}" onclick="reabastVerDetalleReferenciaPorCodigo(this.dataset.c)" style="cursor:pointer;">${fotoTd}${estadoTd}${filaTds}${accionesTd}</tr>`;
   }).join('');
 }
 // Vista de tarjetas (tipo galería/proyectos): una tarjeta por referencia con foto grande, datos
@@ -20533,7 +20550,7 @@ function reabastActualizarCardsReferencias(){
     return `<div class="card" data-c="${reabastEsc(r.referencia)}" onclick="reabastVerDetalleReferenciaPorCodigo(this.dataset.c)" style="cursor:pointer;padding:10px;display:flex;flex-direction:column;gap:6px;${activo?'':'opacity:.55;'}">
       <div style="display:flex;justify-content:center;">${reabastFotoMiniHtml(r.foto_url||wfotoUrl(r.referencia), 96)}</div>
       <div style="font-family:monospace;font-weight:700;font-size:12.5px;text-align:center;">${reabastEsc(r.referencia)}</div>
-      <div style="font-size:11.5px;text-align:center;color:var(--tx);min-height:15px;">${reabastEsc(r.nombre_comercial||'—')}</div>
+      <div style="font-size:11.5px;text-align:center;color:var(--tx);min-height:15px;">${reabastEsc(refNombre(r)||'—')}</div>
       <div style="font-size:10px;color:var(--mu);text-align:center;">${reabastEsc(r.categoria||'—')}${r.canal?' · '+reabastEsc(r.canal):''}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
         <label class="sw" title="${activo?'Activo — clic para desactivar':'Inactivo — clic para activar'}" onclick="event.stopPropagation()">
@@ -20655,12 +20672,13 @@ function reabastPintarHistorialPrecioFOB(referencia, contId){
 }
 function reabastPintarDetalleReferencia(r){
   const activo = r.activo!==false;
-  document.getElementById('rd-titulo').textContent = (r.referencia||'') + (r.nombre_comercial ? ' · '+r.nombre_comercial : '');
+  document.getElementById('rd-titulo').textContent = (r.referencia||'') + (refNombre(r) ? ' · '+refNombre(r) : '');
   const campo = (label, val) => `<div class="rd-campo"><div style="font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.03em;">${reabastEsc(label)}</div><div class="rd-val" style="font-size:13px;">${(val!=null && val!=='') ? reabastEsc(val) : '—'}</div></div>`;
   document.getElementById('rd-body').innerHTML = `
     <div class="rd-top">
       <div>${reabastFotoMiniHtml(r.foto_url||wfotoUrl(r.referencia), 120)}</div>
       <div class="rd-top-info">
+        ${campo('Nombre comercial', refNombre(r))}
         ${campo('Estado', activo?'Activo':'Inactivo')}
         ${campo('Canal', r.canal)}
         ${campo('Clasificación ABC', r.clasificacion_abc_manual)}
