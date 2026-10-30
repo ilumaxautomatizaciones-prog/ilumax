@@ -421,7 +421,7 @@ function conPlano(items, o) {
   lines.push(plCab(n++, o.tipo, o.cons, o.fecha, o.nit, o.notas, o.elab));
   if (pag !== 0) lines.push(plBanco(n++, o.tipo, o.cons, o.ctaBanco, pag, o.fecha, o.notas));
   // Retenciones: facturas → débito; notas crédito (valores negativos) → crédito, cada una en su propia línea
-  mas.forEach(m => lines.push(plMas(n++, o.tipo, o.cons, o.ctaMas || '23359590', o.nit, m, o.notas)));
+  mas.forEach(m => lines.push(plMas(n++, o.tipo, o.cons, m.cuenta || o.ctaMas || '23359590', o.nit, m, o.notas)));
   // Descuentos del cliente sin documento en Siesa (ej. SAPND, SAPINC): débito a la cuenta indicada, para que el banco quede igual al pago real
   (o.otros || []).forEach(x => lines.push(plRet(n++, o.tipo, o.cons, x.cta, o.nit, -x.monto, 0, x.notas)));
   [[o.ctaIca, 'ica', 'bruto', x => x.zona !== 'Y', ' - ICA BOGOTA'], [o.ctaIcaY || o.ctaIca, 'ica', 'bruto', x => x.zona === 'Y', ' - ICA YUMBO'], [o.ctaRte, 'rte', 'iva', () => true, ' - RTE IVA']].forEach(([cta, k, b, zf, et]) => {
@@ -445,10 +445,16 @@ function plCheck(txt) { let d = 0, c = 0; txt.split(/\r?\n/).forEach(l => { if (
 function conCtaMasMapa() { try { return JSON.parse(localStorage.getItem('cart_ctamas') || '{}'); } catch (e) { return {}; } }
 function conCtaMasGuardar(nit, cta) { try { const m = conCtaMasMapa(); m[nit] = cta; localStorage.setItem('cart_ctamas', JSON.stringify(m)); } catch (e) { } }
 function conCtaMasBuscar(nit, cli, mas) {
+  const ids = new Set(mas.map(x => String(x.consec))), d = (D.docsL || []).find(x => /^(MAS|VPP)/i.test(x.tipo) && ids.has(String(+x.consec)) && x.cuenta);
+  if (d) return String(d.cuenta);
   const m = conCtaMasMapa(); if (m[nit]) return m[nit];
   if (/CENCOSUD/i.test(cli || '')) return '23359590';
-  const ids = new Set(mas.map(x => String(x.consec))), d = (D.docsL || []).find(x => /^(MAS|VPP)/i.test(x.tipo) && ids.has(String(+x.consec)) && x.cuenta);
-  return d ? String(d.cuenta) : '';
+  return '';
+}
+// Cuentas por pagar (23…) del cliente, ordenadas por cercanía de su saldo al total de los documentos del recibo
+function conCtaMasCandidatas(nit, total) {
+  const g = {}; (D.docsL || []).forEach(x => { const c = String(x.cuenta || '').replace(/\D/g, ''); if (!c || !/^23/.test(c) || String(x.nit) !== String(nit)) return; (g[c] = g[c] || { cta: c, saldo: 0, n: 0, tipos: new Set() }); g[c].saldo += Math.abs(+x.saldo || 0); g[c].n++; g[c].tipos.add(x.tipo); });
+  return Object.values(g).sort((a, b) => Math.abs(a.saldo - Math.abs(total)) - Math.abs(b.saldo - Math.abs(total))).slice(0, 6);
 }
 const conEsMas = r => !r.ok && /^(MAS|VPP)-\d+$/.test(r.num);
 // Pendientes: líneas del cliente que no están en la cartera abierta de Siesa (ni son MAS/VPP) y aún no se han gestionado ni llevado a un plano
@@ -470,15 +476,20 @@ function conReintentar() {
   conRepintar(); if (n && CON.id) conGuardar(true);
 }
 function conPlanoGen() {
-  const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d && !r.plano), its = ok.filter(conIncl), masR = CON.rows.filter(conEsMas).filter(r => !r.plano && (CON.inc == null || CON.inc[r.num] !== false)), mas = masR.map(r => { const tp = r.num.slice(0, 3).toUpperCase(), cs = +r.num.slice(4), dm = (D.docsL || []).find(x => String(x.tipo).toUpperCase() === tp && +x.consec === cs); return { monto: r.monto, consec: cs, fecha: r.fecha, tipo: tp, suc: dm && dm.suc, cuota: dm && dm.cuota ? dm.cuota : undefined }; }), previo = CON.rows.some(r => r.plano);
+  const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d && !r.plano), its = ok.filter(conIncl), masR = CON.rows.filter(conEsMas).filter(r => !r.plano && (CON.inc == null || CON.inc[r.num] !== false)), mas = masR.map(r => { const tp = r.num.slice(0, 3).toUpperCase(), cs = +r.num.slice(4), dm = (D.docsL || []).find(x => String(x.tipo).toUpperCase() === tp && +x.consec === cs); return { monto: r.monto, consec: cs, fecha: r.fecha, tipo: tp, suc: dm && dm.suc, cuota: dm && dm.cuota ? dm.cuota : undefined, cuenta: dm && dm.cuenta ? String(dm.cuenta).replace(/\D/g, '') : '' }; }), previo = CON.rows.some(r => r.plano);
   const ctaP = String(P.ctaPend || '').replace(/\D/g, ''), pendR = ctaP ? conPend() : [];
   if (!its.length) { alert('No hay documentos por incluir en el plano (los demás ya van en un plano anterior).'); return; }
   if (!P.cons) P.cons = conSig();
   const nitC = its[0].d.nit; let ctaMas = String(P.ctaMas || '').trim();
-  if (mas.length) {
+  const sinCta = mas.filter(m => !m.cuenta);
+  if (mas.length && sinCta.length) {
     if (ctaMas) conCtaMasGuardar(nitC, ctaMas);
-    else ctaMas = conCtaMasBuscar(nitC, its[0].cli, mas);
-    if (!ctaMas) { ctaMas = (prompt('No encontré la cuenta contable de los ' + mas.length + ' documento(s) MAS/VPP de ' + (its[0].cli || nitC) + '.\nEscribe el número de cuenta (se recordará para este cliente):') || '').replace(/\D/g, ''); if (!ctaMas) return; conCtaMasGuardar(nitC, ctaMas); }
+    else ctaMas = conCtaMasBuscar(nitC, its[0].cli, sinCta);
+    if (!ctaMas) {
+      const tot = sinCta.reduce((a, m) => a + Math.abs(m.monto), 0), cand = conCtaMasCandidatas(nitC, tot);
+      const lista = cand.length ? '\n\nCuentas por pagar de este cliente (saldo más parecido a ' + fm(tot) + '):\n' + cand.map(c => ' • ' + c.cta + ' — saldo ' + fm(c.saldo) + ' (' + c.n + ' doc., ' + [...c.tipos].join('/') + ')').join('\n') : '\n\n(No hay otras cuentas por pagar de este cliente en los datos cargados.)';
+      ctaMas = (prompt('No encontré la cuenta contable de los ' + sinCta.length + ' documento(s) MAS/VPP de ' + (its[0].cli || nitC) + ' (' + sinCta.map(m => m.tipo + '-' + m.consec).join(', ') + ').' + lista + '\n\nEscribe el número de cuenta (se recordará para este cliente):', cand[0] ? cand[0].cta : '') || '').replace(/\D/g, ''); if (!ctaMas) return; conCtaMasGuardar(nitC, ctaMas);
+    }
   }
   const otros = pendR.length ? [{ cta: ctaP, monto: pendR.reduce((a, r) => a + r.monto, 0), notas: 'DESCUENTOS CLIENTE (PENDIENTES)', n: pendR.length }] : [];
   const o = { banco: !previo && CON.total != null ? CON.total : null, otros, tipo: P.tipo.toUpperCase(), cons: +P.cons, fecha: P.fecha, nit: nitC, ctaIca: P.ctaIca, ctaIcaY: P.ctaIcaY, ctaRte: P.ctaRte, ctaBanco: P.ctaBanco, ctaMas: ctaMas || '23359590', elab: P.elab !== false, mas, notas: 'PAGO FACTURAS ' + (its[0].cli || '').slice(0, 30) };
