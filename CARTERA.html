@@ -405,7 +405,10 @@ function plMas(seq, tipo, cons, cuenta, nit, m, notas) {
   let s = plPut(PL_TM, 0, plSeq(seq), 7); s = plPut(s, 21, tipo, 2); s = plPut(s, 24, cons, 8, 1); s = plPut(s, 32, cuenta, 8); s = plPut(s, 52, nit, 15);
   const v = Math.abs(m.monto), db = m.monto < 0 ? v : 0, cr = m.monto > 0 ? v : 0;
   s = plPut(s, 105, plAmt(db), 21); s = plPut(s, 126, plAmt(cr), 21); s = plPut(s, 189, plAmt(db), 21); s = plPut(s, 210, plAmt(cr), 21);
-  s = plPut(s, 315, plTxt(notas), 255); s = plPut(s, 593, m.consec, 8, 1);
+  s = plPut(s, 315, plTxt(notas), 255);
+  // Cruce con el documento por pagar: sucursal, TIPO real (MAS / VPP…), consecutivo y cuota — sin esto Siesa crea una línea nueva en vez de cruzar
+  if (m.suc) s = plPut(s, 570, m.suc, 3, 1); if (m.tipo) s = plPut(s, 573, m.tipo, 3); if (m.cuota != null) s = plPut(s, 601, m.cuota, 3, 1);
+  s = plPut(s, 593, m.consec, 8, 1);
   s = plPut(s, 614, plD(m.fecha), 8); s = plPut(s, 622, plD(m.fecha), 8); s = plPut(s, 630, plD(m.fecha), 8);
   return plPut(s, 751, plTxt(notas), 255);
 }
@@ -467,7 +470,7 @@ function conReintentar() {
   conRepintar(); if (n && CON.id) conGuardar(true);
 }
 function conPlanoGen() {
-  const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d && !r.plano), its = ok.filter(conIncl), masR = CON.rows.filter(conEsMas).filter(r => !r.plano && (CON.inc == null || CON.inc[r.num] !== false)), mas = masR.map(r => ({ monto: r.monto, consec: +r.num.slice(4), fecha: r.fecha })), previo = CON.rows.some(r => r.plano);
+  const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d && !r.plano), its = ok.filter(conIncl), masR = CON.rows.filter(conEsMas).filter(r => !r.plano && (CON.inc == null || CON.inc[r.num] !== false)), mas = masR.map(r => { const tp = r.num.slice(0, 3).toUpperCase(), cs = +r.num.slice(4), dm = (D.docsL || []).find(x => String(x.tipo).toUpperCase() === tp && +x.consec === cs); return { monto: r.monto, consec: cs, fecha: r.fecha, tipo: tp, suc: dm && dm.suc, cuota: dm && dm.cuota ? dm.cuota : undefined }; }), previo = CON.rows.some(r => r.plano);
   const ctaP = String(P.ctaPend || '').replace(/\D/g, ''), pendR = ctaP ? conPend() : [];
   if (!its.length) { alert('No hay documentos por incluir en el plano (los demás ya van en un plano anterior).'); return; }
   if (!P.cons) P.cons = conSig();
