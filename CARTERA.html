@@ -451,6 +451,19 @@ function conCtaMasBuscar(nit, cli, mas) {
   if (/CENCOSUD/i.test(cli || '')) return '23359590';
   return '';
 }
+// Cruce del VPP/MAS del archivo del cliente con el documento de Siesa: mismo número, o ≥6 dígitos seguidos en común (el valor desempata)
+const conDig = x => String(x == null ? '' : x).replace(/\D/g, '');
+function conLcs(a, b) { let best = 0; for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) { let k = 0; while (i + k < a.length && j + k < b.length && a[i + k] === b[j + k]) k++; if (k > best) best = k; } return best; }
+function conDocMas(tp, num, monto, nit) {
+  const L = (D.docsL || []).filter(x => /^(MAS|VPP)/i.test(x.tipo));
+  const ex = L.find(x => String(x.tipo).toUpperCase() === tp && +x.consec === +num); if (ex) return { d: ex, aprox: false };
+  const nd = conDig(num), v = Math.abs(monto);
+  const C = L.filter(x => !nit || String(x.nit) === String(nit)).map(x => ({ d: x, l: conLcs(nd, conDig(x.consec)), dv: Math.abs(Math.abs(+x.saldo || 0) - v) }));
+  const a = C.filter(c => c.l >= 6).sort((p, q) => q.l - p.l || p.dv - q.dv)[0];
+  if (a) return { d: a.d, aprox: true, l: a.l };
+  const b = C.filter(c => c.dv < 1); if (b.length === 1) return { d: b[0].d, aprox: true, l: 0, porValor: true };
+  return { d: null };
+}
 // Cuentas por pagar (23…) del cliente, ordenadas por cercanía de su saldo al total de los documentos del recibo
 function conCtaMasCandidatas(nit, total) {
   const g = {}; (D.docsL || []).forEach(x => { const c = String(x.cuenta || '').replace(/\D/g, ''); if (!c || !/^23/.test(c) || String(x.nit) !== String(nit)) return; (g[c] = g[c] || { cta: c, saldo: 0, n: 0, tipos: new Set() }); g[c].saldo += Math.abs(+x.saldo || 0); g[c].n++; g[c].tipos.add(x.tipo); });
@@ -476,7 +489,7 @@ function conReintentar() {
   conRepintar(); if (n && CON.id) conGuardar(true);
 }
 function conPlanoGen() {
-  const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d && !r.plano), its = ok.filter(conIncl), masR = CON.rows.filter(conEsMas).filter(r => !r.plano && (CON.inc == null || CON.inc[r.num] !== false)), mas = masR.map(r => { const tp = r.num.slice(0, 3).toUpperCase(), cs = +r.num.slice(4), dm = (D.docsL || []).find(x => String(x.tipo).toUpperCase() === tp && +x.consec === cs); return { monto: r.monto, consec: cs, fecha: r.fecha, tipo: tp, suc: dm && dm.suc, cuota: dm && dm.cuota ? dm.cuota : undefined, cuenta: dm && dm.cuenta ? String(dm.cuenta).replace(/\D/g, '') : '' }; }), previo = CON.rows.some(r => r.plano);
+  const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d && !r.plano), its = ok.filter(conIncl), masR = CON.rows.filter(conEsMas).filter(r => !r.plano && (CON.inc == null || CON.inc[r.num] !== false)), mas = masR.map(r => { const tp0 = r.num.slice(0, 3).toUpperCase(), cs0 = +r.num.slice(4), mm = conDocMas(tp0, cs0, r.monto, its[0] && its[0].d && its[0].d.nit), dm = mm.d, tp = dm ? String(dm.tipo).toUpperCase().slice(0, 3) : tp0, cs = dm ? +dm.consec : cs0; return { monto: r.monto, consec: cs, orig: tp0 + '-' + cs0, aprox: mm.aprox, fecha: r.fecha, tipo: tp, suc: dm && dm.suc, cuota: dm && dm.cuota ? dm.cuota : undefined, cuenta: dm && dm.cuenta ? String(dm.cuenta).replace(/\D/g, '') : '' }; }), previo = CON.rows.some(r => r.plano);
   const ctaP = String(P.ctaPend || '').replace(/\D/g, ''), pendR = ctaP ? conPend() : [];
   if (!its.length) { alert('No hay documentos por incluir en el plano (los demás ya van en un plano anterior).'); return; }
   if (!P.cons) P.cons = conSig();
@@ -500,6 +513,7 @@ function conPlanoGen() {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([r.txt], { type: 'text/plain;charset=iso-8859-1' })); a.download = 'Plano_' + o.tipo + '_' + o.cons + '.txt'; a.click();
   const tag = o.tipo + '-' + o.cons; its.concat(masR, pendR).forEach(x => { x.plano = tag; });
   CON.pl.hecho = tag; conGuardar(true); CON.pl.cons = ''; conRepintar();
+  const aprx = mas.filter(m => m.aprox); if (aprx.length) alert('Cruce por coincidencia de dígitos / valor:\n' + aprx.map(m => ' • ' + m.orig + ' → ' + m.tipo + '-' + m.consec).join('\n') + '\nRevisa que sean los documentos correctos.');
   alert('Plano ' + tag + ' generado: ' + r.n + ' facturas por valor cartera ' + fm(r.car) + '\nBanco ' + fm(r.pag) + (mas.length ? ' · MAS ' + fm(-mas.reduce((s, m) => s + m.monto, 0)) : '') + (otros.length ? ' · Descuentos cliente ' + fm(-otros[0].monto) : '') + ' · ICA ' + fm(r.ica) + ' · RTE IVA ' + fm(r.rte) + (o.elab ? '\nVa con estado 0 (elaboración): revísalo y apruébalo en Siesa.' : '\nDébitos = créditos.') + (conPend().length ? '\nQuedan ' + conPend().length + ' pendiente(s) por ' + fm(conPend().reduce((a, x) => a + x.monto, 0)) + ' en la lista de pendientes.' : ''));
 }
 
