@@ -779,6 +779,7 @@ body:not(.sync-manual) [data-sync-manual]{display:none!important;}
     <div class="page" id="pg-tesoreria"><div id="teso-mod"></div></div>
     <div class="page" id="pg-compras"><div id="compras-mod"></div></div>
     <div class="page" id="pg-comext"><div id="comext-content"></div></div>
+    <div class="page" id="pg-inv"><div id="inv-content"></div></div>
   </div>
 </div>
 <div class="ov" id="mo-det"><div class="mo"><div class="mh"><div class="mt" id="mo-det-t">Detalle</div><div class="mx" onclick="closeMo('mo-det')">✕</div></div><div class="mb" id="mo-det-b"></div><div class="mf" id="mo-det-f"></div></div></div>
@@ -820,6 +821,8 @@ const _SBC = {mem:new Map(), db:null};
 function sbcDB(){ return _SBC.db || (_SBC.db = new Promise(res=>{ try{ const rq = indexedDB.open('ilumax_cache',1); rq.onupgradeneeded = ()=>rq.result.createObjectStore('c'); rq.onsuccess = ()=>res(rq.result); rq.onerror = ()=>res(null); }catch(e){ res(null); } })); }
 async function sbcGet(k){ const m = _SBC.mem.get(k); if(m) return m; const db = await sbcDB(); if(!db) return null; return new Promise(res=>{ try{ const q = db.transaction('c').objectStore('c').get(k); q.onsuccess = ()=>{ const v = q.result; if(v) _SBC.mem.set(k,v); res(v||null); }; q.onerror = ()=>res(null); }catch(e){ res(null); } }); }
 async function sbcSet(k,v){ _SBC.mem.set(k,v); const db = await sbcDB(); if(!db) return; try{ db.transaction('c','readwrite').objectStore('c').put(v,k); }catch(e){} }
+async function sbcClear(tabla){ if(!tabla){ _SBC.mem.clear(); } else for(const k of [..._SBC.mem.keys()]) if(k.startsWith(tabla+'?')) _SBC.mem.delete(k);
+  const db = await sbcDB(); if(!db) return; try{ const st = db.transaction('c','readwrite').objectStore('c'), rq = st.openKeyCursor(); rq.onsuccess = ()=>{ const c = rq.result; if(c){ if(!tabla || String(c.key).startsWith(tabla+'?')) st.delete(c.key); c.continue(); } }; }catch(e){} }
 async function sbcLeer(tabla, params, fresh){ const ttl = SBC_TTL[tabla]; if(!ttl || fresh) return null; const e = await sbcGet(tabla+'?'+(params||'')); if(e && (Date.now()-e.t) < ttl*60e3){ descMedir(tabla, e.b||0, 'copia'); return e.v; } return null; }
 function sbcGuardar(tabla, params, v, b){ if(SBC_TTL[tabla] && Array.isArray(v)) sbcSet(tabla+'?'+(params||''), {t:Date.now(), v, b:b||0}); }
 const _USO = {buf:{}, t:null};
@@ -1969,6 +1972,17 @@ function invDedup(rows) {
   });
   return Object.values(m);
 }
+async function invTodasLasFilas(select) {
+  let out = [], off = 0;
+  for(;;) {
+    const rows = await sb.get('inventario', 'select=' + select + '&order=id.asc&limit=1000&offset=' + off);
+    out = out.concat(rows || []);
+    if(!rows || rows.length < 1000) break;
+    off += 1000;
+    if(off > 300000) break;
+  }
+  return out;
+}
 async function invCargarBodegasCuentan() {
   try {
     const cfg = await sb.get('configuracion', 'clave=eq.inv_bodegas_cuentan');
@@ -1978,9 +1992,54 @@ async function invCargarBodegasCuentan() {
     }
   } catch(e) { /* se usa la lista por defecto */ }
 }
+function invAbrirConfigBodegas() {
+  const vistas = new Set([...INV_BODEGAS_CUENTAN, ...new Set(INV_DATA.map(r=>r.bodega).filter(Boolean))]);
+  const bodegas = [...vistas].sort();
+  const mo = document.createElement('div');
+  mo.id = 'mo-inv-bodegas';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  mo.innerHTML = `<div style="background:var(--w);border-radius:16px;width:100%;max-width:420px;max-height:90vh;overflow-y:auto;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-size:14px;font-weight:800;">⚙️ Bodegas que suman al inventario</div>
+      <button onclick="document.getElementById('mo-inv-bodegas').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--mu);">✕</button>
+    </div>
+    <div style="padding:16px 20px;">
+      <div style="font-size:11.5px;color:var(--mu);margin-bottom:12px;">Marca las bodegas que SÍ cuentan como stock disponible (esto afecta inventario, cobertura en Ppto. de Ventas, lo "en tránsito" de una referencia y los reportes que dependen de existencia real).</div>
+      ${bodegas.map(b=>`<label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;cursor:pointer;">
+        <input type="checkbox" data-bod="${reabastEsc(b)}" ${INV_BODEGAS_CUENTAN.includes(b)?'checked':''}> <span style="font-family:monospace;font-weight:700;">${reabastEsc(b)}</span>
+      </label>`).join('') || '<div style="color:var(--mu);font-size:12px;">Todavía no hay inventario cargado para ver qué bodegas existen.</div>'}
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--b1);display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-sm" onclick="document.getElementById('mo-inv-bodegas').remove()">Cancelar</button>
+      <button class="btn btn-bl btn-sm" onclick="invGuardarConfigBodegas()">💾 Guardar</button>
+    </div>
+  </div>`;
+  document.body.appendChild(mo);
+}
+async function invGuardarConfigBodegas() {
+  const mo = document.getElementById('mo-inv-bodegas'); if(!mo) return;
+  const marcadas = [...mo.querySelectorAll('input[data-bod]:checked')].map(el=>el.dataset.bod);
+  if(!marcadas.length) { toast('Marca al menos una bodega','wa'); return; }
+  try {
+    await sb.upsert('configuracion', {clave:'inv_bodegas_cuentan', valor:JSON.stringify(marcadas), tipo:'json'}, 'clave');
+    INV_BODEGAS_CUENTAN = marcadas;
+    mo.remove();
+    toast('✅ Bodegas actualizadas — '+marcadas.join(', '),'ok');
+    if(typeof renderInvVista==='function' && document.getElementById('inv-content')) renderInvVista();
+  } catch(e) { toast('❌ '+e.message,'er'); }
+}
 var INV_PERIODO = '';
 var INV_SUBIDO_POR = '';
 var INV_ACTUALIZADO = '';
+function fmtFechaHoraInv(iso) {
+  if(!iso) return '';
+  const d = new Date(iso);
+  if(isNaN(d.getTime())) return '';
+  return d.toLocaleString('es-CO', { day:'2-digit', month:'short', year:'numeric', hour:'numeric', minute:'2-digit' });
+}
+var INV_RESALTADOS = new Set();
+var INV_LISTA_SEL = '';
+var INV_LISTAS_CAT = [];
 var WFOT={m:{},ok:false,p:null};
 function wfIndex(){ WFOT.g={}; try{ for(var k in WFOT.m){ var f=WFOT.m[k]; if(f[0]&&f[3]) WFOT.g[f[0]]=f[3]; } }catch(e){} }
 function wfGrande(u){ return (WFOT.g&&WFOT.g[u])||u; }
@@ -2021,6 +2080,17 @@ function skxMapa(){
   try{ (typeof INV_DATA!=='undefined'?INV_DATA:[]).forEach(function(r){ if(!r.referencia)return; var o=put(r.referencia); if(!o.s&&r.descripcion)o.s=r.descripcion }) }catch(e){}
   Object.keys(m).forEach(function(k){var o=m[k]; o.desc=o.d||o.s||o.e||''});
   SKX.map=m; SKX.t=Date.now(); return m;
+}
+async function renderInventarioMod() {
+  const el = document.getElementById('inv-content');
+  if(!el) return;
+
+  el.innerHTML = '<div style="padding:14px;" id="inv-inner"><div style="max-width:460px;margin:40px auto;text-align:center;"><div id="inv-pb-txt" style="font-size:13px;color:var(--mu);margin-bottom:8px;">Cargando inventario… 0%</div><div style="height:14px;background:var(--s1);border:1px solid var(--b1);border-radius:8px;overflow:hidden;"><div id="inv-pb-bar" style="width:0%;height:100%;background:var(--bl);transition:width .2s;"></div></div></div></div>';
+
+  // Cargar desde Supabase
+  try{ await wfotosCargar(); }catch(e){}
+  await cargarInventarioSupa();
+  renderInvVista();
 }
 function invProgreso(p, txt){
   p = Math.max(0, Math.min(100, Math.round(p)));
@@ -2065,6 +2135,711 @@ async function cargarInventarioSupa() {
   } catch(e) {
     console.warn('Error cargando fecha de última actualización del inventario:', e.message);
   }
+}
+function renderInvVista() {
+  const el = document.getElementById('inv-content');
+  if(!el) return;
+
+  // Totales SOLO con las bodegas que suman (Grupo 001) — ver INV_BODEGAS_CUENTAN.
+  const invCuenta = INV_DATA.filter(r => invBodegaCuenta(r.bodega));
+  const totalRefs = new Set(invCuenta.map(r => r.referencia)).size;
+  const totalExist = invCuenta.reduce((a,r) => a + parseFloat(r.existencia||0), 0);
+  const valorTotal = invCuenta.reduce((a,r) => a + parseFloat(r.costo_prom||0) * parseFloat(r.existencia||0), 0);
+  const conStock = new Set(invCuenta.filter(r => parseFloat(r.existencia||0) > 0).map(r => r.referencia)).size;
+
+  let html = `
+  <div style="padding:14px;" id="inv-inner">
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:14px;padding:16px 18px;margin-bottom:14px;color:#fff;">
+      <div style="font-size:10px;color:rgba(255,255,255,.5);font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px;">
+        📦 Inventario ILUMAX
+        ${INV_PERIODO ? '· Corte: <strong>'+INV_PERIODO+'</strong>' : ''}
+        ${INV_SUBIDO_POR ? '· Subido por: '+INV_SUBIDO_POR : ''}
+      </div>
+      ${INV_ACTUALIZADO ? '<div style="font-size:11px;color:#f5c518;font-weight:700;margin-bottom:10px;">🕒 Última actualización: '+fmtFechaHoraInv(INV_ACTUALIZADO)+'</div>' : ''}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;">
+        <div><div style="font-size:20px;font-weight:800;color:#f5c518;">${totalRefs.toLocaleString('es-CO')}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Referencias</div></div>
+        <div><div style="font-size:20px;font-weight:800;color:#f5c518;">${Math.round(totalExist).toLocaleString('es-CO')}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Unidades totales</div></div>
+        <div><div style="font-size:16px;font-weight:800;color:#f5c518;">${'$'+Math.round(valorTotal).toLocaleString('es-CO')}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Valor inventario</div></div>
+        <div><div style="font-size:20px;font-weight:800;color:#f5c518;">${conStock.toLocaleString('es-CO')}</div><div style="font-size:10px;color:rgba(255,255,255,.5);">Con stock</div></div>
+      </div>
+      <div style="font-size:10px;color:rgba(255,255,255,.55);margin-top:10px;">
+        Solo suman las bodegas disponibles: <strong style="color:#fff;">${INV_BODEGAS_CUENTAN.filter(b => b !== 'BB').join(', ')}</strong> · no incluye averías, garantías, muestras, cuarentena, devoluciones, proyectos ni tránsito
+        ${CU?.rol==='admin' ? `<button class="btn btn-g btn-sm" style="margin-left:8px;padding:2px 8px;font-size:10px;" onclick="invAbrirConfigBodegas()">⚙️ Configurar</button>` : ''}
+      </div>
+    </div>
+
+    <!-- Acciones -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+      <label data-sync-manual style="display:inline-flex;align-items:center;gap:6px;background:var(--bl);color:#fff;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="subirExcelInventario(this)">
+        📤 Subir Excel inventario
+      </label>
+      <button id="btn-siesa-sync" data-sync-manual onclick="actualizarDesdeSiesa()" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        🔄 Actualizar desde SIESA
+      </button>
+      <label data-sync-manual title="Sube el Excel 'INV - DUV' (Biable): actualiza inventario, ventas históricas y por canal, facturas del Reporte Diario y Margen por Cliente" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        <input type="file" accept=".xlsx,.xlsm,.xls" style="display:none;" onchange="invduvSincronizar(this)">
+        🔄 Sincronizar INV - DUV
+      </label>
+      <button onclick="invExportarExcelPorBodega()" style="display:inline-flex;align-items:center;gap:6px;background:#0f172a;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;" title="Descarga un Excel con SKU, Descripción, Categoría, Existencia y Bodega — una fila por cada SKU+bodega con existencia real (solo bodegas disponibles, sin averías/muestras/etc.)">
+        📥 Excel existencias por bodega
+      </button>
+      <button onclick="invExportarRotacion()" style="display:inline-flex;align-items:center;gap:6px;background:#0f766e;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;" title="Excel con inventario actual, rotación a 3 y 6 meses y meses de inventario por referencia (alto stock / reforzar compra)">
+        📥 Excel inventario y rotación
+      </button>
+      <div id="inv-siesa-status" data-sync-manual style="font-size:11px;color:var(--mu);">Sincroniza el inventario directo desde la API de SIESA</div>
+    </div>
+    <div id="invduv-status" style="display:none;background:#0f172a;color:#e2e8f0;border-radius:10px;padding:10px 12px;font:11px/1.6 monospace;margin-bottom:12px;white-space:pre-wrap;max-height:220px;overflow:auto;"></div>
+
+    <!-- Búsqueda y filtros -->
+    <div style="background:var(--w);border-radius:10px;padding:10px 12px;margin-bottom:10px;box-shadow:var(--sh);display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <div style="position:relative;flex:1;min-width:200px;">
+        <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;">🔍</span>
+        <input class="inp" id="srch-inv-mod" placeholder="Buscar referencia o descripción..." 
+          style="padding-left:32px;border-radius:22px;" oninput="filtrarInvMod()">
+      </div>
+      <select class="inp" id="fil-inv-bod" style="width:190px;" onchange="filtrarInvMod()">
+        <option value="">Bodegas disponibles (suman)</option>
+        <option value="__todas">Todas las bodegas</option>
+      </select>
+      <select class="inp" id="fil-inv-stock" style="width:130px;" onchange="filtrarInvMod()">
+        <option value="todos">Todo</option>
+        <option value="stock">Con stock</option>
+        <option value="nostock">Sin stock</option>
+      </select>
+      <select class="inp" id="fil-inv-edad" style="width:150px;" onchange="filtrarInvMod()">
+        <option value="">Nuevos y antiguos</option>
+        <option value="nuevo">🆕 Solo nuevos (&lt;1 año)</option>
+        <option value="antiguo">Solo antiguos (≥1 año)</option>
+      </select>
+      <select class="inp" id="fil-inv-lista" style="width:180px;" onchange="INV_LISTA_SEL=this.value;filtrarInvMod()">
+        <option value="">Sin precio de lista</option>
+      </select>
+    </div>
+
+    <!-- Tabla -->
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-size:13px;font-weight:800;">Detalle por referencia</div>
+        <div id="inv-cnt" style="font-size:11px;color:var(--mu);"></div>
+      </div>
+      <div style="overflow-x:auto;max-height:55vh;overflow-y:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;" id="tbl-inv-mod">
+          <thead>
+            <tr>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Referencia</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Descripción</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Categoría</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Existencia</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Costo prom.</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Valor total</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Bodega</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Valor total</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">U.M.</th>
+              <th style="background:var(--bg);padding:9px 12px;position:sticky;top:0;border-bottom:1px solid var(--b1);"></th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);" id="th-inv-precio-lista">Precio lista</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Listas</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Canales</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-inv-mod"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+
+  el.innerHTML = html;
+  poblarBodegas();
+  poblarListasInv();
+  filtrarInvMod();
+}
+const INV_XLS_MIN_REFS = 100;
+async function invExportarExcelPorBodega() {
+  try {
+    const src = (INV_DATA||[])
+      .filter(r => invBodegaCuenta(r.bodega) && (parseFloat(r.existencia||0) > 0))
+      .sort((a,b) => (a.referencia||'').localeCompare(b.referencia||'') || (a.bodega||'').localeCompare(b.bodega||''));
+    if(!src.length) { toast('No hay existencias para exportar','wa'); return; }
+    toast('Consultando listas de precios…','ok');
+    await ppCargarExcelJS();
+    if(!(INV_LISTAS_CAT||[]).length){ try{ INV_LISTAS_CAT = await sb.get('listas_catalogo','activa=eq.true&order=orden.asc'); }catch(e){} }
+    await invListasCargar(src); // precios por referencia (quedan en caché)
+    const precioDe = (ref, lista) => { const x = (INV_LISTAS_REF[pvClaveRef(ref)]||[]).find(l => String(l.lista)===String(lista) && l.precio>0); return x ? Math.round(x.precio) : 0; };
+    // ¿Cuántas referencias con existencia tiene precio en cada lista?
+    const cuenta = {};
+    [...new Set(src.map(r => pvClaveRef(r.referencia)))].forEach(k => (INV_LISTAS_REF[k]||[]).forEach(l => { if(l.precio>0) cuenta[String(l.lista)] = (cuenta[String(l.lista)]||0) + 1; }));
+    const listas = Object.keys(cuenta).filter(l => l===INV_LISTA_BASE || cuenta[l] >= INV_XLS_MIN_REFS)
+      .sort((a,b) => (a===INV_LISTA_BASE ? -1 : b===INV_LISTA_BASE ? 1 : 0) || cuenta[b]-cuenta[a]);
+    if(!listas.length) { toast('Ninguna referencia con existencia tiene precio en las listas','wa'); return; }
+
+    const hoy = new Date().toISOString().slice(0,10);
+    const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX';
+    const COL = ['1E40AF','047857','B45309','7C3AED','0E7490','BE185D','4D7C0F','9A3412','475569'];
+    const TEMA = ['TableStyleMedium2','TableStyleMedium7','TableStyleMedium3','TableStyleMedium5','TableStyleMedium6','TableStyleMedium4','TableStyleMedium9','TableStyleMedium10','TableStyleMedium1'];
+    const thin = {style:'thin', color:{argb:'FFCBD5E1'}};
+    const resumen = [];
+    const wsR = wb.addWorksheet('Resumen', {properties:{tabColor:{argb:'FF0F172A'}}, views:[{showGridLines:false}]});
+
+    listas.forEach((lista, i) => {
+      const nom = String(invListaNombre(lista));
+      const filas = src.map(r => ({r, p: precioDe(r.referencia, lista)})).filter(x => x.p > 0);
+      const color = COL[i % COL.length];
+      const nombreHoja = ('Lista ' + nom).replace(/[\\\/\?\*\[\]:]/g,'').slice(0,31);
+      const ws = wb.addWorksheet(nombreHoja, {properties:{tabColor:{argb:'FF'+color}}, views:[{state:'frozen', xSplit:2, ySplit:4, showGridLines:false}]});
+      ws.getCell('A1').value = 'Existencias por bodega · Lista de precios ' + nom + (lista===INV_LISTA_BASE ? ' (la más usada)' : '');
+      ws.getCell('A1').font = {bold:true, size:15, color:{argb:'FF'+color}};
+      ws.getCell('A2').value = 'Solo referencias con precio en esta lista · ' + filas.length + ' filas · bodegas que cuentan: ' + INV_BODEGAS_CUENTAN.join(', ') + ' · al ' + hoy;
+      ws.getCell('A2').font = {italic:true, size:9, color:{argb:'FF64748B'}};
+      const n = filas.length;
+      if(n){
+        ws.addTable({
+          name: 'T_Lista' + (i+1), ref: 'A4', headerRow: true, totalsRow: true,
+          style: {theme: TEMA[i % TEMA.length], showRowStripes: true},
+          columns: [
+            {name:'SKU', totalsRowLabel:'TOTAL'}, {name:'Descripción'}, {name:'Categoría'}, {name:'Bodega'},
+            {name:'Existencia', totalsRowFunction:'sum'}, {name:'Precio ' + nom}, {name:'Valor a precio de lista', totalsRowFunction:'sum'}
+          ],
+          rows: filas.map((x, k) => [String(x.r.referencia||''), x.r.descripcion||'', x.r.categoria||'', x.r.bodega||'', Math.round(parseFloat(x.r.existencia||0)), x.p, {formula:'E'+(5+k)+'*F'+(5+k)}])
+        });
+        ws.addConditionalFormatting({ref:'E5:E'+(4+n), rules:[{type:'dataBar', gradient:false, cfvo:[{type:'min'},{type:'max'}], color:{argb:'FF'+color}}]});
+        for(let k=0;k<=n+1;k++){ const row = ws.getRow(4+k);
+          row.getCell(5).numFmt = '#,##0'; row.getCell(6).numFmt = '$ #,##0'; row.getCell(7).numFmt = '$ #,##0';
+          if(k>0 && k<=n) row.getCell(4).alignment = {horizontal:'center'};
+        }
+        ws.getRow(4).height = 30; ws.getRow(4).alignment = {vertical:'middle', horizontal:'center', wrapText:true};
+      }
+      [14,48,30,10,13,15,20].forEach((w, c) => ws.getColumn(c+1).width = w);
+      const unidades = filas.reduce((a,x) => a + Math.round(parseFloat(x.r.existencia||0)), 0);
+      const valor = filas.reduce((a,x) => a + Math.round(parseFloat(x.r.existencia||0)) * x.p, 0);
+      resumen.push({nom, hoja:nombreHoja, color, refs:new Set(filas.map(x => pvClaveRef(x.r.referencia))).size, filas:n, unidades, valor, total: cuenta[lista]});
+    });
+
+    // — Hoja Resumen —
+    wsR.getCell('A1').value = 'Existencias por bodega y listas de precios'; wsR.getCell('A1').font = {bold:true, size:16, color:{argb:'FF0F172A'}};
+    wsR.getCell('A2').value = 'Al ' + hoy + ' · bodegas que cuentan: ' + INV_BODEGAS_CUENTAN.join(', ') + ' · cada hoja muestra solo las referencias que tienen precio en esa lista. Clic en el nombre para ir a la hoja.';
+    wsR.getCell('A2').font = {italic:true, size:9, color:{argb:'FF64748B'}};
+    ['Lista','Referencias con precio','Filas (SKU+bodega)','Unidades','Valor a precio de lista'].forEach((t, c) => {
+      const cell = wsR.getCell(4, c+1); cell.value = t; cell.font = {bold:true, color:{argb:'FFFFFFFF'}}; cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FF0F172A'}};
+      cell.alignment = {horizontal:'center', vertical:'middle', wrapText:true}; cell.border = {top:thin, bottom:thin, left:thin, right:thin};
+    });
+    wsR.getRow(4).height = 30;
+    resumen.forEach((x, k) => {
+      const r = 5 + k;
+      const c1 = wsR.getCell(r,1); c1.value = {text:'Lista ' + x.nom, hyperlink:"#'" + x.hoja + "'!A1"};
+      c1.font = {bold:true, color:{argb:'FF'+x.color}, underline:true};
+      wsR.getCell(r,2).value = x.refs; wsR.getCell(r,3).value = x.filas; wsR.getCell(r,4).value = x.unidades; wsR.getCell(r,5).value = x.valor;
+      [2,3,4].forEach(c => wsR.getCell(r,c).numFmt = '#,##0'); wsR.getCell(r,5).numFmt = '$ #,##0';
+      for(let c=1;c<=5;c++){ const cell = wsR.getCell(r,c); cell.border = {top:thin, bottom:thin, left:thin, right:thin}; if(k%2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FFF1F5F9'}}; }
+    });
+    wsR.addConditionalFormatting({ref:'E5:E'+(4+resumen.length), rules:[{type:'dataBar', gradient:false, cfvo:[{type:'min'},{type:'max'}], color:{argb:'FF38BDF8'}}]});
+    [26,16,16,14,24].forEach((w, c) => wsR.getColumn(c+1).width = w);
+    wsR.getCell(6+resumen.length, 1).value = 'El valor a precio de lista es existencia × precio de esa lista (no es costo).';
+    wsR.getCell(6+resumen.length, 1).font = {italic:true, size:9, color:{argb:'FF64748B'}};
+
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download = 'Existencias_por_bodega_' + hoy + '.xlsx'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+    toast('📥 Excel descargado: ' + listas.length + ' listas de precios', 'ok');
+  } catch(e) { console.error(e); toast('Error: ' + e.message, 'er'); }
+}
+function invRotBuildWb(D){
+  // D = {filas:[{ref,desc,cat,stock,costo,m:[unidades por mes]}], meses:[etiquetas], bodegas:[...], fecha}
+  const wb = new ExcelJS.Workbook(); wb.creator='ILUMAX'; wb.calcProperties={fullCalcOnLoad:true};
+  const n = D.meses.length, NF=D.filas.length;
+  const col = c => { let s=''; c++; while(c>0){ const m=(c-1)%26; s=String.fromCharCode(65+m)+s; c=Math.floor((c-1)/26);} return s; }; // 0→A
+  const AZUL='1E293B', thin={style:'thin',color:{argb:'FFCBD5E1'}}, bord={top:thin,bottom:thin,left:thin,right:thin};
+  const hdr = (c,bg)=>{ c.font={bold:true,color:{argb:'FFFFFFFF'},size:10}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF'+(bg||AZUL)}}; c.alignment={horizontal:'center',vertical:'middle',wrapText:true}; c.border=bord; };
+  // ══ Hoja Panel ══
+  const wp = wb.addWorksheet('Panel',{properties:{tabColor:{argb:'FF0F766E'}},views:[{showGridLines:false}]});
+  // ══ Hoja Detalle ══
+  const wd = wb.addWorksheet('Detalle',{properties:{tabColor:{argb:'FF1E293B'}},views:[{state:'frozen',xSplit:2,ySplit:4,showGridLines:false}]});
+  const H=4, R0=5, R1=R0+NF-1;           // encabezado y rango de datos
+  const cD=3;                              // índice 0-based de "Inventario actual" (D)
+  const cM0=4;                             // primera columna de ventas por mes (E)
+  const cV3=cM0+n, cV6=cV3+1, cR3=cV6+1, cR6=cR3+1, cRB=cR6+1, cMB=cRB+1, cMM0=cMB+1, cEst=cMM0+n,
+        cCto=cEst+1, cVal=cCto+1, cExc=cVal+1, cVExc=cExc+1, cSug=cVExc+1, cCSug=cSug+1;
+  const L = {D:col(cD), V6:col(cV6), V3:col(cV3), R3:col(cR3), R6:col(cR6), RB:col(cRB), MB:col(cMB), Est:col(cEst), Cto:col(cCto), Val:col(cVal), Exc:col(cExc), VExc:col(cVExc), Sug:col(cSug), CSug:col(cCSug)};
+  // Parámetros (Panel)
+  const P = { alto:"Panel!$C$5", ref:"Panel!$C$6", obj:"Panel!$C$7", base:"Panel!$C$8" };
+  // — Detalle —
+  wd.getCell('A1').value='Inventario y rotación por referencia'; wd.getCell('A1').font={bold:true,size:14,color:{argb:'FF1E293B'}};
+  wd.getCell('A2').value='Stock al '+D.fecha+' · bodegas: '+D.bodegas.join(', ')+' · Los parámetros (umbrales, base 3m/6m, meses objetivo) se cambian en la hoja Panel y todo se recalcula.';
+  wd.getCell('A2').font={italic:true,size:9,color:{argb:'FF64748B'}};
+  const heads=['Referencia','Descripción','Categoría','Inventario actual'].concat(D.meses.map(m=>'Ventas '+m),
+    ['Ventas 3m (und)','Ventas '+n+'m (und)','Rotación 3m (und/mes)','Rotación '+n+'m (und/mes)','Rotación base (und/mes)','Meses de inventario (base)'],
+    D.meses.map(m=>'Meses inv. a ritmo '+m), ['Estado','Costo prom.','Valor inventario','Exceso (und)','Valor exceso','Sugerido comprar (und)','Costo compra sugerida']);
+  heads.forEach((h,i)=>{ const c=wd.getCell(H,i+1); c.value=h; hdr(c, i>=cM0&&i<cV3?'0F766E': (i>=cMM0&&i<cEst?'7C3AED': (i>=cEst?'B45309':AZUL))); });
+  wd.getRow(H).height=44;
+  D.filas.forEach((f,k)=>{
+    const r=R0+k, row=wd.getRow(r);
+    row.getCell(1).value=f.ref; row.getCell(2).value=f.desc; row.getCell(3).value=f.cat; row.getCell(cD+1).value=f.stock;
+    f.m.forEach((u,j)=>{ row.getCell(cM0+j+1).value=u; });
+    const first3=col(cM0+n-3), lastM=col(cM0+n-1), firstM=col(cM0);
+    row.getCell(cV3+1).value={formula:`SUM(${first3}${r}:${lastM}${r})`};
+    row.getCell(cV6+1).value={formula:`SUM(${firstM}${r}:${lastM}${r})`};
+    row.getCell(cR3+1).value={formula:`${L.V3}${r}/3`};
+    row.getCell(cR6+1).value={formula:`${L.V6}${r}/${n}`};
+    row.getCell(cRB+1).value={formula:`IF(${P.base}="3 meses",${L.R3}${r},${L.R6}${r})`};
+    row.getCell(cMB+1).value={formula:`IF(${L.RB}${r}>0,${L.D}${r}/${L.RB}${r},"")`};
+    for(let j=0;j<n;j++) row.getCell(cMM0+j+1).value={formula:`IF(${col(cM0+j)}${r}>0,$${L.D}${r}/${col(cM0+j)}${r},"")`};
+    row.getCell(cEst+1).value={formula:`IF(AND(${L.D}${r}<=0,${L.V6}${r}>0),"Agotado - comprar",IF(${L.V6}${r}<=0,IF(${L.D}${r}>0,"Sin rotación","—"),IF(${L.MB}${r}>${P.alto},"Alto stock",IF(${L.MB}${r}<${P.ref},"Reforzar compra","Normal"))))`};
+    row.getCell(cCto+1).value=f.costo;
+    row.getCell(cVal+1).value={formula:`${L.D}${r}*${L.Cto}${r}`};
+    row.getCell(cExc+1).value={formula:`IF(${L.RB}${r}>0,MAX(0,ROUND(${L.D}${r}-${P.alto}*${L.RB}${r},0)),IF(${L.D}${r}>0,${L.D}${r},0))`};
+    row.getCell(cVExc+1).value={formula:`${L.Exc}${r}*${L.Cto}${r}`};
+    row.getCell(cSug+1).value={formula:`IF(${L.RB}${r}>0,MAX(0,ROUND(${P.obj}*${L.RB}${r}-${L.D}${r},0)),0)`};
+    row.getCell(cCSug+1).value={formula:`${L.Sug}${r}*${L.Cto}${r}`};
+  });
+  const fmtInt='#,##0', fmt1='#,##0.0', fmtMon='$ #,##0';
+  for(let c=0;c<heads.length;c++){
+    const cl=wd.getColumn(c+1);
+    cl.width = c===0?13 : c===1?44 : c===2?24 : c===cEst?18 : (c===cVal||c===cVExc||c===cCSug)?17 : 12;
+    if(c>=cD && c<cV3) cl.numFmt=fmtInt;
+    else if(c===cV3||c===cV6) cl.numFmt=fmtInt;
+    else if(c>=cR3&&c<=cRB) cl.numFmt=fmt1;
+    else if(c>=cMB&&c<cEst) cl.numFmt=fmt1;
+    else if(c===cCto||c===cVal||c===cVExc||c===cCSug) cl.numFmt=fmtMon;
+    else if(c===cExc||c===cSug) cl.numFmt=fmtInt;
+  }
+  for(let r=R0;r<=R1;r++){ for(let c=1;c<=heads.length;c++){ const x=wd.getCell(r,c); x.border=bord; x.font={size:10}; if(c-1===cEst) x.alignment={horizontal:'center'}; if(r%2===0 && c-1!==cEst) x.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF8FAFC'}}; } }
+  wd.autoFilter={from:{row:H,column:1},to:{row:H,column:heads.length}};
+  // formato condicional
+  const rg=(a,b)=>`${a}${R0}:${b}${R1}`, estR=`${L.Est}${R0}:${L.Est}${R1}`;
+  [['Alto stock','FFFECACA','FF991B1B'],['Reforzar compra','FFFDE68A','FF92400E'],['Agotado - comprar','FFFDBA74','FF7C2D12'],['Normal','FFBBF7D0','FF166534'],['Sin rotación','FFE2E8F0','FF475569']].forEach(([t,bg,fg])=>{
+    wd.addConditionalFormatting({ref:estR,rules:[{type:'cellIs',operator:'equal',formulae:['"'+t+'"'],style:{fill:{type:'pattern',pattern:'solid',bgColor:{argb:bg}},font:{bold:true,color:{argb:fg}}}}]});
+  });
+  const mesR = [rg(L.MB,L.MB), rg(col(cMM0),col(cMM0+n-1))];
+  mesR.forEach(ref=>{ wd.addConditionalFormatting({ref,rules:[
+    {type:'expression',formulae:[`AND(ISNUMBER(${ref.split(':')[0]}),${ref.split(':')[0]}>${P.alto})`],style:{font:{color:{argb:'FF991B1B'},bold:true},fill:{type:'pattern',pattern:'solid',bgColor:{argb:'FFFEE2E2'}}}},
+    {type:'expression',formulae:[`AND(ISNUMBER(${ref.split(':')[0]}),${ref.split(':')[0]}<${P.ref})`],style:{font:{color:{argb:'FF92400E'},bold:true},fill:{type:'pattern',pattern:'solid',bgColor:{argb:'FFFEF3C7'}}}}]}); });
+  wd.addConditionalFormatting({ref:rg(L.VExc,L.VExc),rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFF87171'}]}]});
+  wd.addConditionalFormatting({ref:rg(L.CSug,L.CSug),rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFFBBF24'}]}]});
+  wd.addConditionalFormatting({ref:rg(col(cM0),col(cM0+n-1)),rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FF5EEAD4'}]}]});
+  // ══ Panel ══
+  wp.columns=[{width:3},{width:34},{width:20},{width:18},{width:18},{width:18},{width:3},{width:30},{width:16},{width:16}];
+  wp.getCell('B1').value='📦 Inventario y rotación — ILUMAX'; wp.getCell('B1').font={bold:true,size:16,color:{argb:'FF1E293B'}};
+  wp.getCell('B2').value='Stock al '+D.fecha+' · Ventas mes a mes: '+D.meses.join(', ')+' (meses completos)'; wp.getCell('B2').font={italic:true,size:10,color:{argb:'FF64748B'}};
+  wp.getCell('B4').value='PARÁMETROS (celdas amarillas, editables)'; wp.getCell('B4').font={bold:true,color:{argb:'FF0F766E'}};
+  const par=[['Alto stock si meses de inventario >',6],['Reforzar compra si meses de inventario <',2],['Meses objetivo de cobertura (para sugerido de compra)',3],['Base de rotación','6 meses']];
+  par.forEach((a,i)=>{ const r=5+i; wp.getCell(r,2).value=a[0]; wp.getCell(r,2).font={size:10}; const c=wp.getCell(r,3); c.value=a[1]; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFEF9C3'}}; c.font={bold:true,size:11}; c.border=bord; c.alignment={horizontal:'center'}; });
+  wp.getCell('C5').dataValidation={type:'decimal',operator:'greaterThan',formulae:[0],showErrorMessage:true,error:'Ingresa un número mayor que 0'};
+  wp.getCell('C6').dataValidation={type:'decimal',operator:'greaterThan',formulae:[0],showErrorMessage:true,error:'Ingresa un número mayor que 0'};
+  wp.getCell('C7').dataValidation={type:'decimal',operator:'greaterThan',formulae:[0],showErrorMessage:true,error:'Ingresa un número mayor que 0'};
+  wp.getCell('C8').dataValidation={type:'list',allowBlank:false,formulae:['"3 meses,6 meses"'],showErrorMessage:true,error:'Elige 3 meses o 6 meses'};
+  // Resumen por estado
+  wp.getCell('B10').value='RESUMEN POR ESTADO'; wp.getCell('B10').font={bold:true,color:{argb:'FF0F766E'}};
+  ['Estado','# Referencias','Inventario (und)','Valor inventario','% del valor'].forEach((h,i)=>{ const c=wp.getCell(11,2+i); c.value=h; hdr(c); });
+  const est=[['Alto stock','FFFECACA'],['Normal','FFBBF7D0'],['Reforzar compra','FFFDE68A'],['Agotado - comprar','FFFDBA74'],['Sin rotación','FFE2E8F0']];
+  const dE=`Detalle!$${L.Est}$${R0}:$${L.Est}$${R1}`, dD=`Detalle!$${L.D}$${R0}:$${L.D}$${R1}`, dV=`Detalle!$${L.Val}$${R0}:$${L.Val}$${R1}`;
+  est.forEach((e,i)=>{ const r=12+i;
+    wp.getCell(r,2).value=e[0]; wp.getCell(r,2).fill={type:'pattern',pattern:'solid',fgColor:{argb:e[1]}}; wp.getCell(r,2).font={bold:true};
+    wp.getCell(r,3).value={formula:`COUNTIF(${dE},B${r})`};
+    wp.getCell(r,4).value={formula:`SUMIF(${dE},B${r},${dD})`};
+    wp.getCell(r,5).value={formula:`SUMIF(${dE},B${r},${dV})`};
+    wp.getCell(r,6).value={formula:`IF(SUM($E$12:$E$16)>0,E${r}/SUM($E$12:$E$16),0)`};
+    wp.getCell(r,3).numFmt=fmtInt; wp.getCell(r,4).numFmt=fmtInt; wp.getCell(r,5).numFmt=fmtMon; wp.getCell(r,6).numFmt='0.0%';
+    for(let c=2;c<=6;c++) wp.getCell(r,c).border=bord; });
+  wp.getCell('B17').value='Total'; wp.getCell('B17').font={bold:true};
+  ['C','D','E'].forEach(c=>{ wp.getCell(c+'17').value={formula:`SUM(${c}12:${c}16)`}; wp.getCell(c+'17').font={bold:true}; wp.getCell(c+'17').numFmt = c==='E'?fmtMon:fmtInt; });
+  wp.getCell('F17').value={formula:'SUM(F12:F16)'}; wp.getCell('F17').numFmt='0.0%'; wp.getCell('F17').font={bold:true};
+  for(let c=2;c<=6;c++){ wp.getCell(17,c).border=bord; wp.getCell(17,c).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF1F5F9'}}; }
+  wp.addConditionalFormatting({ref:'F12:F16',rules:[{type:'dataBar',cfvo:[{type:'num',value:0},{type:'num',value:1}],color:{argb:'FF38BDF8'}}]});
+  // Indicadores clave
+  wp.getCell('B19').value='INDICADORES CLAVE'; wp.getCell('B19').font={bold:true,color:{argb:'FF0F766E'}};
+  const dEx=`Detalle!$${L.VExc}$${R0}:$${L.VExc}$${R1}`, dCs=`Detalle!$${L.CSug}$${R0}:$${L.CSug}$${R1}`, dR=`Detalle!$${L.RB}$${R0}:$${L.RB}$${R1}`;
+  const kp=[['Valor total del inventario',`SUM(${dV})`,fmtMon],['Capital inmovilizado en exceso (sobre el umbral de alto stock)',`SUM(${dEx})`,fmtMon],['Inversión sugerida para llegar a los meses objetivo',`SUM(${dCs})`,fmtMon],['Meses de inventario global (stock / ventas mensuales base)',`IF(SUM(${dR})>0,SUM(${dD})/SUM(${dR}),0)`,fmt1],['Referencias con stock',`COUNTIF(${dD},">0")`,fmtInt]];
+  kp.forEach((k,i)=>{ const r=20+i; wp.getCell(r,2).value=k[0]; wp.getCell(r,2).alignment={wrapText:true,vertical:'middle'}; wp.getCell(r,3).value={formula:k[1]}; wp.getCell(r,3).numFmt=k[2]; wp.getCell(r,3).font={bold:true,size:12}; wp.getCell(r,2).border=bord; wp.getCell(r,3).border=bord; wp.getRow(r).height=30; });
+  wp.mergeCells('C20:D20'); wp.mergeCells('C21:D21'); wp.mergeCells('C22:D22'); wp.mergeCells('C23:D23'); wp.mergeCells('C24:D24');
+  // Por categoría
+  const cats=[...new Set(D.filas.map(f=>f.cat||'(sin categoría)'))].sort();
+  wp.getCell('H4').value='POR CATEGORÍA'; wp.getCell('H4').font={bold:true,color:{argb:'FF0F766E'}};
+  ['Categoría','Valor inventario','Valor exceso','# Alto stock','# Reforzar'].forEach((h,i)=>{ const c=wp.getCell(5,8+i); c.value=h; hdr(c); });
+  wp.getColumn(11).width=16; wp.getColumn(12).width=14;
+  const dC=`Detalle!$C$${R0}:$C$${R1}`;
+  cats.forEach((ct,i)=>{ const r=6+i, crit = ct==='(sin categoría)'?'""':`H${r}`;
+    wp.getCell(r,8).value=ct;
+    wp.getCell(r,9).value={formula:`SUMIF(${dC},${crit},${dV})`}; wp.getCell(r,10).value={formula:`SUMIF(${dC},${crit},${dEx})`};
+    wp.getCell(r,11).value={formula:`COUNTIFS(${dC},${crit},${dE},"Alto stock")`}; wp.getCell(r,12).value={formula:`COUNTIFS(${dC},${crit},${dE},"Reforzar compra")`};
+    wp.getCell(r,9).numFmt=fmtMon; wp.getCell(r,10).numFmt=fmtMon; for(let c=8;c<=12;c++) wp.getCell(r,c).border=bord; });
+  wp.addConditionalFormatting({ref:`J6:J${5+cats.length}`,rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFF87171'}]}]});
+  // ══ Hoja Mes a mes (ventas totales por mes y por categoría) ══
+  const wm = wb.addWorksheet('Mes a mes',{properties:{tabColor:{argb:'FF7C3AED'}},views:[{showGridLines:false}]});
+  wm.getCell('A1').value='Unidades vendidas por mes y categoría'; wm.getCell('A1').font={bold:true,size:14};
+  ['Categoría'].concat(D.meses,['Total','Prom. mensual']).forEach((h,i)=>{ const c=wm.getCell(3,i+1); c.value=h; hdr(c,'7C3AED'); });
+  cats.forEach((ct,i)=>{ const r=4+i, crit = ct==='(sin categoría)'?'""':`$A${r}`;
+    wm.getCell(r,1).value=ct;
+    for(let j=0;j<n;j++){ const cc=wm.getCell(r,2+j); cc.value={formula:`SUMIF(${dC},${crit},Detalle!$${col(cM0+j)}$${R0}:$${col(cM0+j)}$${R1})`}; cc.numFmt=fmtInt; }
+    wm.getCell(r,2+n).value={formula:`SUM(B${r}:${col(n)}${r})`}; wm.getCell(r,3+n).value={formula:`${col(n+1)}${r}/${n}`};
+    wm.getCell(r,2+n).numFmt=fmtInt; wm.getCell(r,3+n).numFmt=fmtInt;
+    for(let c=1;c<=3+n;c++) wm.getCell(r,c).border=bord; });
+  const rt=4+cats.length; wm.getCell(rt,1).value='Total'; wm.getCell(rt,1).font={bold:true};
+  for(let c=2;c<=3+n;c++){ const cl=col(c-1); wm.getCell(rt,c).value={formula:`SUM(${cl}4:${cl}${rt-1})`}; wm.getCell(rt,c).numFmt=fmtInt; wm.getCell(rt,c).font={bold:true}; wm.getCell(rt,c).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF1F5F9'}}; }
+  for(let c=1;c<=3+n;c++) wm.getCell(rt,c).border=bord;
+  wm.getColumn(1).width=32; for(let c=2;c<=3+n;c++) wm.getColumn(c).width=13;
+  wm.addConditionalFormatting({ref:`B4:${col(n)}${rt-1}`,rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFA78BFA'}]}]});
+  // ══ Notas ══
+  const wn = wb.addWorksheet('Notas',{views:[{showGridLines:false}]}); wn.getColumn(1).width=120;
+  ['CÓMO LEER ESTE ARCHIVO',
+   '• Panel: parámetros editables (celdas amarillas), resumen por estado, indicadores clave y resumen por categoría. Todo es fórmula: cambia un parámetro y se recalcula.',
+   '• Detalle: una fila por referencia. Usa los filtros del encabezado (estado, categoría, referencia…). Las columnas moradas muestran cuántos meses duraría el stock al ritmo de CADA mes; las naranjas son acciones (exceso y compra sugerida).',
+   '• Mes a mes: unidades vendidas por categoría en cada mes.',
+   '',
+   'DEFINICIONES',
+   '• Inventario actual: suma de las bodegas que cuentan ('+D.bodegas.join(', ')+') al '+D.fecha+'.',
+   '• Ventas por mes: unidades de los últimos '+n+' meses completos ('+D.meses.join(', ')+'). El mes en curso (o un último mes incompleto) no se usa.',
+   '• Rotación 3m / '+n+'m: promedio mensual de unidades vendidas. Rotación base: la que elijas en Panel (3 o 6 meses).',
+   '• Meses de inventario = inventario actual / rotación base. Meses inv. a ritmo <mes> = inventario actual / ventas de ese mes.',
+   '• Estado: Alto stock (meses > umbral alto) · Reforzar compra (meses < umbral) · Normal · Agotado - comprar (sin stock y con ventas) · Sin rotación (con stock y sin ventas).',
+   '• Exceso (und) = inventario − (umbral alto × rotación base). Sugerido comprar (und) = (meses objetivo × rotación base) − inventario, si es positivo.',
+   '• El sugerido no descuenta órdenes de compra en tránsito: revísalo contra Compras antes de pedir.'
+  ].forEach((t,i)=>{ const c=wn.getCell(i+1,1); c.value=t; c.alignment={wrapText:true,vertical:'top'}; if(t==='CÓMO LEER ESTE ARCHIVO'||t==='DEFINICIONES') c.font={bold:true,color:{argb:'FF0F766E'},size:12}; });
+  wb.views=[{activeTab:0}];
+  return wb;
+}
+async function invExportarRotacion() {
+  try {
+    await ppCargarExcelJS();
+    toast('Calculando rotación mes a mes…','ok');
+    const hoy = new Date(), mk = (y,m)=>y*12+(m-1);
+    const actual = mk(hoy.getFullYear(), hoy.getMonth()+1), desde = actual - 8;
+    const dy = Math.floor(desde/12), dm = desde%12+1;
+    const rows = await sb.get('ventas_historico', 'select=referencia,anio,mes,unidades&or=(anio.gt.'+dy+',and(anio.eq.'+dy+',mes.gte.'+dm+'))');
+    const tot = {}; (rows||[]).forEach(r=>{ const k=mk(r.anio,r.mes); tot[k]=(tot[k]||0)+(+r.unidades||0); });
+    let ks = Object.keys(tot).map(Number).sort((a,b)=>a-b).filter(k=>k<actual);
+    // descarta el último mes si quedó incompleto (< 60% del promedio de los 3 anteriores)
+    if(ks.length>=4){ const L=ks[ks.length-1], prev=ks.slice(-4,-1).reduce((a,k)=>a+tot[k],0)/3; if(tot[L] < prev*0.6) ks.pop(); }
+    if(ks.length<3){ toast('No hay suficientes meses completos de ventas','wa'); return; }
+    const k6 = ks.slice(-6);
+    const nom = k=>{const y=Math.floor((k-1)/12),m=(k-1)%12+1;return ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][m-1]+'-'+y;};
+    const um = {};
+    (rows||[]).forEach(r=>{ const k=mk(r.anio,r.mes), i=k6.indexOf(k); if(i<0) return; (um[r.referencia]=um[r.referencia]||new Array(k6.length).fill(0))[i]+=(+r.unidades||0); });
+    const lista = reabastInventarioPorReferencia(), ex = {}; lista.forEach(x=>ex[x.referencia]=x);
+    const cost = {}, cat = {}; (INV_DATA||[]).forEach(r=>{ if(r.costo_prom) cost[r.referencia]=parseFloat(r.costo_prom)||0; if(r.categoria) cat[r.referencia]=r.categoria; });
+    const refs = new Set(lista.map(x=>x.referencia)); Object.keys(um).forEach(r=>refs.add(r));
+    const filas = [];
+    refs.forEach(r=>{
+      const e = ex[r]||{}, st = Math.round(e.existencia||0), m = um[r]||new Array(k6.length).fill(0);
+      if(st<=0 && !m.some(v=>v>0)) return;
+      filas.push({ref:r, desc:e.descripcion||'', cat:cat[r]||'', stock:st, costo:cost[r]||0, m});
+    });
+    filas.sort((a,b)=>b.stock-a.stock);
+    const fechas = (INV_DATA||[]).map(r=>r.periodo).filter(Boolean).sort();
+    const wb = invRotBuildWb({filas, meses:k6.map(nom), bodegas:INV_BODEGAS_CUENTAN, fecha: (fechas.length?fechas[fechas.length-1]:new Date().toISOString().slice(0,10))});
+    const buf = await wb.xlsx.writeBuffer();
+    const nombre = 'Inventario_rotacion_' + new Date().toISOString().slice(0,10) + '.xlsx';
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download = nombre; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1500);
+    toast('📥 Excel descargado: '+filas.length+' referencias','ok');
+  } catch(e){ console.error(e); toast('Error: '+e.message,'er'); }
+}
+async function poblarListasInv() {
+  const sel = document.getElementById('fil-inv-lista');
+  if(!sel) return;
+  if(!INV_LISTAS_CAT.length) {
+    try {
+      INV_LISTAS_CAT = await sb.get('listas_catalogo', 'activa=eq.true&order=orden.asc');
+    } catch(e) { console.warn('Error cargando listas_catalogo:', e); INV_LISTAS_CAT = []; }
+  }
+  (INV_LISTAS_CAT||[]).forEach(c => {
+    const o = document.createElement('option');
+    o.value = c.lista_id;
+    o.textContent = c.nombre + ' — ' + (c.descripcion||'');
+    if(c.lista_id === INV_LISTA_SEL) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+function poblarBodegas() {
+  const sel = document.getElementById('fil-inv-bod');
+  if(!sel) return;
+  const bodegas = [...new Set(INV_DATA.map(r => r.bodega).filter(Boolean))].sort();
+  bodegas.forEach(b => {
+    const o = document.createElement('option');
+    o.value = b; o.textContent = b + (invBodegaCuenta(b) ? '' : ' (no suma)');
+    sel.appendChild(o);
+  });
+}
+async function filtrarInvMod() {
+  const q     = (document.getElementById('srch-inv-mod')||{value:''}).value.trim().toLowerCase();
+  const bod   = (document.getElementById('fil-inv-bod')||{value:''}).value;
+  const stock = (document.getElementById('fil-inv-stock')||{value:'todos'}).value;
+  const edad  = (document.getElementById('fil-inv-edad')||{value:''}).value;
+
+  // 1) Filtrar filas crudas (referencia+bodega) por texto y bodega seleccionada
+  let filas = INV_DATA.filter(r => {
+    if(bod === '' && !invBodegaCuenta(r.bodega)) return false;
+    if(bod && bod !== '__todas' && r.bodega !== bod) return false;
+    if(q && !(r.referencia+' '+(r.descripcion||'')).toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  // 2) Consolidar: una fila por SKU, sumando existencia/valor y listando bodegas con stock
+  const porRef = {};
+  filas.forEach(r => {
+    const ref = r.referencia;
+    if(!ref) return;
+    if(!porRef[ref]) {
+      porRef[ref] = {
+        referencia: ref, descripcion: r.descripcion||'', categoria: r.categoria||'',
+        um: r.um||'', existencia: 0, valorTotal: 0, bodegas: [], fecha_creacion: r.fecha_creacion||null,
+      };
+    }
+    const g = porRef[ref];
+    if(!g.descripcion && r.descripcion) g.descripcion = r.descripcion;
+    if(!g.categoria   && r.categoria)   g.categoria   = r.categoria;
+    if(!g.um          && r.um)          g.um          = r.um;
+    if(r.fecha_creacion && (!g.fecha_creacion || r.fecha_creacion < g.fecha_creacion)) g.fecha_creacion = r.fecha_creacion;
+    const exist = parseFloat(r.existencia||0) || 0;
+    const costo = parseFloat(r.costo_prom||0) || 0;
+    g.existencia += exist;
+    g.valorTotal += exist * costo;
+    if(exist > 0 && r.bodega) g.bodegas.push(r.bodega.trim());
+  });
+
+  let items = Object.values(porRef).map(g => ({
+    referencia:  g.referencia,
+    descripcion: g.descripcion,
+    categoria:   g.categoria,
+    um:          g.um,
+    existencia:  g.existencia,
+    costo_prom:  g.existencia > 0 ? (g.valorTotal / g.existencia) : 0,
+    bodega:      [...new Set(g.bodegas)].sort().join(', '),
+    fecha_creacion: g.fecha_creacion,
+  }));
+
+  // 3) Filtro de stock sobre el total ya consolidado
+  items = items.filter(r => {
+    if(stock === 'stock'   && !(r.existencia > 0)) return false;
+    if(stock === 'nostock' && r.existencia > 0)     return false;
+    return true;
+  });
+
+  // 3b) Filtro por antigüedad (fecha de creación): nuevo = menos de 1 año
+  if(edad){
+    const haceUnAnio = new Date(); haceUnAnio.setFullYear(haceUnAnio.getFullYear()-1);
+    const haceUnAnioISO = haceUnAnio.toISOString().slice(0,10);
+    items = items.filter(r => {
+      if(!r.fecha_creacion) return false; // sin fecha conocida, no entra en ninguno de los dos filtros
+      const esNuevo = r.fecha_creacion > haceUnAnioISO;
+      return edad === 'nuevo' ? esNuevo : !esNuevo;
+    });
+  }
+
+  // Ordenar: primero las recién actualizadas por SIESA, luego por existencia desc
+  items.sort((a,b) => {
+    const aRes = INV_RESALTADOS.has(a.referencia) ? 1 : 0;
+    const bRes = INV_RESALTADOS.has(b.referencia) ? 1 : 0;
+    if(aRes !== bRes) return bRes - aRes;
+    return parseFloat(b.existencia||0) - parseFloat(a.existencia||0);
+  });
+
+  const cnt = document.getElementById('inv-cnt');
+  if(cnt) cnt.textContent = items.length.toLocaleString('es-CO') + ' SKU' + (items.length > 500 ? ' (mostrando 500)' : '');
+
+  const tbody = document.getElementById('tbody-inv-mod');
+  if(!tbody) return;
+
+  if(!items.length) {
+    tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:32px;color:var(--mu);">Sin resultados</td></tr>';
+    return;
+  }
+
+  const mostrar = items.slice(0, 500);
+
+  // Primer render, sin precio de lista (para no bloquear la vista mientras se consulta)
+  const seqInv = ++INV_RENDER_SEQ;
+  await invCanalesCargar();
+  let preciosMapAct = {};
+  tbody.innerHTML = _renderFilasInv(mostrar, {});
+
+  // Si hay una lista de precios seleccionada, traer los precios (por lotes de 100 referencias)
+  // y volver a renderizar solo cuando estén listos
+  if(INV_LISTA_SEL) {
+    try {
+      const refs = [...new Set(mostrar.map(r => r.referencia).filter(Boolean))];
+      const preciosMap = {};
+      // Se busca con y sin ceros a la izquierda (00094 / 94) y se guarda por valor numérico
+      for(let i = 0; i < refs.length; i += 20) {
+        const lote = encodeURIComponent(pvVariantesRefs(refs.slice(i, i + 20)).map(r => '"'+r+'"').join(','));
+        const rows = await sb.get('precios_lista',
+          `lista=eq.${encodeURIComponent(INV_LISTA_SEL)}&referencia=in.(${lote})&select=referencia,precio&limit=1000`);
+        (rows||[]).forEach(r => { const p = parseFloat(r.precio)||0; const k = pvClaveRef(r.referencia); if(p || !preciosMap[k]) preciosMap[k] = p; });
+      }
+      preciosMapAct = preciosMap;
+      if(seqInv === INV_RENDER_SEQ) tbody.innerHTML = _renderFilasInv(mostrar, preciosMap);
+    } catch(e) { console.warn('Error cargando precios de lista:', e); }
+  }
+  // Listas de precios de cada referencia (se completan después del primer render)
+  try{ await invListasCargar(mostrar); if(seqInv === INV_RENDER_SEQ) tbody.innerHTML = _renderFilasInv(mostrar, preciosMapAct); }catch(e){ console.warn('Listas por referencia:', e); }
+}
+function esItemNuevo(fechaCreacionISO){
+  if(!fechaCreacionISO) return false;
+  const haceUnAnio = new Date(); haceUnAnio.setFullYear(haceUnAnio.getFullYear()-1);
+  return fechaCreacionISO > haceUnAnio.toISOString().slice(0,10);
+}
+function _renderFilasInv(mostrar, preciosMap) {
+  const fmtCOP = n => n ? '$' + Math.round(n).toLocaleString('es-CO') : '—';
+  const fmtN   = n => n ? Math.round(n).toLocaleString('es-CO') : '0';
+
+  return mostrar.map(r => {
+    const exist = parseFloat(r.existencia||0);
+    const costo = parseFloat(r.costo_prom||0);
+    const valor = exist * costo;
+    const existColor = exist > 1000 ? 'color:var(--gr);font-weight:700' : exist > 0 ? 'color:var(--am);font-weight:700' : 'color:var(--mu2)';
+    const resaltada = INV_RESALTADOS.has(r.referencia);
+    const rowStyle = resaltada
+      ? 'border-bottom:1px solid var(--b1);background:#fef9c3;transition:background 2s ease;'
+      : 'border-bottom:1px solid var(--b1);';
+    const precioLista = INV_LISTA_SEL ? (preciosMap[r.referencia] || preciosMap[pvClaveRef(r.referencia)]) : undefined;
+    return `<tr style="${rowStyle}" ${resaltada ? 'data-resaltada="1"' : ''}>
+      <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${wfoto(r.referencia)}${wlnk(r.referencia,r.referencia||'')}${resaltada?' <span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">SIESA</span>':''}${esItemNuevo(r.fecha_creacion)?' <span style="background:#0891b2;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">🆕 NUEVO</span>':''}</td>
+      <td style="padding:9px 12px;max-width:220px;font-weight:600;font-size:11px;">${(r.descripcion||'').substring(0,50)}</td>
+      <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.categoria||''}</td>
+      <td style="padding:9px 12px;text-align:right;${existColor}">${fmtN(exist)}</td>
+      <td style="padding:9px 12px;text-align:right;font-size:11px;">${fmtCOP(costo)}</td>
+      <td style="padding:9px 12px;text-align:right;font-weight:700;">${fmtCOP(valor)}</td>
+      <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.bodega||''}</td>
+      <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.um||''}</td>
+      <td style="padding:9px 12px;text-align:right;font-size:11px;color:var(--bl);font-weight:700;white-space:nowrap;">${invPrecioCelda(r.referencia)}</td>
+      <td style="padding:9px 12px;"><button class="btn btn-g btn-sm" data-item='${JSON.stringify({referencia:r.referencia,descripcion:r.descripcion,bodega:r.bodega,existencia:exist}).replace(/'/g,"&#39;")}' onclick="abrirModalReabast(JSON.parse(this.dataset.item))">🔁 Solicitar</button></td>
+      <td style="padding:9px 12px;max-width:220px;">${invListasChips(r.referencia)}</td>
+      <td style="padding:9px 12px;min-width:150px;">${invCanalesChips(r.referencia)}</td>
+    </tr>`;
+  }).join('');
+}
+var INV_CANALES_MAP = null;
+var INV_LISTAS_REF  = {};
+var INV_RENDER_SEQ  = 0;
+function invPuedeGestionarCanales(){ return !!(CU && (CU.rol==='admin' || (typeof reabastEsAdmin==='function' && reabastEsAdmin()))); }
+async function invCanalesCargar(forzar){
+  if(INV_CANALES_MAP && !forzar) return INV_CANALES_MAP;
+  try{
+    const r = await sb.get('configuracion','clave=eq.inventario_canales');
+    const v = r && r[0] ? r[0].valor : null;
+    INV_CANALES_MAP = (typeof v==='string' ? JSON.parse(v) : v) || {};
+  }catch(e){ console.warn('Canales de inventario:', e); INV_CANALES_MAP = INV_CANALES_MAP || {}; }
+  return INV_CANALES_MAP;
+}
+async function invListasCargar(items){
+  const refs = [...new Set((items||[]).map(r=>pvClaveRef(r.referencia)).filter(k=>k && INV_LISTAS_REF[k]===undefined))];
+  for(let i=0;i<refs.length;i+=20){
+    const lote = refs.slice(i,i+20);
+    lote.forEach(k=>INV_LISTAS_REF[k]=[]);
+    const rows = await sb.get('precios_lista', `referencia=in.(${encodeURIComponent(pvVariantesRefs(lote).map(r=>'"'+r+'"').join(','))})&select=lista,referencia,precio&limit=1000`);
+    const vistos = {};
+    (rows||[]).forEach(r=>{ const k = pvClaveRef(r.referencia); const kk = k+'|'+r.lista; const p = parseFloat(r.precio)||0; if(!INV_LISTAS_REF[k]) INV_LISTAS_REF[k]=[]; if(vistos[kk]){ if(p) vistos[kk].precio = p; return; } vistos[kk] = {lista:String(r.lista), precio:p}; INV_LISTAS_REF[k].push(vistos[kk]); });
+  }
+}
+function invListaNombre(id){ const c=(INV_LISTAS_CAT||[]).find(x=>String(x.lista_id)===String(id)); return c ? c.nombre : id; }
+const INV_LISTA_BASE = '1';
+function invPrecioDe(ref){
+  const ls = INV_LISTAS_REF[pvClaveRef(ref)]; if(ls===undefined) return undefined;
+  const conP = ls.filter(l=>l.precio>0);
+  const sel = INV_LISTA_SEL ? conP.find(l=>String(l.lista)===String(INV_LISTA_SEL)) : null;
+  if(sel) return {lista:sel.lista, precio:sel.precio, respaldo:false};
+  const p1 = conP.find(l=>String(l.lista)===INV_LISTA_BASE);
+  if(p1) return {lista:p1.lista, precio:p1.precio, respaldo:!!INV_LISTA_SEL};
+  return null;
+}
+function invPrecioCelda(ref){
+  const p = invPrecioDe(ref);
+  if(p===undefined) return '<span style="color:var(--mu2);">…</span>';
+  const puede = invPuedeGestionarCanales();
+  const btn = puede ? ` <button class="btn btn-g btn-sm" style="padding:1px 6px;font-size:10px;" title="Poner o cambiar el precio de lista" onclick="invPrecioEditar('${String(ref).replace(/'/g,"")}')">✎</button>` : '';
+  if(!p) return '<span style="color:var(--mu2);font-weight:600;">Sin precio</span>'+btn;
+  return '$'+Math.round(p.precio).toLocaleString('es-CO')+` <span style="font-size:9px;font-weight:700;color:${p.respaldo?'var(--am)':'var(--mu)'};" title="${p.respaldo?'No tiene precio en la lista elegida: se muestra el de P1':'Lista '+invListaNombre(p.lista)}">${invListaNombre(p.lista)}${p.respaldo?' (respaldo)':''}</span>`+btn;
+}
+function invListasChips(ref){
+  const k = pvClaveRef(ref); const ls = INV_LISTAS_REF[k];
+  if(ls===undefined) return '<span style="color:var(--mu2);font-size:10px;">…</span>';
+  const nom = invListaNombre;
+  const chips = ls.length ? ls.slice().sort((x,y)=>String(nom(x.lista)).localeCompare(String(nom(y.lista)),'es',{numeric:true})).map(l=>`<span title="Lista ${nom(l.lista)}" style="display:inline-block;background:var(--bg);border:1px solid var(--b1);border-radius:10px;padding:1px 6px;margin:1px 2px 1px 0;font-size:9px;font-weight:700;color:var(--bl);white-space:nowrap;">${nom(l.lista)} <span style="color:var(--tx);">${l.precio?('$'+Math.round(l.precio).toLocaleString('es-CO')):'—'}</span></span>`).join('') : '<span style="color:var(--mu2);font-size:10px;">Sin lista</span>';
+  const ed = invPuedeGestionarCanales() ? ` <button class="btn btn-g btn-sm" style="padding:1px 6px;font-size:10px;" title="Agregar o cambiar el precio en una lista" onclick="invPrecioEditar('${String(ref).replace(/'/g,"")}')">＋</button>` : '';
+  return chips + ed;
+}
+async function invPrecioEditar(ref){
+  if(!invPuedeGestionarCanales()) return;
+  const k = pvClaveRef(ref);
+  if(!INV_LISTAS_CAT.length){ try{ INV_LISTAS_CAT = await sb.get('listas_catalogo','activa=eq.true&order=orden.asc'); }catch(e){} }
+  const actuales = INV_LISTAS_REF[k] || [];
+  const inicial = INV_LISTA_SEL || INV_LISTA_BASE;
+  let m = document.getElementById('inv-precio-modal'); if(m) m.remove();
+  m = document.createElement('div'); m.id='inv-precio-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99990;display:flex;align-items:center;justify-content:center;';
+  const precioDe = id => { const l = actuales.find(x=>String(x.lista)===String(id)); return l && l.precio ? l.precio : ''; };
+  m.innerHTML = `<div style="background:var(--w,#fff);color:var(--tx,#111);border:1px solid var(--b1,#ccc);border-radius:12px;width:min(420px,92vw);padding:16px;">
+    <div style="font-weight:800;margin-bottom:4px;">Precio de lista · referencia ${k}</div>
+    <div style="font-size:11px;color:var(--mu);margin-bottom:10px;">Elige la lista (por ejemplo Home Center) y escribe el precio. Si la referencia ya tiene precio en esa lista, se reemplaza.</div>
+    <label style="font-size:11px;font-weight:700;">Lista</label>
+    <select id="inv-pr-lista" class="inp" style="width:100%;margin-bottom:10px;" onchange="document.getElementById('inv-pr-valor').value=(window.__invPrecios||{})[this.value]||''">
+      ${(INV_LISTAS_CAT||[]).map(c=>`<option value="${c.lista_id}" ${String(c.lista_id)===String(inicial)?'selected':''}>${c.nombre}${c.canal_principal?' — '+c.canal_principal:''}</option>`).join('')}
+    </select>
+    <label style="font-size:11px;font-weight:700;">Precio (COP)</label>
+    <input id="inv-pr-valor" class="inp" type="number" min="0" step="1" style="width:100%;" value="${precioDe(inicial)}" placeholder="Ej: 4283">
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;"><button class="btn btn-sm" onclick="document.getElementById('inv-precio-modal').remove()">Cancelar</button><button class="btn btn-sm" style="background:var(--bl);color:#fff;" onclick="invPrecioGuardar('${String(ref).replace(/'/g,"")}')">Guardar</button></div></div>`;
+  window.__invPrecios = {}; actuales.forEach(l=>{ if(l.precio) window.__invPrecios[l.lista] = l.precio; });
+  m.addEventListener('click',e=>{ if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+  document.getElementById('inv-pr-valor').focus();
+}
+async function invPrecioGuardar(ref){
+  const lista = String(document.getElementById('inv-pr-lista').value);
+  const precio = parseFloat(document.getElementById('inv-pr-valor').value);
+  if(!(precio>0)){ toast('Escribe un precio mayor a 0','wa'); return; }
+  const k = pvClaveRef(ref); const ahora = new Date().toISOString(); const hoy = ahora.slice(0,10);
+  try{
+    const vars = encodeURIComponent(pvVariantesRefs([ref]).map(r=>'"'+r+'"').join(','));
+    const ex = await sb.get('precios_lista', `lista=eq.${encodeURIComponent(lista)}&referencia=in.(${vars})&select=id&limit=100`);
+    if(ex && ex.length){
+      await sb.patch('precios_lista', `id=in.(${ex.map(r=>r.id).join(',')})`, {precio, actualizado:ahora, subido_por:(CU&&CU.nombre)||'Portal', periodo:hoy});
+    } else {
+      const inv = (INV_DATA||[]).find(r=>pvClaveRef(r.referencia)===k) || {};
+      const cat = inv.categoria || (typeof pvCatRP==='function' ? await pvCatRP(ref) : '') || null;
+      await sb.post('precios_lista', {lista, referencia:k, descripcion:(inv.descripcion||'').trim().slice(0,200), precio, categoria:cat, periodo:hoy, subido_por:(CU&&CU.nombre)||'Portal', actualizado:ahora});
+    }
+    delete INV_LISTAS_REF[k];
+    document.getElementById('inv-precio-modal')?.remove();
+    toast('✅ Precio guardado en la lista '+invListaNombre(lista),'ok');
+    filtrarInvMod();
+  }catch(e){ toast('❌ No se pudo guardar el precio: '+e.message,'er'); }
+}
+function invCanalesChips(ref){
+  const k = pvClaveRef(ref); const cs = (INV_CANALES_MAP||{})[k] || [];
+  const chips = cs.length ? cs.map(c=>`<span style="display:inline-block;background:rgba(37,99,235,.10);color:var(--bl);border-radius:10px;padding:1px 7px;margin:1px 2px 1px 0;font-size:9px;font-weight:700;">${c}</span>`).join('') : '<span style="color:var(--mu2);font-size:10px;">—</span>';
+  const ed = invPuedeGestionarCanales() ? ` <button class="btn btn-g btn-sm" style="padding:1px 6px;font-size:10px;" title="Gestionar canales de esta referencia" onclick="invCanalesEditar('${String(ref).replace(/'/g,"")}')">✎</button>` : '';
+  return chips + ed;
+}
+async function invCanalesTodos(){
+  let canales = [...CANALES_DEFAULT];
+  try{ const cfg = await sb.get('configuracion','clave=eq.canales_comerciales'); if(cfg && cfg[0]) canales = String(cfg[0].valor).split(',').map(s=>s.trim()).filter(Boolean); }catch(e){}
+  return canales;
+}
+async function invCanalesEditar(ref){
+  if(!invPuedeGestionarCanales()) return;
+  const k = pvClaveRef(ref); const map = await invCanalesCargar(true); const sel = new Set(map[k]||[]);
+  const canales = await invCanalesTodos();
+  let m = document.getElementById('inv-canales-modal'); if(m) m.remove();
+  m = document.createElement('div'); m.id='inv-canales-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99990;display:flex;align-items:center;justify-content:center;';
+  m.innerHTML = `<div style="background:var(--w,#fff);color:var(--tx,#111);border:1px solid var(--b1,#ccc);border-radius:12px;width:min(420px,92vw);max-height:80vh;overflow:auto;padding:16px;">
+    <div style="font-weight:800;margin-bottom:4px;">Canales de la referencia ${k}</div>
+    <div style="font-size:11px;color:var(--mu);margin-bottom:10px;">Marca los canales donde se vende esta referencia.</div>
+    <div id="inv-can-lista" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">${canales.map(c=>`<label style="display:flex;gap:6px;align-items:center;font-size:12px;"><input type="checkbox" value="${c.replace(/"/g,'&quot;')}" ${sel.has(c)?'checked':''}> ${c}</label>`).join('')}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;"><button class="btn btn-sm" onclick="document.getElementById('inv-canales-modal').remove()">Cancelar</button><button class="btn btn-sm" style="background:var(--bl);color:#fff;" onclick="invCanalesGuardar('${k.replace(/'/g,"")}')">Guardar</button></div></div>`;
+  m.addEventListener('click',e=>{ if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+}
+async function invCanalesGuardar(k){
+  const marcados = [...document.querySelectorAll('#inv-can-lista input:checked')].map(i=>i.value);
+  try{
+    const map = await invCanalesCargar(true);   // se relee para no pisar cambios de otra persona
+    if(marcados.length) map[k] = marcados; else delete map[k];
+    await sb.upsert('configuracion', {clave:'inventario_canales', valor:JSON.stringify(map), tipo:'json'}, 'clave');
+    INV_CANALES_MAP = map;
+    document.getElementById('inv-canales-modal')?.remove();
+    toast('✅ Canales actualizados','ok');
+    filtrarInvMod();
+  }catch(e){ toast('❌ No se pudo guardar: '+e.message,'er'); }
 }
 let REABAST = { lista: [], politica: [], ventas: {}, abc: {}, clientesPorRef: {}, filtros: {}, tab: 'urgentes' };
 function reabastPuedeAprobar(){ return !!(CU && (CU.rol==='aprobador'||CU.rol==='admin')) || reabastEsEditor(); }
@@ -16744,7 +17519,723 @@ async function marcarRecibido(id, cantidadSugerida){
     renderReabastMod();
   }catch(e){ if(typeof toast==='function') toast('Error: '+e.message,'er'); }
 }
+const SIESA_BASE_URL = 'https://servicios.siesacloud.com/api/connekta';
+const SIESA_CONFIG = {
+  // Endpoint con paginación dinámica — se construye en _siesaFetchPaginas()
+  // NOTA: esta consulta es "estándar" (prefijo API_), la Edge Function la enruta
+  // automáticamente a /api/siesa/v3/ejecutarconsultaestandar (no a /connekta).
+  urlBase: SIESA_BASE_URL + '/v3/ejecutarconsultaestandar',
+  params: {
+    idCompania:  '9263',
+    descripcion: 'API_v2_Inventarios_InvFecha',  // consulta estándar módulo SQL Server (antes: ilumax_WA_CONSULTA_INVENTARIOS)
+    parametros:  null,                            // TODO: confirmar si esta consulta requiere algún parámetro (ej. fecha de corte)
+    paginacion:  'numPag={PAG}|tamPag=100',
+  },
+  headers: {
+    'Content-Type': 'application/json',
+    // Las llaves de SIESA viven en los secrets de Supabase (nunca en este archivo)
+  },
+  // arrayPath: ruta al array dentro del JSON de respuesta.
+  // Ajusta si SIESA devuelve algo como { data: [...] } → 'data'
+  // Deja '' si la respuesta ES directamente el array
+  // arrayPath: CONFIRMADO tras la primera llamada real (2026-09-17) — esta consulta
+  // estándar devuelve { detalle: { Table: [...] } }, NO { detalle: { Datos: [...] } }
+  // como la consulta vieja de connekta. Este era el bug que causaba "Sin registros".
+  arrayPath: 'detalle.Table',
+  // tamPag: registros por página
+  tamPag: 100,
+  // MAPEO CONFIRMADO tras la primera llamada real (2026-09-17) contra
+  // API_v2_Inventarios_InvFecha, y verificado contra la documentación oficial de SIESA
+  // (Modulo de Conectividad > Observaciones). Nombres de campo reales:
+  //   f120_referencia, f150_id (bodega), f400_cant_existencia_1, f400_costo_prom_uni,
+  //   f120_id_unidad_inventario, f400_id_lote, f400_id_ubicacion_aux
+  //
+  // ✅ CONFIRMADO por la documentación oficial: esta consulta NO tiene parámetro de fecha
+  // (a pesar del nombre "InvFecha"). La estructura de datos documentada no incluye ningún
+  // campo de fecha — solo existencia/comprometida/costo por ítem+bodega.
+  //
+  // La existencia en 0 que vimos en la prueba inicial fue porque esa llamada (página 1,
+  // sin filtro) solo trajo la bodega "AD" (probablemente administrativa/virtual, sin stock
+  // real), no las bodegas físicas con inventario (BA, BS, RE, etc. — las que se ven en el
+  // portal). _siesaFetchPaginas ya pagina hasta agotar los datos, así que al recorrer todas
+  // las páginas debería llegar también a las bodegas con stock real.
+  //
+  // Filtro opcional soportado (formato SQL sin WHERE, comillas simples dobles para strings):
+  //   parametros: "f120_id_cia = 1 AND f150_id = ''BA''"
+  // Útil si en el futuro se quiere excluir bodegas virtuales como "AD" desde el propio filtro
+  // en vez de traer todo y descartar en el frontend.
+  mapeo: function(item) {
+    return {
+      referencia:  String(item.f120_referencia || '').trim(),
+      descripcion: '',   // esta consulta no trae descripción — se conserva la existente al sincronizar
+      existencia:  parseFloat(item.f400_cant_existencia_1 || 0) || 0,
+      costo_prom:  parseFloat(item.f400_costo_prom_uni || 0) || 0,
+      bodega:      String(item.f150_id || '').trim(),
+      ubicacion:   String(item.f400_id_ubicacion_aux || '').trim(),
+      lote:        String(item.f400_id_lote || '').trim(),
+      um:          String(item.f120_id_unidad_inventario || '').trim(),
+      subido_por:  'SIESA (automático)',
+      periodo:     new Date().toISOString().split('T')[0],
+    };
+  },
+};
+function _siesaGetArray(resp) {
+  if(!SIESA_CONFIG.arrayPath) return Array.isArray(resp) ? resp : [];
+  const parts = SIESA_CONFIG.arrayPath.split('.');
+  let cur = resp;
+  for(const p of parts) {
+    if(cur == null) return [];
+    cur = cur[p];
+  }
+  return Array.isArray(cur) ? cur : [];
+}
+async function _siesaFetchPaginas(setStatus, descripcion, parametros, tamPag) {
+  descripcion = descripcion || SIESA_CONFIG.params.descripcion;
+  parametros  = (parametros !== undefined) ? parametros : (SIESA_CONFIG.params.parametros || null);
+  const tam   = tamPag || SIESA_CONFIG.tamPag;
+
+  const todos = [];
+  let pag = 1;
+  let totalPags = null; // SIESA informa total_páginas en la primera respuesta (no todas las consultas lo traen)
+
+  const PROXY_URL = SB_URL + '/functions/v1/consulta-siesa';
+
+  while(true) {
+    const label = totalPags
+      ? '📡 ' + descripcion + ' — página ' + pag + ' de ' + totalPags + '...'
+      : '📡 ' + descripcion + ' — página ' + pag + '...';
+    setStatus(label, '#60a5fa');
+
+    const resp = await fetch(PROXY_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'apikey':        SB_KEY,
+        'Authorization': 'Bearer ' + SB_KEY,
+      },
+      body: JSON.stringify({
+        descripcion: descripcion,
+        parametros:  parametros,
+        numPag:      pag,
+        tamPag:      tam,
+      }),
+    });
+
+    if(!resp.ok) {
+      const txt = await resp.text();
+      if(resp.status === 400 && /No se encontraron registros/i.test(txt)) break; // pagina vacia = fin de datos (ej. total de lineas multiplo de tamPag)
+      throw new Error('Edge Function error ' + resp.status + ': ' + txt);
+    }
+
+    const json = await resp.json();
+    if(json.error) throw new Error('SIESA: ' + json.error);
+
+    // Leer total_páginas del detalle de SIESA (disponible desde pág 1)
+    if(totalPags === null && json.detalle && json.detalle['total_páginas']) {
+      totalPags = json.detalle['total_páginas'];
+      console.log('[SIESA] ' + descripcion + ' total_páginas:', totalPags, '| total_registros:', json.detalle['total_registros']);
+    }
+
+    const items = _siesaGetArray(json);
+    todos.push(...items);
+
+    // Terminar cuando llegamos a la última página
+    if(totalPags !== null && pag >= totalPags) break;
+    if(totalPags === null && items.length < tam) break; // fallback (consultas sin total_páginas, ej. las estándar API_v2_*)
+    pag++;
+    if(pag > 2000) { console.warn('SIESA: límite de seguridad 2000 páginas — ' + descripcion); break; } // Inventarios llega a ~673; 200 (valor anterior) cortaba el sync antes de completar
+  }
+  return todos;
+}
+async function actualizarDesdeSiesa() {
+  const btn    = document.getElementById('btn-siesa-sync');
+  const status = document.getElementById('inv-siesa-status');
+
+  const setStatus = (msg, color='var(--mu)') => {
+    if(status) { status.textContent = msg; status.style.color = color; }
+  };
+  const setBtnState = (loading) => {
+    if(!btn) return;
+    btn.disabled = loading;
+    btn.style.opacity = loading ? '0.65' : '1';
+    btn.innerHTML = loading
+      ? '⏳ Consultando SIESA...'
+      : '🔄 Actualizar desde SIESA';
+  };
+
+  // Validar que el baseUrl ya fue configurado
+  if(SIESA_BASE_URL.includes('TU-DOMINIO-SIESA')) {
+    toast('⚠️ Configura SIESA_BASE_URL con el dominio real del servidor SIESA', 'er');
+    setStatus('⚠️ SIESA_BASE_URL no configurada — edita el valor en el código', '#ef4444');
+    return;
+  }
+
+  setBtnState(true);
+  setStatus('🔌 Conectando con SIESA...', '#60a5fa');
+
+  try {
+    // ── 1-4. El inventario lo sincroniza la función de la nube (producción): aquí se dispara y se espera ──
+    const LOTE = 200;
+    setStatus('☁️ Sincronizando inventario en la nube...', '#60a5fa');
+    const _cfgInv = async () => { const c = await sb.get('configuracion', 'clave=eq.inv_ultima_actualizacion&select=valor').catch(()=>null); return c && c[0] ? c[0].valor : ''; };
+    const antes = await _cfgInv();
+    const rr = await fetch(SB_URL + '/functions/v1/sync-siesa-auto', { method:'POST', headers:{'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY}, body: JSON.stringify({modo:'inventario'}) });
+    if(!rr.ok) throw new Error('No se pudo iniciar la sincronización (' + rr.status + ')');
+    let listo = false;
+    for(let i = 0; i < 50; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const v = await _cfgInv();
+      if(v && v !== antes) { listo = true; INV_ACTUALIZADO = v; break; }
+      setStatus('☁️ Sincronizando inventario en la nube... ' + ((i+1)*3) + ' s', '#60a5fa');
+    }
+    if(!listo) throw new Error('La sincronización está tardando más de lo normal; revisa en unos minutos');
+    await cargarInventarioSupa();
+    const resumen = 'inventario actualizado desde SIESA';
+    toast('✅ Inventario sincronizado', 'ok');
+    setStatus('✅ Inventario listo', '#16a34a');
+
+    // ── 5. Traer precios por lista desde API_v2_ItemsPrecios ───────
+    try {
+      setStatus('💰 Consultando precios por lista (API_v2_ItemsPrecios)...', '#60a5fa');
+
+      // Mapeo código SIESA (ej. "001") → lista_id interno usado en precios_lista (ej. "1")
+      let catalogo = INV_LISTAS_CAT.length ? INV_LISTAS_CAT : await sb.get('listas_catalogo', 'select=lista_id,codigo');
+      const codigoToListaId = {};
+      (catalogo||[]).forEach(c => { codigoToListaId[c.codigo] = c.lista_id; });
+
+      const preciosRaw = await _siesaFetchPaginas(setStatus, 'API_v2_ItemsPrecios', null, 100);
+
+      // Mapear y deduplicar por referencia+lista (SIESA puede repetir filas, como en Inventarios)
+      const preciosPorClave = {};
+      preciosRaw.forEach(p => {
+        const referencia  = String(p.f120_referencia || '').trim();
+        const codigoLista = String(p.f126_id_lista_precio || '').trim();
+        const listaId = codigoToListaId[codigoLista];
+        if(!referencia || !listaId) return; // ignorar listas que no están en listas_catalogo
+        preciosPorClave[referencia + '_' + listaId] = {
+          lista:       listaId,
+          referencia:  referencia,
+          descripcion: String(p.f120_descripcion || '').trim(),
+          precio:      parseFloat(p.f126_precio         || 0) || 0,
+          precio_min:  parseFloat(p.f126_precio_minimo   || 0) || 0,
+          precio_max:  parseFloat(p.f126_precio_maximo   || 0) || 0,
+          periodo:     new Date().toISOString().split('T')[0],
+          subido_por:  'SIESA (automático)',
+        };
+      });
+      const preciosRegistros = Object.values(preciosPorClave);
+
+      if(preciosRegistros.length) {
+        setStatus('🔍 Comparando precios anteriores...', '#60a5fa');
+        let existentesPrecios = {};
+        try {
+          // Ojo: precios_lista ya tiene más de 22.000 filas — un solo limit=10000 se
+          // quedaba corto y dejaba precios "existentes" fuera del mapa, así que el sync
+          // los trataba como nuevos y los volvía a insertar duplicados en cada corrida.
+          // Se pagina completo (igual que cargarInventarioSupa) para comparar contra TODO
+          // lo que ya hay antes de decidir insertar vs. actualizar.
+          const PAGE_PRECIOS = 1000;
+          let offsetPrecios = 0;
+          while(true) {
+            const rows = await sb.get('precios_lista',
+              'select=lista,referencia,precio&order=id.asc&limit=' + PAGE_PRECIOS + '&offset=' + offsetPrecios, {fresh:true});
+            if(!rows || !rows.length) break;
+            rows.forEach(r => { existentesPrecios[r.referencia + '_' + r.lista] = r; });
+            if(rows.length < PAGE_PRECIOS) break;
+            offsetPrecios += PAGE_PRECIOS;
+            if(offsetPrecios > 200000) { console.warn('precios_lista: límite de seguridad 200k filas'); break; }
+          }
+        } catch(e) { console.warn('No se pudo cargar precios anteriores:', e); }
+
+        const preciosNuevos = [], preciosActualizados = [];
+        let preciosSinCambio = 0;
+        preciosRegistros.forEach(r => {
+          const key = r.referencia + '_' + r.lista;
+          const ant = existentesPrecios[key];
+          if(!ant) preciosNuevos.push(r);
+          else if(Math.abs(parseFloat(r.precio||0) - parseFloat(ant.precio||0)) > 0.01) preciosActualizados.push(r);
+          else preciosSinCambio++;
+        });
+
+        for(let i = 0; i < preciosNuevos.length; i += LOTE) {
+          await sb.post('precios_lista', preciosNuevos.slice(i, i + LOTE));
+        }
+        for(let i = 0; i < preciosActualizados.length; i++) {
+          const r = preciosActualizados[i];
+          try {
+            await sb.patch('precios_lista',
+              'referencia=eq.' + encodeURIComponent(r.referencia) + '&lista=eq.' + encodeURIComponent(r.lista),
+              { precio: r.precio, precio_min: r.precio_min, precio_max: r.precio_max, periodo: r.periodo, subido_por: r.subido_por }
+            );
+          } catch(e) { console.warn('Error actualizando precio', r.referencia, r.lista, e); }
+          if(i % 100 === 0 && i > 0) setStatus('Actualizando precios ' + i + '/' + preciosActualizados.length + '...', '#60a5fa');
+        }
+        toast('💰 Precios: ' + preciosNuevos.length + ' nuevos · ' + preciosActualizados.length + ' actualizados · ' + preciosSinCambio + ' sin cambio', 'inf');
+      }
+    } catch(e) {
+      console.warn('Error consultando API_v2_ItemsPrecios:', e);
+      toast('⚠️ No se pudieron traer precios por lista (API_v2_ItemsPrecios): ' + e.message, 'er');
+    }
+
+    setStatus('✅ Última sync: ' + new Date().toLocaleTimeString('es-CO') + ' · ' + resumen, '#16a34a');
+    renderInvVista();
+
+  } catch(e) {
+    console.error('Error sync SIESA:', e);
+    // Distinguir error de red vs error de servidor
+    if(e instanceof TypeError && e.message.toLowerCase().includes('fetch')) {
+      toast('❌ No se pudo conectar con SIESA. Verifica la URL y que el servidor sea accesible.', 'er');
+      setStatus('❌ Error de conexión — revisa la URL o CORS', '#ef4444');
+    } else {
+      toast('❌ Error: ' + e.message, 'er');
+      setStatus('❌ ' + e.message, '#ef4444');
+    }
+  } finally {
+    setBtnState(false);
+  }
+}
+async function xlsxLeerHojasStream(file, hojas, onProgreso) {
+  const buf = await file.arrayBuffer();
+  const u8 = new Uint8Array(buf), dv = new DataView(buf);
+  const dec = new TextDecoder('utf-8');
+  // 1. Directorio central del zip
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 70000); i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
+  if (eocd < 0) throw new Error('El archivo no parece un .xlsx válido');
+  const nEnt = dv.getUint16(eocd + 10, true); let p = dv.getUint32(eocd + 16, true);
+  const ent = {};
+  for (let k = 0; k < nEnt; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const metodo = dv.getUint16(p + 10, true), comp = dv.getUint32(p + 20, true);
+    const nl = dv.getUint16(p + 28, true), xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true);
+    const loc = dv.getUint32(p + 42, true);
+    const nombre = dec.decode(u8.subarray(p + 46, p + 46 + nl));
+    const ini = loc + 30 + dv.getUint16(loc + 26, true) + dv.getUint16(loc + 28, true);
+    ent[nombre] = { metodo, ini, comp };
+    p += 46 + nl + xl + cl;
+  }
+  const flujo = e => {
+    let st = new Blob([u8.subarray(e.ini, e.ini + e.comp)]).stream();
+    if (e.metodo === 8) st = st.pipeThrough(new DecompressionStream('deflate-raw'));
+    return st.pipeThrough(new TextDecoderStream()).getReader();
+  };
+  const leerTexto = async ruta => {
+    const e = ent[ruta]; if (!e) return '';
+    const rd = flujo(e); let t = '';
+    for (;;) { const { value, done } = await rd.read(); if (done) break; t += value; }
+    return t;
+  };
+  const desXml = t => t.replace(/&(lt|gt|amp|quot|apos|#\d+|#x[0-9a-fA-F]+);/g, (m, g) =>
+    g === 'lt' ? '<' : g === 'gt' ? '>' : g === 'amp' ? '&' : g === 'quot' ? '"' : g === 'apos' ? "'" :
+    String.fromCodePoint(g[1] === 'x' ? parseInt(g.slice(2), 16) : parseInt(g.slice(1), 10)));
+  // 2. Hoja → archivo
+  const wbx = await leerTexto('xl/workbook.xml'), rels = await leerTexto('xl/_rels/workbook.xml.rels');
+  const relMap = {};
+  rels.replace(/<Relationship\b[^>]*>/g, m => { const id = (m.match(/Id="([^"]+)"/) || [])[1], tg = (m.match(/Target="([^"]+)"/) || [])[1]; if (id && tg) relMap[id] = tg; return m; });
+  const rutaHoja = {};
+  wbx.replace(/<sheet\b[^>]*>/g, m => {
+    const nom = desXml((m.match(/name="([^"]*)"/) || [])[1] || ''), rid = (m.match(/r:id="([^"]+)"/) || [])[1];
+    let tg = relMap[rid] || ''; tg = tg.startsWith('/') ? tg.slice(1) : 'xl/' + tg;
+    rutaHoja[nom.trim().toUpperCase()] = tg; return m;
+  });
+  // 3. Textos compartidos
+  const ssx = await leerTexto('xl/sharedStrings.xml');
+  const ss = [];
+  ssx.replace(/<si>([\s\S]*?)<\/si>/g, (m, si) => { let t = ''; si.replace(/<t\b[^>]*>([\s\S]*?)<\/t>/g, (mm, x) => { t += x; return mm; }); ss.push(desXml(t)); return m; });
+  // 4. Recorrer cada hoja fila por fila
+  const colIdx = letras => { let n = 0; for (let i = 0; i < letras.length; i++) n = n * 26 + (letras.charCodeAt(i) - 64); return n - 1; };
+  const reCel = /<c r="([A-Z]+)\d+"([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+  for (const [nombreHoja, onRow] of Object.entries(hojas)) {
+    const ruta = rutaHoja[nombreHoja.toUpperCase()];
+    if (!ruta || !ent[ruta]) throw new Error('El archivo no tiene la hoja ' + nombreHoja + ' (hojas: ' + Object.keys(rutaHoja).join(', ') + ')');
+    const rd = flujo(ent[ruta]); let resto = '', leidos = 0, ultimoAviso = 0;
+    for (;;) {
+      const { value, done } = await rd.read();
+      if (value) { resto += value; leidos += value.length; }
+      let fin = resto.lastIndexOf('</row>');
+      if (fin < 0 && !done) continue;
+      const bloque = fin >= 0 ? resto.slice(0, fin + 6) : resto;
+      resto = fin >= 0 ? resto.slice(fin + 6) : '';
+      let a = 0;
+      for (;;) {
+        const i = bloque.indexOf('<row', a); if (i < 0) break;
+        const j = bloque.indexOf('</row>', i); if (j < 0) break;
+        const fila = bloque.slice(i, j); a = j + 6;
+        if (fila.indexOf('<v>') < 0 && fila.indexOf('<t') < 0) continue;   // fila solo con formato
+        const vals = []; let hay = false; reCel.lastIndex = 0; let m;
+        while ((m = reCel.exec(fila))) {
+          const cuerpo = m[3]; if (!cuerpo) continue;
+          const tipo = (m[2].match(/\bt="([^"]+)"/) || [])[1] || 'n';
+          let v;
+          if (tipo === 'inlineStr') { const t = cuerpo.match(/<t\b[^>]*>([\s\S]*?)<\/t>/); v = t ? desXml(t[1]) : ''; }
+          else { const vv = cuerpo.match(/<v>([\s\S]*?)<\/v>/); if (!vv) continue; v = vv[1];
+            if (tipo === 's') v = ss[parseInt(v, 10)]; else if (tipo === 'str' || tipo === 'e') v = desXml(v); else if (tipo === 'b') v = v === '1'; else v = parseFloat(v); }
+          vals[colIdx(m[1])] = v; hay = true;
+        }
+        if (hay) onRow(vals);
+      }
+      if (onProgreso && leidos - ultimoAviso > 40e6) { ultimoAviso = leidos; onProgreso(nombreHoja, leidos); }
+      if (done) break;
+    }
+  }
+}
+async function invduvSincronizar(inputEl) {
+  const file = inputEl && inputEl.files && inputEl.files[0];
+  if(inputEl) inputEl.value = '';
+  if(!file) return;
+  if(MODO_OFFLINE) { toast('Sin conexión a Supabase', 'er'); return; }
+  const box = document.getElementById('invduv-status');
+  const log = t => { if(box){ box.style.display='block'; box.textContent += (box.textContent?'\n':'') + t; box.scrollTop = box.scrollHeight; } };
+  if(box) box.textContent = '';
+  const H = {'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json'};
+  const req = async (method, path, body, prefer) => {
+    const h = {...H}; if(prefer) h['Prefer'] = prefer;
+    for(let intento=1; intento<=3; intento++) {
+      const r = await fetch(SB_URL + '/rest/v1/' + path, {method, headers:h, body: body ? JSON.stringify(body) : undefined});
+      if(r.ok){ if(method!=='GET') sbcClear(String(path).split('?')[0]); return method==='GET' ? r.json() : null; }
+      const t = await r.text();
+      if(intento===3) throw new Error(r.status + ' ' + t.slice(0,300));
+      await new Promise(res => setTimeout(res, 1500*intento));
+    }
+  };
+  const str = v => v==null ? '' : String(v).trim();
+  const num = v => { if(v==null || v==='') return 0; const n = typeof v==='number' ? v : parseFloat(String(v).replace(/,/g,'')); return isFinite(n) ? n : 0; };
+  const r2 = n => Math.round(n*100)/100;
+  try {
+    log('📂 Leyendo ' + file.name + ' (' + (file.size/1048576).toFixed(1) + ' MB)… puede tardar 20-60 segundos');
+    if(typeof DecompressionStream === 'undefined') throw new Error('Este navegador no soporta la lectura del archivo; usa Chrome o Edge actualizados');
+    // Se guardan filas completas de INVENTARIO (pocas columnas) y, de VENTAS, solo las
+    // columnas que se usan (la hoja trae ~295 columnas × 46.000 filas).
+    const aI = [], aV = [];
+    const colsV = ['Periodo','Desc Tipo_cliente','Referencia Item','Valor_subtotal_local','Cantidad_inventario','Nombre Item','Desc_Item2 Item',
+                   'Tipo de Documento','Numero_documento','Fecha','Nombre Vendedor','Nombre Cliente_factura','Cliente_factura','Ciudad Factura Desc','Costo_prom_tot'];
+    let idxV = null;
+    await xlsxLeerHojasStream(file, {
+      'INVENTARIO': fila => aI.push(fila),
+      'VENTAS': fila => {
+        if(!idxV) {
+          aV.push(fila);
+          if(fila.includes('Periodo') && fila.includes('Valor_subtotal_local')) { idxV = colsV.map(c => fila.indexOf(c)).filter(i => i >= 0); }
+          return;
+        }
+        const f = []; idxV.forEach(i => { f[i] = fila[i]; }); aV.push(f);
+      }
+    }, (hoja, bytes) => log('   … ' + hoja + ': ' + Math.round(bytes/1048576) + ' MB procesados'));
+
+    const fechaISOdeCelda = v => {
+      if(v==null || v==='') return null;
+      if(typeof v === 'number') {
+        const d = new Date(Date.UTC(1899,11,30) + Math.round(v)*86400000);
+        return isNaN(d) ? null : d.toISOString().slice(0,10);
+      }
+      const t = str(v);
+      if(/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0,10);
+      const m = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+      if(m) { let [_,d,mo,y] = m; if(y.length===2) y = '20'+y; return y+'-'+String(mo).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
+      return null;
+    };
+
+    // ── INVENTARIO ──
+    const hI = aI.findIndex(r => r && r.includes('Referencia Item'));
+    if(hI<0) throw new Error('No encontré el encabezado "Referencia Item" en INVENTARIO');
+    const cI = {}; aI[hI].forEach((h,i) => { if(h && !(h in cI)) cI[h]=i; });
+    const inv = {};
+    for(let i=hI+1;i<aI.length;i++){
+      const r = aI[i]; const ref = str(r[cI['Referencia Item']]); if(!ref) continue;
+      const bod = str(r[cI['Bodega']]); const k = ref+'|'+bod;
+      const ex = num(r[cI['Cant_existencia_actual']]);
+      const fc = fechaISOdeCelda(r[cI['FECHA CREACION']]);
+      const fue = feISO(r[cI['Fecha_ult_entrada']]);
+      if(inv[k]) { if(fue && (!inv[k].fecha_ult_entrada || fue > inv[k].fecha_ult_entrada)) inv[k].fecha_ult_entrada = fue; inv[k].existencia += ex; if(fc && (!inv[k].fecha_creacion || fc < inv[k].fecha_creacion)) inv[k].fecha_creacion = fc; continue; }
+      inv[k] = {referencia:ref, bodega:bod, descripcion:str(r[cI['Nombre Item']]).slice(0,200), existencia:ex, costo_prom:r2(num(r[cI['Costo_prom_uni']])), um:str(r[cI['Unidad de Medida']]), fecha_creacion: fc, fecha_ult_entrada: fue, categoria: str(r[cI['Nombre Tipo de Inventario']])};
+    }
+    const invL = Object.values(inv); invL.forEach(x => x.existencia = r2(x.existencia));
+    log('📦 INVENTARIO: ' + invL.length + ' referencia+bodega');
+
+    // ── VENTAS ──
+    const hV = aV.findIndex(r => r && r.includes('Periodo') && r.includes('Valor_subtotal_local'));
+    if(hV<0) throw new Error('No encontré el encabezado de VENTAS');
+    const cV = {}; aV[hV].forEach((h,i) => { if(h && !(h in cV)) cV[h]=i; });
+    const hist = {}, cm = {}, mcMap = {}, rvDocs = {}, rcMap = {};
+    let lineas = 0;
+    const serialDe = f => {
+      if(typeof f === 'number') return Math.round(f);
+      const t = str(f); if(t.length < 8) return 0;
+      return Math.round((Date.UTC(+t.slice(0,4), +t.slice(4,6)-1, +t.slice(6,8)) - Date.UTC(1899,11,30)) / 86400000);
+    };
+    for(let i=hV+1;i<aV.length;i++){
+      const r = aV[i]; const per = str(r[cV['Periodo']]); if(per.length<6) continue;
+      lineas++;
+      const anio = parseInt(per.slice(0,4)), mes = parseInt(per.slice(4,6));
+      const canal = str(r[cV['Desc Tipo_cliente']]), ref = str(r[cV['Referencia Item']]);
+      const val = num(r[cV['Valor_subtotal_local']]), u = num(r[cV['Cantidad_inventario']]);
+      const kh = anio+'|'+mes+'|'+ref+'|'+canal;
+      if(!hist[kh]) hist[kh] = {anio, mes, referencia:ref, canal, descripcion:str(r[cV['Nombre Item']]).slice(0,200), categoria:str(r[cV['Desc_Item2 Item']]), unidades:0, valor_cop:0};
+      hist[kh].unidades += u; hist[kh].valor_cop += val;
+      const kc = anio+'|'+mes+'|'+canal;
+      if(!cm[kc]) cm[kc] = {anio, mes, canal, unidades:0, valor_cop:0};
+      cm[kc].unidades += u; cm[kc].valor_cop += val;
+      // Margen por Cliente — una fila por cliente (NIT) + mes, mismo formato que el módulo
+      const nit = str(r[cV['Cliente_factura']]);
+      if(nit) {
+        const mk = anio + '-' + String(mes).padStart(2,'0'), km = nit + '|' + mk;
+        if(!mcMap[km]) mcMap[km] = {'Cliente factura':nit, 'Razón social cliente factura':str(r[cV['Nombre Cliente_factura']]) || nit,
+          'Desc. tipo de cliente':canal, 'Cantidad inv.':0, 'Valor subtotal':0, 'Costo promedio total':0, _mesKey:mk, _mesLbl:MC_MESES[mes-1] + ' ' + anio};
+        const g = mcMap[km];
+        g['Cantidad inv.'] += u; g['Valor subtotal'] += val; g['Costo promedio total'] += num(r[cV['Costo_prom_tot']]);
+      }
+      // Qué clientes compran más cada referencia
+      if(nit && ref) {
+        const kr = ref + '|' + nit;
+        if(!rcMap[kr]) rcMap[kr] = {referencia:ref, cliente_nit:nit, cliente_nombre:str(r[cV['Nombre Cliente_factura']]) || nit, unidades:0, valor_cop:0};
+        rcMap[kr].unidades += u; rcMap[kr].valor_cop += val;
+      }
+      // Reporte Diario — una fila por factura (documento), agrupada por periodo
+      const tipoDoc = str(r[cV['Tipo de Documento']]), nroDoc = num(r[cV['Numero_documento']]);
+      if(tipoDoc && nroDoc) {
+        const perN = anio*100 + mes, doc = tipoDoc + '-' + String(Math.round(nroDoc)).padStart(8,'0');
+        const docs = rvDocs[perN] = rvDocs[perN] || {};
+        if(!docs[doc]) docs[doc] = {Fecha:serialDe(r[cV['Fecha']]), 'Nro documento':doc,
+          'Razon social cliente factura':str(r[cV['Nombre Cliente_factura']]), 'Nombre vendedor':str(r[cV['Nombre Vendedor']]),
+          'Desc. tipo de cliente':canal, 'Ciudad':str(r[cV['Ciudad Factura Desc']]), 'Valor subtotal local':0};
+        docs[doc]['Valor subtotal local'] += val;
+      }
+    }
+    const mcL = Object.values(mcMap).map(g => ({...g, 'Cantidad inv.':r2(g['Cantidad inv.']), 'Valor subtotal':r2(g['Valor subtotal']), 'Costo promedio total':r2(g['Costo promedio total'])}));
+    const rcL = Object.values(rcMap).map(g => ({...g, unidades:r2(g.unidades), valor_cop:r2(g.valor_cop), actualizado:new Date().toISOString()}));
+    const perMax = Math.max(...Object.keys(rvDocs).map(Number));
+    const rvDatos = Object.values(rvDocs[perMax] || {}).map(d => ({...d, 'Valor subtotal local':r2(d['Valor subtotal local'])}));
+    const rvFechas = [...new Set(rvDatos.map(d => d.Fecha).filter(Boolean))].sort((a,b) => a-b);
+    const rvTotal = r2(rvDatos.reduce((a,d) => a + d['Valor subtotal local'], 0));
+    const rvFechaISO = rvFechas.length ? (() => { const d = rvFecha(rvFechas[rvFechas.length-1]); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })() : null;
+    const email = (CU && CU.email) || 'portal';
+    const histL = Object.values(hist).map(x => ({...x, unidades:r2(x.unidades), valor_cop:r2(x.valor_cop), subido_por:email}));
+    const cmL   = Object.values(cm).map(x => ({...x, unidades:r2(x.unidades), valor_cop:r2(x.valor_cop), subido_por:email, fuente:'excel INV - DUV'}));
+    log('📈 VENTAS: ' + lineas.toLocaleString('es-CO') + ' líneas → ' + histL.length + ' filas histórico · ' + cmL.length + ' filas canal/mes');
+
+    // ── Subir inventario (actualizar + agregar, sin borrar) ──
+    log('🔍 Comparando con el inventario de Supabase…');
+    let exist = [], off = 0;
+    while(true){ const rows = await req('GET','inventario?select=id,referencia,bodega,categoria&order=id.asc&limit=1000&offset='+off); exist = exist.concat(rows); if(rows.length<1000) break; off += 1000; }
+    const idx = {}; const categoriaPorRef = {};
+    exist.forEach(r => {
+      const k = r.referencia+'|'+(r.bodega||''); (idx[k]=idx[k]||[]).push(r.id);
+      // Categoría ya asignada a esa referencia en OTRA bodega — se conserva al crear filas
+      // nuevas (p. ej. cuando el ítem se mueve o aparece en una bodega distinta).
+      if(r.categoria && String(r.categoria).trim() && !categoriaPorRef[r.referencia]) categoriaPorRef[r.referencia] = r.categoria;
+    });
+    const hoy = new Date(); const periodo = hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0')+'-'+String(hoy.getDate()).padStart(2,'0');
+    const ahora = hoy.toISOString(); const quien = (CU && CU.nombre) || 'Portal';
+    const upd = [], ins = [];
+    invL.forEach(x => {
+      const f = {descripcion:x.descripcion, existencia:x.existencia, costo_prom:x.costo_prom, um:x.um, periodo, subido_por:quien, actualizado:ahora, fecha_creacion:x.fecha_creacion||null, fecha_ult_entrada:x.fecha_ult_entrada||null};
+      f.categoria = x.categoria || categoriaPorRef[x.referencia] || null; // «Nombre Tipo de Inventario» del Excel (si no viene, conserva la que ya tenía)
+      const ids = idx[x.referencia+'|'+x.bodega];
+      if(ids) ids.forEach(id => upd.push({id, referencia:x.referencia, bodega:x.bodega, ...f}));
+      else ins.push({referencia:x.referencia, bodega:x.bodega, ubicacion:'', lote:'', categoria:x.categoria||categoriaPorRef[x.referencia]||null, ...f});
+    });
+    log('⬆️ Inventario: ' + upd.length + ' a actualizar · ' + ins.length + ' nuevas');
+    if(exist.length > 1000 && upd.length === 0 && ins.length > 500) throw new Error('Ninguna fila del Excel coincidió con el inventario de Supabase; se cancela para no duplicar.');
+    for(let i=0;i<upd.length;i+=500) await req('POST','inventario?on_conflict=id', upd.slice(i,i+500), 'resolution=merge-duplicates,return=minimal');
+    for(let i=0;i<ins.length;i+=500) await req('POST','inventario', ins.slice(i,i+500), 'return=minimal');
+    log('⬆️ Ventas histórico…');
+    for(let i=0;i<histL.length;i+=500) await req('POST','ventas_historico?on_conflict=anio,mes,referencia,canal', histL.slice(i,i+500), 'resolution=merge-duplicates,return=minimal');
+    log('⬆️ Ventas por canal/mes…');
+    await req('POST','ventas_canal_mes?on_conflict=anio,mes,canal', cmL, 'resolution=merge-duplicates,return=minimal');
+    if(rvFechaISO) {
+      log('⬆️ Reporte Diario: ' + rvDatos.length + ' facturas del mes (hasta ' + rvFechaISO + ') · $' + Math.round(rvTotal).toLocaleString('es-CO'));
+      await req('POST','rpc/invduv_actualizar_reporte', {p_fecha:rvFechaISO, p_datos:rvDatos, p_fechas:rvFechas, p_total:rvTotal, p_subido:email});
+    }
+    log('⬆️ Margen por Cliente: ' + mcL.length + ' filas cliente/mes');
+    await req('POST','rpc/invduv_actualizar_margen', {p_datos:mcL, p_subido:email, p_origen:'🔄 INV - DUV (Biable)'});
+    log('⬆️ Clientes por producto: ' + rcL.length + ' filas referencia+cliente');
+    for(let i=0;i<rcL.length;i+=500) await req('POST','ventas_cliente_producto?on_conflict=referencia,cliente_nit', rcL.slice(i,i+500), 'resolution=merge-duplicates,return=minimal');
+    await req('POST','configuracion?on_conflict=clave', [
+      {clave:'inv_ultima_actualizacion', valor:ahora, tipo:'texto'},
+      {clave:'invduv_ultima_sync', valor:JSON.stringify({fecha:ahora, origen:'portal', por:quien, archivo:file.name, inv:invL.length, hist:histL.length, cm:cmL.length}), tipo:'json'}
+    ], 'resolution=merge-duplicates,return=minimal');
+    log('🎉 Listo: inventario, ventas, Reporte Diario (facturas) y Margen por Cliente actualizados.');
+    // Que el Reporte Diario vuelva a leer el snapshot nuevo la próxima vez que se abra.
+    if(typeof RV !== 'undefined') { RV.cargado = false; RV.autoIntentado = false; }
+    toast('✅ INV - DUV sincronizado', 'ok');
+    INV_ACTUALIZADO = ahora;
+    await cargarInventarioSupa();
+    renderInvVista();
+  } catch(e) {
+    console.error(e);
+    log('❌ ERROR: ' + e.message + '\n   Puedes volver a intentarlo: no duplica datos.');
+    toast('Error sincronizando: ' + e.message, 'er');
+  }
+}
+async function subirExcelInventario(inputEl) {
+  const file = inputEl.files[0];
+  if(!file) return;
+
+  toast('📊 Procesando Excel...', 'inf');
+
+  try {
+    const data = await file.arrayBuffer();
+    const wb   = XLSX.read(data, {type:'array'});
+    const ws   = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, {header:1});
+
+    if(!rows.length) { toast('Excel vacío','er'); return; }
+
+    // Detectar la fila de encabezados (en el Excel de Biable/SIESA "Referencia Item" está en la fila 3, no en la 1)
+    let hr = 0;
+    for(let i=0; i<Math.min(rows.length,15); i++){ if(rows[i] && rows[i].some(c => String(c||'').toLowerCase().trim()==='referencia item')){ hr = i; break; } }
+    const headers = rows[hr].map(h => String(h||'').toLowerCase().trim());
+    console.log('Headers detectados:', headers);
+
+    // Mapear columnas del reporte de Siesa
+    // Formato: Referencia, Desc. item, Costo prom. unit., Costo prom. uni., ..., Bodega, Ubicación, Lote, U.M., Existencia
+    const iRef   = headers.findIndex(h => h.includes('referencia') || h === 'ref');
+    let iDesc  = headers.findIndex(h => h === 'nombre item');
+    if(iDesc < 0) iDesc = headers.findIndex(h => h.includes('desc') || h.includes('descripcion') || h.includes('ítem') || h.includes('item'));
+    let iCosto = headers.findIndex(h => h === 'costo_prom_uni');
+    if(iCosto < 0) iCosto = headers.findIndex(h => h.includes('costo prom. uni') && !h.includes('ins'));
+    const iCat   = headers.findIndex(h => h === 'nombre tipo de inventario');
+    const iFcr   = headers.findIndex(h => h === 'fecha creacion' || h === 'fecha_creacion item');
+    const iFue   = headers.findIndex(h => h === 'fecha_ult_entrada');
+    const iBod   = headers.findIndex(h => h === 'bodega');
+    const iUbic  = headers.findIndex(h => h.includes('ubicaci'));
+    const iLote  = headers.findIndex(h => h === 'lote');
+    const iUM    = headers.findIndex(h => h === 'u.m.' || h === 'um' || h === 'u.m' || h === 'unidad de medida');
+    let iExist = headers.findIndex(h => h === 'cant_existencia_actual');
+    if(iExist < 0) iExist = headers.findIndex(h => h === 'existencia' || h.includes('existenci'));
+
+    if(iRef < 0 || iExist < 0) {
+      toast('No se reconoció el formato. Asegúrate de usar el reporte de existencias de Siesa.','er');
+      return;
+    }
+
+    // Parsear filas
+    const periodo = new Date().toISOString().split('T')[0];
+    const registros = [];
+    const fcDe = v => { if(v==null||v==='') return null; if(typeof v==='number'){ const d=new Date(Date.UTC(1899,11,30)+Math.round(v)*86400000); return isNaN(d)?null:d.toISOString().slice(0,10); } const t=String(v).trim(); return /^\d{4}-\d{2}-\d{2}/.test(t)?t.slice(0,10):null; };
+    for(let i=hr+1; i<rows.length; i++) {
+      const row = rows[i];
+      if(!row || !row[iRef]) continue;
+      const ref   = String(row[iRef]||'').trim();
+      const exist = parseFloat(String(row[iExist]||'0').replace(/[^0-9.-]/g,'')) || 0;
+      if(!ref) continue;
+      registros.push({
+        referencia:  ref,
+        descripcion: iDesc  >= 0 ? String(row[iDesc]||'').trim()  : '',
+        costo_prom:  iCosto >= 0 ? parseFloat(String(row[iCosto]||'0').replace(/[^0-9.-]/g,''))||0 : 0,
+        existencia:  exist,
+        bodega:      iBod   >= 0 ? String(row[iBod]||'').trim()   : '',
+        ubicacion:   iUbic  >= 0 ? String(row[iUbic]||'').trim()  : '',
+        lote:        iLote  >= 0 ? String(row[iLote]||'').trim()  : '',
+        um:          iUM    >= 0 ? String(row[iUM]||'').trim()     : '',
+        subido_por:  CU ? CU.nombre : 'Usuario',
+        periodo:     periodo,
+        ...(iCat >= 0 && String(row[iCat]||'').trim() ? {categoria: String(row[iCat]).trim()} : {}),
+        ...(iFcr >= 0 && fcDe(row[iFcr]) ? {fecha_creacion: fcDe(row[iFcr])} : {}),
+        ...(iFue >= 0 && feISO(row[iFue]) ? {fecha_ult_entrada: feISO(row[iFue])} : {}),
+      });
+    }
+
+    if(!registros.length) { toast('No se encontraron datos válidos en el Excel','er'); return; }
+
+    toast('⬆️ Subiendo ' + registros.length + ' registros a Supabase...', 'inf');
+
+    // Borrar inventario anterior y subir nuevo en lotes de 200
+    if(!MODO_OFFLINE) {
+      // Cargar inventario actual de Supabase para comparar
+      toast('🔍 Comparando con inventario anterior...', 'inf');
+      let existentes = {}, categoriaPorRef = {};
+      try {
+        const rows = await invTodasLasFilas('referencia,bodega,existencia,costo_prom,categoria');
+        rows.forEach(function(r){
+          existentes[r.referencia + '_' + (r.bodega||'')] = r;
+          // Categoría ya asignada a esa referencia en OTRA bodega — se conserva al crear filas
+          // nuevas (p. ej. cuando el ítem se mueve o aparece en una bodega distinta).
+          if(r.categoria && String(r.categoria).trim() && !categoriaPorRef[r.referencia]) categoriaPorRef[r.referencia] = r.categoria;
+        });
+      } catch(e) { console.warn('No se pudo cargar anterior:', e); }
+
+      // Separar en nuevos vs actualizados
+      const nuevos = [], actualizados = [];
+      let sinCambio = 0;
+
+      registros.forEach(function(r) {
+        var key = r.referencia + '_' + (r.bodega||'');
+        var ant = existentes[key];
+        if(!ant) {
+          if(categoriaPorRef[r.referencia]) r.categoria = categoriaPorRef[r.referencia];
+          nuevos.push(r);
+        } else {
+          // Verificar si cambió existencia o costo
+          var existCambio = Math.abs(parseFloat(r.existencia||0) - parseFloat(ant.existencia||0)) > 0.01;
+          var costoCambio = Math.abs(parseFloat(r.costo_prom||0) - parseFloat(ant.costo_prom||0)) > 1;
+          var catCambio = !!(r.categoria && r.categoria !== ant.categoria);
+          if(existCambio || costoCambio || catCambio) {
+            actualizados.push(r);
+          } else {
+            sinCambio++;
+          }
+        }
+      });
+
+      toast('📊 ' + nuevos.length + ' nuevos · ' + actualizados.length + ' actualizados · ' + sinCambio + ' sin cambio', 'inf');
+
+      // Insertar nuevos en lotes de 200
+      const lote = 200;
+      if(nuevos.length > 0) {
+        for(let i=0; i<nuevos.length; i+=lote) {
+          await sb.post('inventario', nuevos.slice(i, i+lote));
+        }
+      }
+
+      // Actualizar los que cambiaron (patch por referencia+bodega)
+      for(let i=0; i<actualizados.length; i++) {
+        const r = actualizados[i];
+        try {
+          await sb.patch('inventario',
+            'referencia=eq.' + encodeURIComponent(r.referencia) + '&bodega=eq.' + encodeURIComponent(r.bodega||''),
+            Object.assign({ existencia: r.existencia, costo_prom: r.costo_prom, periodo: r.periodo, subido_por: r.subido_por }, r.categoria ? {categoria: r.categoria} : {}, r.fecha_creacion ? {fecha_creacion: r.fecha_creacion} : {}, r.fecha_ult_entrada ? {fecha_ult_entrada: r.fecha_ult_entrada} : {})
+          );
+        } catch(e) { console.warn('Error actualizando', r.referencia, e); }
+        // Progress cada 50
+        if(i % 50 === 0) toast('Actualizando ' + i + '/' + actualizados.length + '...', 'inf');
+      }
+
+      toast('✅ ' + nuevos.length + ' nuevos · ' + actualizados.length + ' actualizados · ' + sinCambio + ' sin cambio', 'ok');
+
+      // Guardar la fecha/hora de esta sincronización en Supabase (visible para
+      // todos, no solo en este navegador) — es lo que se muestra en el header.
+      const tsSync = new Date().toISOString();
+      try {
+        await sb.upsert('configuracion', {clave:'inv_ultima_actualizacion', valor: tsSync, tipo:'texto'}, 'clave');
+        INV_ACTUALIZADO = tsSync;
+      } catch(e) { console.warn('No se pudo guardar la fecha de última actualización:', e); }
+    }
+
+    // Actualizar local
+    INV_DATA = registros;
+    INV_PERIODO = periodo;
+    INV_SUBIDO_POR = CU ? CU.nombre : 'Usuario';
+
+    // Mostrar resumen de la subida
+    const resumenSubida = document.getElementById('inv-resumen-subida');
+    if(resumenSubida) {
+      resumenSubida.innerHTML = '<div style="background:var(--grd);border:1px solid var(--gr);border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:var(--gr);">'
+        + '✅ <strong>Inventario actualizado</strong> · '
+        + registros.length + ' referencias procesadas'
+        + '</div>';
+    }
+    renderInvVista();
+
+  } catch(e) {
+    toast('Error procesando Excel: ' + e.message, 'er');
+    console.error(e);
+  }
+}
+const CANALES_DEFAULT = ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara','Proyectos','Especializado','Online','Hard Discount','Canal Moderno','Constructoras','Empleados'];
 var PV_CAT_RP = null;
+var feISO = v => { if(v==null||v==='') return null; if(typeof v==='number'){ if(v>=20000101&&v<=29991231){ const t=String(v); return t.slice(0,4)+'-'+t.slice(4,6)+'-'+t.slice(6,8); } if(v>30000&&v<80000){ const d=new Date(Date.UTC(1899,11,30)+Math.round(v)*86400000); return isNaN(d)?null:d.toISOString().slice(0,10); } return null; } const t=String(v).trim(); let m=t.match(/^(\d{4})(\d{2})(\d{2})$/); if(m) return t==='00000000'?null:m[1]+'-'+m[2]+'-'+m[3]; if(/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0,10); return feISO(parseFloat(t)); };
+function pvVariantesRefs(refs){ const v=new Set(); (refs||[]).forEach(s=>{ s=String(s==null?'':s).trim(); if(!s) return; v.add(s); if(/^\d+$/.test(s)){ const k=s.replace(/^0+/,'')||'0'; v.add(k); for(let L=3;L<=8;L++) v.add(k.padStart(L,'0')); } }); return [...v]; }
 function pvClaveRef(s){ s=String(s==null?'':s).trim(); return /^\d+$/.test(s) ? (s.replace(/^0+/,'')||'0') : s; }
 async function pvCatRPCargar(){
   if(PV_CAT_RP) return PV_CAT_RP;
@@ -16758,6 +18249,7 @@ async function pvCatRPCargar(){
   }catch(e){ console.warn('Categorías RP:', e); }
   PV_CAT_RP = m; return m;
 }
+async function pvCatRP(ref){ const m = await pvCatRPCargar(); return m[pvClaveRef(ref)] || ''; }
 var RV = {
   datos:[], td:{}, consolidado:{}, recaudo:[], semana:[], pptoCanal:{},
   fechas:[], cargado:false, tabActivo:'resumen',
@@ -16779,6 +18271,7 @@ var RV = {
   // Forma: { valor: number } | null.
   compAnioAnterior: null
 };
+const rvFecha = n => { const d=new Date(1899,11,30); d.setDate(d.getDate()+n); return d; };
 const sc = sessionStorage.getItem('ilx_cu');
 // ═══ Arranque propio de ABASTECIMIENTO (versión liviana) ═══
 function renderComextMod() {
@@ -16786,8 +18279,8 @@ function renderComextMod() {
   if (!CE_MOD_TABS.includes(REABAST.tab)) REABAST.tab = 'ce_hoy';
   return renderReabastMod();
 }
-const pgMap = { reabast: renderReabastMod, comext: renderComextMod, tesoreria: renderTesoreriaMod, compras: renderComprasMod };
-const ABAST_TABS = [['reabast', '🔁', 'Abastecimiento'], ['comext', '🌐', 'Comercio Exterior'], ['tesoreria', '💸', 'Tesorería'], ['compras', '🛒', 'Módulo de compras']];
+const pgMap = { reabast: renderReabastMod, comext: renderComextMod, inv: renderInvAbast, tesoreria: renderTesoreriaMod, compras: renderComprasMod };
+const ABAST_TABS = [['reabast', '🔁', 'Abastecimiento'], ['comext', '🌐', 'Comercio Exterior'], ['inv', '📦', 'Inventario'], ['tesoreria', '💸', 'Tesorería'], ['compras', '🛒', 'Módulo de compras']];
 function buildNav() {
   const n = document.getElementById('nav'); if (!n) return;
   n.innerHTML = ABAST_TABS.map(t => '<div class="nt" id="tab-' + t[0] + '" onclick="goPage(\'' + t[0] + '\')">' + t[1] + ' ' + t[2] + '</div>').join('');
@@ -16832,6 +18325,130 @@ async function startApp() {
     else { sessionStorage.removeItem('ilx_cu'); localStorage.removeItem('ilx_cu'); }
   } catch (e) { sessionStorage.removeItem('ilx_cu'); localStorage.removeItem('ilx_cu'); }
 })();
+
+// ═══ Inventario · Seguimiento para Abastecimiento ═══
+// 1) Inventario disponible (bodegas configuradas) 2) En tránsito = lo ordenado que no ha ingresado (USD × 1,15 × TRM)
+// 3) Regular vs descontinuado (clasificación cargada del Excel BASE DE PRODUCTO) 4) Regulares agotados por canal con fecha de llegada
+const IVS = { bodegas: ['BA', 'BS', 'BV', 'RI', 'RE', 'HC'], clasif: null, tab: 'seg', trm: null, trmFecha: '', canal: '', q: '' };
+const ivsE = s => (typeof reabastEsc === 'function' ? reabastEsc(s) : String(s == null ? '' : s));
+const ivsN = n => Math.round(Number(n) || 0).toLocaleString('es-CO');
+const ivsM = n => '$ ' + ivsN(n);
+const ivsFd = d => d ? new Date(d).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+async function ivsCfg() {
+  try {
+    const rows = await sb.get('configuracion', 'clave=in.(inv_bodegas_disp,inv_clasif,teso_trm_fecha)');
+    (rows || []).forEach(r => {
+      let v = r.valor; try { if (typeof v === 'string') v = JSON.parse(v); } catch (e) { }
+      if (r.clave === 'inv_bodegas_disp' && Array.isArray(v) && v.length) IVS.bodegas = v.map(x => String(x).toUpperCase());
+      if (r.clave === 'inv_clasif') IVS.clasif = v && v.d ? v : null;
+      if (r.clave === 'teso_trm_fecha' && v) { const ks = Object.keys(v).sort(); if (ks.length) { IVS.trmFecha = ks[ks.length - 1]; if (IVS.trm == null) IVS.trm = Number(v[IVS.trmFecha]) || null; } }
+    });
+  } catch (e) { console.warn('ivsCfg', e); }
+}
+async function renderInvAbast() {
+  const pg = document.getElementById('pg-inv'); if (!pg) return;
+  if (!document.getElementById('ivs-bar')) pg.insertAdjacentHTML('afterbegin', '<div id="ivs-bar" style="display:flex;gap:6px;margin:0 0 12px;"></div><div id="inv-seg"></div>');
+  ivsBar();
+  const seg = document.getElementById('inv-seg'); seg.innerHTML = '<div class="empty">Cargando inventario y órdenes de compra…</div>';
+  ivsVista();
+  const oc = (async () => { try { if (!REABAST.ordenesCompra) await cargarOC(); } catch (e) { } try { await cblCargar(); } catch (e) { } try { await invCanalesCargar(); } catch (e) { } })();
+  await Promise.all([renderInventarioMod(), ivsCfg(), oc]);
+  ivsPintar();
+}
+function ivsBar() {
+  const b = document.getElementById('ivs-bar'); if (!b) return;
+  b.innerHTML = [['seg', '📊 Seguimiento'], ['det', '📦 Detalle del inventario']].map(t => '<button class="btn ' + (IVS.tab === t[0] ? 'btn-bl' : 'btn-g') + '" onclick="IVS.tab=\'' + t[0] + '\';ivsBar();ivsVista()">' + t[1] + '</button>').join('');
+}
+function ivsVista() { const s = document.getElementById('inv-seg'), d = document.getElementById('inv-content'); if (s) s.style.display = IVS.tab === 'seg' ? '' : 'none'; if (d) d.style.display = IVS.tab === 'det' ? '' : 'none'; }
+function ivsCalc() {
+  const set = new Set(IVS.bodegas), por = {}, bod = {}, cl = new Set((IVS.clasif && IVS.clasif.d) || []);
+  (typeof INV_DATA !== 'undefined' ? INV_DATA : []).forEach(r => {
+    const k = pvClaveRef(r.referencia), b = String(r.bodega || '').trim().toUpperCase(), ex = Number(r.existencia) || 0, c = Number(r.costo_prom) || 0;
+    const p = por[k] = por[k] || { k, ref: r.referencia, desc: r.descripcion || '', disp: 0, valor: 0 };
+    if (!p.desc && r.descripcion) p.desc = r.descripcion;
+    if (set.has(b)) { p.disp += ex; p.valor += ex * c; bod[b] = bod[b] || { u: 0, v: 0 }; bod[b].u += ex; bod[b].v += ex * c; }
+  });
+  const refs = Object.values(por); refs.forEach(p => p.desc_ = cl.has(p.k));
+  // en tránsito: lo ordenado que aún no ingresó
+  const trmDef = IVS.trm || 0, tr = [], pendRef = {};
+  (REABAST.ordenesCompra || []).forEach(o => {
+    if (['cancelada', 'suspendida', 'completada'].includes(o.estado_general)) return; let ing = false; try { ing = ocIngresada(o); } catch (e) { } if (ing) return;
+    let L = null; try { L = ceLlegada(o); } catch (e) { }
+    const items = REABAST.ocItems[o.id] || [], trm = Number(o.trm) || trmDef; let uds = 0, usd = 0, sinFob = 0;
+    items.forEach(it => {
+      let pend = 0; try { pend = ocPendItem(o, it); } catch (e) { pend = Number(it.cantidad) || 0; } if (!(pend > 0)) return;
+      const M = (REABAST.referenciasMaestro || {})[String(it.referencia || '').trim()] || {}, fob = Number(it.precio_fob_usd) || Number(M.fob_usd) || 0; if (!fob) sinFob++;
+      uds += pend; usd += pend * fob; const k = pvClaveRef(it.referencia); (pendRef[k] = pendRef[k] || []).push({ oc: o.numero_oc, pend, fecha: L && L.fecha ? L.fecha : null, estim: !!(L && (L.estimada || L.corregida)) });
+    });
+    if (uds > 0) tr.push({ oc: o.numero_oc, prov: o.proveedor || '', fecha: L && L.fecha ? L.fecha : null, estim: !!(L && (L.estimada || L.corregida)), uds, usd, trm, cop: usd * 1.15 * trm, sinFob });
+  });
+  tr.sort((a, b) => (a.fecha || 8e15) - (b.fecha || 8e15));
+  return { refs, bod, tr, pendRef };
+}
+function ivsPintar() {
+  const seg = document.getElementById('inv-seg'); if (!seg) return;
+  const C = ivsCalc(), reg = C.refs.filter(p => !p.desc_), des = C.refs.filter(p => p.desc_);
+  const sum = (L, k) => L.reduce((a, p) => a + p[k], 0), hay = !!(IVS.clasif && IVS.clasif.d);
+  const tile = (v, l, c) => '<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:10px 16px;min-width:190px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'var(--tx)') + ';">' + v + '</div><div style="font-size:10.5px;color:var(--mu);">' + l + '</div></div>';
+  const totDisp = sum(C.refs, 'valor'), totTr = C.tr.reduce((a, x) => a + x.cop, 0);
+  // 4) agotados regulares
+  const ago = reg.filter(p => !(p.disp > 0)).map(p => { const cn = (typeof INV_CANALES_MAP !== 'undefined' && INV_CANALES_MAP && INV_CANALES_MAP[p.k]) || []; const ll = (C.pendRef[p.k] || []).slice().sort((a, b) => (a.fecha || 8e15) - (b.fecha || 8e15))[0]; return { p, canales: cn.length ? cn : ['Sin canal asignado'], ll }; });
+  const canales = [...new Set(ago.flatMap(a => a.canales))].sort();
+  const q = (IVS.q || '').toLowerCase().trim(), fil = ago.filter(a => (!IVS.canal || a.canales.includes(IVS.canal)) && (!q || (a.p.ref + ' ' + a.p.desc).toLowerCase().includes(q))).sort((a, b) => ((a.ll && a.ll.fecha) || 8e15) - ((b.ll && b.ll.fecha) || 8e15));
+  const porCanal = canales.map(c => ({ c, n: ago.filter(a => a.canales.includes(c)).length, conLl: ago.filter(a => a.canales.includes(c) && a.ll).length }));
+  const th = (t, r) => '<th' + (r ? ' style="text-align:right;"' : '') + '>' + t + '</th>';
+  seg.innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">${tile(ivsM(totDisp), 'Inventario DISPONIBLE · bodegas ' + IVS.bodegas.join(', '), 'var(--bl)')}${tile(ivsM(totTr), 'En tránsito (ordenado sin ingresar) · USD × 1,15 × TRM', '#b45309')}${tile(ivsM(totDisp + totTr), 'Disponible + tránsito')}${tile(ago.length + '', 'Regulares agotados', ago.length ? '#991b1b' : '#16a34a')}</div>
+  <div class="card" style="margin-bottom:12px;"><div class="ch"><div class="ct">1️⃣ Inventario disponible para la compañía</div></div><div class="cb">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><span class="arte-mu" style="font-size:11.5px;">Solo suman las bodegas:</span><input id="ivs-bod" class="inp" style="width:210px;font-size:12px;" value="${ivsE(IVS.bodegas.join(', '))}"><button class="btn btn-g btn-sm" onclick="ivsGuardarBodegas()">Guardar bodegas</button></div>
+    <div class="tw"><table class="cbl-t"><thead><tr>${th('Bodega')}${th('Unidades', 1)}${th('Valor (costo prom.)', 1)}${th('% del total', 1)}</tr></thead><tbody>${Object.keys(C.bod).sort((a, b) => C.bod[b].v - C.bod[a].v).map(b => `<tr><td><b>${ivsE(b)}</b></td><td style="text-align:right;">${ivsN(C.bod[b].u)}</td><td style="text-align:right;">${ivsM(C.bod[b].v)}</td><td style="text-align:right;">${totDisp ? (C.bod[b].v / totDisp * 100).toFixed(1) : 0}%</td></tr>`).join('')}<tr style="font-weight:800;background:var(--s1);"><td>TOTAL DISPONIBLE</td><td style="text-align:right;">${ivsN(sum(C.refs, 'disp'))}</td><td style="text-align:right;">${ivsM(totDisp)}</td><td></td></tr></tbody></table></div></div></div>
+  <div class="card" style="margin-bottom:12px;"><div class="ch"><div class="ct">2️⃣ Inventario en tránsito</div><div class="arte-mu" style="font-size:11px;">todo lo ordenado que aún no ingresa · valor en USD × 1,15 × TRM</div></div><div class="cb">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><span class="arte-mu" style="font-size:11.5px;">TRM usada (si la OC no trae la suya)${IVS.trmFecha ? ' · última registrada ' + ivsE(IVS.trmFecha) : ''}:</span><input type="number" class="inp" style="width:110px;font-size:12px;" value="${IVS.trm || ''}" onchange="IVS.trm=Number(this.value)||null;ivsPintar()"><button class="btn btn-g btn-sm" onclick="ivsExcelTransito()">⬇ Excel</button></div>
+    ${C.tr.length ? `<div class="tw" style="max-height:420px;overflow:auto;"><table class="cbl-t"><thead><tr>${th('OC')}${th('Proveedor')}${th('Llegada')}${th('Unidades pend.', 1)}${th('Valor USD', 1)}${th('× 1,15', 1)}${th('TRM', 1)}${th('Valor COP', 1)}</tr></thead><tbody>${C.tr.map(x => `<tr><td><b>${ivsE(x.oc)}</b></td><td>${ivsE(x.prov)}</td><td>${x.fecha ? (x.estim ? '≈ ' : '') + ivsFd(x.fecha) : '—'}</td><td style="text-align:right;">${ivsN(x.uds)}</td><td style="text-align:right;">${ivsN(x.usd)}${x.sinFob ? ' <span title="Ítems sin precio FOB" style="color:#b45309;">⚠️</span>' : ''}</td><td style="text-align:right;">${ivsN(x.usd * 1.15)}</td><td style="text-align:right;">${ivsN(x.trm)}</td><td style="text-align:right;font-weight:700;">${ivsM(x.cop)}</td></tr>`).join('')}<tr style="font-weight:800;background:var(--s1);"><td colspan="3">TOTAL EN TRÁNSITO</td><td style="text-align:right;">${ivsN(C.tr.reduce((a, x) => a + x.uds, 0))}</td><td style="text-align:right;">${ivsN(C.tr.reduce((a, x) => a + x.usd, 0))}</td><td style="text-align:right;">${ivsN(C.tr.reduce((a, x) => a + x.usd * 1.15, 0))}</td><td></td><td style="text-align:right;">${ivsM(totTr)}</td></tr></tbody></table></div>` : '<div class="empty">No hay órdenes con saldo por ingresar.</div>'}</div></div>
+  <div class="card" style="margin-bottom:12px;"><div class="ch"><div class="ct">3️⃣ Clasificación: regular vs descontinuado</div></div><div class="cb">
+    ${hay ? '' : '<div class="alert" style="margin-bottom:8px;">Aún no hay clasificación cargada: todo se cuenta como regular. Sube el Excel BASE DE PRODUCTO (referencia + estado Activo / Descontinuado).</div>'}
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><label class="btn btn-bl btn-sm" style="cursor:pointer;">📥 Cargar BASE DE PRODUCTO (Excel)<input type="file" accept=".xlsx,.xls" style="display:none;" onchange="ivsCargarClasif(this)"></label>${hay ? '<span class="arte-mu" style="font-size:11px;">' + ivsE(IVS.clasif.archivo || '') + ' · ' + ivsE((IVS.clasif.fecha || '').slice(0, 10)) + ' · ' + ivsN(IVS.clasif.d.length) + ' descontinuadas</span>' : ''}</div>
+    <div class="tw"><table class="cbl-t"><thead><tr>${th('Clasificación')}${th('Referencias', 1)}${th('Con stock disp.', 1)}${th('Unidades disp.', 1)}${th('Valor disponible', 1)}${th('%', 1)}</tr></thead><tbody>
+      ${[['Regular (activo)', reg], ['Descontinuado', des]].map(([n, L]) => `<tr><td><b>${n}</b></td><td style="text-align:right;">${ivsN(L.length)}</td><td style="text-align:right;">${ivsN(L.filter(p => p.disp > 0).length)}</td><td style="text-align:right;">${ivsN(sum(L, 'disp'))}</td><td style="text-align:right;">${ivsM(sum(L, 'valor'))}</td><td style="text-align:right;">${totDisp ? (sum(L, 'valor') / totDisp * 100).toFixed(1) : 0}%</td></tr>`).join('')}
+      <tr style="font-weight:800;background:var(--s1);"><td>Total general</td><td style="text-align:right;">${ivsN(C.refs.length)}</td><td style="text-align:right;">${ivsN(C.refs.filter(p => p.disp > 0).length)}</td><td style="text-align:right;">${ivsN(sum(C.refs, 'disp'))}</td><td style="text-align:right;">${ivsM(totDisp)}</td><td></td></tr></tbody></table></div></div></div>
+  <div class="card"><div class="ch"><div class="ct">4️⃣ Productos regulares agotados · por canal y fecha de llegada</div></div><div class="cb">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"><span class="chip ${IVS.canal ? '' : 'on'}" onclick="IVS.canal='';ivsPintar()">Todos (${ago.length})</span>${porCanal.map(x => `<span class="chip ${IVS.canal === x.c ? 'on' : ''}" onclick="IVS.canal='${ivsE(x.c).replace(/'/g, '')}';ivsPintar()">${ivsE(x.c)} (${x.n})</span>`).join('')}</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><input class="inp" placeholder="🔎 Buscar referencia o descripción…" value="${ivsE(IVS.q)}" style="flex:1;min-width:220px;max-width:380px;" oninput="IVS.q=this.value;clearTimeout(window.__ivsT);window.__ivsT=setTimeout(()=>{ivsPintar();const i=document.querySelector('#inv-seg input[placeholder^=\\'🔎\\']');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},300)"><button class="btn btn-g btn-sm" onclick="ivsExcelAgotados()">⬇ Excel</button><span class="arte-mu" style="font-size:11px;">${fil.length} de ${ago.length} · ${ago.filter(a => a.ll).length} con orden en camino</span></div>
+    ${fil.length ? `<div class="tw" style="max-height:520px;overflow:auto;"><table class="cbl-t"><thead><tr>${th('Referencia')}${th('Descripción')}${th('Canal')}${th('Orden en camino')}${th('Unidades por llegar', 1)}${th('Fecha de llegada')}</tr></thead><tbody>${fil.slice(0, 600).map(a => `<tr><td style="font-family:monospace;font-weight:700;">${ivsE(a.p.ref)}</td><td style="font-size:11px;">${ivsE(a.p.desc)}</td><td style="font-size:11px;">${ivsE(a.canales.join(', '))}</td><td>${a.ll ? '<b>' + ivsE(a.ll.oc) + '</b>' : '<span style="color:#991b1b;font-weight:700;">Sin orden</span>'}</td><td style="text-align:right;">${a.ll ? ivsN((C.pendRef[a.p.k] || []).reduce((s, x) => s + x.pend, 0)) : '—'}</td><td>${a.ll && a.ll.fecha ? (a.ll.estim ? '≈ ' : '') + ivsFd(a.ll.fecha) : a.ll ? 'sin fecha' : '—'}</td></tr>`).join('')}</tbody></table></div>${fil.length > 600 ? '<div class="arte-mu" style="font-size:11px;">Se muestran las primeras 600; usa el filtro o el Excel.</div>' : ''}` : '<div class="empty">✅ No hay regulares agotados con ese filtro.</div>'}</div></div>`;
+  IVS._C = C; IVS._ago = fil;
+}
+async function ivsGuardarBodegas() {
+  const v = (document.getElementById('ivs-bod').value || '').split(/[,\s;]+/).map(x => x.trim().toUpperCase()).filter(Boolean); if (!v.length) { toast('Escribe al menos una bodega', 'er'); return; }
+  IVS.bodegas = v; try { await sb.upsert('configuracion', { clave: 'inv_bodegas_disp', valor: JSON.stringify(v), tipo: 'json' }, 'clave'); toast('Bodegas guardadas', 'ok'); } catch (e) { toast('No se pudo guardar: ' + e.message, 'er'); }
+  ivsPintar();
+}
+async function ivsCargarClasif(inp) {
+  const f = inp.files && inp.files[0]; if (!f) return;
+  try {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' }); let ok = false, D = new Set(), A = new Set();
+    for (const sn of wb.SheetNames) {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: '' });
+      for (let h = 0; h < Math.min(rows.length, 15); h++) {
+        const cr = rows[h].findIndex(c => /^(referencia|ref\.?|codigo|código|sku|item|cod\.? ?item)/i.test(String(c).trim())); if (cr < 0) continue;
+        let ce = -1; for (let c = 0; c < rows[h].length; c++) { if (c === cr) continue; const vals = rows.slice(h + 1, h + 400).map(r => String(r[c] == null ? '' : r[c])); if (vals.some(v => /descontinu/i.test(v)) && /estado|clasif|tipo|status|activo|descont/i.test(String(rows[h][c]) + ' ' + vals.slice(0, 50).join(' '))) { ce = c; break; } }
+        if (ce < 0) continue;
+        rows.slice(h + 1).forEach(r => { const rf = String(r[cr] == null ? '' : r[cr]).trim(); if (!rf) return; const k = pvClaveRef(rf); if (/descontinu/i.test(String(r[ce]))) D.add(k); else A.add(k); }); ok = true; break;
+      }
+      if (ok) break;
+    }
+    if (!ok || !D.size) { toast('No encontré columnas de referencia y estado (Activo / Descontinuado) en ese Excel', 'er'); inp.value = ''; return; }
+    const v = { d: [...D], a: A.size, archivo: f.name, fecha: new Date().toISOString() };
+    await sb.upsert('configuracion', { clave: 'inv_clasif', valor: JSON.stringify(v), tipo: 'json' }, 'clave'); IVS.clasif = v;
+    toast('Clasificación cargada: ' + D.size + ' descontinuadas · ' + A.size + ' activas', 'ok'); ivsPintar();
+  } catch (e) { toast('No pude leer el Excel: ' + e.message, 'er'); }
+  inp.value = '';
+}
+function ivsExcelTransito() {
+  const C = IVS._C; if (!C) return; const ws = XLSX.utils.aoa_to_sheet([['OC', 'Proveedor', 'Llegada', 'Unidades pendientes', 'Valor USD', 'USD x 1,15', 'TRM', 'Valor COP']].concat(C.tr.map(x => [x.oc, x.prov, x.fecha ? new Date(x.fecha).toISOString().slice(0, 10) : '', Math.round(x.uds), Math.round(x.usd), Math.round(x.usd * 1.15), x.trm, Math.round(x.cop)]))), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'En transito'); XLSX.writeFile(wb, 'Inventario_en_transito_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+}
+function ivsExcelAgotados() {
+  const L = IVS._ago || []; const ws = XLSX.utils.aoa_to_sheet([['Referencia', 'Descripción', 'Canal', 'Orden en camino', 'Unidades por llegar', 'Fecha de llegada']].concat(L.map(a => [a.p.ref, a.p.desc, a.canales.join(', '), a.ll ? a.ll.oc : 'Sin orden', a.ll ? Math.round((IVS._C.pendRef[a.p.k] || []).reduce((s, x) => s + x.pend, 0)) : '', a.ll && a.ll.fecha ? new Date(a.ll.fecha).toISOString().slice(0, 10) : '']))), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Agotados regulares'); XLSX.writeFile(wb, 'Regulares_agotados_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+}
+
 // ═══ Ordenar cualquier tabla al hacer clic en el encabezado (▲ menor→mayor, ▼ mayor→menor) ═══
 (function(){
   if(window.__sortTh) return; window.__sortTh = 1;
