@@ -10474,7 +10474,8 @@ async function cargarInventarioSupa() {
     invProgreso(92, 'Procesando referencias…');
     if(todas.length > 0) {
       INV_DATA = invDedup(todas);
-      try{ const mrp = await pvCatRPCargar(); INV_DATA.forEach(r=>{ if(!r.categoria) r.categoria = mrp[pvClaveRef(r.referencia)] || r.categoria; }); }catch(e){}
+      if(typeof MODO_ABAST!=='undefined' && MODO_ABAST) INV_DATA = INV_DATA.filter(r => !/^[PR]/i.test(String(r.referencia||'').trim()));   // Abastecimiento: se excluyen las referencias que empiezan por P o R
+      try{ const mrp = await pvCatRPCargar(); INV_DATA.forEach(r=>{ if(!r.categoria) r.categoria = mrp[pvClaveRef(r.referencia)] || r.categoria; if(!String(r.subcategoria||'').trim()) r.subcategoria = (PV_SUB_RP||{})[pvClaveRef(r.referencia)] || r.subcategoria; }); }catch(e){}
       INV_PERIODO = todas[0].periodo || '';
       INV_SUBIDO_POR = todas[0].subido_por || '';
     }
@@ -10590,7 +10591,7 @@ function renderInvVista() {
             <tr>
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Referencia</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Descripción</th>
-              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Categoría</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Subcategoría</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Existencia</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);" id="th-inv-cam">En camino</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Costo prom.</th>
@@ -10599,6 +10600,8 @@ function renderInvVista() {
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">U.M.</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);" id="th-inv-precio-lista">Precio lista</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);" title="Promedio de unidades vendidas por mes (últimos 6 meses completos)">Venta prom. / mes</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);" title="Existencia ÷ venta promedio mensual">Meses inv.</th>
+              <th style="background:var(--bg);padding:9px 12px;text-align:right;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);" title="(Existencia + lo que viene en camino) ÷ venta promedio mensual">Meses inv. + tránsito</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Listas</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">Canales</th>
               <th style="background:var(--bg);padding:9px 12px;text-align:left;font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);" title="Existencia + lo que llega − ventas promedio, mes a mes">Proyección 6 meses</th>
@@ -10875,7 +10878,9 @@ async function invExportarRotacion() {
     const hoy = new Date(), mk = (y,m)=>y*12+(m-1);
     const actual = mk(hoy.getFullYear(), hoy.getMonth()+1), desde = actual - 8;
     const dy = Math.floor(desde/12), dm = desde%12+1;
-    const rows = await sb.get('ventas_historico', 'select=referencia,anio,mes,unidades&or=(anio.gt.'+dy+',and(anio.eq.'+dy+',mes.gte.'+dm+'))');
+    let rows = await sb.get('ventas_historico', 'select=referencia,anio,mes,unidades,canal&or=(anio.gt.'+dy+',and(anio.eq.'+dy+',mes.gte.'+dm+'))');
+    rows = rows||[]; // ventas_historico trae filas repetidas (canal escrito distinto): se cuenta una sola vez
+    rows = rows.filter((function(){ const vis = new Set(); return r => { const kk = pvClaveRef(r.referencia)+'|'+r.anio+'|'+r.mes+'|'+String(r.canal||'').trim().toUpperCase()+'|'+(+r.unidades||0); if(vis.has(kk)) return false; vis.add(kk); return true; }; })());
     const tot = {}; (rows||[]).forEach(r=>{ const k=mk(r.anio,r.mes); tot[k]=(tot[k]||0)+(+r.unidades||0); });
     let ks = Object.keys(tot).map(Number).sort((a,b)=>a-b).filter(k=>k<actual);
     // descarta el último mes si quedó incompleto (< 60% del promedio de los 3 anteriores)
@@ -10934,6 +10939,7 @@ function poblarBodegas() {
 }
 
 async function filtrarInvMod() {
+  try{ invFiltIniciar(); }catch(e){}
   const q     = (document.getElementById('srch-inv-mod')||{value:''}).value.trim().toLowerCase();
   const bod   = (document.getElementById('fil-inv-bod')||{value:''}).value;
   const stock = (document.getElementById('fil-inv-stock')||{value:'todos'}).value;
@@ -10954,13 +10960,14 @@ async function filtrarInvMod() {
     if(!ref) return;
     if(!porRef[ref]) {
       porRef[ref] = {
-        referencia: ref, descripcion: r.descripcion||'', categoria: r.categoria||'',
+        referencia: ref, descripcion: r.descripcion||'', categoria: r.categoria||'', subcategoria: r.subcategoria||'',
         um: r.um||'', existencia: 0, valorTotal: 0, bodegas: [], bodQ: {}, fecha_creacion: r.fecha_creacion||null,
       };
     }
     const g = porRef[ref];
     if(!g.descripcion && r.descripcion) g.descripcion = r.descripcion;
     if(!g.categoria   && r.categoria)   g.categoria   = r.categoria;
+    if(!g.subcategoria && r.subcategoria) g.subcategoria = r.subcategoria;
     if(!g.um          && r.um)          g.um          = r.um;
     if(r.fecha_creacion && (!g.fecha_creacion || r.fecha_creacion < g.fecha_creacion)) g.fecha_creacion = r.fecha_creacion;
     const exist = parseFloat(r.existencia||0) || 0;
@@ -10974,6 +10981,7 @@ async function filtrarInvMod() {
     referencia:  g.referencia,
     descripcion: g.descripcion,
     categoria:   g.categoria,
+    subcategoria: g.subcategoria,
     um:          g.um,
     existencia:  g.existencia,
     costo_prom:  g.existencia > 0 ? (g.valorTotal / g.existencia) : 0,
@@ -11121,14 +11129,16 @@ function invVentaCelda(kc, exist){
   if(!INV_VPROM) return '<span style="color:var(--mu2)">'+(INV_VFALLO?'—':'…')+'</span>';
   const v = INV_VPROM[kc]; if(!v) return '<span style="color:var(--mu2)">Sin ventas</span>';
   const mes = exist > 0 ? exist / v : 0;
-  return '<b>'+Math.round(v).toLocaleString('es-CO')+'</b> <span style="color:var(--mu);font-size:10px;">und/mes</span>'+(exist>0?'<div style="font-size:10px;color:var(--mu);">≈ '+(mes>=10?Math.round(mes):mes.toFixed(1)).toString().replace('.',',')+' meses de inventario</div>':'');
+  return '<b>'+Math.round(v).toLocaleString('es-CO')+'</b> <span style="color:var(--mu);font-size:10px;">und/mes</span>'; void mes;
 }
 async function invVentasCargar(){
   if(INV_VPROM || INV_VCARGANDO || INV_VFALLO) return; INV_VCARGANDO = true;
   try{
     const hoy = new Date(), mk = (y,m)=>y*12+(m-1), actual = mk(hoy.getFullYear(), hoy.getMonth()+1), desde = actual - 8, dy = Math.floor(desde/12), dm = desde%12+1;
     let rows = [], off = 0;
-    for(;;){ const r = await sb.get('ventas_historico','select=referencia,anio,mes,unidades&or=(anio.gt.'+dy+',and(anio.eq.'+dy+',mes.gte.'+dm+'))&order=id.asc&limit=1000&offset='+off); rows = rows.concat(r||[]); if(!r || r.length < 1000 || off > 50000) break; off += 1000; }
+    for(;;){ const r = await sb.get('ventas_historico','select=referencia,anio,mes,unidades,canal&or=(anio.gt.'+dy+',and(anio.eq.'+dy+',mes.gte.'+dm+'))&order=id.asc&limit=1000&offset='+off); rows = rows.concat(r||[]); if(!r || r.length < 1000 || off > 50000) break; off += 1000; }
+    // ventas_historico trae filas repetidas (mismo ref/mes/unidades con el canal escrito distinto): se cuenta una sola vez
+    rows = rows.filter((function(){ const vis = new Set(); return r => { const kk = pvClaveRef(r.referencia)+'|'+r.anio+'|'+r.mes+'|'+String(r.canal||'').trim().toUpperCase()+'|'+(+r.unidades||0); if(vis.has(kk)) return false; vis.add(kk); return true; }; })());
     const tot = {}; rows.forEach(r => { const k = mk(r.anio, r.mes); tot[k] = (tot[k]||0) + (+r.unidades||0); });
     let ks = Object.keys(tot).map(Number).sort((a,b)=>a-b).filter(k=>k<actual);
     if(ks.length>=4){ const L = ks[ks.length-1], prev = ks.slice(-4,-1).reduce((a,k)=>a+tot[k],0)/3; if(tot[L] < prev*0.6) ks.pop(); }
@@ -11141,8 +11151,64 @@ async function invVentasCargar(){
 }
 var INV_CAM_DIAS = 30, INV_FILTRO_CAM = '';
 function invDescRef(){ const m = {}; (typeof INV_DATA!=='undefined'?INV_DATA:[]).forEach(r => { const k = pvClaveRef(r.referencia); if(!m[k] || (!m[k].d && r.descripcion)) m[k] = {d:r.descripcion||'', ex:(m[k]?m[k].ex:0)}; if(invBodegaCuenta(r.bodega)) m[k].ex += parseFloat(r.existencia||0)||0; }); return m; }
-(function(){ const st = document.createElement('style'); st.textContent = '#tbl-inv-mod.inv-flt>thead>tr>th:nth-child(7),#tbl-inv-mod.inv-flt>thead>tr>th:nth-child(9),#tbl-inv-mod.inv-flt>thead>tr>th:nth-child(10),#tbl-inv-mod.inv-flt>tbody>tr>td:nth-child(7),#tbl-inv-mod.inv-flt>tbody>tr>td:nth-child(9),#tbl-inv-mod.inv-flt>tbody>tr>td:nth-child(10),#tbl-inv-mod.inv-flt>thead>tr>th:nth-child(12),#tbl-inv-mod.inv-flt>thead>tr>th:nth-child(13),#tbl-inv-mod.inv-flt>tbody>tr>td:nth-child(12),#tbl-inv-mod.inv-flt>tbody>tr>td:nth-child(13){display:none}'; document.head.appendChild(st); })();
-function invPintarBtnCam(){ const tb = document.getElementById('tbl-inv-mod'); if(tb) tb.classList.toggle('inv-flt', !!INV_FILTRO_CAM); const h = document.getElementById('th-inv-cam'); if(h) h.textContent = INV_FILTRO_CAM === 'ingresos' ? 'Ingresó' : 'En camino'; const sd = document.getElementById('inv-ing-dias'); if(sd) sd.style.display = INV_FILTRO_CAM === 'ingresos' ? '' : 'none'; document.querySelectorAll('[data-camf]').forEach(b => { const on = b.dataset.camf === INV_FILTRO_CAM; b.style.outline = on ? '3px solid #f5c518' : 'none'; b.style.outlineOffset = '1px'; }); }
+(function(){ const st = document.createElement('style'); st.textContent = '#tbl-inv-mod>thead>tr>th:nth-child(10),#tbl-inv-mod>tbody>tr>td:nth-child(10),#tbl-inv-mod.inv-flt>thead>tr>th:nth-child(7),#tbl-inv-mod.inv-flt>thead>tr>th:nth-child(9),#tbl-inv-mod.inv-flt>tbody>tr>td:nth-child(7),#tbl-inv-mod.inv-flt>tbody>tr>td:nth-child(9),#tbl-inv-mod.inv-flt>thead>tr>th:nth-child(14),#tbl-inv-mod.inv-flt>thead>tr>th:nth-child(15),#tbl-inv-mod.inv-flt>tbody>tr>td:nth-child(14),#tbl-inv-mod.inv-flt>tbody>tr>td:nth-child(15){display:none} #tbl-inv-mod tr.cf-hide{display:none!important} .cf-btn{border:0;background:transparent;cursor:pointer;font-size:10px;color:var(--mu);padding:0 2px;margin-left:3px;border-radius:4px} .cf-btn:hover{background:rgba(37,99,235,.12);color:var(--bl)} .cf-btn.on{background:var(--bl);color:#fff} #cf-pop{position:fixed;z-index:99995;background:#fff;color:#0f172a;border:1px solid var(--b1,#cbd5e1);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.2);width:250px;padding:10px;font-size:12px;text-transform:none;font-weight:400} #cf-pop .cf-l{max-height:210px;overflow:auto;border:1px solid var(--b1,#e2e8f0);border-radius:6px;margin:6px 0;padding:3px 6px} #cf-pop label{display:flex;gap:6px;align-items:center;padding:2px 0;cursor:pointer}'; document.head.appendChild(st); })();
+// ── Filtros por columna tipo Excel (flechita ▾ en cada encabezado del Detalle por referencia) ──
+var INV_CF = {}, INV_CF_OBS = null;
+const INV_CF_NUM = {4:1,5:1,6:1,7:1,11:1,12:1,13:1};
+function invCfNum(t){ const m = String(t||'').replace(/\./g,'').replace(',', '.').match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : null; }
+function invCfVals(td, c){
+  if(c===8){ const b = [...td.querySelectorAll('b')].map(x=>x.textContent.trim()).filter(Boolean); return b.length ? b : [td.textContent.trim()||'—']; }
+  if(c===15){ const b = [...td.querySelectorAll('span')].map(x=>x.textContent.trim()).filter(Boolean); return b.length ? b : ['—']; }
+  if(c===14){ const b = [...td.querySelectorAll('span[title]')].map(x=>x.title.replace('Lista ','')).filter(Boolean); return b.length ? b : ['—']; }
+  if(c===11 || c===12 || c===13){ const sv = td.getAttribute('data-sv'); return [sv===''||sv==null ? '—' : (c===11 ? Math.round(+sv).toLocaleString('es-CO') : (+sv).toFixed(1).replace('.',','))]; }
+  const t = (td.innerText||td.textContent||'').split('\n')[0].replace(/\s+/g,' ').trim(); return [t || '—'];
+}
+function invCfNumDe(td, c){ if(c===11||c===12||c===13){ const sv = td.getAttribute('data-sv'); return sv===''||sv==null ? null : +sv; } return invCfNum((td.innerText||'').split('\n')[0]); }
+function invCfAplicar(){
+  const tb = document.getElementById('tbody-inv-mod'); if(!tb) return;
+  const act = Object.keys(INV_CF).filter(c=>{ const f=INV_CF[c]; return f && (f.set || f.min!=null || f.max!=null); });
+  let ocultoMain = false, vis = 0, tot = 0;
+  [...tb.children].forEach(tr=>{
+    if(tr.hasAttribute('data-det')){ tr.classList.toggle('cf-hide', ocultoMain); return; }
+    tot++; let ok = true;
+    for(const c of act){ const f = INV_CF[c], td = tr.children[c-1]; if(!td){ continue; }
+      if(f.set){ const vs = invCfVals(td, +c); if(!vs.some(v=>f.set.has(v))){ ok=false; break; } }
+      if(f.min!=null || f.max!=null){ const n = invCfNumDe(td, +c); if(n==null || (f.min!=null && n<f.min) || (f.max!=null && n>f.max)){ ok=false; break; } } }
+    tr.classList.toggle('cf-hide', !ok); ocultoMain = !ok; if(ok) vis++;
+  });
+  document.querySelectorAll('#tbl-inv-mod .cf-btn').forEach(b=>b.classList.toggle('on', act.includes(String(b.dataset.c))));
+  let cl = document.getElementById('inv-cf-clear'); const cnt = document.getElementById('inv-cnt');
+  if(!cl && cnt){ cl = document.createElement('span'); cl.id = 'inv-cf-clear'; cnt.parentNode.insertBefore(cl, cnt.nextSibling); }
+  if(cl){ cl.innerHTML = act.length ? ' · <b>'+vis+' de '+tot+'</b> con filtros de columna <a href="#" style="color:var(--bl);font-weight:700;" onclick="INV_CF={};invCfAplicar();return false;">✕ quitar filtros</a>' : ''; }
+}
+function invFiltIniciar(){
+  const tb = document.getElementById('tbl-inv-mod'); if(!tb) return;
+  [...tb.querySelectorAll('thead th')].forEach((th,i)=>{ if(i===9) return; if(!th.querySelector('.cf-btn')){ const b = document.createElement('button'); b.className='cf-btn'; b.dataset.c = i+1; b.textContent='▾'; b.title='Filtrar esta columna'; b.onclick = e=>{ e.stopPropagation(); e.preventDefault(); invCfAbrir(i+1, b); }; th.appendChild(b); } });
+  const body = document.getElementById('tbody-inv-mod');
+  if(body && INV_CF_OBS !== body){ if(window.__cfObs) try{ window.__cfObs.disconnect(); }catch(e){} window.__cfObs = new MutationObserver(()=>invCfAplicar()); window.__cfObs.observe(body,{childList:true}); INV_CF_OBS = body; }
+}
+function invCfAbrir(c, btn){
+  document.getElementById('cf-pop')?.remove();
+  const tb = document.getElementById('tbody-inv-mod'); const cnt = {};
+  [...tb.children].forEach(tr=>{ if(tr.hasAttribute('data-det')) return; const td = tr.children[c-1]; if(td) invCfVals(td, c).forEach(v=>{ cnt[v] = (cnt[v]||0)+1; }); });
+  const cur = INV_CF[c] || {}; const vals = Object.keys(cnt).sort((a,b)=>String(a).localeCompare(String(b),'es',{numeric:true})).slice(0,500);
+  const p = document.createElement('div'); p.id = 'cf-pop'; const r = btn.getBoundingClientRect();
+  p.style.top = Math.min(r.bottom+4, window.innerHeight-380)+'px'; p.style.left = Math.max(8, Math.min(r.left-120, window.innerWidth-262))+'px';
+  p.innerHTML = '<input class="inp" id="cf-q" placeholder="🔎 Buscar…" style="width:100%;font-size:12px;">'
+   + (INV_CF_NUM[c] ? '<div style="display:flex;gap:6px;margin-top:6px;"><input class="inp" id="cf-min" type="number" placeholder="Mín." value="'+(cur.min!=null?cur.min:'')+'" style="width:50%;font-size:12px;"><input class="inp" id="cf-max" type="number" placeholder="Máx." value="'+(cur.max!=null?cur.max:'')+'" style="width:50%;font-size:12px;"></div>' : '')
+   + '<div style="margin-top:6px;font-size:11px;"><a href="#" id="cf-all">Marcar todo</a> · <a href="#" id="cf-none">Ninguno</a></div><div class="cf-l" id="cf-l"></div>'
+   + '<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="btn btn-sm" id="cf-clr">Limpiar</button><button class="btn btn-sm btn-p" id="cf-ok">Aplicar</button></div>';
+  document.body.appendChild(p);
+  const sel = new Set(cur.set ? [...cur.set] : vals);
+  const pintar = ()=>{ const q = document.getElementById('cf-q').value.toLowerCase(); document.getElementById('cf-l').innerHTML = vals.filter(v=>String(v).toLowerCase().includes(q)).map(v=>'<label><input type="checkbox" value="'+String(v).replace(/"/g,'&quot;')+'" '+(sel.has(v)?'checked':'')+'> <span>'+String(v).replace(/</g,'&lt;')+'</span> <span style="color:#94a3b8;margin-left:auto;">'+cnt[v]+'</span></label>').join('') || '<div style="color:#94a3b8;padding:6px;">Sin valores</div>'; document.querySelectorAll('#cf-l input').forEach(i=>i.onchange=()=>{ i.checked ? sel.add(i.value) : sel.delete(i.value); }); };
+  pintar(); document.getElementById('cf-q').oninput = pintar; document.getElementById('cf-q').focus();
+  document.getElementById('cf-all').onclick = e=>{ e.preventDefault(); const q = document.getElementById('cf-q').value.toLowerCase(); vals.filter(v=>String(v).toLowerCase().includes(q)).forEach(v=>sel.add(v)); pintar(); };
+  document.getElementById('cf-none').onclick = e=>{ e.preventDefault(); const q = document.getElementById('cf-q').value.toLowerCase(); vals.filter(v=>String(v).toLowerCase().includes(q)).forEach(v=>sel.delete(v)); pintar(); };
+  document.getElementById('cf-clr').onclick = ()=>{ delete INV_CF[c]; p.remove(); invCfAplicar(); };
+  document.getElementById('cf-ok').onclick = ()=>{ const mn = INV_CF_NUM[c] ? document.getElementById('cf-min').value : '', mx = INV_CF_NUM[c] ? document.getElementById('cf-max').value : ''; INV_CF[c] = { set: sel.size === vals.length ? null : new Set(sel), min: mn===''?null:+mn, max: mx===''?null:+mx }; p.remove(); invCfAplicar(); };
+  setTimeout(()=>{ const off = e=>{ if(!p.contains(e.target) && e.target!==btn){ p.remove(); document.removeEventListener('mousedown', off); } }; document.addEventListener('mousedown', off); },0);
+}
+function invPintarBtnCam(){ const tb = document.getElementById('tbl-inv-mod'); if(tb) tb.classList.toggle('inv-flt', !!INV_FILTRO_CAM); { const th0 = document.getElementById('th-inv-cam'); if(th0){ const b0 = th0.querySelector('.cf-btn'); if(b0) b0.remove(); } } const h = document.getElementById('th-inv-cam'); if(h){ h.textContent = INV_FILTRO_CAM === 'ingresos' ? 'Ingresó' : 'En camino'; try{ invFiltIniciar(); }catch(e){} } const sd = document.getElementById('inv-ing-dias'); if(sd) sd.style.display = INV_FILTRO_CAM === 'ingresos' ? '' : 'none'; document.querySelectorAll('[data-camf]').forEach(b => { const on = b.dataset.camf === INV_FILTRO_CAM; b.style.outline = on ? '3px solid #f5c518' : 'none'; b.style.outlineOffset = '1px'; }); }
 function invFiltroCam(t){
   if(!REABAST.ordenesCompra){ toast('Cargando órdenes…','inf'); invCaminoCargar().then(()=>invFiltroCam(t)); return; }
   INV_FILTRO_CAM = INV_FILTRO_CAM === t ? '' : t; invPintarBtnCam();
@@ -11199,7 +11265,7 @@ function _renderFilasInv(mostrar, preciosMap) {
     return `<tr style="${rowStyle}" ${resaltada ? 'data-resaltada="1"' : ''}>
       <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${wfoto(r.referencia)}${wlnk(r.referencia,r.referencia||'')}${resaltada?' <span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">SIESA</span>':''}${esItemNuevo(r.fecha_creacion)?' <span style="background:#0891b2;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">🆕 NUEVO</span>':''}</td>
       <td style="padding:9px 12px;max-width:220px;font-weight:600;font-size:11px;">${(r.descripcion||'').substring(0,50)}</td>
-      <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.categoria||''}</td>
+      <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.subcategoria ? r.subcategoria : '<span style="color:#b91c1c;font-style:italic;">Sin subcategoría</span>'}</td>
       <td style="padding:9px 12px;text-align:right;${existColor}">${fmtN(exist)}</td>
       <td data-sv="${cam.length ? (MING ? cam[0].fecha.getTime() : camTot) : ''}" style="padding:9px 12px;text-align:right;white-space:nowrap;">${cam.length ? `<span data-camb="${kc}" style="font-weight:700;color:var(--bl);cursor:pointer;" title="Ver órdenes y fecha de llegada" onclick="invCaminoTog('${kc}')"><b>${abierto?'▾':'▸'}</b> ${fmtN(camTot)}</span><div style="font-size:10px;color:var(--mu);">${cam[0].fecha ? (MING?'ingresó ':'próx. ')+cam[0].fecha.toLocaleDateString('es-CO',{day:'2-digit',month:'short'}) : 'sin fecha'}</div>` : '<span style="color:var(--mu2)">—</span>'}</td>
       <td style="padding:9px 12px;text-align:right;font-size:11px;">${fmtCOP(costo)}</td>
@@ -11208,6 +11274,8 @@ function _renderFilasInv(mostrar, preciosMap) {
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.um||''}</td>
       <td style="padding:9px 12px;text-align:right;font-size:11px;color:var(--bl);font-weight:700;white-space:nowrap;">${invPrecioCelda(r.referencia)}</td>
       <td data-sv="${(INV_VPROM&&INV_VPROM[kc])?INV_VPROM[kc]:0}" style="padding:9px 12px;text-align:right;white-space:nowrap;">${invVentaCelda(kc, exist)}</td>
+      ${(()=>{ const v = INV_VPROM && INV_VPROM[kc]; const m = (v && exist>0) ? exist/v : null; return '<td data-sv="'+(m==null?'':m.toFixed(2))+'" style="padding:9px 12px;text-align:right;white-space:nowrap;font-weight:700;">'+(m==null?'<span style="color:var(--mu2);font-weight:400;">—</span>':(m>=10?Math.round(m):m.toFixed(1)).toString().replace('.',','))+'</td>'; })()}
+      ${(()=>{ const v = INV_VPROM && INV_VPROM[kc]; const tr = camT.reduce((a,x)=>a+x.pend,0), m = (v && (exist+tr)>0) ? (exist+tr)/v : null; return '<td data-sv="'+(m==null?'':m.toFixed(2))+'" style="padding:9px 12px;text-align:right;white-space:nowrap;font-weight:700;color:var(--bl);">'+(m==null?'<span style="color:var(--mu2);font-weight:400;">—</span>':(m>=10?Math.round(m):m.toFixed(1)).toString().replace('.',','))+'</td>'; })()}
       <td style="padding:9px 12px;max-width:220px;">${invListasChips(r.referencia)}</td>
       <td style="padding:9px 12px;min-width:150px;">${invCanalesChips(r.referencia)}</td>
       <td data-sv="${PR?PR.fin:''}" style="padding:9px 12px;min-width:150px;">${proyCelda}</td>
@@ -11216,16 +11284,18 @@ function _renderFilasInv(mostrar, preciosMap) {
 }
 
 // ── Listas de precios y canales por referencia (Inventario) ──
+var INV_CANAL_REF = {};   // { referencia: 'Ferretero'|'Home Center'|… } — canal oficial de la BASE DE PRODUCTO + SOLICITUD DE COMPRAS (configuracion.inv_canal_ref)
 var INV_CANALES_MAP = null;      // { referenciaSinCeros: ['Home Center', ...] } — se guarda en configuracion.inventario_canales
 var INV_LISTAS_REF  = {};        // { referenciaSinCeros: [{lista, precio}] }
 var INV_RENDER_SEQ  = 0;
+function invCanalDe(k){ const c = (INV_CANAL_REF||{})[k]; return c ? [c] : ((INV_CANALES_MAP||{})[k] || []); }
 function invPuedeGestionarCanales(){ return !!(CU && (CU.rol==='admin' || (typeof reabastEsAdmin==='function' && reabastEsAdmin()))); }
 async function invCanalesCargar(forzar){
   if(INV_CANALES_MAP && !forzar) return INV_CANALES_MAP;
   try{
-    const r = await sb.get('configuracion','clave=eq.inventario_canales');
-    const v = r && r[0] ? r[0].valor : null;
-    INV_CANALES_MAP = (typeof v==='string' ? JSON.parse(v) : v) || {};
+    const rr = await sb.get('configuracion','clave=in.(inventario_canales,inv_canal_ref)');
+    const g = n => { const x = (rr||[]).find(y=>y.clave===n); const v = x ? x.valor : null; try{ return (typeof v==='string' ? JSON.parse(v) : v) || {}; }catch(e){ return {}; } };
+    INV_CANALES_MAP = g('inventario_canales'); INV_CANAL_REF = g('inv_canal_ref');
   }catch(e){ console.warn('Canales de inventario:', e); INV_CANALES_MAP = INV_CANALES_MAP || {}; }
   return INV_CANALES_MAP;
 }
@@ -11263,7 +11333,9 @@ function invListasChips(ref){
   const k = pvClaveRef(ref); const ls = INV_LISTAS_REF[k];
   if(ls===undefined) return '<span style="color:var(--mu2);font-size:10px;">…</span>';
   const nom = invListaNombre;
-  const chips = ls.length ? ls.slice().sort((x,y)=>String(nom(x.lista)).localeCompare(String(nom(y.lista)),'es',{numeric:true})).map(l=>`<span title="Lista ${nom(l.lista)}" style="display:inline-block;background:var(--bg);border:1px solid var(--b1);border-radius:10px;padding:1px 6px;margin:1px 2px 1px 0;font-size:9px;font-weight:700;color:var(--bl);white-space:nowrap;">${nom(l.lista)} <span style="color:var(--tx);">${l.precio?('$'+Math.round(l.precio).toLocaleString('es-CO')):'—'}</span></span>`).join('') : '<span style="color:var(--mu2);font-size:10px;">Sin lista</span>';
+  const _OK = {}; { const LMAP = {'Home Center':['11'],'Ferretero':['1'],'Multicanal':['1','11'],'ARA':['21'],'Éxito':['14']}; const cs = invCanalDe(k); (cs.length ? cs : ['Ferretero']).forEach(c => (LMAP[c]||['1']).forEach(i => _OK[i]=1)); }
+  const lsF = ls.filter(l => _OK[String(l.lista)]);   // solo la lista que aplica al canal: Home Center→7, Ferretero→P1, Multicanal→P1 y 7
+  const chips = lsF.length ? lsF.slice().sort((x,y)=>String(nom(x.lista)).localeCompare(String(nom(y.lista)),'es',{numeric:true})).map(l=>`<span title="Lista ${nom(l.lista)}" style="display:inline-block;background:var(--bg);border:1px solid var(--b1);border-radius:10px;padding:1px 6px;margin:1px 2px 1px 0;font-size:9px;font-weight:700;color:var(--bl);white-space:nowrap;">${nom(l.lista)} <span style="color:var(--tx);">${l.precio?('$'+Math.round(l.precio).toLocaleString('es-CO')):'—'}</span></span>`).join('') : '<span style="color:var(--mu2);font-size:10px;">Sin lista</span>';
   const ed = invPuedeGestionarCanales() ? ` <button class="btn btn-g btn-sm" style="padding:1px 6px;font-size:10px;" title="Agregar o cambiar el precio en una lista" onclick="invPrecioEditar('${String(ref).replace(/'/g,"")}')">＋</button>` : '';
   return chips + ed;
 }
@@ -11314,9 +11386,9 @@ async function invPrecioGuardar(ref){
   }catch(e){ toast('❌ No se pudo guardar el precio: '+e.message,'er'); }
 }
 function invCanalesChips(ref){
-  const k = pvClaveRef(ref); const cs = (INV_CANALES_MAP||{})[k] || [];
+  const k = pvClaveRef(ref); const cs = invCanalDe(k);
   const chips = cs.length ? cs.map(c=>`<span style="display:inline-block;background:rgba(37,99,235,.10);color:var(--bl);border-radius:10px;padding:1px 7px;margin:1px 2px 1px 0;font-size:9px;font-weight:700;">${c}</span>`).join('') : '<span style="color:var(--mu2);font-size:10px;">—</span>';
-  const ed = invPuedeGestionarCanales() ? ` <button class="btn btn-g btn-sm" style="padding:1px 6px;font-size:10px;" title="Gestionar canales de esta referencia" onclick="invCanalesEditar('${String(ref).replace(/'/g,"")}')">✎</button>` : '';
+  const ed = (invPuedeGestionarCanales() && !(INV_CANAL_REF||{})[k]) ? ` <button class="btn btn-g btn-sm" style="padding:1px 6px;font-size:10px;" title="Gestionar canales de esta referencia" onclick="invCanalesEditar('${String(ref).replace(/'/g,"")}')">✎</button>` : '';
   return chips + ed;
 }
 async function invCanalesTodos(){
@@ -12368,6 +12440,9 @@ function cblDesdeExcel(){
     const mx = k => ls.map(x=>x[k]).filter(Boolean).sort().pop()||'';
     [['etd','d1'],['eta','d2']].forEach(([k,e])=>{ const v = mx(e); if(v && v!==b[k]){ ch.push(k.toUpperCase()+' '+(b[k]||'—')+' → '+v); b[k] = v; } });
     const rm = ls.map(x=>x.rm).find(Boolean); if(rm && !(b.registro && b.registro.numero)){ b.registro = {numero:String(rm), fecha:'', aprobado:false, quien:'Excel Com. Ext.', t:new Date().toISOString()}; ch.push('registro '+rm); }
+    const cntD = {}; ls.forEach(x=>{ const d = ceDimFmt(x.dm); if(d) cntD[d] = (cntD[d]||0)+1; }); const ordD = Object.entries(cntD).sort((p,q)=>q[1]-p[1]);
+    const nvD = ordD.length && (ordD.length===1 || ordD[0][1]>ordD[1][1]) ? ordD[0][0] : '';   // un BL tiene un solo DIM: el que más se repite en la sábana (si hay empate no se asigna)
+    if(nvD && (!String(b.dim||'').trim() || b.dimFuente==='excel') && b.dim!==nvD){ ch.push('DIM '+(b.dim||'—')+' → '+nvD); b.dim = nvD; b.dimFuente = 'excel'; }   // si alguien lo escribe a mano, ese manda
     if(n) ch.unshift(n+' ítem(s) avanzaron de estado/fechas');
     if(ch.length){ cblLog(b, 'Actualizado desde el Excel de Comercio Exterior'+((CE.meta&&CE.meta.archivo)?' ('+CE.meta.archivo+')':'')+': '+ch.join(' · ')); cam.push(b); items += n; } });
   return {cam, adel, items};
@@ -12757,11 +12832,10 @@ function cblPintarDetalle(){
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;"><b style="font-size:12px;">Ítems del BL y su estado</b><span class="arte-mu" style="font-size:11px;">Poner todos en:</span><select id="cbld-todos" class="inp" style="width:auto;" ${dis}>${CBL_ESTADOS.map(e=>`<option>${e}</option>`).join('')}</select><button class="btn btn-g btn-xs" ${dis} onclick="cblTodosEstado('${b.id}')">Aplicar a todos</button></div>
     ${(()=>{ const sv = (b.items||[]).filter(cblSinVig); const ven = (b.items||[]).filter(it=>{ if(!it.rimf) return false; const v = new Date(it.rimf+'T12:00:00'); v.setMonth(v.getMonth()+6); return v < new Date(); });
       return (sv.length||ven.length) ? `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;">⚠️ ${sv.length?sv.length+' ítem(s) sin registro de importación: '+[...new Set(sv.map(i=>i.ref))].join(', ')+'. Ninguna referencia puede llegar sin registro.':''}${ven.length?' · '+ven.length+' con el registro VENCIDO: '+[...new Set(ven.map(i=>i.ref))].join(', ')+'.':''}</div>` : ''; })()}
-    <div class="tw" style="max-height:340px;"><table class="cbl-t"><thead><tr><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Cajas</th><th>Estado</th><th>Reg. importación</th><th>Vigencia (6 meses)</th><th>Llegada a planta</th><th>Ingreso a bodega</th><th></th></tr></thead><tbody>
+    <div class="tw" style="max-height:340px;"><table class="cbl-t"><thead><tr><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Cajas</th><th>Estado</th><th>Reg. importación</th><th>Llegada a planta</th><th>Ingreso a bodega</th><th></th></tr></thead><tbody>
     ${(b.items||[]).map((it,ix)=>`<tr><td><b>${reabastEsc(it.oc)}</b></td><td>${reabastEsc(it.ref||'')}</td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${reabastEsc(it.desc||'')}">${reabastEsc(it.desc||'')}</td><td style="text-align:right;">${cblN(it.cant)}</td><td style="text-align:right;">${it.cbm>0?cblN(it.cant*it.cbm,2):'—'}</td><td style="text-align:right;">${it.cajas!=null&&it.cajas!==''?cblN(it.cajas):'—'}</td>
       <td><select class="inp" style="width:auto;font-size:11px;" ${dis} onchange="cblItemEstado('${b.id}',${ix},this.value)">${opts(it.estado)}</select></td>
       <td><input class="inp" style="font-size:11px;width:130px;" placeholder="N.º registro" value="${reabastEsc(cblRimEf(it).rim)}" ${dis} onchange="cblItemRim('${b.id}',${ix},this.value)"></td>
-      <td style="white-space:nowrap;"><input type="date" class="inp" style="font-size:11px;" title="Fecha del registro de importación" value="${cblRimEf(it).rimf}" ${dis} onchange="cblItemRimF('${b.id}',${ix},this.value)"><div>${cblVigRim(it)}</div></td>
       <td><input type="date" class="inp" style="font-size:11px;" value="${it.planta||''}" ${dis} onchange="cblItemFecha('${b.id}',${ix},'planta',this.value)"></td>
       <td><input type="date" class="inp" style="font-size:11px;" value="${it.ingreso||''}" ${dis} onchange="cblItemFecha('${b.id}',${ix},'ingreso',this.value)"></td>
       <td>${puede?`<button class="btn btn-g btn-xs" title="Sacar este ítem del BL (vuelve a 'por embarcar')" onclick="cblQuitarItem('${b.id}',${ix})">✕</button>`:''}</td></tr>`).join('')}
@@ -12851,7 +12925,7 @@ function cblRenombrar(id){
 // DIM (declaración de importación) de cada BL: por ahora se escribe a mano; más adelante podría traerse de Siesa.
 function cblDim(id, val){
   const n = String(val||'').trim();
-  cblMutar(id, b=>{ if((b.dim||'')===n) return false; cblLog(b,'DIM '+(b.dim||'—')+' → '+(n||'—')); b.dim = n; }, 'DIM guardado');
+  cblMutar(id, b=>{ if((b.dim||'')===n) return false; cblLog(b,'DIM '+(b.dim||'—')+' → '+(n||'—')); b.dim = n; b.dimFuente = ''; }, 'DIM guardado');
 }
 function cblGuardarCab(id){
   const v = k => (document.getElementById('cbld-'+k)||{}).value || '';
@@ -31948,7 +32022,7 @@ async function pvBuscarRef(q) {
 // se incluye junto con los seleccionados de la derecha al presupuestar por período.
 var PV_SKU_ACTUAL = null; // { referencia, descripcion, categoria }
 // Categoría según el RP (referencias_maestro del módulo Abastecimiento) cuando la lista de precios/inventario no la trae.
-var PV_CAT_RP = null;
+var PV_CAT_RP = null, PV_SUB_RP = {};
 // Variantes con ceros a la izquierda de una lista de referencias (el inventario de SIESA trae 00094; el presupuesto guarda 94)
 var feISO = v => { if(v==null||v==='') return null; if(typeof v==='number'){ if(v>=20000101&&v<=29991231){ const t=String(v); return t.slice(0,4)+'-'+t.slice(4,6)+'-'+t.slice(6,8); } if(v>30000&&v<80000){ const d=new Date(Date.UTC(1899,11,30)+Math.round(v)*86400000); return isNaN(d)?null:d.toISOString().slice(0,10); } return null; } const t=String(v).trim(); let m=t.match(/^(\d{4})(\d{2})(\d{2})$/); if(m) return t==='00000000'?null:m[1]+'-'+m[2]+'-'+m[3]; if(/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0,10); return feISO(parseFloat(t)); };
 function pvVariantesRefs(refs){ const v=new Set(); (refs||[]).forEach(s=>{ s=String(s==null?'':s).trim(); if(!s) return; v.add(s); if(/^\d+$/.test(s)){ const k=s.replace(/^0+/,'')||'0'; v.add(k); for(let L=3;L<=8;L++) v.add(k.padStart(L,'0')); } }); return [...v]; }
@@ -31958,8 +32032,8 @@ async function pvCatRPCargar(){
   const m = {};
   try{
     for(let off=0; off<20000; off+=1000){
-      const rows = await sbReabast.get('referencias_maestro', 'select=referencia,categoria&categoria=not.is.null&limit=1000&offset='+off);
-      (rows||[]).forEach(r=>{ if(r.categoria) m[pvClaveRef(r.referencia)] = r.categoria; });
+      const rows = await sbReabast.get('referencias_maestro', 'select=referencia,categoria,subcategoria&limit=1000&offset='+off);
+      (rows||[]).forEach(r=>{ if(r.categoria) m[pvClaveRef(r.referencia)] = r.categoria; if(r.subcategoria && String(r.subcategoria).trim()) PV_SUB_RP[pvClaveRef(r.referencia)] = String(r.subcategoria).trim(); });
       if(!rows || rows.length<1000) break;
     }
   }catch(e){ console.warn('Categorías RP:', e); }
@@ -45499,7 +45573,7 @@ function mcDescargarReporte() {
     return true;
   }
   function thOk(th){
-    if(th.hasAttribute('onclick') || th.querySelector('[onclick],input,button,select')) return false;
+    if(th.hasAttribute('onclick') || th.querySelector('[onclick],input,button:not(.cf-btn),select')) return false;
     return (th.textContent||'').trim()!=='';
   }
   function aplicar(tb, col, dir){

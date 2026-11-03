@@ -3919,6 +3919,9 @@ function cblDesdeExcel(){
     const mx = k => ls.map(x=>x[k]).filter(Boolean).sort().pop()||'';
     [['etd','d1'],['eta','d2']].forEach(([k,e])=>{ const v = mx(e); if(v && v!==b[k]){ ch.push(k.toUpperCase()+' '+(b[k]||'—')+' → '+v); b[k] = v; } });
     const rm = ls.map(x=>x.rm).find(Boolean); if(rm && !(b.registro && b.registro.numero)){ b.registro = {numero:String(rm), fecha:'', aprobado:false, quien:'Excel Com. Ext.', t:new Date().toISOString()}; ch.push('registro '+rm); }
+    const cntD = {}; ls.forEach(x=>{ const d = ceDimFmt(x.dm); if(d) cntD[d] = (cntD[d]||0)+1; }); const ordD = Object.entries(cntD).sort((p,q)=>q[1]-p[1]);
+    const nvD = ordD.length && (ordD.length===1 || ordD[0][1]>ordD[1][1]) ? ordD[0][0] : '';   // un BL tiene un solo DIM: el que más se repite en la sábana (si hay empate no se asigna)
+    if(nvD && (!String(b.dim||'').trim() || b.dimFuente==='excel') && b.dim!==nvD){ ch.push('DIM '+(b.dim||'—')+' → '+nvD); b.dim = nvD; b.dimFuente = 'excel'; }   // si alguien lo escribe a mano, ese manda
     if(n) ch.unshift(n+' ítem(s) avanzaron de estado/fechas');
     if(ch.length){ cblLog(b, 'Actualizado desde el Excel de Comercio Exterior'+((CE.meta&&CE.meta.archivo)?' ('+CE.meta.archivo+')':'')+': '+ch.join(' · ')); cam.push(b); items += n; } });
   return {cam, adel, items};
@@ -4297,11 +4300,10 @@ function cblPintarDetalle(){
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;"><b style="font-size:12px;">Ítems del BL y su estado</b><span class="arte-mu" style="font-size:11px;">Poner todos en:</span><select id="cbld-todos" class="inp" style="width:auto;" ${dis}>${CBL_ESTADOS.map(e=>`<option>${e}</option>`).join('')}</select><button class="btn btn-g btn-xs" ${dis} onclick="cblTodosEstado('${b.id}')">Aplicar a todos</button></div>
     ${(()=>{ const sv = (b.items||[]).filter(cblSinVig); const ven = (b.items||[]).filter(it=>{ if(!it.rimf) return false; const v = new Date(it.rimf+'T12:00:00'); v.setMonth(v.getMonth()+6); return v < new Date(); });
       return (sv.length||ven.length) ? `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;">⚠️ ${sv.length?sv.length+' ítem(s) sin registro de importación: '+[...new Set(sv.map(i=>i.ref))].join(', ')+'. Ninguna referencia puede llegar sin registro.':''}${ven.length?' · '+ven.length+' con el registro VENCIDO: '+[...new Set(ven.map(i=>i.ref))].join(', ')+'.':''}</div>` : ''; })()}
-    <div class="tw" style="max-height:340px;"><table class="cbl-t"><thead><tr><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Cajas</th><th>Estado</th><th>Reg. importación</th><th>Vigencia (6 meses)</th><th>Llegada a planta</th><th>Ingreso a bodega</th><th></th></tr></thead><tbody>
+    <div class="tw" style="max-height:340px;"><table class="cbl-t"><thead><tr><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Cajas</th><th>Estado</th><th>Reg. importación</th><th>Llegada a planta</th><th>Ingreso a bodega</th><th></th></tr></thead><tbody>
     ${(b.items||[]).map((it,ix)=>`<tr><td><b>${reabastEsc(it.oc)}</b></td><td>${reabastEsc(it.ref||'')}</td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${reabastEsc(it.desc||'')}">${reabastEsc(it.desc||'')}</td><td style="text-align:right;">${cblN(it.cant)}</td><td style="text-align:right;">${it.cbm>0?cblN(it.cant*it.cbm,2):'—'}</td><td style="text-align:right;">${it.cajas!=null&&it.cajas!==''?cblN(it.cajas):'—'}</td>
       <td><select class="inp" style="width:auto;font-size:11px;" ${dis} onchange="cblItemEstado('${b.id}',${ix},this.value)">${opts(it.estado)}</select></td>
       <td><input class="inp" style="font-size:11px;width:130px;" placeholder="N.º registro" value="${reabastEsc(cblRimEf(it).rim)}" ${dis} onchange="cblItemRim('${b.id}',${ix},this.value)"></td>
-      <td style="white-space:nowrap;"><input type="date" class="inp" style="font-size:11px;" title="Fecha del registro de importación" value="${cblRimEf(it).rimf}" ${dis} onchange="cblItemRimF('${b.id}',${ix},this.value)"><div>${cblVigRim(it)}</div></td>
       <td><input type="date" class="inp" style="font-size:11px;" value="${it.planta||''}" ${dis} onchange="cblItemFecha('${b.id}',${ix},'planta',this.value)"></td>
       <td><input type="date" class="inp" style="font-size:11px;" value="${it.ingreso||''}" ${dis} onchange="cblItemFecha('${b.id}',${ix},'ingreso',this.value)"></td>
       <td>${puede?`<button class="btn btn-g btn-xs" title="Sacar este ítem del BL (vuelve a 'por embarcar')" onclick="cblQuitarItem('${b.id}',${ix})">✕</button>`:''}</td></tr>`).join('')}
@@ -4388,7 +4390,7 @@ function cblRenombrar(id){
 }
 function cblDim(id, val){
   const n = String(val||'').trim();
-  cblMutar(id, b=>{ if((b.dim||'')===n) return false; cblLog(b,'DIM '+(b.dim||'—')+' → '+(n||'—')); b.dim = n; }, 'DIM guardado');
+  cblMutar(id, b=>{ if((b.dim||'')===n) return false; cblLog(b,'DIM '+(b.dim||'—')+' → '+(n||'—')); b.dim = n; b.dimFuente = ''; }, 'DIM guardado');
 }
 function cblGuardarCab(id){
   const v = k => (document.getElementById('cbld-'+k)||{}).value || '';
