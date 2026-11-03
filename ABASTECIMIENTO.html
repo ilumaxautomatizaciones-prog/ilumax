@@ -18653,7 +18653,7 @@ function ivsCalc() {
   const set = new Set(IVS.bodegas), por = {}, bod = {}, cl = new Set((IVS.clasif && IVS.clasif.d) || []);
   const actB = IVS.clasif && Array.isArray(IVS.clasif.act) ? new Set(IVS.clasif.act) : null; // referencias que no están en la BASE DE PRODUCTO se excluyen del análisis
   (typeof INV_DATA !== 'undefined' ? INV_DATA : []).forEach(r => {
-    const k = pvClaveRef(r.referencia); if (actB && !actB.has(k) && !cl.has(k)) return; const b = String(r.bodega || '').trim().toUpperCase(), ex = Number(r.existencia) || 0, c = Number(r.costo_prom) || 0;
+    const k = ivsKey(r.referencia); if (actB && !actB.has(k) && !cl.has(k)) return; const b = String(r.bodega || '').trim().toUpperCase(), ex = Number(r.existencia) || 0, c = Number(r.costo_prom) || 0;
     const p = por[k] = por[k] || { k, ref: r.referencia, desc: r.descripcion || '', disp: 0, valor: 0 };
     if (!p.desc && r.descripcion) p.desc = r.descripcion;
     if (set.has(b)) { p.disp += ex; p.valor += ex * c; bod[b] = bod[b] || { u: 0, v: 0, refs: {} }; bod[b].u += ex; bod[b].v += ex * c; if (ex) { const q = bod[b].refs[k] = bod[b].refs[k] || { ref: r.referencia, desc: r.descripcion || '', u: 0, v: 0 }; q.u += ex; q.v += ex * c; if (!q.desc && r.descripcion) q.desc = r.descripcion; } }
@@ -18726,14 +18726,14 @@ async function ivsCargarClasif(inp) {
         const cr = rows[h].findIndex(c => /^(referencia|ref\.?|codigo|código|sku|item|cod\.? ?item)/i.test(String(c).trim())); if (cr < 0) continue;
         let ce = -1; for (let c = 0; c < rows[h].length; c++) { if (c === cr) continue; const vals = rows.slice(h + 1, h + 400).map(r => String(r[c] == null ? '' : r[c])); if (vals.some(v => /descontinu|evacuar|saldos|renuncia/i.test(v)) && /estado|clasif|tipo|status|activo|descont/i.test(String(rows[h][c]) + ' ' + vals.slice(0, 50).join(' '))) { ce = c; break; } }
         if (ce < 0) continue; const cc = rows[h].findIndex(c => /^canal/i.test(String(c).trim()));
-        rows.slice(h + 1).forEach(r => { const rf = String(r[cr] == null ? '' : r[cr]).trim(); if (!rf) return; const k = pvClaveRef(rf); const sv = String(r[ce] == null ? '' : r[ce]).trim().toUpperCase(); if (cc >= 0) { const cv = String(r[cc] == null ? '' : r[cc]).trim().toUpperCase(); if (cv && cv !== 'NONE' && !CN[k]) CN[k] = cv; } if (sv && !ST[k]) ST[k] = sv; if (/descontinu|evacuar|saldos|renuncia/i.test(sv)) D.add(k); else A.add(k); }); ok = true; break;
+        rows.slice(h + 1).forEach(r => { const rf = String(r[cr] == null ? '' : r[cr]).trim(); if (!rf) return; const k = rf; const sv = String(r[ce] == null ? '' : r[ce]).trim().toUpperCase(); if (cc >= 0) { const cv = String(r[cc] == null ? '' : r[cc]).trim().toUpperCase(); if (cv && cv !== 'NONE' && !CN[k]) CN[k] = cv; } if (sv && !ST[k]) ST[k] = sv; if (/descontinu|evacuar|saldos|renuncia/i.test(sv)) D.add(k); else A.add(k); }); ok = true; break;
       }
       if (ok) break;
     }
     if (!ok || !D.size) { toast('No encontré columnas de referencia y estado (Activo / Descontinuado) en ese Excel', 'er'); inp.value = ''; return; }
-    D.forEach(k => A.delete(k)); const v = { d: [...D], act: [...A], st: ST, cn: CN, a: A.size, archivo: f.name, fecha: new Date().toISOString() };
+    D.forEach(k => A.delete(k)); const v = { d: [...D], act: [...A], st: ST, cn: CN, a: A.size, ex: 1, archivo: f.name, fecha: new Date().toISOString() };
     await sb.upsert('configuracion', { clave: 'inv_clasif', valor: JSON.stringify(v), tipo: 'json' }, 'clave'); IVS.clasif = v;
-    try { const nm = x => x === 'EXCLUSIVO' ? 'Home Center' : (/^.?XITO$/.test(x) ? 'Éxito' : (x === 'ARA' ? 'ARA' : x.charAt(0) + x.slice(1).toLowerCase())); const r0 = await sb.get('configuracion', 'clave=eq.inv_canal_ref'); let m0 = {}; try { m0 = JSON.parse(r0[0].valor) || {}; } catch (e) { } Object.keys(CN).forEach(k => { m0[k] = nm(CN[k]); }); await sb.upsert('configuracion', { clave: 'inv_canal_ref', valor: JSON.stringify(m0), tipo: 'json' }, 'clave'); INV_CANAL_REF = m0; } catch (e) { }
+    try { const nm = x => x === 'EXCLUSIVO' ? 'Home Center' : (/^.?XITO$/.test(x) ? 'Éxito' : (x === 'ARA' ? 'ARA' : x.charAt(0) + x.slice(1).toLowerCase())); const r0 = await sb.get('configuracion', 'clave=eq.inv_canal_ref'); let m0 = {}; try { m0 = JSON.parse(r0[0].valor) || {}; } catch (e) { } Object.keys(CN).forEach(k => { if (k === pvClaveRef(k)) m0[k] = nm(CN[k]); }); await sb.upsert('configuracion', { clave: 'inv_canal_ref', valor: JSON.stringify(m0), tipo: 'json' }, 'clave'); INV_CANAL_REF = m0; } catch (e) { }
     toast('Clasificación cargada: ' + D.size + ' descontinuadas · ' + A.size + ' activas', 'ok'); ivsPintar();
   } catch (e) { toast('No pude leer el Excel: ' + e.message, 'er'); }
   inp.value = '';
@@ -18812,7 +18812,9 @@ async function ivsDescargar() {
 
 function ivsTrmTxt() { const t = IVS.trmFijo ? 'TRM en uso: $' + ivsN(IVS.trmFijo) + ' (fija)' : (IVS.trm ? 'TRM en uso: $' + IVS.trm + ' (última registrada ' + ivsE(IVS.trmFecha) + ')' : 'Sin TRM'); return ivsE(t) + ' · Factor ' + ivsFac(); }
 
-function ivsFuera(ref) { const c = IVS.clasif; if (!c || !Array.isArray(c.act)) return false; const k = pvClaveRef(ref); return !(c.act.includes(k) || (c.d || []).includes(k)); }
+// Llave de clasificación: con la BASE cargada con ceros a la izquierda respetados (ex=1) la referencia se compara exacta (01222 ≠ 1222); con cargas antiguas se quitan los ceros
+function ivsKey(ref) { const t = String(ref == null ? '' : ref).trim(); return (IVS.clasif && IVS.clasif.ex) ? t : pvClaveRef(t); }
+function ivsFuera(ref) { const c = IVS.clasif; if (!c || !Array.isArray(c.act)) return false; const k = ivsKey(ref); return !(c.act.includes(k) || (c.d || []).includes(k)); }
 
 // ═══ Ordenar cualquier tabla al hacer clic en el encabezado (▲ menor→mayor, ▼ mayor→menor) ═══
 (function(){
