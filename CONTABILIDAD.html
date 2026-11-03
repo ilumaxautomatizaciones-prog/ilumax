@@ -56,7 +56,7 @@ const fm = n => (n < 0 ? '-' : '') + '$' + Math.round(Math.abs(n)).toLocaleStrin
 const fd = n => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 /*PURE*/
 // ---- Plano Siesa "Documento contable" CPR (mismo ancho de campos que el plano de Excel, pero decimales con PUNTO) ----
-const plAmt = n => { n = Math.round(n * 10000) / 10000; return (n < 0 ? '-' : '+') + Math.abs(n).toFixed(4).padStart(20, '0'); };
+const plAmt = n => { n = Math.round(n * 100) / 100; return (n < 0 ? '-' : '+') + String(Math.abs(n)).padStart(20, '0'); };
 const plSeq = n => String(n).padStart(7, '0');
 const plTxt = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\x20-\x7E]/g, ' ').toUpperCase();
 const pad = (s, w) => String(s == null ? '' : s).padEnd(w, ' ').slice(0, w);
@@ -66,15 +66,19 @@ function plMovCPR(seq, cuenta, nit, cc, db, cr, notas) {
   return plSeq(seq) + '03510002001001' + 'CPR' + '00000000' + pad(cuenta, 20) + pad(nit, 15) + '001' + pad('99', 20) + pad(cc, 15) + pad('', 10)
     + plAmt(db) + plAmt(cr) + plAmt(0) + plAmt(0) + plAmt(0) + '  ' + '00000000' + pad(plTxt(notas), 255);
 }
+// Línea 0351 subtipo 02 (cuentas de saldo abierto, ej. 233595xx): sin campo FE, 4 valores, y al final los datos del documento por pagar
+function plMovCxP(seq, cuenta, nit, db, cr, notas, fecha) {
+  const n = pad(plTxt(notas), 255), z = plAmt(0);
+  return plSeq(seq) + '03510202001001' + 'CPR' + '00000000' + pad(cuenta, 20) + pad(nit, 15) + '001' + pad('99', 20) + pad('', 15)
+    + plAmt(db) + plAmt(cr) + z + z + n + '001CPR ' + pad(fecha, 8) + '000' + ' '.repeat(10) + pad(fecha, 8) + pad(fecha, 8) + z + z + z + z + z + n;
+}
 // lines: [{cuenta, nit, cc, db}] · devuelve el texto del plano y el total (crédito único a ctaCr con el tercero indicado)
 function planoCPR(lines, o) {
   const out = ['000000100000001001', plCabCPR(2, o.fecha, o.notas)]; let n = 3, tot = 0;
   lines.forEach(l => { out.push(plMovCPR(n++, l.cuenta, l.nit, l.cc, l.db, 0, o.notas)); tot += l.db; });
   tot = Math.round(tot * 100) / 100;
-  if (o.porRegla) { // créditos a la cuenta por pagar (23…) de cada regla, agrupados por cuenta + tercero (el cliente)
-    const g = new Map(); lines.forEach(l => { const k = (l.cr || o.ctaCr) + '|' + l.nit; g.set(k, (g.get(k) || 0) + l.db); });
-    g.forEach((v, k) => { const [c, t] = k.split('|'); out.push(plMovCPR(n++, c, t, '', 0, Math.round(v * 100) / 100, o.notas)); });
-  } else out.push(plMovCPR(n++, o.ctaCr, o.tercero, '', 0, tot, o.notas));
+  if (o.porRegla) lines.forEach(l => out.push(plMovCxP(n++, l.cr, l.nit, 0, l.db, o.notas, o.fecha))); // crédito a la cuenta por pagar (23…) de cada regla, tercero = cliente
+  else out.push(plMovCPR(n++, o.ctaCr, o.tercero, '', 0, tot, o.notas));
   out.push(plSeq(n) + '99990001001');
   return { txt: out.join('\r\n') + '\r\n', n: lines.length, tot };
 }
