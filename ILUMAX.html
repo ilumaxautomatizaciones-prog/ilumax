@@ -18015,13 +18015,13 @@ function ceLeerLibro(wb){
     cont:col('contenedor'), bl:col('bl numero','bl'), dim:col('dim'), estado:col('estado'), etd:col('etd'), eta:col('eta'), rim:col('rim'), planta:col('fecha llegada a planta'), ingreso:col('ingresada al inventario') };
   const v = (f,k)=> C[k]>=0 ? f[C[k]] : null;
   const lineas = []; let ultOrden = null, ultImpo = null, ultCom = null;
-  crudas.slice(hIdx+1).forEach(f=>{
+  crudas.slice(hIdx+1).forEach((f,jj)=>{
     if(!f || !f.some(x=>x!=null && String(x).trim()!=='')) return;
     const orden = ceNum(v(f,'orden')); if(!orden || orden==='NONE') return;
     if(orden!==ultOrden){ ultOrden = orden; ultImpo = null; ultCom = null; }
     const impo = v(f,'impo'); if(impo!=null && String(impo).trim()) ultImpo = String(impo);
     const com = v(f,'com'); if(com!=null && String(com).trim()) ultCom = String(com).trim();
-    lineas.push({ orden, impo: ultImpo, tokens: String(ultImpo||'').split(/[\n\/,;]+|\s{2,}/).map(ceNum).filter(Boolean),
+    lineas.push({ row: rango.s.r+hIdx+jj+2, orden, impo: ultImpo, tokens: String(ultImpo||'').split(/[\n\/,;]+|\s{2,}/).map(ceNum).filter(Boolean),
       comentario: ultCom, sigla: v(f,'sigla'), ref: v(f,'ref'), desc: v(f,'desc'), cantOrd: Number(v(f,'cantOrd'))||0, cantEnv: Number(v(f,'cantEnv'))||0, pend: Number(v(f,'pend'))||0,
       puerto: v(f,'puerto'), carga: pciFecha(v(f,'carga')), aci: v(f,'aci'), cont: v(f,'cont'), bl: v(f,'bl'), dim: v(f,'dim'), estado: String(v(f,'estado')||'').trim(),
       etd: pciFecha(v(f,'etd')), eta: pciFecha(v(f,'eta')), rim: v(f,'rim'), planta: pciFecha(v(f,'planta')), ingreso: pciFecha(v(f,'ingreso')) });
@@ -18393,7 +18393,7 @@ function ceAbrir(){
         Las etapas que alguien cerró a mano en el ERP no se tocan.
       </div>
       ${CE.meta?`<div class="arte-mu" style="font-size:11px;margin-bottom:8px;">Última actualización: ${new Date(CE.meta.fecha).toLocaleString('es-CO')} · ${reabastEsc(CE.meta.usuario||'')} · ${reabastEsc(CE.meta.archivo||'')}</div>`:''}
-      <label class="btn btn-bl btn-sm" style="cursor:pointer;">📤 Elegir archivo Seguimiento comercio exterior (.xlsx)<input type="file" accept=".xlsx,.xls" style="display:none;" onchange="ceLeerArchivo(this)"></label>
+      <label class="btn btn-bl btn-sm" style="cursor:pointer;">📤 Elegir archivo Seguimiento comercio exterior (.xlsx)<input type="file" accept=".xlsx,.xls" style="display:none;" onchange="ceLeerArchivo(this)"></label> <button class="btn btn-g btn-sm" id="ce-dl" onclick="ceDescargarSabana()" title="Abre la última sábana que se subió, le pone los cambios del portal (BL, DIM, estados, fechas) y la descarga con el mismo formato">📥 Descargar sábana actualizada</button>
       <div id="ce-prev" style="margin-top:12px;"></div>
       <div id="ce-prog" style="font-size:12px;margin-top:8px;"></div>
     </div>
@@ -18408,7 +18408,7 @@ async function ceLeerArchivo(input){
   const file = input.files[0]; if(!file) return;
   const prev = document.getElementById('ce-prev'); prev.innerHTML = '⏳ Leyendo archivo…';
   try{
-    const wb = XLSX.read(await file.arrayBuffer(), {type:'array', cellDates:true});
+    const bufX = await file.arrayBuffer(); CE._buf = bufX.slice(0); CE._bufName = file.name; const wb = XLSX.read(bufX, {type:'array', cellDates:true});
     const {hoja, lineas} = ceLeerLibro(wb);
     const {g, erp, sin} = ceAgrupar(lineas);
     const ramasNuevas = ceDetectarYSepararLotes(g, erp);
@@ -18479,6 +18479,7 @@ async function ceEjecutar(){
   try{ await sb.upsert('configuracion', {clave:'ce_resumen', valor:JSON.stringify({fecha:new Date().toISOString(), usuario:(CU&&CU.nombre)||'', archivo:CE.archivo||'', ocs}), tipo:'json'}, 'clave');
     CE.resumen = ocs; CE.meta = {fecha:new Date().toISOString(), usuario:(CU&&CU.nombre)||'', archivo:CE.archivo||''}; }
   catch(e){ err.push('No se guardó el resumen: '+e.message); }
+  try{ await ceGuardarOriginal(); }catch(e){ err.push('No se guardó el archivo original de la sábana: '+e.message); }
   try{ if(CE.blsNuevo){ await sb.upsert('configuracion', {clave:'ce_bl', valor:JSON.stringify({fecha:new Date().toISOString(), lineas:CE.blsNuevo}), tipo:'json'}, 'clave'); CE.bls = CE.blsNuevo; } }
   catch(e){ err.push('No se guardó el detalle por BL: '+e.message); }
   // 1b) los BL creados en el ERP también se ponen al día con la sábana nueva (estado, ingreso, planta, ETD/ETA, registro)
@@ -18504,6 +18505,79 @@ async function ceEjecutar(){
   if(typeof toast==='function') toast(`🚢 Comercio exterior: ${cambios} cambios en ${sel.length} OC`,'ok');
 }
 // Vuelve a aplicar el último resumen guardado (tras una carga de Base compras).
+// ═══ Sábana actualizada: el Excel original que se subió + lo que cambió en el ERP (BL, DIM, estados, fechas) ═══
+async function ceGuardarOriginal(){
+  if(!CE._buf) return;
+  const f = new Date(), pd = n=>String(n).padStart(2,'0');
+  const nombre = 'sabana-ce/'+f.getFullYear()+'-'+pd(f.getMonth()+1)+'-'+pd(f.getDate())+'_'+pd(f.getHours())+pd(f.getMinutes())+pd(f.getSeconds())+'_'+String(CE._bufName||'sabana.xlsx').replace(/[^a-zA-Z0-9._-]/g,'_');
+  const r = await fetch(`${SB_REABAST_URL}/storage/v1/object/oc-adjuntos/${nombre}`, { method:'POST', headers:{ 'apikey':SB_REABAST_KEY, 'Authorization':'Bearer '+SB_REABAST_KEY, 'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }, body:new Blob([CE._buf]) });
+  if(!r.ok) throw new Error(await r.text());
+  CE.orig = {url:`${SB_REABAST_URL}/storage/v1/object/public/oc-adjuntos/${nombre}`, archivo:CE._bufName||'', fecha:f.toISOString(), usuario:(CU&&CU.nombre)||''};
+  await sb.upsert('configuracion', {clave:'ce_sabana_archivo', valor:JSON.stringify(CE.orig), tipo:'json'}, 'clave');
+}
+// Pone en el Excel original lo que el ERP tiene distinto (estado, ETD/ETA, DIM, contenedor, registro, planta, ingreso) y lista los cambios en una hoja aparte.
+function ceAplicarPortalASabana(wb, lineas, bls){
+  const ws = wb.worksheets.find(w=>/information/i.test(w.name)) || wb.worksheets[0];
+  const txt = c => { let v = c && c.value; if(v==null) return ''; if(v.richText) return v.richText.map(x=>x.text).join(''); if(v.result!==undefined) v = v.result; if(v instanceof Date) return v.toISOString().slice(0,10); return String(v); };
+  let hr = 0, H = {};
+  for(let r=1; r<=Math.min(ws.rowCount,40) && !hr; r++){ const m = {}; ws.getRow(r).eachCell({includeEmpty:false}, (c,n)=>{ m[n] = pciNorm(txt(c)); }); const hs = Object.values(m); if(hs.includes('orden') && hs.includes('eta')){ hr = r; H = m; } }
+  if(!hr) throw new Error('No encontré los encabezados de la hoja '+ws.name);
+  const col = (...ns)=>{ for(const n of ns){ const e = Object.entries(H).find(([,h])=>h===n || h.startsWith(n)); if(e) return +e[0]; } return 0; };
+  const C = { cont:col('contenedor'), dim:col('dim'), estado:col('estado'), etd:col('etd'), eta:col('eta'), rim:col('rim'), planta:col('fecha llegada a planta'), ingreso:col('ingresada al inventario') };
+  const iso = d => d ? new Date(d).toISOString().slice(0,10) : '';
+  const FASE = {3:'PRODUCCION', 5:'PROCESO DE EMBARQUE', 6:'TRANSITO', 7:'NACIONALIZACION', 9:'INGRESADA'};
+  const cambios = [], hechos = new Set();
+  const poner = (l, campo, antes, nuevo, esFecha) => {
+    const n = C[campo]; if(!n || nuevo==null || nuevo==='') return;
+    const c = ws.getRow(l.row).getCell(n), t = c.isMerged ? c.master : c;
+    const k = t.address+'|'+campo; if(hechos.has(k)) return; hechos.add(k);
+    t.value = esFecha ? new Date(nuevo+'T00:00:00Z') : nuevo;
+    cambios.push({fila:l.row, oc:l.orden, ref:String(l.ref||''), bl:String(l.bl||''), campo:campo.toUpperCase(), antes:esFecha?(antes||''):String(antes==null?'':antes), despues:String(nuevo)});
+  };
+  lineas.forEach(l=>{
+    const blN = String(l.bl||'').trim().toUpperCase(); if(!blN || !l.row) return;
+    const b = (bls||[]).find(x=>String(x.bl||'').trim().toUpperCase()===blN); if(!b) return;
+    const toks = new Set([l.orden, ...(l.tokens||[])]);
+    const it = (b.items||[]).find(i=>ceRefKey(i.ref)===ceRefKey(l.ref) && toks.has(ceNum(i.oc)));
+    if(b.etd && iso(l.etd)!==b.etd) poner(l,'etd',iso(l.etd),b.etd,true);
+    if(b.eta && iso(l.eta)!==b.eta) poner(l,'eta',iso(l.eta),b.eta,true);
+    const dm = String(b.dim||'').trim(); if(dm && ceDimFmt(l.dim)!==dm) poner(l,'dim',ceDimFmt(l.dim),/^\d+$/.test(dm)?Number(dm):dm);
+    const ct = String(b.cont||'').trim(); if(ct && String(l.cont||'').trim()!==ct) poner(l,'cont',l.cont,ct);
+    if(!it) return;
+    const fp = ceFaseLinea(it.estado||'','').fase, fl = ceFaseLinea(l.estado, l.comentario).fase;
+    if(fp!=null && fp>0 && fp!==fl && FASE[fp]) poner(l,'estado',l.estado,FASE[fp]);
+    const rm = String(cblRimEf(it).rim||'').trim(); if(rm && !String(l.rim||'').trim()) poner(l,'rim',l.rim,rm);   // el registro solo se completa si la sábana lo trae vacío
+    if(it.planta && iso(l.planta)!==it.planta) poner(l,'planta',iso(l.planta),it.planta,true);
+    if(it.ingreso && iso(l.ingreso)!==it.ingreso) poner(l,'ingreso',iso(l.ingreso),it.ingreso,true);
+  });
+  const nom = 'ACTUALIZACIONES PORTAL'; const viejo = wb.getWorksheet(nom); if(viejo) wb.removeWorksheet(viejo.id);
+  const w2 = wb.addWorksheet(nom);
+  w2.addRow(['Fila','OC','Ref.','BL','Campo','Antes (sábana)','Ahora (portal)']);
+  cambios.forEach(c=>w2.addRow([c.fila,c.oc,c.ref,c.bl,c.campo,c.antes,c.despues]));
+  w2.getRow(1).font = {bold:true}; w2.views = [{state:'frozen', ySplit:1}]; [7,14,10,20,12,34,34].forEach((w,i)=>{ w2.getColumn(i+1).width = w; });
+  return cambios;
+}
+async function ceDescargarSabana(){
+  const btn = document.getElementById('ce-dl'); const ant = btn ? btn.textContent : '';
+  try{
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ Preparando…'; }
+    await ppCargarExcelJS();
+    const r = await sb.get('configuracion','clave=eq.ce_sabana_archivo'); const v = r && r[0] ? r[0].valor : null; const P = (typeof v==='string' ? JSON.parse(v) : v) || CE.orig;
+    if(!P || !P.url){ if(typeof toast==='function') toast('Aún no hay una sábana guardada: sube el archivo con "Actualizar" y después descarga','wa'); return; }
+    const resp = await fetch(P.url); if(!resp.ok) throw new Error('No se pudo abrir la sábana guardada ('+resp.status+')');
+    const buf = await resp.arrayBuffer();
+    await cblCargar(true);
+    const {lineas} = ceLeerLibro(XLSX.read(buf.slice(0), {type:'array', cellDates:true}));
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf);
+    const cambios = ceAplicarPortalASabana(wb, lineas, CBL.bls||[]);
+    const out = await wb.xlsx.writeBuffer();
+    const d = new Date(), pd = n=>String(n).padStart(2,'0');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([out], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download = 'Seguimiento_comercio_exterior_'+d.getFullYear()+'-'+pd(d.getMonth()+1)+'-'+pd(d.getDate())+'.xlsx'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+    if(typeof toast==='function') toast('📥 Sábana descargada · '+cambios.length+' cambio(s) del portal sobre el archivo del '+new Date(P.fecha).toLocaleDateString('es-CO'),'ok');
+  }catch(e){ if(typeof toast==='function') toast('No se pudo generar la sábana: '+e.message,'er'); console.warn(e); }
+  finally{ if(btn){ btn.disabled = false; btn.textContent = ant; } }
+}
 async function ceReaplicar(numeros){
   await ceCargarResumen(true);
   const pendientes = numeros.filter(num=>{ const r = ceDe(num); const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===ceNum(num)); return r && oc; });
