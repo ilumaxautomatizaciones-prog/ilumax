@@ -45,7 +45,7 @@ td input{font:inherit;font-size:11px;width:66px;padding:3px 4px;border:1px solid
 </style>
 </head>
 <body>
-<div class="hdr"><h1>ILU<span>MAX</span> · Contabilidad</h1><div class="sub">Descuentos confidenciales del mes → plano CPR para Siesa</div><button class="out" id="out" style="display:none" onclick="pinSalir()">Salir</button></div>
+<div class="hdr"><h1>ILU<span>MAX</span> · Contabilidad</h1><div class="sub">Descuentos confidenciales del mes → plano AR para Siesa</div><button class="out" id="out" style="display:none" onclick="pinSalir()">Salir</button></div>
 <div class="wrap"><div id="app"></div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
@@ -55,22 +55,23 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&a
 const fm = n => (n < 0 ? '-' : '') + '$' + Math.round(Math.abs(n)).toLocaleString('es-CO');
 const fd = n => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 /*PURE*/
-// ---- Plano Siesa "Documento contable" CPR (mismo ancho de campos que el plano de Excel, pero decimales con PUNTO) ----
+// ---- Plano Siesa "Documento contable" AR (mismo ancho de campos que el plano de Excel, pero decimales con PUNTO) ----
 const plAmt = n => { n = Math.round(n * 100) / 100; return (n < 0 ? '-' : '+') + String(Math.abs(n)).padStart(20, '0'); };
 const plSeq = n => String(n).padStart(7, '0');
 const plTxt = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\x20-\x7E]/g, ' ').toUpperCase();
 const pad = (s, w) => String(s == null ? '' : s).padEnd(w, ' ').slice(0, w);
+const PL_TIPO = 'AR'; // tipo de documento del plano en Siesa (antes CPR)
 const nitLim = s => String(s == null ? '' : s).replace(/\.0+$/, '').replace(/\D/g, '');
-function plCabCPR(seq, fecha, notas) { return plSeq(seq) + '035000020011001' + 'CPR' + '00000000' + pad(fecha, 8) + ' '.repeat(15) + '0003000' + pad(plTxt(notas), 255) + ' '.repeat(15); }
+function plCabCPR(seq, fecha, notas) { return plSeq(seq) + '035000020011001' + pad(PL_TIPO, 3) + '00000000' + pad(fecha, 8) + ' '.repeat(15) + '0003000' + pad(plTxt(notas), 255) + ' '.repeat(15); }
 function plMovCPR(seq, cuenta, nit, cc, db, cr, notas) {
-  return plSeq(seq) + '03510002001001' + 'CPR' + '00000000' + pad(cuenta, 20) + pad(nit, 15) + '001' + pad('99', 20) + pad(cc, 15) + pad('', 10)
+  return plSeq(seq) + '03510002001001' + pad(PL_TIPO, 3) + '00000000' + pad(cuenta, 20) + pad(nit, 15) + '001' + pad('99', 20) + pad(cc, 15) + pad('', 10)
     + plAmt(db) + plAmt(cr) + plAmt(0) + plAmt(0) + plAmt(0) + '  ' + '00000000' + pad(plTxt(notas), 255);
 }
 // Línea 0351 subtipo 02 (cuentas de saldo abierto, ej. 233595xx): sin campo FE, 4 valores, y al final los datos del documento por pagar
 function plMovCxP(seq, cuenta, nit, db, cr, notas, fecha) {
   const n = pad(plTxt(notas), 255), z = plAmt(0);
-  return plSeq(seq) + '03510202001001' + 'CPR' + '00000000' + pad(cuenta, 20) + pad(nit, 15) + '001' + pad('99', 20) + pad('', 15)
-    + plAmt(db) + plAmt(cr) + z + z + n + '001CPR ' + pad(fecha, 8) + '000' + ' '.repeat(10) + pad(fecha, 8) + pad(fecha, 8) + z + z + z + z + z + n;
+  return plSeq(seq) + '03510202001001' + pad(PL_TIPO, 3) + '00000000' + pad(cuenta, 20) + pad(nit, 15) + '001' + pad('99', 20) + pad('', 15)
+    + plAmt(db) + plAmt(cr) + z + z + n + '001' + pad(PL_TIPO, 3) + ' ' + pad(fecha, 8) + '000' + ' '.repeat(10) + pad(fecha, 8) + pad(fecha, 8) + z + z + z + z + z + n;
 }
 // lines: [{cuenta, nit, cc, db}] · devuelve el texto del plano y el total (crédito único a ctaCr con el tercero indicado)
 function planoCPR(lines, o) {
@@ -236,7 +237,7 @@ async function descargar(modo) {
   const o = planoCPR(L.map(x => ({ cuenta: x.cuenta, nit: x.nit, cc: x.cc, db: x.db, cr: x.cr })), { fecha: p.fecha, notas: p.notas, ctaCr: p.ctaCr, tercero: p.tercero, porRegla: true });
   const sinCta = L.filter(r => !r.cuenta); if (sinCta.length && !confirm(sinCta.length + ' línea(s) no tienen cuenta débito. ¿Descargar de todos modos?')) return;
   const yaGen = Object.keys(S.gen[genKey(p)] || {}).length;
-  if (!confirm('Plano CPR ' + p.tipo + (modo === 'pend' ? ' (SOLO PENDIENTES)' : ' (COMPLETO del mes)') + ': ' + o.n + ' líneas de débito por ' + fd(o.tot) + ' y créditos por el mismo valor ' + 'a la cuenta por pagar 23… de cada regla (tercero = cliente)' + '.' + (modo === 'completo' && yaGen ? '\nOJO: ya generaste planos de este mes; si ya los importaste en Siesa, este duplicaría la provisión.' : '') + '\n¿Descargar?')) return;
+  if (!confirm('Plano AR ' + p.tipo + (modo === 'pend' ? ' (SOLO PENDIENTES)' : ' (COMPLETO del mes)') + ': ' + o.n + ' líneas de débito por ' + fd(o.tot) + ' y créditos por el mismo valor ' + 'a la cuenta por pagar 23… de cada regla (tercero = cliente)' + '.' + (modo === 'completo' && yaGen ? '\nOJO: ya generaste planos de este mes; si ya los importaste en Siesa, este duplicaría la provisión.' : '') + '\n¿Descargar?')) return;
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([o.txt], { type: 'text/plain;charset=iso-8859-1' })); a.download = 'Confidenciales_' + (p.tipo === 'MODERNO' ? 'Moderno' : 'Otros') + '_' + p.lapso + (modo === 'pend' ? '_pendientes' : '') + '.TXT'; a.click();
   const g = modo === 'pend' ? (S.gen[genKey(p)] || {}) : {}; L.forEach(x => { g[x.k] = x.dto; });
   if (modo === 'completo') { const ks = clavesRegla(p); p.rows.forEach((r, i) => { if (!r.off) g[ks[i]] = r.dto; }); }
@@ -273,7 +274,7 @@ function planoHtml(p) {
       + '<td><input value="' + (r.pct * 100).toFixed(2).replace(/\.?0+$/, '') + '" onchange="setPct(' + i + ',this.value)" style="width:38px">%</td><td>' + fm(r.venta) + (dv ? '<div class="n">archivo ' + fm(p.bd[r.nit]) + '</div>' : '') + '</td>'
       + '<td><input value="' + r.dto.toLocaleString('es-CO', { maximumFractionDigits: 2 }) + '" onchange="setDto(' + i + ',this.value)"></td><td>' + esc(r.db) + '</td><td>' + esc(r.cr) + '</td></tr>';
   }).join('');
-  return '<div class="card"><h2>📄 Plano CPR ' + esc(p.tipo) + ' <span class="n" style="font-weight:400">· ' + esc(p.nombre) + '</span></h2>'
+  return '<div class="card"><h2>📄 Plano AR ' + esc(p.tipo) + ' <span class="n" style="font-weight:400">· ' + esc(p.nombre) + '</span></h2>'
     + '<div class="bar"><label>Fecha <input value="' + esc(p.fecha) + '" style="width:90px" onchange="S.planos[S.sel].fecha=this.value.replace(/\\D/g,\'\')"></label><label>Lapso <input value="' + esc(p.lapso) + '" style="width:70px" onchange="S.planos[S.sel].lapso=this.value.replace(/\\D/g,\'\')"></label><label>Notas <input value="' + esc(p.notas) + '" style="width:280px" onchange="S.planos[S.sel].notas=this.value"></label></div>'
     + '<div class="kpis"><div class="kpi"><div class="l">Líneas con descuento</div><div class="v">' + p.act.length + '</div></div><div class="kpi"><div class="l">Total descuentos</div><div class="v">' + fd(p.tot) + '</div><div class="s">' + (dif == null ? '' : dif === 0 || Math.abs(dif) < 1 ? '<span class="ok">= al archivo</span>' : 'archivo ' + fd(p.totDtoArch) + ' · dif ' + fd(dif)) + '</div></div><div class="kpi"><div class="l">Ventas usadas</div><div class="v" style="font-size:14px">' + (S.v ? 'Siesa ' + S.mes : 'Pendiente: traer ventas') + '</div><div class="s">Amarillo = difiere del archivo</div></div></div>'
     + (S.v ? '' : '<div class="inf" style="background:#fef3c7;border-color:#f59e0b">⚠ Aún no has traído las ventas de Siesa: sin ellas solo salen los valores fijos. Al descargar las traigo automáticamente (~1 min).</div>') + '<div class="bar"><button class="btn" onclick="descargar(\'completo\')">⬇ Plano COMPLETO del mes</button><button class="btn" onclick="descargar(\'pend\')">⬇ Solo PENDIENTES (' + lineasPlano(p, 'pend').length + ')</button><button class="btn g" onclick="reiniciaGen()">↺ Reiniciar «ya generado»</button><span class="n">' + (Object.keys(S.gen[genKey(p)] || {}).length ? 'Ya generado este mes: ' + Object.keys(S.gen[genKey(p)]).length + ' reglas. Pendientes = reglas nuevas o con valor distinto (se baja la diferencia).' : 'Aún no has generado plano de este mes.') + '</span></div>'
