@@ -3827,6 +3827,9 @@ function cblUxCaja(ref){ const M = (REABAST.referenciasMaestro||{})[String(ref||
   // Acepta "24", "24 pcs", "24 pcs/ctn", "24 pcs per ctn"… (el maestro guarda "N pcs/ctn"); 0 o texto sin número → sin dato
   const m = t.match(/^(\d+(?:\.\d+)?)\s*(?:pcs?|pzs?|unid\w*|uds?|und)?\s*(?:\/\s*ctns?|per\s*ctns?)?$/i); return m && Number(m[1])>0 ? Number(m[1]) : null; }
 function cblFaseBL(b){ const fs = (b.items||[]).map(it=>ceFaseLinea(it.estado||'Embarque','').fase).filter(f=>f!=null && f>=0); if(!fs.length) return (b.items||[]).length ? -1 : null; const m = Math.min(...fs); return (m===5 && fs.includes(6)) ? 6 : m; }
+function cblFasesBL(b){ const m = {}; (b.items||[]).forEach(it=>{ const f = ceFaseLinea(it.estado||'Embarque','').fase; if(f!=null && f>=0){ const k = (f===5 && (b.items||[]).some(x=>ceFaseLinea(x.estado||'Embarque','').fase===6)) ? 6 : f; m[k] = (m[k]||0)+1; } }); return m; }
+function cblParcial(b){ return Object.keys(cblFasesBL(b)).length>1; }
+function cblParcialTxt(b){ const m = cblFasesBL(b); return Object.keys(m).sort((a,c)=>c-a).map(f=>m[f]+' ítem(s) '+(CBL_FASE_TXT[f]||f)).join(' · '); }
 function cblEstadoBL(b){ const f = cblFaseBL(b); return f===-1 ? 'Cancelado' : f==null ? '—' : (CBL_FASE_TXT[f] || '—'); }
 function cblDeOC(numero){ return CBL.bls.some(b=>(b.items||[]).some(it=>ceNum(it.oc)===ceNum(numero))); }
 async function ingCargarConf(){
@@ -3896,13 +3899,12 @@ function cblDesdeExcel(){
     const ls = base.filter(x=>x.bl && String(x.bl).toUpperCase()===String(b0.bl).toUpperCase() && x.f!==-1); if(!ls.length) return;
     const b = JSON.parse(JSON.stringify(b0)), ch = []; let n = 0;
     // Un BL = un solo estado: el más avanzado entre Embarque/Tránsito/Nacionalización de sus líneas; ETD en verde = ya zarpó (mínimo Tránsito)
-    const fsB = ls.map(x=>x.f).filter(f=>f===5||f===6||f===7); let FB = fsB.length ? Math.max(...fsB) : null;
-    if(ls.some(x=>x.zv) && (FB==null || FB<6)) FB = 6;
+    const zarpo = ls.some(x=>x.zv);   // ETD en verde = ya zarpó: ningún ítem puede quedar en Embarque (los demás conservan su propio estado: el BL puede ser parcial)
     (b.items||[]).forEach(it=>{
       const l = ls.find(z=>ceNum(z.oc)===ceNum(it.oc) && ceRefKey(z.r)===ceRefKey(it.ref));
       if(l && l.rm && /^(REG-|TMR-I-)/i.test(String(l.rm).trim()) && !it.rim){ it.rim = String(l.rm).trim(); n++; }   // N.º de registro de importación por referencia (la fecha de vigencia se pone a mano)
       const fi = ceFaseLinea(it.estado||'Embarque','').fase;
-      const tf = l ? ((l.f===9 || l.f==null || l.f<0) ? l.f : (FB!=null ? FB : l.f)) : ((fi===5||fi===6) && FB!=null ? FB : null);
+      const tf = l ? ((l.f===5 && zarpo) ? 6 : l.f) : ((fi===5 && zarpo) ? 6 : null);
       if(tf==null || tf<0) return;
       if(fi!=null && fi>tf){ adel.push(b.bl+' · '+it.oc+' '+it.ref); return; }
       let m = false;
@@ -4148,8 +4150,9 @@ async function cblCrear(){
 function cblBLsFiltrados(){
   const f = CBL.f, q = (f.q||'').toLowerCase().trim();
   return CBL.bls.filter(b=>{ const fase = cblFaseBL(b);
-    if(f.estado==='activos' && fase===9) return false; if(f.estado==='ingresados' && fase!==9) return false;
-    if(['5','6','7'].includes(f.estado) && String(fase)!==f.estado) return false;
+    const FM = cblFasesBL(b), par = Object.keys(FM).length>1;   // BL parcial: sale en cada estado donde tenga ítems
+    if(f.estado==='activos' && fase===9) return false; if(f.estado==='ingresados' && fase!==9 && !(par && FM[9])) return false;
+    if(['5','6','7'].includes(f.estado) && String(fase)!==f.estado && !(par && FM[f.estado])) return false;
     if(f.kpi){ const act = fase!==9 && fase!==-1; if(!act) return false;
       if(f.kpi==='transito' && fase!==6) return false;
       if(f.kpi==='prox'){ const d = b.eta ? (new Date(b.eta+'T12:00:00')-Date.now())/86400000 : null; if(!(d!=null && d>=0 && d<=15)) return false; }
@@ -4246,7 +4249,7 @@ function cblFilaBL(b, hoy, clk){ const d = b.eta ? Math.ceil((new Date(b.eta+'T1
     return `<tr style="cursor:pointer;" onclick="${clk}"><td style="font-family:monospace;font-weight:800;">${reabastEsc(b.bl)}</td><td onclick="event.stopPropagation()"><input class="inp" style="font-size:11px;width:120px;" placeholder="N.º DIM" title="Número de la declaración de importación (DIM) de este BL" value="${reabastEsc(b.dim||'')}" ${cblPuede()?'':'disabled'} onchange="cblDim('${b.id}',this.value)"></td><td title="${reabastEsc(ocs.join(', '))}">${reabastEsc(ocs.slice(0,3).join(', '))}${ocs.length>3?' +'+(ocs.length-3):''}</td><td>${reabastEsc(b.agente||'—')}</td><td>${reabastEsc((b.po||'—')+' → '+(b.pd||'—'))}</td><td onclick="event.stopPropagation()">${cblFd(b.etd)}${fase===5?` <span style="cursor:pointer;" title="Actualizar ETD" onclick="cblEditarFecha('${b.id}','etd')">✏️</span>`:''}</td>
     <td style="white-space:nowrap;" onclick="event.stopPropagation()"><b>${cblFd(b.eta)}</b>${b.etaConf?' <span title="ETA confirmada (verde en la sábana)" style="color:#16a34a;">✔</span>':''}${fase!==9&&fase!==-1?` <span style="cursor:pointer;" title="Actualizar ETA" onclick="cblEditarFecha('${b.id}','eta')">✏️</span>`:''}${fase!==9 && d!=null?`<div style="font-size:10px;color:${d<0?'#991b1b':d<=15?'#1e40af':'var(--mu)'};">${d<0?'hace '+(-d)+' d':d===0?'hoy':'en '+d+' d'}</div>`:''}</td>
     <td style="text-align:right;">${(b.items||[]).length}</td><td style="text-align:right;">${cblN(cbm,1)}</td>
-    <td><span class="cbl-pill" style="${fase===9?'background:#dcfce7;color:#166534;':fase===5?'background:#ede9fe;color:#5b21b6;':fase===6?'background:#dbeafe;color:#1e40af;':fase===7?'background:#fef3c7;color:#92400e;':''}">${reabastEsc(cblEstadoBL(b))}</span></td>
+    <td><span class="cbl-pill" style="${fase===9?'background:#dcfce7;color:#166534;':fase===5?'background:#ede9fe;color:#5b21b6;':fase===6?'background:#dbeafe;color:#1e40af;':fase===7?'background:#fef3c7;color:#92400e;':''}">${reabastEsc(cblEstadoBL(b))}</span>${cblParcial(b)?` <span class="cbl-pill" style="background:#fce7f3;color:#9d174d;" title="${reabastEsc(cblParcialTxt(b))}">◐ Parcial</span>`:''}</td>
     <td>${rim?`<b>${reabastEsc(b.registro.numero)}</b>${b.registro.aprobado?' ✅':''}`:'<span class="arte-mu">—</span>'}${(nSV=>nSV?`<div style="font-size:10px;font-weight:700;color:#991b1b;" title="Ítems sin registro de importación">⚠️ ${nSV} ítem(s) sin registro</div>`:'')((b.items||[]).filter(cblSinVig).length)}</td><td style="white-space:nowrap;" onclick="event.stopPropagation()">${cblBotonAvanzar(b,true)}</td></tr>`; }
 function cblHtmlTabla(){
   cblCupoMapa();
