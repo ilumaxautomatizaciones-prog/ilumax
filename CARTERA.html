@@ -140,6 +140,26 @@ function filtrarCli() {
 }
 function cellsB(b, fav, tot) { return b.map((n, i) => '<td class="' + (i === 2 ? 'r1' : i === 3 ? 'r2' : i === 4 ? 'r3' : '') + '">' + (n ? fm(n) : '–') + '</td>').join('') + '<td class="fav">' + (fav ? fm(fav) : '–') + '</td><td><b>' + fm(tot) + '</b></td>'; }
 const TH = '<th>' + BK.map((b, i) => i ? b + ' d' : b).join('</th><th>') + '</th><th>A favor</th><th>Saldo neto</th>';
+// Si lo escrito en el buscador de Facturas es un NIT, además de las cuentas por cobrar se listan las cuentas por pagar al mismo tercero (Siesa)
+let CXPQ = { nit: '', rows: null, tm: null };
+function cxpNitQ() { const q = Q.replace(/[.\s-]/g, ''); return /^\d{6,12}$/.test(q) ? q : ''; }
+function cxpPintar() {
+  const box = $('cxpBox'); if (!box) return; const n = cxpNitQ();
+  if (!n) { CXPQ.nit = ''; CXPQ.rows = null; box.innerHTML = ''; return; }
+  const pintar = () => {
+    const b = $('cxpBox'); if (!b || cxpNitQ() !== n) return;
+    const R = (CXPQ.rows || []).filter(d => cxpSaldo(d) > 0.5).sort((a, c) => String(a.fecha).localeCompare(String(c.fecha))), tot = R.reduce((t, d) => t + ((d.cr || 0) - (d.db || 0)), 0);
+    b.innerHTML = '<div class="card"><h2>Cuentas por pagar al NIT ' + esc(n) + ' (' + R.length + ') · ' + fm(Math.abs(tot)) + '</h2><div class="tw"><table><thead><tr><th>Cuenta</th><th>Sucursal</th><th>Documento</th><th>Fecha</th><th>Vence</th><th>Saldo</th><th style="text-align:left">Notas</th></tr></thead><tbody>' +
+      (R.map(d => '<tr><td><b>' + esc(d.cuenta) + '</b></td><td>' + esc(d.suc || '') + '</td><td>' + (d.consec > 0 ? esc(String(d.consec)) : '–') + '</td><td>' + esc(d.fecha || '') + '</td><td>' + esc(d.vcto || '') + '</td><td>' + fm(cxpSaldo(d)) + '</td><td class="n" style="text-align:left;min-width:200px">' + esc(d.notas || '') + '</td></tr>').join('') || '<tr><td colspan="7" class="empty">Sin cuentas por pagar para este NIT</td></tr>') + '</tbody></table></div></div>';
+  };
+  if (CXPQ.nit === n && CXPQ.rows) { pintar(); return; }
+  box.innerHTML = '<div class="err">Buscando cuentas por pagar del NIT ' + esc(n) + '…</div>';
+  clearTimeout(CXPQ.tm); CXPQ.tm = setTimeout(async () => {
+    let j = await conApi({ accion: 'cxp', nit: n }); let rows = j && j.ok ? (j.rows || []) : null;
+    if (rows && !rows.length && n.length === 10) { j = await conApi({ accion: 'cxp', nit: n.slice(0, 9) }); rows = j && j.ok ? (j.rows || []) : rows; }
+    if (cxpNitQ() !== n) return; CXPQ.nit = n; CXPQ.rows = rows || []; if (!rows) { const b = $('cxpBox'); if (b) b.innerHTML = '<div class="err">No pude consultar las cuentas por pagar (' + esc((j && j.error) || 'sin respuesta') + ').</div>'; return; } pintar();
+  }, 450);
+}
 function filaDocs(ds) {
   return ds.slice().sort((a, b) => b.dv - a.dv).map(d => '<tr class="det"><td colspan="2"><b>' + esc(d.tipo + d.consec + (d.cuota ? '-' + d.cuota : '')) + '</b>' + (d.notas ? ' · ' + esc(d.notas) : '') + '</td><td colspan="2">Fecha ' + esc(d.fecha) + '</td><td colspan="2">Vence ' + esc(d.vcto) + (d.saldo > 0 && d.dv > 0 ? ' (' + d.dv + ' d)' : '') + '</td><td colspan="2">' + fm(d.saldo) + '</td></tr>').join('');
 }
@@ -155,8 +175,8 @@ function vista(soloTabla) {
     const L = D.docsL.filter(d => Math.abs(d.saldo) > 0.5 && (!VEND || d.vend === VEND) && (!q || [d.tipo + '-' + d.consec, d.tipo + d.consec, d.consec, d.suc, d.bruto, d.db, d.saldo, d.cli, d.nit, d.notas, d.vend].join(' ').toUpperCase().includes(q))).sort((a, b) => b.dv - a.dv);
     const tot = L.reduce((s, d) => s + d.saldo, 0);
     const rows = L.slice(0, 500).map(d => '<tr><td><b>' + esc(d.tipo + '-' + d.consec + (d.cuota ? '-' + d.cuota : '')) + '</b></td><td>' + esc(d.suc) + '</td><td>' + (d.bruto == null ? '–' : fm(d.bruto)) + '</td><td>' + fm(d.db) + '</td><td class="n" style="text-align:left">' + esc(d.cli) + '</td><td>' + fm(d.saldo) + '</td><td class="n" style="text-align:left;min-width:200px">' + esc(d.notas) + '</td></tr>').join('');
-    c.innerHTML = barra(vendSel()) + '<div class="card"><h2>Facturas y documentos con saldo (' + L.length + ') · ' + fm(tot) + '</h2><div class="tw"><table><thead><tr><th>Factura</th><th>Sucursal</th><th>Valor bruto</th><th>Valor cartera</th><th style="text-align:left">Cliente</th><th>Saldo</th><th style="text-align:left">Notas</th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Sin resultados</td></tr>') + '</tbody></table></div></div>' + (L.length > 500 ? '<div class="err">Se muestran las 500 más vencidas; usa el buscador o el Excel.</div>' : '');
-    keepFocus();
+    c.innerHTML = barra(vendSel()) + '<div class="card"><h2>Facturas y documentos con saldo (' + L.length + ') · ' + fm(tot) + '</h2><div class="tw"><table><thead><tr><th>Factura</th><th>Sucursal</th><th>Valor bruto</th><th>Valor cartera</th><th style="text-align:left">Cliente</th><th>Saldo</th><th style="text-align:left">Notas</th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Sin resultados</td></tr>') + '</tbody></table></div></div>' + (L.length > 500 ? '<div class="err">Se muestran las 500 más vencidas; usa el buscador o el Excel.</div>' : '') + '<div id="cxpBox"></div>';
+    keepFocus(); cxpPintar();
   } else if (TAB === 'con') {
     if (!soloTabla || !$('cfile')) { c.innerHTML = conVista(); conLista(); }
   } else if (TAB === 'ven') {
@@ -440,7 +460,7 @@ function conPlano(items, o) {
   });
   its.forEach(x => lines.push(plCart(n++, o.tipo, o.cons, x.d, o.nit, x.cartera, o.notas)));
   const dif0 = Math.round((pagC + ica + rte - car) * 100) / 100;
-  if (dif0 !== 0 && Math.abs(dif0) <= 10) lines.push(plRet(n++, o.tipo, o.cons, dif0 < 0 ? (o.ctaAjGasto || '53959505') : (o.ctaAjIngreso || '42955115'), o.nit, dif0 < 0 ? -dif0 : -dif0, 0, 'AJUSTE AL PESO', o.ccAj || '11005'));
+  if (dif0 !== 0 && Math.abs(dif0) <= 10 && !o.sinAj) lines.push(plRet(n++, o.tipo, o.cons, dif0 < 0 ? (o.ctaAjGasto || '53959505') : (o.ctaAjIngreso || '42955115'), o.nit, dif0 < 0 ? -dif0 : -dif0, 0, 'AJUSTE AL PESO', o.ccAj || '11005'));
   lines.push(plSeq(n) + '99990001001');
   const chk = plCheck(lines.join('\r\n'));
   return { chk, txt: ['000000100000001001'].concat(lines).join('\r\n') + '\r\n', ica, rte, pag, car, dif, n: its.length };
@@ -676,6 +696,8 @@ async function conPlanoGen() {
   }
   const otros = pendR.length ? [{ cta: ctaP, monto: pendR.reduce((a, r) => a + r.monto, 0), notas: 'DESCUENTOS CLIENTE (PENDIENTES)', n: pendR.length }] : [];
   const o = { banco: !previo && CON.total != null ? CON.total : null, otros, tipo: P.tipo.toUpperCase(), cons: +P.cons, fecha: P.fecha, nit: nitC, ctaIca: P.ctaIca, ctaIcaY: P.ctaIcaY, ctaRte: P.ctaRte, ctaBanco: P.ctaBanco, ctaMas: ctaMas || '23359590', elab: P.elab !== false, mas, notas: 'PAGO FACTURAS ' + (its[0].cli || '').slice(0, 30) };
+  const dfx = its.reduce((a, x) => a + x.monto + x.ica + x.rte - x.cartera, 0);
+  if (Math.abs(dfx) > 0.5 && Math.abs(dfx) <= 10) { let cc0 = ''; try { cc0 = localStorage.getItem('cart_ccaj') || '11005'; } catch (e) { } const cc = prompt('El plano lleva ' + fm(Math.abs(dfx)) + ' de AJUSTE AL PESO (cuenta ' + (dfx < 0 ? '53959505' : '42955115') + ').\nCentro de costo de esa línea (debe ser de un grupo que acepte esa cuenta; si Siesa da el error 11005, pregúntale a contabilidad cuál usan).\nDéjalo vacío para NO incluir la línea y ajustar el peso a mano en Siesa:', cc0); if (cc === null) return; try { localStorage.setItem('cart_ccaj', cc.trim()); } catch (e) { } o.ccAj = cc.trim(); o.sinAj = !cc.trim(); }
   const r = conPlano(its.map(x => ({ d: x.d, cartera: x.cartera, monto: x.monto, ica: x.ica, rte: x.rte, bruto: x.bruto, iva: x.iva, zona: x.zona })), o);
   if (Math.abs(r.dif) > 10) { alert('Las facturas no cuadran con ICA / RTE IVA (diferencia ' + fm(r.dif) + '). Revisa la conciliación.'); return; }
   const pend = conPend();
