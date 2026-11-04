@@ -18623,16 +18623,23 @@ const ivsM = n => '$ ' + ivsN(n);
 const ivsFd = d => d ? new Date(d).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 async function ivsCfg() {
   try {
-    const rows = await sb.get('configuracion', 'clave=in.(inv_bodegas_disp,inv_clasif,teso_trm_fecha,inv_param)');
+    const rows = await sb.get('configuracion', 'clave=in.(inv_bodegas_disp,inv_clasif,inv_clasif_forzar,teso_trm_fecha,inv_param)');
     (rows || []).forEach(r => {
       let v = r.valor; try { if (typeof v === 'string') v = JSON.parse(v); } catch (e) { }
       if (r.clave === 'inv_bodegas_disp' && Array.isArray(v) && v.length) IVS.bodegas = v.map(x => String(x).toUpperCase());
       if (r.clave === 'inv_param' && v) { IVS.trmFijo = Number(v.trm) > 0 ? Number(v.trm) : null; IVS.factor = Number(v.factor) > 0 ? Number(v.factor) : 1.15; }
       if (r.clave === 'inv_clasif') IVS.clasif = v && v.d ? v : null;
+      if (r.clave === 'inv_clasif_forzar') IVS.forzarAct = Array.isArray(v) ? v.map(x => String(x).trim()).filter(Boolean) : [];
       if (r.clave === 'teso_trm_fecha' && v) { const ks = Object.keys(v).sort(); if (ks.length) { IVS.trmFecha = ks[ks.length - 1]; if (IVS.trm == null) IVS.trm = Number(v[IVS.trmFecha]) || null; } }
     });
+    ivsAplicaForzar();
   } catch (e) { console.warn('ivsCfg', e); }
 }
+// Referencias que se cuentan como ACTIVAS aunque la BASE DE PRODUCTO diga SALDOS/EVACUAR/RENUNCIA (ej. 2330)
+function ivsAplicaForzar() { const c = IVS.clasif, F = IVS.forzarAct || []; if (!c || !F.length) return; const fs = new Set(F); c.d = (c.d || []).filter(k => !fs.has(k)); const a = new Set(c.act || []); F.forEach(k => a.add(k)); c.act = [...a]; c.a = c.act.length; }
+async function ivsForzarGuardar(msg) { try { await sb.upsert('configuracion', { clave: 'inv_clasif_forzar', valor: JSON.stringify(IVS.forzarAct || []), tipo: 'json' }, 'clave'); if (IVS.clasif) await sb.upsert('configuracion', { clave: 'inv_clasif', valor: JSON.stringify(IVS.clasif), tipo: 'json' }, 'clave'); toast(msg, 'ok'); } catch (e) { toast('No se pudo guardar: ' + e.message, 'er'); } ivsPintar(); }
+function ivsForzarAdd() { const i = document.getElementById('ivs-forz'); const k = String(i && i.value || '').trim(); if (!k) return; IVS.forzarAct = IVS.forzarAct || []; if (!IVS.forzarAct.includes(k)) IVS.forzarAct.push(k); ivsAplicaForzar(); ivsForzarGuardar('Referencia ' + k + ' marcada como activa (abastecida)'); }
+function ivsForzarQuitar(k) { IVS.forzarAct = (IVS.forzarAct || []).filter(x => x !== k); ivsForzarGuardar('Quitada de la lista. Vuelve a su estado de la base al cargar la BASE DE PRODUCTO otra vez.'); }
 async function renderInvAbast() {
   const pg = document.getElementById('pg-inv'); if (!pg) return;
   if (!document.getElementById('ivs-bar')) pg.insertAdjacentHTML('afterbegin', '<div id="ivs-bar" style="display:flex;gap:6px;margin:0 0 12px;"></div><div id="inv-seg"></div>');
@@ -18696,6 +18703,7 @@ function ivsPintar() {
   <div class="card" style="margin-bottom:12px;"><div class="ch"><div class="ct">3️⃣ Clasificación: regular vs descontinuado</div></div><div class="cb">
     ${hay ? '' : '<div class="alert" style="margin-bottom:8px;">Aún no hay clasificación cargada: todo se cuenta como regular. Sube el Excel BASE DE PRODUCTO (referencia + estado Activo / Descontinuado).</div>'}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><label class="btn btn-bl btn-sm" style="cursor:pointer;">📥 Cargar BASE DE PRODUCTO (Excel)<input type="file" accept=".xlsx,.xls" style="display:none;" onchange="ivsCargarClasif(this)"></label>${hay ? '<span class="arte-mu" style="font-size:11px;">' + ivsE(IVS.clasif.archivo || '') + ' · ' + ivsE((IVS.clasif.fecha || '').slice(0, 10)) + ' · ' + ivsN(IVS.clasif.d.length) + ' descontinuadas</span>' : ''}</div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><span class="arte-mu" style="font-size:11.5px;">Se cuentan como <b>activas</b> aunque la base diga descontinuada:</span>${(IVS.forzarAct || []).map(k => '<span class="chip on" title="Quitar" onclick="ivsForzarQuitar(\'' + ivsE(k).replace(/'/g, '') + '\')">' + ivsE(k) + ' ✕</span>').join('') || '<span class="arte-mu" style="font-size:11px;">ninguna</span>'}<input id="ivs-forz" class="inp" style="width:110px;font-size:12px;" placeholder="Referencia" onkeydown="if(event.key==='Enter')ivsForzarAdd()"><button class="btn btn-g btn-sm" onclick="ivsForzarAdd()">Agregar</button></div>
     <div class="tw"><table class="cbl-t"><thead><tr>${th('Clasificación')}${th('Referencias', 1)}${th('Con stock disp.', 1)}${th('Unidades disp.', 1)}${th('Valor disponible', 1)}${th('%', 1)}</tr></thead><tbody>
       ${[['Activo', reg], ['Descontinuado', des]].map(([n, L]) => { const fila = (nom, X, sub) => `<tr${sub ? '' : ' style="background:var(--s1);"'}><td style="${sub ? 'padding-left:26px;' : 'font-weight:800;'}">${sub ? ivsE(nom) : '▾ ' + n}</td><td style="text-align:right;">${ivsN(X.length)}</td><td style="text-align:right;">${ivsN(X.filter(p => p.disp > 0).length)}</td><td style="text-align:right;">${ivsN(sum(X, 'disp'))}</td><td style="text-align:right;${sub ? '' : 'font-weight:800;'}">${ivsM(sum(X, 'valor'))}</td><td style="text-align:right;">${totDisp ? (sum(X, 'valor') / totDisp * 100).toFixed(1) : 0}%</td></tr>`; const ests = {}; L.forEach(p => (ests[p.est] = ests[p.est] || []).push(p)); return fila(n, L, false) + Object.keys(ests).sort((x, y) => sum(ests[y], 'valor') - sum(ests[x], 'valor')).map(e => fila(e, ests[e], true)).join(''); }).join('')}
       <tr style="font-weight:800;background:var(--s1);"><td>Total general</td><td style="text-align:right;">${ivsN(C.refs.length)}</td><td style="text-align:right;">${ivsN(C.refs.filter(p => p.disp > 0).length)}</td><td style="text-align:right;">${ivsN(sum(C.refs, 'disp'))}</td><td style="text-align:right;">${ivsM(totDisp)}</td><td></td></tr></tbody></table></div></div></div>
@@ -18731,7 +18739,7 @@ async function ivsCargarClasif(inp) {
       if (ok) break;
     }
     if (!ok || !D.size) { toast('No encontré columnas de referencia y estado (Activo / Descontinuado) en ese Excel', 'er'); inp.value = ''; return; }
-    D.forEach(k => A.delete(k)); const v = { d: [...D], act: [...A], st: ST, cn: CN, a: A.size, ex: 1, archivo: f.name, fecha: new Date().toISOString() };
+    D.forEach(k => A.delete(k)); (IVS.forzarAct || []).forEach(k => { D.delete(k); A.add(k); }); const v = { d: [...D], act: [...A], st: ST, cn: CN, a: A.size, ex: 1, archivo: f.name, fecha: new Date().toISOString() };
     await sb.upsert('configuracion', { clave: 'inv_clasif', valor: JSON.stringify(v), tipo: 'json' }, 'clave'); IVS.clasif = v;
     try { const nm = x => x === 'EXCLUSIVO' ? 'Home Center' : (/^.?XITO$/.test(x) ? 'Éxito' : (x === 'ARA' ? 'ARA' : x.charAt(0) + x.slice(1).toLowerCase())); const r0 = await sb.get('configuracion', 'clave=eq.inv_canal_ref'); let m0 = {}; try { m0 = JSON.parse(r0[0].valor) || {}; } catch (e) { } Object.keys(CN).forEach(k => { if (k === pvClaveRef(k)) m0[k] = nm(CN[k]); }); await sb.upsert('configuracion', { clave: 'inv_canal_ref', valor: JSON.stringify(m0), tipo: 'json' }, 'clave'); INV_CANAL_REF = m0; } catch (e) { }
     toast('Clasificación cargada: ' + D.size + ' descontinuadas · ' + A.size + ' activas', 'ok'); ivsPintar();
