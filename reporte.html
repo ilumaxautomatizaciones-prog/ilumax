@@ -457,7 +457,7 @@ function pintarDet() {
     + '<select onchange="setDet(\'ase\',this.value)">' + opt('TODOS', 'Todo el equipo', DET.ase === 'TODOS') + D.asesores.map(a => opt(a, a, a === DET.ase)).join('') + '</select>'
     + '<input placeholder="🔍 Buscar cliente o # de factura…" value="' + esc(DET.q) + '" onchange="setDet(\'q\',this.value)">'
     + '<button class="btn" onclick="descargarExcel()">📥 Excel avanzado</button>'
-    + '<button class="btn" onclick="informeClientes()" title="Excel con los clientes de cada asesor: venta, facturas, última compra y comparación con el mes anterior">👥 Informe de clientes</button></div>';
+    + '<button class="btn" onclick="infAbrir()" title="Excel con los clientes de cada asesor, resumen general por canal y resumen por referencia. Tú eliges los meses">👥 Informe de clientes</button></div>';
   if (incompleto) h += '<div class="warn">⚠️ El mes anterior (' + mesLbl(DET.prev) + ') tiene pocas facturas cargadas; las comparaciones contra ese mes pueden verse más altas de lo real.</div>';
   const kp = (l, v, s, c, f) => '<div class="kpi"' + (f ? dr(f) : '') + '><div class="l">' + l + '</div><div class="v ' + (c || '') + '">' + v + '</div>' + (s ? '<div class="s">' + s + '</div>' : '') + '</div>';
   const cumpl = ppto > 0 ? vC / ppto : null;
@@ -716,7 +716,7 @@ async function xiPintar(tr, b) {
 document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('.xib'); if (!b) return; e.stopPropagation(); xiPintar(b.closest('tr'), b); }, true);
 
 // ───────── Informe de clientes por asesor (Excel) ─────────
-async function informeClientes() {
+async function informeClientes(extra) {
   try {
     await cargarScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
     const D = detDatos(), mes = DET.mes, wb = new ExcelJS.Workbook(), money = '"$" #,##0', pct = '0%';
@@ -753,10 +753,103 @@ async function informeClientes() {
     const e = 7 + info.length; wr.addRow(['TOTAL EQUIPO', { formula: `SUM(B8:B${e})` }, { formula: `SUM(C8:C${e})` }, { formula: `SUM(D8:D${e})` }, { formula: `SUM(E8:E${e})` }, { formula: `IF(E${e + 1}=0,"",D${e + 1}/E${e + 1}-1)` }]); wr.getRow(e + 1).font = { bold: true };
     [4, 5].forEach(c => wr.getColumn(c).numFmt = money); wr.getColumn(6).numFmt = pct; [34, 12, 12, 18, 18, 14].forEach((w, i) => wr.getColumn(i + 1).width = w);
     wr.getColumn(1).eachCell((c, n) => { if (n >= 8 && n <= e) c.font = { color: { argb: 'FF1D4ED8' }, underline: true }; });
+    if (extra) await extra(wb, HD);
     const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     a.download = 'Informe_clientes_' + mes + (DET.ase === 'TODOS' ? '' : '_' + DET.ase.split(' ')[0]) + '.xlsx'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   } catch (e) { alert('No se pudo generar el informe: ' + e.message); }
+}
+
+// ───────── Informe de clientes: meses a elegir + resumen general por canal + resumen por referencia ─────────
+const API_REFS = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/reporte-ventas-refs';
+function infAbrir() {
+  const y = (DET.corte || DET.mes).slice(0, 4), tope = +(DET.corte || DET.mes).slice(5, 7), nm = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+  let h = '';
+  for (let m = 1; m <= tope; m++) { const k = y + '-' + String(m).padStart(2, '0'); h += '<label style="display:inline-flex;align-items:center;gap:4px;margin:3px 10px 3px 0;font-size:13px"><input type="checkbox" class="infm" value="' + k + '"' + (k === DET.mes ? ' checked' : '') + '>' + nm[m - 1] + '</label>'; }
+  const ov = document.createElement('div'); ov.id = 'infOv'; ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px;max-width:420px;width:100%;box-shadow:0 10px 30px rgba(0,0,0,.3)"><div style="font-weight:800;font-size:16px;margin-bottom:4px">👥 Informe de clientes</div>'
+    + '<div style="font-size:12px;color:#64748b;margin-bottom:10px">' + (DET.ase === 'TODOS' ? 'Todo el equipo' : esc(DET.ase)) + ' · elige los meses de ' + y + '</div><div>' + h + '</div>'
+    + '<div style="margin:8px 0"><button class="btn" style="background:#e2e8f0" onclick="document.querySelectorAll(\'.infm\').forEach(c=>c.checked=true)">Todo el año</button> <button class="btn" style="background:#e2e8f0" onclick="document.querySelectorAll(\'.infm\').forEach(c=>c.checked=false)">Ninguno</button></div>'
+    + '<div style="font-size:11px;color:#64748b;margin-bottom:12px">Incluye: resumen general por canal, clientes por asesor y resumen por referencia (valores sin IVA).</div>'
+    + '<div id="infEst" style="font-size:12px;color:#b45309;margin-bottom:8px"></div><div style="text-align:right"><button class="btn" style="background:#e2e8f0" onclick="document.getElementById(\'infOv\').remove()">Cancelar</button> <button class="btn" id="infGo" onclick="infGenerar()">📥 Descargar</button></div></div>';
+  document.body.appendChild(ov);
+}
+async function infGenerar() {
+  const meses = [...document.querySelectorAll('.infm:checked')].map(c => c.value), est = document.getElementById('infEst'), go = document.getElementById('infGo');
+  if (!meses.length) { est.textContent = 'Elige al menos un mes.'; return; }
+  go.disabled = true; est.textContent = 'Preparando el informe…';
+  try {
+    const r = await fetch(API_REFS + '?k=' + encodeURIComponent(token()) + '&meses=' + meses.join(','), { cache: 'no-store' }), R = await r.json();
+    if (!r.ok || R.error) throw new Error(R.error || 'Error');
+    const filtro = DET.ase === 'TODOS' ? null : DET.ase;
+    R.refs = R.refs.filter(x => !filtro || x[1] === filtro); R.clientes = R.clientes.filter(x => !filtro || x[1] === filtro);
+    const sin = meses.filter(m => !(R.disponibles || []).includes(m));
+    if (sin.length === meses.length) { est.textContent = 'Todavía no hay detalle por referencia cargado para esos meses.'; go.disabled = false; return; }
+    const extra = async (wb, HD) => infHojas(wb, HD, R, meses.filter(m => !sin.includes(m)));
+    if (meses.length === 1 && meses[0] === DET.mes) await informeClientes(extra);
+    else await infMultiples(R, meses.filter(m => !sin.includes(m)), extra);
+    document.getElementById('infOv').remove();
+    if (sin.length) alert('Sin detalle por referencia para: ' + sin.map(mesLbl).join(', '));
+  } catch (e) { est.textContent = 'No se pudo generar: ' + e.message; go.disabled = false; }
+}
+function infHojas(wb, HD, R, meses) {
+  const money = '"$" #,##0', num0 = '#,##0', mm = meses.slice().sort(), ml = mm.map(mesLbl), ini = (ws, t, sub) => { ws.addRow([t]); ws.getRow(1).font = { bold: true, size: 14 }; ws.addRow([sub]); ws.addRow([]); };
+  const hd = (ws, arr) => { const r = ws.addRow(arr); r.eachCell(c => Object.assign(c, HD)); r.height = 26; return r; };
+  const quien = DET.ase === 'TODOS' ? 'Todo el equipo' : DET.ase, sub = quien + ' · ' + ml.join(', ') + ' · valores sin IVA (facturas de venta, antes de notas crédito)';
+  // Resumen general por canal
+  const wg = wb.addWorksheet('Resumen general', { properties: { tabColor: { argb: 'FF2563EB' } } }); ini(wg, 'Resumen general de ventas por canal', sub);
+  const canal = {}, ase = {}, cli = {}; let tot = 0;
+  R.clientes.forEach(c => { const k = c[4]; (canal[k] = canal[k] || { v: {}, n: 0, cl: new Set() }); canal[k].v[c[0]] = (canal[k].v[c[0]] || 0) + c[5]; canal[k].n += c[6]; canal[k].cl.add(c[2]); tot += c[5];
+    (ase[c[1]] = ase[c[1]] || { v: {}, n: 0, cl: new Set() }); ase[c[1]].v[c[0]] = (ase[c[1]].v[c[0]] || 0) + c[5]; ase[c[1]].n += c[6]; ase[c[1]].cl.add(c[2]); });
+  const tabla = (ws, rotulo, obj) => {
+    hd(ws, [rotulo, ...ml, 'Total', '% del total', 'Clientes', 'Facturas']); const r0 = ws.rowCount + 1, ks = Object.keys(obj).sort((a, b) => Object.values(obj[b].v).reduce((x, y) => x + y, 0) - Object.values(obj[a].v).reduce((x, y) => x + y, 0)), rN = r0 + ks.length - 1, cT = 2 + mm.length;
+    const L = i => String.fromCharCode(64 + i);
+    ks.forEach((k, i) => { const r = r0 + i; ws.addRow([k, ...mm.map(m => obj[k].v[m] || 0), { formula: `SUM(B${r}:${L(cT - 1)}${r})` }, { formula: `IF(${L(cT)}$${rN + 1}=0,0,${L(cT)}${r}/${L(cT)}$${rN + 1})` }, obj[k].cl.size, obj[k].n]); });
+    const t = ws.addRow(['TOTAL', ...mm.map((m, i) => ({ formula: `SUM(${L(2 + i)}${r0}:${L(2 + i)}${rN})` })), { formula: `SUM(${L(cT)}${r0}:${L(cT)}${rN})` }, '', '', { formula: `SUM(${L(cT + 3)}${r0}:${L(cT + 3)}${rN})` }]); t.font = { bold: true }; t.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } }; });
+    for (let c = 2; c <= cT; c++) ws.getColumn(c).numFmt = money; ws.getColumn(cT + 1).numFmt = '0.0%'; ws.addRow([]);
+  };
+  tabla(wg, 'Canal', canal); tabla(wg, 'Asesor', ase);
+  wg.getColumn(1).width = 36; for (let c = 2; c <= mm.length + 5; c++) wg.getColumn(c).width = 16;
+  // Resumen por referencia
+  const rf = {}, rc = {}; R.refs.forEach(x => { const k = x[4]; const o = rf[k] || (rf[k] = { ref: k, desc: x[5], u: 0, v: 0, m: {}, c: new Set() }); o.u += x[6]; o.v += x[7]; o.m[x[0]] = (o.m[x[0]] || 0) + x[7]; o.c.add(x[2]); });
+  const wr = wb.addWorksheet('Resumen referencias', { properties: { tabColor: { argb: 'FF16A34A' } } }); ini(wr, 'Resumen de ventas por referencia', sub);
+  hd(wr, ['Referencia', 'Descripción', 'Unidades', 'Valor', '% del total', 'Clientes', ...ml]);
+  const lis = Object.values(rf).sort((a, b) => b.v - a.v), r0 = 5, rN = r0 + lis.length - 1;
+  lis.forEach((o, i) => { const r = r0 + i; wr.addRow([o.ref, o.desc, o.u, o.v, { formula: `IF(D$${rN + 1}=0,0,D${r}/D$${rN + 1})` }, o.c.size, ...mm.map(m => o.m[m] || 0)]); });
+  const tr = wr.addRow(['', 'TOTAL', { formula: `SUM(C${r0}:C${rN})` }, { formula: `SUM(D${r0}:D${rN})` }, '', '', ...mm.map((m, i) => ({ formula: `SUM(${String.fromCharCode(71 + i)}${r0}:${String.fromCharCode(71 + i)}${rN})` }))]); tr.font = { bold: true };
+  wr.getColumn(3).numFmt = num0; wr.getColumn(4).numFmt = money; wr.getColumn(5).numFmt = '0.0%'; for (let c = 7; c < 7 + mm.length; c++) wr.getColumn(c).numFmt = money;
+  [14, 46, 12, 16, 10, 10].forEach((w, i) => wr.getColumn(i + 1).width = w); for (let c = 7; c < 7 + mm.length; c++) wr.getColumn(c).width = 15;
+  wr.views = [{ state: 'frozen', xSplit: 2, ySplit: 4 }]; wr.autoFilter = `A4:${String.fromCharCode(70 + mm.length)}${rN}`;
+  // Cliente x referencia
+  const wx = wb.addWorksheet('Cliente x Referencia', { properties: { tabColor: { argb: 'FFF59E0B' } } }); ini(wx, 'Qué compró cada cliente (por referencia)', sub);
+  hd(wx, ['Asesor', 'Cliente', 'NIT', 'Referencia', 'Descripción', 'Unidades', 'Valor']);
+  const cx = {}; R.refs.forEach(x => { const k = x[1] + '|' + x[2] + '|' + x[4]; const o = cx[k] || (cx[k] = [x[1], x[3], x[2], x[4], x[5], 0, 0]); o[5] += x[6]; o[6] += x[7]; });
+  const fil = Object.values(cx).sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]) || b[6] - a[6]); fil.forEach(f => wx.addRow(f));
+  wx.getColumn(6).numFmt = num0; wx.getColumn(7).numFmt = money; [28, 40, 14, 14, 44, 11, 16].forEach((w, i) => wx.getColumn(i + 1).width = w);
+  wx.views = [{ state: 'frozen', ySplit: 4 }]; wx.autoFilter = `A4:G${4 + fil.length}`;
+}
+async function infMultiples(R, meses, extra) {
+  await cargarScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
+  const wb = new ExcelJS.Workbook(), money = '"$" #,##0', mm = meses.slice().sort(), ml = mm.map(mesLbl);
+  const HD = { font: { bold: true, color: { argb: 'FFFFFFFF' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } }, alignment: { vertical: 'middle', horizontal: 'center', wrapText: true } };
+  const L = i => String.fromCharCode(64 + i), nombres = new Set(), safe = n => { let b = n.replace(/[\\/?*\[\]:]/g, ' ').slice(0, 28).trim() || 'Asesor', x = b, i = 2; while (nombres.has(x)) x = b.slice(0, 26) + ' ' + i++; nombres.add(x); return x; };
+  await extra(wb, HD);
+  const ases = [...new Set(R.clientes.map(c => c[1]))].sort();
+  ases.forEach(a => {
+    const cm = {}; R.clientes.filter(c => c[1] === a).forEach(c => { const o = cm[c[2]] || (cm[c[2]] = { cli: c[3], v: {}, n: 0, ult: '', cn: {} }); o.v[c[0]] = (o.v[c[0]] || 0) + c[5]; o.n += c[6]; if (c[7] > o.ult) o.ult = c[7]; o.cn[c[4]] = (o.cn[c[4]] || 0) + c[5]; });
+    const lis = Object.values(cm).sort((x, y) => Object.values(y.v).reduce((s, z) => s + z, 0) - Object.values(x.v).reduce((s, z) => s + z, 0));
+    const ws = wb.addWorksheet(safe(a)); ws.addRow([a]); ws.getRow(1).font = { bold: true, size: 14 }; ws.addRow([ml.join(', ') + ' · valores sin IVA']); ws.addRow([]);
+    const hr = ws.addRow(['#', 'Cliente', 'Canal principal', ...ml, 'Total', 'Facturas', 'Última compra']); hr.eachCell(c => Object.assign(c, HD)); hr.height = 24;
+    const r0 = 5, rN = r0 + lis.length - 1, cT = 4 + mm.length;
+    lis.forEach((c, i) => { const r = r0 + i; ws.addRow([i + 1, c.cli, Object.entries(c.cn).sort((x, y) => y[1] - x[1])[0][0], ...mm.map(m => c.v[m] || 0), { formula: `SUM(D${r}:${L(cT - 1)}${r})` }, c.n, c.ult ? new Date(c.ult + 'T12:00:00Z') : '']); });
+    const t = ws.addRow(['', 'TOTAL', '', ...mm.map((m, i) => ({ formula: `SUM(${L(4 + i)}${r0}:${L(4 + i)}${rN})` })), { formula: `SUM(${L(cT)}${r0}:${L(cT)}${rN})` }, { formula: `SUM(${L(cT + 1)}${r0}:${L(cT + 1)}${rN})` }, '']); t.font = { bold: true };
+    for (let c = 4; c <= cT; c++) ws.getColumn(c).numFmt = money; ws.getColumn(cT + 2).numFmt = 'dd/mm/yyyy';
+    ws.getColumn(1).width = 5; ws.getColumn(2).width = 40; ws.getColumn(3).width = 20; for (let c = 4; c <= cT + 2; c++) ws.getColumn(c).width = 15;
+    ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 4 }]; ws.autoFilter = `A4:${L(cT + 2)}${rN}`;
+  });
+  const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+  a.download = 'Informe_clientes_' + mm[0] + (mm.length > 1 ? '_a_' + mm[mm.length - 1] : '') + (DET.ase === 'TODOS' ? '' : '_' + DET.ase.split(' ')[0]) + '.xlsx'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
 // ───────── Ventas perdidas (pedidos de Siesa que no se facturaron completos) ─────────
@@ -897,9 +990,9 @@ function pintarImp() {
   const chip = (lbl, v, e, col) => '<div onclick="IMP.est=\'' + e + '\';pintarImp()" style="cursor:pointer;flex:1;min-width:110px;background:' + (IMP.est === e ? '#dbeafe' : '#fff') + ';border:' + (IMP.est === e ? '2px solid #2563eb' : '1px solid #bfdbfe') + ';border-radius:12px;padding:8px 12px"><div style="font-size:22px;font-weight:800;color:' + col + '">' + v + '</div><div style="font-size:11px;color:#475569;font-weight:600">' + lbl + '</div></div>';
   const pill = f => { const c = f[6] === 6 ? ['#dbeafe', '#1e40af'] : f[6] === 7 ? ['#fef3c7', '#92400e'] : f[6] === 9 ? ['#dcfce7', '#166534'] : f[6] === 5 ? ['#ede9fe', '#5b21b6'] : ['#e0f2fe', '#075985']; return '<span style="background:' + c[0] + ';color:' + c[1] + ';padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700">' + esc(f[5]) + '</span>'; };
   const tot = Math.round(L.reduce((a, f) => a + f[4], 0)).toLocaleString('es-CO');
-  let h = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">' + chip('Líneas activas', act.length, 'activos', '#1e3a8a') + chip('En producción', cnt(3), '3', '#0369a1') + chip('En embarque', cnt(5), '5', '#5b21b6') + chip('En tránsito', cnt(6), '6', '#1d4ed8') + chip('En nacionalización', cnt(7), '7', '#b45309') + chip('Ingresadas', R.filter(f => f[6] === 9).length, '9', '#166534') + '</div>'
+  let h = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">' + chip('Líneas activas', act.length, 'activos', '#1e3a8a') + chip('En embarque', cnt(5), '5', '#5b21b6') + chip('En tránsito', cnt(6), '6', '#1d4ed8') + chip('En nacionalización', cnt(7), '7', '#b45309') + chip('Ingresadas', R.filter(f => f[6] === 9).length, '9', '#166534') + '</div>'
     + '<div class="bar"><input id="impQ" placeholder="🔎 Buscar BL, orden, referencia o descripción…" value="' + esc(IMP.q) + '" oninput="IMP.q=this.value;clearTimeout(window.__impT);window.__impT=setTimeout(impTabla,200)">'
-    + '<select onchange="IMP.est=this.value;pintarImp()">' + [['activos', 'Activos (sin ingresar)'], ['todos', 'Todos'], ['3', 'Producción'], ['5', 'Embarque'], ['6', 'Tránsito'], ['7', 'Nacionalización'], ['9', 'Ingresadas']].map(o => '<option value="' + o[0] + '"' + (IMP.est === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>'
+    + '<select onchange="IMP.est=this.value;pintarImp()">' + [['activos', 'Activos (sin ingresar)'], ['todos', 'Todos'], ['5', 'Embarque'], ['6', 'Tránsito'], ['7', 'Nacionalización'], ['9', 'Ingresadas']].map(o => '<option value="' + o[0] + '"' + (IMP.est === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>'
     + '<label style="font-size:12px;font-weight:600;display:flex;gap:5px;align-items:center"><input type="checkbox" style="flex:none" ' + (IMP.soloNov ? 'checked' : '') + ' onchange="IMP.soloNov=this.checked;pintarImp()"> Solo con novedades</label>'
     + '<select onchange="IMP.dias=+this.value;IMP.d=null;cargarImp()">' + [7, 15, 30].map(n => '<option value="' + n + '"' + (IMP.dias === n ? ' selected' : '') + '>Novedades: últimos ' + n + ' días</option>').join('') + '</select>'
     + '<button class="btn" onclick="excelImp()">📥 Excel</button><span id="impN" style="font-size:12px;color:#475569;font-weight:600">' + L.length + ' líneas · ' + tot + ' u</span></div>'
