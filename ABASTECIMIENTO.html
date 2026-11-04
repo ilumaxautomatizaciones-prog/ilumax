@@ -3826,7 +3826,7 @@ async function cblGuardar(cambiados, eliminados){
 function cblUxCaja(ref){ const M = (REABAST.referenciasMaestro||{})[String(ref||'').trim()] || {}; const t = String(M.master_packaging||'').trim();
   // Acepta "24", "24 pcs", "24 pcs/ctn", "24 pcs per ctn"… (el maestro guarda "N pcs/ctn"); 0 o texto sin número → sin dato
   const m = t.match(/^(\d+(?:\.\d+)?)\s*(?:pcs?|pzs?|unid\w*|uds?|und)?\s*(?:\/\s*ctns?|per\s*ctns?)?$/i); return m && Number(m[1])>0 ? Number(m[1]) : null; }
-function cblFaseBL(b){ const fs = (b.items||[]).map(it=>ceFaseLinea(it.estado||'Embarque','').fase).filter(f=>f!=null && f>=0); return fs.length ? Math.min(...fs) : (b.items||[]).length ? -1 : null; }
+function cblFaseBL(b){ const fs = (b.items||[]).map(it=>ceFaseLinea(it.estado||'Embarque','').fase).filter(f=>f!=null && f>=0); if(!fs.length) return (b.items||[]).length ? -1 : null; const m = Math.min(...fs); return (m===5 && fs.includes(6)) ? 6 : m; }
 function cblEstadoBL(b){ const f = cblFaseBL(b); return f===-1 ? 'Cancelado' : f==null ? '—' : (CBL_FASE_TXT[f] || '—'); }
 function cblDeOC(numero){ return CBL.bls.some(b=>(b.items||[]).some(it=>ceNum(it.oc)===ceNum(numero))); }
 async function ingCargarConf(){
@@ -3895,16 +3895,20 @@ function cblDesdeExcel(){
   (CBL.bls||[]).forEach(b0=>{
     const ls = base.filter(x=>x.bl && String(x.bl).toUpperCase()===String(b0.bl).toUpperCase() && x.f!==-1); if(!ls.length) return;
     const b = JSON.parse(JSON.stringify(b0)), ch = []; let n = 0;
+    // Un BL = un solo estado: el más avanzado entre Embarque/Tránsito/Nacionalización de sus líneas; ETD en verde = ya zarpó (mínimo Tránsito)
+    const fsB = ls.map(x=>x.f).filter(f=>f===5||f===6||f===7); let FB = fsB.length ? Math.max(...fsB) : null;
+    if(ls.some(x=>x.zv) && (FB==null || FB<6)) FB = 6;
     (b.items||[]).forEach(it=>{
       const l = ls.find(z=>ceNum(z.oc)===ceNum(it.oc) && ceRefKey(z.r)===ceRefKey(it.ref));
       if(l && l.rm && /^(REG-|TMR-I-)/i.test(String(l.rm).trim()) && !it.rim){ it.rim = String(l.rm).trim(); n++; }   // N.º de registro de importación por referencia (la fecha de vigencia se pone a mano)
-      if(!l || l.f==null || l.f<0) return;
       const fi = ceFaseLinea(it.estado||'Embarque','').fase;
-      if(fi!=null && fi>l.f){ adel.push(b.bl+' · '+it.oc+' '+it.ref); return; }
+      const tf = l ? ((l.f===9 || l.f==null || l.f<0) ? l.f : (FB!=null ? FB : l.f)) : ((fi===5||fi===6) && FB!=null ? FB : null);
+      if(tf==null || tf<0) return;
+      if(fi!=null && fi>tf){ adel.push(b.bl+' · '+it.oc+' '+it.ref); return; }
       let m = false;
-      if(fi!==l.f){ it.estado = cblEstadoNorm(l.e, l.f); m = true; }
-      if(l.f===9){ const ing = l.ing || l.pl || it.ingreso || ''; if(ing && it.ingreso!==ing){ it.ingreso = ing; m = true; } }
-      if(l.pl && it.planta!==l.pl){ it.planta = l.pl; m = true; }
+      if(fi!==tf){ it.estado = cblEstadoNorm('', tf); m = true; }
+      if(l && l.f===9){ const ing = l.ing || l.pl || it.ingreso || ''; if(ing && it.ingreso!==ing){ it.ingreso = ing; m = true; } }
+      if(l && l.pl && it.planta!==l.pl){ it.planta = l.pl; m = true; }
       if(m) n++; });
     // líneas del Excel que son de este BL pero no están como ítem (el BL se cargó con solo parte de sus líneas): se agregan
     const nuevos = new Map();
@@ -3917,7 +3921,10 @@ function cblDesdeExcel(){
     nuevos.forEach(it=>{ const u = cblUxCaja(it.ref); it.cajas = u ? Math.ceil(it.cant/u) : null; b.items.push(it); n++; });
     if(nuevos.size) ch.push(nuevos.size+' línea(s) del Excel agregadas al BL ('+[...new Set([...nuevos.values()].map(i=>i.oc))].join(', ')+')');
     const mx = k => ls.map(x=>x[k]).filter(Boolean).sort().pop()||'';
-    [['etd','d1'],['eta','d2']].forEach(([k,e])=>{ const v = mx(e); if(v && v!==b[k]){ ch.push(k.toUpperCase()+' '+(b[k]||'—')+' → '+v); b[k] = v; } });
+    // Fecha en verde en la sábana = real/confirmada (manda la sábana); sin verde = estimada: se sigue manejando en el portal (solo se llena si está vacía)
+    [['etd','d1','zv'],['eta','d2','ev']].forEach(([k,e,vf])=>{ const vl = ls.filter(x=>x[vf]), v = vl.length ? vl.map(x=>x[e]).filter(Boolean).sort().pop() : '';
+      if(v){ if(v!==b[k]){ ch.push(k.toUpperCase()+' '+(b[k]||'—')+' → '+v+' (confirmada)'); b[k] = v; } if(k==='etd'){ if(b.etd_real!==v){ b.etd_real = v; } } else b.etaConf = true; }
+      else if(!b[k]){ const v2 = mx(e); if(v2){ ch.push(k.toUpperCase()+' '+v2); b[k] = v2; } } });
     const rm = ls.map(x=>x.rm).find(Boolean); if(rm && !(b.registro && b.registro.numero)){ b.registro = {numero:String(rm), fecha:'', aprobado:false, quien:'Excel Com. Ext.', t:new Date().toISOString()}; ch.push('registro '+rm); }
     const cntD = {}; ls.forEach(x=>{ const d = ceDimFmt(x.dm); if(d) cntD[d] = (cntD[d]||0)+1; }); const ordD = Object.entries(cntD).sort((p,q)=>q[1]-p[1]);
     const nvD = ordD.length && (ordD.length===1 || ordD[0][1]>ordD[1][1]) ? ordD[0][0] : '';   // un BL tiene un solo DIM: el que más se repite en la sábana (si hay empate no se asigna)
@@ -4237,7 +4244,7 @@ function cblHtmlSinVig(){
 function cblCabBL(){ return `<thead><tr><th>BL</th><th>DIM</th><th>OC</th><th>Agente</th><th>Origen → Destino</th><th>ETD</th><th>ETA</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th>Estado</th><th>Registro de importación</th><th>Siguiente paso</th></tr></thead>`; }
 function cblFilaBL(b, hoy, clk){ const d = b.eta ? Math.ceil((new Date(b.eta+'T12:00:00')-hoy)/86400000) : null, fase = cblFaseBL(b), ocs = [...new Set((b.items||[]).map(it=>it.oc))], cbm = (b.items||[]).reduce((a,it)=>a+(it.cbm>0?it.cant*it.cbm:0),0), rim = b.registro && b.registro.numero;
     return `<tr style="cursor:pointer;" onclick="${clk}"><td style="font-family:monospace;font-weight:800;">${reabastEsc(b.bl)}</td><td onclick="event.stopPropagation()"><input class="inp" style="font-size:11px;width:120px;" placeholder="N.º DIM" title="Número de la declaración de importación (DIM) de este BL" value="${reabastEsc(b.dim||'')}" ${cblPuede()?'':'disabled'} onchange="cblDim('${b.id}',this.value)"></td><td title="${reabastEsc(ocs.join(', '))}">${reabastEsc(ocs.slice(0,3).join(', '))}${ocs.length>3?' +'+(ocs.length-3):''}</td><td>${reabastEsc(b.agente||'—')}</td><td>${reabastEsc((b.po||'—')+' → '+(b.pd||'—'))}</td><td onclick="event.stopPropagation()">${cblFd(b.etd)}${fase===5?` <span style="cursor:pointer;" title="Actualizar ETD" onclick="cblEditarFecha('${b.id}','etd')">✏️</span>`:''}</td>
-    <td style="white-space:nowrap;" onclick="event.stopPropagation()"><b>${cblFd(b.eta)}</b>${fase!==9&&fase!==-1?` <span style="cursor:pointer;" title="Actualizar ETA" onclick="cblEditarFecha('${b.id}','eta')">✏️</span>`:''}${fase!==9 && d!=null?`<div style="font-size:10px;color:${d<0?'#991b1b':d<=15?'#1e40af':'var(--mu)'};">${d<0?'hace '+(-d)+' d':d===0?'hoy':'en '+d+' d'}</div>`:''}</td>
+    <td style="white-space:nowrap;" onclick="event.stopPropagation()"><b>${cblFd(b.eta)}</b>${b.etaConf?' <span title="ETA confirmada (verde en la sábana)" style="color:#16a34a;">✔</span>':''}${fase!==9&&fase!==-1?` <span style="cursor:pointer;" title="Actualizar ETA" onclick="cblEditarFecha('${b.id}','eta')">✏️</span>`:''}${fase!==9 && d!=null?`<div style="font-size:10px;color:${d<0?'#991b1b':d<=15?'#1e40af':'var(--mu)'};">${d<0?'hace '+(-d)+' d':d===0?'hoy':'en '+d+' d'}</div>`:''}</td>
     <td style="text-align:right;">${(b.items||[]).length}</td><td style="text-align:right;">${cblN(cbm,1)}</td>
     <td><span class="cbl-pill" style="${fase===9?'background:#dcfce7;color:#166534;':fase===5?'background:#ede9fe;color:#5b21b6;':fase===6?'background:#dbeafe;color:#1e40af;':fase===7?'background:#fef3c7;color:#92400e;':''}">${reabastEsc(cblEstadoBL(b))}</span></td>
     <td>${rim?`<b>${reabastEsc(b.registro.numero)}</b>${b.registro.aprobado?' ✅':''}`:'<span class="arte-mu">—</span>'}${(nSV=>nSV?`<div style="font-size:10px;font-weight:700;color:#991b1b;" title="Ítems sin registro de importación">⚠️ ${nSV} ítem(s) sin registro</div>`:'')((b.items||[]).filter(cblSinVig).length)}</td><td style="white-space:nowrap;" onclick="event.stopPropagation()">${cblBotonAvanzar(b,true)}</td></tr>`; }
@@ -8964,12 +8971,19 @@ async function ceCargarResumen(forzar){
 }
 function ceBlLimpio(x, oc){ if(x==null || x==='') return ''; const t = (x instanceof Date) ? 'D' : String(x).trim(); if(t==='D' || /GMT[+-]\d{4}|^[A-Za-z]{3} [A-Za-z]{3} \d{1,2} \d{4}/.test(t)) return 'POR ASIGNAR-'+(oc||''); return t; }
 function ceDimFmt(x){ if(x==null||x==='') return ''; const t = (x instanceof Date) ? x.toISOString() : String(x).trim(); const m = t.match(/^[A-Za-z]{3} ([A-Za-z]{3}) (\d{1,2}) (\d{4})/); if(m){ const i = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'].indexOf(m[1].toLowerCase()); if(i>=0) return m[3]+'-'+String(i+1).padStart(2,'0')+'-'+String(m[2]).padStart(2,'0'); } return t.length>10 && /^\d{4}-\d{2}-\d{2}T/.test(t) ? t.slice(0,10) : t; }
+function ceBlOrden(l, oc){   // sin número de BL pero ya zarpó/en tránsito: si la OC está en un solo BL del portal se usa ese; si no, queda «PENDIENTE-<OC>» (sigue en Tránsito)
+  const b = ceBlLimpio(l.bl, oc); if(b) return b;
+  const f = ceFaseLinea(l.estado, l.comentario).fase; if(!(l.etdV || f===6 || f===7)) return '';
+  const n = ceNum(oc), bls = (typeof CBL!=='undefined' && CBL.bls) || [];
+  const c = [...new Set(bls.filter(x=>x.bl && !/^PENDIENTE/i.test(x.bl) && cblFaseBL(x)!==9 && (x.items||[]).some(it=>ceNum(it.oc)===n)).map(x=>x.bl))];
+  return c.length===1 ? c[0] : 'PENDIENTE-'+oc;
+}
 function ceCompactarBL(lineas){
   const iso = d => d ? new Date(d).toISOString().slice(0,10) : null;
   return lineas.filter(l=>l.ref!=null && String(l.ref).trim()!=='').map(l=>{
     const sub = (l.tokens||[]).find(t=>t!==l.orden && t.startsWith(l.orden+'-') && /^-\d+$/.test(t.slice(l.orden.length)));
-    return {o:l.orden, oc: sub||l.orden, r:String(l.ref).trim(), c: ceCantLinea(l.cantEnv, l.cantOrd), env:l.cantEnv, co:l.cantOrd, bl: ceBlLimpio(l.bl, sub||l.orden), ct: l.cont?String(l.cont).trim():'', dm: l.dim!=null&&String(l.dim).trim()?ceDimFmt(l.dim):'', cm: l.comentario?String(l.comentario).slice(0,200):'', rm: l.rim?String(l.rim).trim():'',
-      e:l.estado||'', f:ceFaseLinea(l.estado, l.comentario).fase, d1:iso(l.etd), d2:iso(l.eta), pl:iso(l.planta), ing:iso(l.ingreso)};
+    return {o:l.orden, oc: sub||l.orden, r:String(l.ref).trim(), c: ceCantLinea(l.cantEnv, l.cantOrd), env:l.cantEnv, co:l.cantOrd, bl: ceBlOrden(l, sub||l.orden), ct: l.cont?String(l.cont).trim():'', dm: l.dim!=null&&String(l.dim).trim()?ceDimFmt(l.dim):'', cm: l.comentario?String(l.comentario).slice(0,200):'', rm: l.rim?String(l.rim).trim():'',
+      e:l.estado||'', f:ceFaseLinea(l.estado, l.comentario).fase, zv:l.etdV?1:0, ev:l.etaV?1:0, d1:iso(l.etd), d2:iso(l.eta), pl:iso(l.planta), ing:iso(l.ingreso)};
   });
 }
 function ocEnCaminoRef(ref){
@@ -9054,6 +9068,11 @@ function ceFaseLinea(estado, comentario){
   if(/pausad/.test(t)) return {fase:3, revisar:'pausada'};
   return {fase:null, revisar: t ? 'estado "'+estado+'"' : 'sin estado'};
 }
+function ceVerde(hoja, r, c){   // celda con relleno verde en la sábana: ETD verde = ya zarpó · ETA verde = fecha confirmada
+  if(c<0) return false; const ce = hoja[XLSX.utils.encode_cell({r, c})], s = ce && ce.s; if(!s || s.patternType!=='solid') return false;
+  const fg = s.fgColor || {}; if(fg.rgb){ const h = String(fg.rgb).slice(-6), R = parseInt(h.slice(0,2),16), G = parseInt(h.slice(2,4),16), B = parseInt(h.slice(4,6),16); return G>R+12 && G>B+12; }
+  return fg.theme===9;
+}
 function ceLeerLibro(wb){
   const nombre = wb.SheetNames.find(n=>/information/i.test(n)) || wb.SheetNames[0];
   const hoja = wb.Sheets[nombre];
@@ -9077,7 +9096,8 @@ function ceLeerLibro(wb){
     lineas.push({ row: rango.s.r+hIdx+jj+2, orden, impo: ultImpo, tokens: String(ultImpo||'').split(/[\n\/,;]+|\s{2,}/).map(ceNum).filter(Boolean),
       comentario: ultCom, sigla: v(f,'sigla'), ref: v(f,'ref'), desc: v(f,'desc'), cantOrd: Number(v(f,'cantOrd'))||0, cantEnv: Number(v(f,'cantEnv'))||0, pend: Number(v(f,'pend'))||0,
       puerto: v(f,'puerto'), carga: pciFecha(v(f,'carga')), aci: v(f,'aci'), cont: v(f,'cont'), bl: v(f,'bl'), dim: v(f,'dim'), estado: String(v(f,'estado')||'').trim(),
-      etd: pciFecha(v(f,'etd')), eta: pciFecha(v(f,'eta')), rim: v(f,'rim'), planta: pciFecha(v(f,'planta')), ingreso: pciFecha(v(f,'ingreso')) });
+      etd: pciFecha(v(f,'etd')), eta: pciFecha(v(f,'eta')), rim: v(f,'rim'), planta: pciFecha(v(f,'planta')), ingreso: pciFecha(v(f,'ingreso')),
+      etdV: ceVerde(hoja, rango.s.r+hIdx+1+jj, C.etd), etaV: ceVerde(hoja, rango.s.r+hIdx+1+jj, C.eta) });
   });
   return {hoja:nombre, lineas};
 }
@@ -9422,7 +9442,7 @@ async function ceLeerArchivo(input){
   const file = input.files[0]; if(!file) return;
   const prev = document.getElementById('ce-prev'); prev.innerHTML = '⏳ Leyendo archivo…';
   try{
-    const bufX = await file.arrayBuffer(); CE._buf = bufX.slice(0); CE._bufName = file.name; const wb = XLSX.read(bufX, {type:'array', cellDates:true});
+    const bufX = await file.arrayBuffer(); CE._buf = bufX.slice(0); CE._bufName = file.name; const wb = XLSX.read(bufX, {type:'array', cellDates:true, cellStyles:true});
     const {hoja, lineas} = ceLeerLibro(wb);
     const {g, erp, sin} = ceAgrupar(lineas);
     const ramasNuevas = ceDetectarYSepararLotes(g, erp);
@@ -9580,7 +9600,7 @@ async function ceDescargarSabana(){
     const resp = await fetch(P.url); if(!resp.ok) throw new Error('No se pudo abrir la sábana guardada ('+resp.status+')');
     const buf = await resp.arrayBuffer();
     await cblCargar(true);
-    const {lineas} = ceLeerLibro(XLSX.read(buf.slice(0), {type:'array', cellDates:true}));
+    const {lineas} = ceLeerLibro(XLSX.read(buf.slice(0), {type:'array', cellDates:true, cellStyles:true}));
     const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf);
     const cambios = ceAplicarPortalASabana(wb, lineas, CBL.bls||[]);
     const out = await wb.xlsx.writeBuffer();
