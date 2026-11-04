@@ -779,6 +779,7 @@ body:not(.sync-manual) [data-sync-manual]{display:none!important;}
     <div class="page" id="pg-tesoreria"><div id="teso-mod"></div></div>
     <div class="page" id="pg-compras"><div id="compras-mod"></div></div>
     <div class="page" id="pg-innov"><div id="innov-mod"></div></div>
+    <div class="page" id="pg-onepage"><div id="onepage-mod"></div></div>
     <div class="page" id="pg-comext"><div id="comext-content"></div></div>
     <div class="page" id="pg-inv"><div id="inv-content"></div></div>
   </div>
@@ -2754,7 +2755,7 @@ function invProyTog(kc){
   document.querySelectorAll('tr[data-proy="'+kc+'"]').forEach(t => t.style.display = INV_PROY_ABIERTO[kc] ? '' : 'none');
   document.querySelectorAll('[data-proyb="'+kc+'"]').forEach(b => b.textContent = (INV_PROY_ABIERTO[kc] ? '▾' : '▸') + ' Proyección');
 }
-var INV_VPROM = null, INV_VCARGANDO = false, INV_VFALLO = false;
+var INV_VPROM = null, INV_VPROM_V = null, INV_VMESES = 0, INV_VCARGANDO = false, INV_VFALLO = false;
 function invVentaCelda(kc, exist){
   if(!INV_VPROM) return '<span style="color:var(--mu2)">'+(INV_VFALLO?'—':'…')+'</span>';
   const v = INV_VPROM[kc]; if(!v) return '<span style="color:var(--mu2)">Sin ventas</span>';
@@ -2766,18 +2767,19 @@ async function invVentasCargar(){
   try{
     const hoy = new Date(), mk = (y,m)=>y*12+(m-1), actual = mk(hoy.getFullYear(), hoy.getMonth()+1), desde = actual - 8, dy = Math.floor(desde/12), dm = desde%12+1;
     let rows = [], off = 0;
-    for(;;){ const r = await sb.get('ventas_historico','select=referencia,anio,mes,unidades,canal&or=(anio.gt.'+dy+',and(anio.eq.'+dy+',mes.gte.'+dm+'))&order=id.asc&limit=1000&offset='+off); rows = rows.concat(r||[]); if(!r || r.length < 1000 || off > 50000) break; off += 1000; }
+    for(;;){ const r = await sb.get('ventas_historico','select=referencia,anio,mes,unidades,valor_cop,canal&or=(anio.gt.'+dy+',and(anio.eq.'+dy+',mes.gte.'+dm+'))&order=id.asc&limit=1000&offset='+off); rows = rows.concat(r||[]); if(!r || r.length < 1000 || off > 50000) break; off += 1000; }
     // ventas_historico trae filas repetidas (mismo ref/mes/unidades con el canal escrito distinto): se cuenta una sola vez
     rows = rows.filter((function(){ const vis = new Set(); return r => { const kk = pvClaveRef(r.referencia)+'|'+r.anio+'|'+r.mes+'|'+String(r.canal||'').trim().toUpperCase()+'|'+(+r.unidades||0); if(vis.has(kk)) return false; vis.add(kk); return true; }; })());
     const tot = {}; rows.forEach(r => { const k = mk(r.anio, r.mes); tot[k] = (tot[k]||0) + (+r.unidades||0); });
     let ks = Object.keys(tot).map(Number).sort((a,b)=>a-b).filter(k=>k<actual);
-    if(ks.length>=4){ const L = ks[ks.length-1], prev = ks.slice(-4,-1).reduce((a,k)=>a+tot[k],0)/3; if(tot[L] < prev*0.6) ks.pop(); }
+    { const vs = ks.map(k=>tot[k]).sort((a,b)=>a-b), med = vs.length ? vs[Math.floor(vs.length/2)] : 0; ks = ks.filter(k=>tot[k] >= med*0.6); }   // se descartan los meses incompletos (menos del 60% de lo normal)
     const k6 = ks.slice(-6), n = k6.length; if(!n) throw new Error('sin meses completos');
-    const acc = {}; rows.forEach(r => { if(!k6.includes(mk(r.anio, r.mes))) return; const k = pvClaveRef(r.referencia); acc[k] = (acc[k]||0) + (+r.unidades||0); });
-    INV_VPROM = {}; Object.keys(acc).forEach(k => { if(acc[k] > 0) INV_VPROM[k] = acc[k] / n; });
+    const acc = {}, accV = {}; rows.forEach(r => { if(!k6.includes(mk(r.anio, r.mes))) return; const k = pvClaveRef(r.referencia); acc[k] = (acc[k]||0) + (+r.unidades||0); accV[k] = (accV[k]||0) + (+r.valor_cop||0); });
+    INV_VPROM = {}; INV_VPROM_V = {}; Object.keys(acc).forEach(k => { if(acc[k] > 0){ INV_VPROM[k] = acc[k] / n; INV_VPROM_V[k] = Math.max(0, accV[k] || 0) / n; } }); INV_VMESES = n;
   }catch(e){ console.warn('Ventas promedio:', e); INV_VPROM = null; INV_VFALLO = true; }
   INV_VCARGANDO = false;
   if(INV_VPROM && document.getElementById('tbody-inv-mod') && typeof filtrarInvMod==='function') filtrarInvMod();
+  if(INV_VPROM && document.getElementById('inv-seg') && typeof ivsPintar==='function') ivsPintar();
 }
 var INV_CAM_DIAS = 30, INV_FILTRO_CAM = '';
 function invDescRef(){ const m = {}; (typeof INV_DATA!=='undefined'?INV_DATA:[]).forEach(r => { const k = pvClaveRef(r.referencia); if(!m[k] || (!m[k].d && r.descripcion)) m[k] = {d:r.descripcion||'', ex:(m[k]?m[k].ex:0)}; if(invBodegaCuenta(r.bodega)) m[k].ex += parseFloat(r.existencia||0)||0; }); return m; }
@@ -4018,6 +4020,23 @@ function cblOverlay(){
   const nuevas = []; CBL.bls.forEach(b=>(b.items||[]).forEach(it=>{ const num = ceNum(it.oc), fase = ceFaseLinea(it.estado||'Embarque','').fase;
     nuevas.push({o:num.replace(/-\d+$/,''), oc:num, r:String(it.ref||'').trim(), c:Number(it.cant)||0, env:Number(it.cant)||0, co:Number(it.cant)||0, bl:b.bl||'', ct:b.cont||'', e:it.estado||'', f:fase, d1:b.etd||null, d2:b.eta||null, pl:it.planta||b.planta||null, ing:it.ingreso||null}); }));
   CE.bls = (CE._blsBase||[]).filter(x=>!set.has(ceNum(x.oc))).concat(nuevas);
+  try{ repImpPublicar(set); }catch(e){ console.warn('repImp', e); }
+}
+// Publica para reporte.html (Importaciones) lo que Abastecimiento muestra y el portal de BL no cubre: sábana de las OC sin portal + pendiente en Producción
+let _repImpHash = '', _repImpT = null;
+function repImpPublicar(setPortal){
+  clearTimeout(_repImpT); _repImpT = setTimeout(async ()=>{
+    try{
+      if(!CE.resumen || !(CE._blsBase||[]).length && !(REABAST.ordenesCompra||[]).length) return;
+      const ETQ = {3:'Producción',5:'Embarque',6:'Tránsito',7:'Nacionalización'}, filas = [], iso = x => x ? String(x).slice(0,10) : '';
+      (CE._blsBase||[]).forEach(x=>{ if(setPortal.has(ceNum(x.oc)) || x.f==null || x.f<0 || x.f===9) return;
+        const eta = iso(x.d2); filas.push([x.bl||'', x.oc||x.o||'', String(x.r||''), '', Number(x.c)||0, ETQ[x.f]||x.e||'Embarque', x.f, iso(x.d1), eta, iso(x.pl) || (eta ? cblPlantaEst(eta) : ''), '']); });
+      setPortal.forEach(num=>{ const oc = (REABAST.ordenesCompra||[]).find(o=>ceNum(o.numero_oc)===num); if(!oc) return;
+        cblPendientes(oc).forEach(p=>{ if(p.pend>0) filas.push(['', oc.numero_oc, String(p.ref||''), p.desc||'', p.pend, 'Producción', 3, '', '', '', '']); }); });
+      const js = JSON.stringify(filas); if(js===_repImpHash) return; _repImpHash = js;
+      await sb.upsert('configuracion', {clave:'rep_imp_extra', valor:JSON.stringify({fecha:new Date().toISOString(), usuario:(CU&&CU.nombre)||'', filas}), tipo:'json'}, 'clave');
+    }catch(e){ console.warn('repImp pub', e); }
+  }, 4000);
 }
 async function cblSincronizar(nums){
   try{ await ceCargarResumen(true); }catch(e){ console.warn(e); }
@@ -18588,8 +18607,236 @@ function renderComextMod() {
   if (!CE_MOD_TABS.includes(REABAST.tab)) REABAST.tab = 'ce_hoy';
   return renderReabastMod();
 }
-const pgMap = { reabast: renderReabastMod, comext: renderComextMod, inv: renderInvAbast, tesoreria: renderTesoreriaMod, compras: renderComprasMod, innov: renderInnovMod };
-const ABAST_TABS = [['reabast', '🔁', 'Abastecimiento'], ['comext', '🌐', 'Comercio Exterior'], ['inv', '📦', 'Inventario'], ['tesoreria', '💸', 'Tesorería'], ['compras', '🛒', 'Módulo de compras'], ['innov', '💡', 'Innovación']];
+const pgMap = { reabast: renderReabastMod, comext: renderComextMod, inv: renderInvAbast, tesoreria: renderTesoreriaMod, compras: renderComprasMod, innov: renderInnovMod, onepage: renderOnePageMod };
+// ================= ONE PAGE OPERACIONES =================
+const OP = { d: null, mes: null, cargando: false, pre: null };
+const OP_M = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+const OP_MF = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+const opDiv = (a, b) => (a == null || b == null || !b) ? null : a / b;
+// [tipo, clave, etiqueta, meta, dir(hi=más es mejor, lo=menos es mejor), formato, cálculo(g)] · g(k) = valor del indicador k en esa columna
+const OP_FILAS = [
+  ['sec', 'COMERCIAL'],
+  ['in', 'VENTAS', 'VENTAS ($M)', null, 'hi', 'm'],
+  ['in', 'PPTO', 'PPTO DE VENTAS ($M)', null, 'hi', 'm'],
+  ['calc', 'CUMPL', '% CUMPLIMIENTO', 1, 'hi', 'p', g => opDiv(g('VENTAS'), g('PPTO'))],
+  ['in', 'PERDIDA', 'VENTA PERDIDA POR AGOTADOS ($M)', null, 'lo', 'm'],
+  ['in', 'NOENT', 'NO ENTREGADO ($M)', null, 'lo', 'm'],
+  ['calc', 'PCT_PERD', '% DE VENTA PERDIDA', 0.02, 'lo', 'p', g => g('VENTAS') == null || g('PERDIDA') == null ? null : g('PERDIDA') / (g('VENTAS') + g('PERDIDA'))],
+  ['sec', 'OTIF (%)'],
+  ['calc', 'OTIF', 'OTIF GLOBAL', 0.96, 'hi', 'p', g => g('INFULL') == null || g('ONTIME') == null ? null : g('INFULL') * g('ONTIME')],
+  ['calc', 'INFULL', 'IN FULL', 0.97, 'hi', 'p', g => g('VENTAS') == null || g('PERDIDA') == null ? null : g('VENTAS') / (g('VENTAS') + g('PERDIDA') + (g('NOENT') || 0))],
+  ['in', 'ONTIME', 'ON TIME', 0.96, 'hi', 'p'],
+  ['sec', 'BODEGA'],
+  ['in', 'EXACT', 'EXACTITUD INV.', 0.99, 'hi', 'p'],
+  ['calc', 'NS_HC', 'NIVEL DE SERVICIO HC', 0.95, 'hi', 'p', g => g('VENTAS_HC') == null || g('PERDIDA_HC') == null ? null : g('VENTAS_HC') / (g('VENTAS_HC') + g('PERDIDA_HC'))],
+  ['calc', 'NS_SIN', 'NIVEL DE SERVICIO GENERAL SIN HC', 0.96, 'hi', 'p', g => { const v = g('VENTAS'), p = g('PERDIDA'), vh = g('VENTAS_HC'), ph = g('PERDIDA_HC'); if (v == null || p == null || vh == null || ph == null) return null; return (v - vh) / ((v - vh) + (p - ph)); }],
+  ['calc', 'DEV_UP', 'DEVOLUCIONES / VENTAS UNDS', 0.02, 'lo', 'p', g => opDiv(g('DEV_U'), g('VENTAS_U'))],
+  ['calc', 'DEV_VP', 'DEVOLUCIONES / VENTAS $', 0.02, 'lo', 'p', g => g('VENTAS') ? opDiv(g('DEV_V'), g('VENTAS') * 1e6) : null],
+  ['calc', 'AV_UP', 'AVERÍAS / VENTAS UNDS', 0.01, 'lo', 'p', g => opDiv(g('AV_U'), g('VENTAS_U'))],
+  ['calc', 'AV_VP', 'AVERÍAS / VENTAS $', 0.01, 'lo', 'p', g => g('VENTAS') ? opDiv(g('AV_V'), g('VENTAS') * 1e6) : null],
+  ['sec', 'FLETES'],
+  ['in', 'FLETE', 'FLETE GENERAL', 0.043, 'lo', 'p'],
+  ['in', 'FLETE_DEV', 'FLETE DE DEVOLUCIONES', 0.0011, 'lo', 'p2'],
+  ['sec', 'ABASTECIMIENTO E INVENTARIOS'],
+  ['in', 'COSTO', 'COSTO DE VENTA ($M)', null, 'lo', 'm'],
+  ['in', 'TRANSITO', 'TRÁNSITO PY ($M)', null, 'lo', 'm'],
+  ['in', 'INV_LINEA', 'INVENTARIO DE LÍNEA ($M)', 6058, 'lo', 'm'],
+  ['in', 'INV_DESC', 'INVENTARIO DESCONTINUADO ($M)', 605.8, 'lo', 'm'],
+  ['calc', 'PCT_LINEA', '% INVENTARIO DE LÍNEA', 0.8, 'hi', 'p', g => g('INV_LINEA') == null || g('INV_DESC') == null ? null : g('INV_LINEA') / (g('INV_LINEA') + g('INV_DESC'))],
+  ['calc', 'PCT_DESC', '% INVENTARIO DESCONTINUADO', 0.2, 'lo', 'p', g => g('INV_LINEA') == null || g('INV_DESC') == null ? null : g('INV_DESC') / (g('INV_LINEA') + g('INV_DESC'))],
+  ['calc', 'DIAS_B', 'INVENTARIO EN DÍAS EN BODEGA', 120, 'lo', 'n', g => opDiv(g('INV_LINEA'), g('COSTO_PROM')) == null ? null : g('INV_LINEA') / g('COSTO_PROM') * 30],
+  ['calc', 'DIAS_T', 'INVENTARIO EN DÍAS CON TRÁNSITO', 180, 'lo', 'n', g => g('INV_LINEA') == null || !g('COSTO_PROM') ? null : (g('INV_LINEA') + (g('TRANSITO') || 0)) / g('COSTO_PROM') * 30],
+  ['sec', 'INNOVACIÓN'],
+  ['in', 'INNOV_PART', 'PARTICIPACIÓN DE LA INNOVACIÓN / VENTA', 0.15, 'hi', 'p'],
+  ['in', 'INNOV_MG', 'MARGEN DE LA INNOVACIÓN', 0.4, 'hi', 'p'],
+  ['sec', 'COMERCIO EXTERIOR'],
+  ['in', 'FACT_SIN', 'FACTOR DE IMPORTACIÓN SIN ARANCEL', 1.1, 'lo', 'f'],
+  ['in', 'FACT_CON', 'FACTOR DE IMPORTACIÓN CON ARANCEL', 1.3, 'lo', 'f']
+];
+// filas de apoyo (se guardan y se editan en la sección "Datos base"): unidades y valores crudos
+const OP_BASE = [['VENTAS_U', 'Unidades vendidas', 'n'], ['VENTAS_HC', 'Ventas Homecenter ($M)', 'm'], ['PERDIDA_HC', 'Venta perdida Homecenter ($M)', 'm'], ['DEV_U', 'Devoluciones (unid.)', 'n'], ['DEV_V', 'Devoluciones ($)', 'n'], ['AV_U', 'Averías (unid.)', 'n'], ['AV_V', 'Averías ($)', 'n']];
+const OP_SUMA = new Set(['VENTAS', 'PERDIDA', 'NOENT', 'VENTAS_HC', 'PERDIDA_HC', 'VENTAS_U', 'DEV_U', 'DEV_V', 'AV_U', 'AV_V']);
+const OP_ULT = new Set(['TRANSITO', 'INV_LINEA', 'INV_DESC']);
+const opFmt = (v, f) => { if (v == null || isNaN(v)) return '—'; if (f === 'p') return (v * 100).toFixed(1).replace('.', ',') + '%'; if (f === 'p2') return (v * 100).toFixed(2).replace('.', ',') + '%'; if (f === 'f') return v.toFixed(2).replace('.', ','); return Math.round(v).toLocaleString('es-CO'); };
+function opSem(v, meta, dir) { if (v == null || meta == null || !meta) return ''; const r = dir === 'lo' ? (v > 0 ? meta / v : 2) : v / meta; return r >= 0.91 ? '#16a34a' : r < 0.8 ? '#dc2626' : '#d97706'; }
+async function opCargar(f) {
+  if (OP.d && !f) return;
+  try { const r = await sb.get('configuracion', 'select=valor&clave=eq.onepage_2026'); OP.d = r && r[0] ? (typeof r[0].valor === 'string' ? JSON.parse(r[0].valor) : r[0].valor) : null; } catch (e) { OP.d = null; }
+  if (!OP.d) OP.d = { v: 1, ind: {}, obs: {}, dna: {}, dev: {}, meta: {} };
+  OP.d.ind = OP.d.ind || {}; OP.d.obs = OP.d.obs || {}; OP.d.dna = OP.d.dna || {}; OP.d.dev = OP.d.dev || {}; OP.d.meta = OP.d.meta || {};
+  if (OP.mes == null) OP.mes = (new Date().getMonth() + 11) % 12;
+}
+async function opGuardar() { try { OP.d.actualizado = new Date().toISOString(); await sb.upsert('configuracion', { clave: 'onepage_2026', valor: JSON.stringify(OP.d), tipo: 'json' }, 'clave'); } catch (e) { toast('No se pudo guardar el One Page', 'er'); console.warn(e); } }
+function opVal(k, i) { const a = (OP.d.ind[k] || [])[i]; return a == null || a === '' ? null : Number(a); }
+function opSet(k, i, v) { OP.d.ind[k] = OP.d.ind[k] || Array(12).fill(null); OP.d.ind[k][i] = v; }
+function opCostoProm() { const a = (OP.d.ind.COSTO || []).filter(x => x != null && x > 0); return a.length ? a.reduce((s, x) => s + x, 0) / a.length : null; }
+function opG(i) { // accesor de una columna (mes i) o del acumulado (i = 'T'); resuelve también los indicadores calculados
+  const base = opG0(i), CM = {}; OP_FILAS.forEach(f => { if (f[0] === 'calc') CM[f[1]] = f[6]; });
+  const g = k => CM[k] ? CM[k](g) : base(k); return g;
+}
+function opG0(i) {
+  const cp = opCostoProm();
+  if (i === 'T') {
+    const ms = []; (OP.d.ind.VENTAS || []).forEach((x, j) => { if (x != null) ms.push(j); });
+    const agg = k => { const xs = ms.map(j => opVal(k, j)).filter(x => x != null); if (!xs.length) return null; if (k === 'PPTO') return ms.reduce((s, j) => s + (opVal('PPTO', j) || 0), 0); if (OP_SUMA.has(k)) return xs.reduce((s, x) => s + x, 0); if (OP_ULT.has(k)) return xs[xs.length - 1]; return xs.reduce((s, x) => s + x, 0) / xs.length; };
+    const g = k => k === 'COSTO_PROM' ? cp : (k === 'INV_LINEA' || k === 'INV_DESC' || k === 'TRANSITO') ? (() => { for (let j = 11; j >= 0; j--) { const x = opVal(k, j); if (x != null) return x; } return null; })() : agg(k);
+    return g;
+  }
+  return k => k === 'COSTO_PROM' ? cp : opVal(k, i);
+}
+function opSpark(vals, col) { const xs = vals.map((v, i) => v == null ? null : [i, v]).filter(Boolean); if (xs.length < 2) return ''; const mn = Math.min(...xs.map(p => p[1])), mx = Math.max(...xs.map(p => p[1])), r = (mx - mn) || 1; const pts = xs.map(p => (3 + p[0] * 70 / 11).toFixed(1) + ',' + (20 - (p[1] - mn) / r * 16).toFixed(1)).join(' '); return '<svg width="80" height="24" viewBox="0 0 80 24"><polyline fill="none" stroke="' + (col || '#2563eb') + '" stroke-width="1.6" points="' + pts + '"/></svg>'; }
+function opEdit(k, i, v, f) { // v: texto → número
+  let s = String(v).trim().replace(/\s/g, ''); if (s === '') { opSet(k, i, null); } else { if (s.includes(',')) s = s.replace(/\./g, ''); s = s.replace('%', '').replace(',', '.'); let n = Number(s); if (isNaN(n)) { toast('Valor no válido', 'er'); return opPintar(); } if ((f === 'p' || f === 'p2') && n > 1.5) n /= 100; opSet(k, i, n); }
+  opGuardar().then(() => opPintar());
+}
+function opMeta(k) { const m = OP.d.meta || {}; if (k in m) return m[k]; const f = OP_FILAS.find(x => x[1] === k); return f ? f[3] : null; }
+function opMetaEdit(k, v) { const f = OP_FILAS.find(x => x[1] === k); let s = String(v).replace(',', '.').replace('%', '').trim(); let n = s === '' ? null : Number(s); if (n != null && (f[5] === 'p' || f[5] === 'p2') && n > 1.5) n /= 100; OP.d.meta[k] = n; opGuardar().then(() => opPintar()); }
+function opHtmlTabla() {
+  const th = 'padding:5px 6px;text-align:right;font-size:11px;color:#475569;white-space:nowrap;position:sticky;top:0;background:#f1f5f9';
+  let h = '<div class="wrap" style="max-height:78vh;overflow:auto"><table style="border-collapse:collapse;font-size:12px;min-width:1100px"><tr><th style="' + th + ';text-align:left;left:0;z-index:2">INDICADOR</th><th style="' + th + '">META</th>' + OP_M.map((m, i) => '<th style="' + th + (i === OP.mes ? ';background:#fde68a' : '') + '">' + m.toUpperCase() + '</th>').join('') + '<th style="' + th + '">ACUM. 2026</th><th style="' + th + '">TENDENCIA</th></tr>';
+  OP_FILAS.forEach(f => {
+    if (f[0] === 'sec') { h += '<tr><td colspan="16" style="background:#203864;color:#fff;font-weight:800;padding:5px 8px;font-size:11.5px;letter-spacing:.4px">' + f[1] + '</td></tr>'; return; }
+    const k = f[1], fm = f[5], meta = opMeta(k), calc = f[0] === 'calc';
+    const val = i => calc ? f[6](opG(i)) : opVal(k, i);
+    const vals = Array.from({ length: 12 }, (_, i) => val(i)), tot = calc ? f[6](opG('T')) : (() => { const g = opG('T'); return g(k); })();
+    h += '<tr style="border-top:1px solid #e2e8f0' + (calc ? ';background:#f8fafc' : '') + '"><td style="padding:4px 8px;font-weight:' + (calc ? 700 : 600) + ';white-space:nowrap;position:sticky;left:0;background:' + (calc ? '#f8fafc' : '#fff') + '">' + f[2] + '</td>' +
+      '<td style="text-align:right;padding:2px 4px;color:#64748b"><input value="' + (meta == null ? '' : opFmt(meta, fm).replace('—', '')) + '" onchange="opMetaEdit(\'' + k + '\',this.value)" style="width:58px;text-align:right;border:0;background:transparent;color:#64748b;font-size:11.5px" title="Meta editable"></td>';
+    vals.forEach((v, i) => { const col = opSem(v, meta, f[4]); const bg = i === OP.mes ? 'background:#fffbeb;' : '';
+      h += calc ? '<td style="text-align:right;padding:4px 6px;' + bg + 'font-weight:700;color:' + (col || '#0f172a') + '">' + opFmt(v, fm) + '</td>' :
+        '<td style="padding:1px 2px;' + bg + '"><input value="' + (v == null ? '' : opFmt(v, fm).replace(/\./g, '')) + '" onchange="opEdit(\'' + k + '\',' + i + ',this.value,\'' + fm + '\')" style="width:62px;text-align:right;border:1px solid transparent;background:transparent;font-size:12px;color:' + (col || '#0f172a') + ';font-weight:' + (col ? 700 : 400) + '" onfocus="this.style.borderColor=\'#93c5fd\'" onblur="this.style.borderColor=\'transparent\'"></td>'; });
+    const ct = opSem(tot, meta, f[4]);
+    h += '<td style="text-align:right;padding:4px 6px;font-weight:800;color:' + (ct || '#0f172a') + '">' + opFmt(tot, fm) + '</td><td style="padding:0 6px">' + opSpark(vals, ct || '#2563eb') + '</td></tr>';
+  });
+  return h + '</table></div><div style="font-size:11px;color:#64748b;margin-top:6px">Semáforo vs. meta: <b style="color:#16a34a">verde ≥ 91%</b> · <b style="color:#d97706">amarillo 80–90%</b> · <b style="color:#dc2626">rojo &lt; 80%</b> (en indicadores donde menos es mejor se invierte). Las celdas blancas se editan; las grises se calculan. Días de inventario = inventario ÷ costo de venta promedio × 30.</div>';
+}
+function opHtmlBase() {
+  let h = '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:700;font-size:13px">🧮 Datos base (unidades, Homecenter, devoluciones y averías en bruto)</summary><div class="wrap"><table style="border-collapse:collapse;font-size:12px;margin-top:6px"><tr><th style="text-align:left;padding:4px 8px">Dato</th>' + OP_M.map(m => '<th style="padding:4px 6px;font-size:11px">' + m + '</th>').join('') + '</tr>';
+  OP_BASE.forEach(b => { h += '<tr style="border-top:1px solid #e2e8f0"><td style="padding:3px 8px;white-space:nowrap;font-weight:600">' + b[1] + '</td>' + Array.from({ length: 12 }, (_, i) => { const v = opVal(b[0], i); return '<td style="padding:1px 2px"><input value="' + (v == null ? '' : Math.round(v * 100) / 100) + '" onchange="opEdit(\'' + b[0] + '\',' + i + ',this.value,\'n\')" style="width:74px;text-align:right;border:1px solid #e2e8f0;border-radius:4px;font-size:12px"></td>'; }).join('') + '</tr>'; });
+  return h + '</table></div></details>';
+}
+function opHtmlDetalle() {
+  const i = OP.mes, k = '2026' + String(i + 1).padStart(2, '0'), dn = OP.d.dna[k], dv = OP.d.dev[k];
+  const money = v => '$' + Math.round(v || 0).toLocaleString('es-CO');
+  let h = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;margin-top:14px">';
+  h += '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:12px 14px"><div style="font-weight:800;margin-bottom:2px">📦 Demanda no abastecida · ' + OP_MF[i] + '</div>';
+  if (!dn) h += '<div class="empty" style="font-size:12px">Sin archivo cargado para este mes. Sube «Demanda no abastecida» (Siesa).</div>';
+  else {
+    const pc = (a, b) => b ? (a / b * 100).toFixed(0) + '%' : '—';
+    h += '<div style="font-size:12px;color:#334155;margin:6px 0">Pendiente por facturar total <b>' + money(dn.tot) + '</b> (' + dn.lineas + ' líneas). Cruzado con el inventario disponible de hoy (bodega BA): <b style="color:#dc2626">sin existencia (agotado real) ' + money(dn.sin) + ' · ' + pc(dn.sin, dn.tot) + '</b> · <b style="color:#16a34a">con existencia (no facturado por otra causa) ' + money(dn.con) + ' · ' + pc(dn.con, dn.tot) + '</b>.<br>Homecenter: ' + money(dn.hc) + ' (sin existencia ' + money(dn.sinHC) + ').</div>';
+    h += '<div class="wrap" style="max-height:300px;overflow:auto"><table style="border-collapse:collapse;font-size:11.5px;width:100%"><tr style="color:#64748b;text-align:left"><th>Ref.</th><th>Producto</th><th style="text-align:right">Pend.</th><th style="text-align:right">Stock</th><th style="text-align:right">Valor sin stock</th></tr>' + (dn.top || []).map(x => '<tr style="border-top:1px solid #e2e8f0"><td><b>' + innEsc(x[0]) + '</b></td><td>' + innEsc(String(x[1]).slice(0, 30)) + '</td><td style="text-align:right">' + x[2] + '</td><td style="text-align:right">' + x[3] + '</td><td style="text-align:right">' + money(x[4]) + '</td></tr>').join('') + '</table></div><div style="font-size:11px;color:#94a3b8;margin-top:4px">Top referencias sin existencia. El stock es el actual: para meses antiguos es una referencia, no el stock de ese momento.</div>';
+  }
+  h += '</div><div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:12px 14px"><div style="font-weight:800;margin-bottom:2px">↩️ Devoluciones y averías por motivo · ' + OP_MF[i] + '</div>';
+  if (!dv) h += '<div class="empty" style="font-size:12px">Sin archivo cargado para este mes. Sube «Devoluciones x Motivo» (Siesa).</div>';
+  else h += '<div class="wrap" style="max-height:340px;overflow:auto"><table style="border-collapse:collapse;font-size:11.5px;width:100%"><tr style="color:#64748b;text-align:left"><th>Motivo</th><th>Tipo</th><th style="text-align:right">Unid.</th><th style="text-align:right">Valor</th></tr>' + Object.keys(dv.causal).sort((a, b) => dv.causal[b][1] - dv.causal[a][1]).map(c => '<tr style="border-top:1px solid #e2e8f0"><td>' + innEsc(c) + '</td><td>' + (dv.causal[c][2] === 'AV' ? '<b style="color:#dc2626">Avería</b>' : dv.causal[c][2] === 'AD' ? '<span style="color:#94a3b8">Administrativa (no cuenta)</span>' : 'Devolución') + '</td><td style="text-align:right">' + dv.causal[c][0].toLocaleString('es-CO') + '</td><td style="text-align:right">' + money(dv.causal[c][1]) + '</td></tr>').join('') + '</table></div>' +
+    '<div style="font-size:11.5px;margin-top:6px;color:#334155">Por canal: ' + Object.keys(dv.canal).sort((a, b) => dv.canal[b][1] - dv.canal[a][1]).map(c => '<b>' + innEsc(c.replace('CANAL ', '')) + '</b> ' + money(dv.canal[c][1])).join(' · ') + '</div>';
+  return h + '</div></div>';
+}
+async function opPintar() {
+  const el = document.getElementById('onepage-mod'); if (!el) return; await opCargar();
+  const sy = window.scrollY, obs = OP.d.obs || {};
+  el.innerHTML = '<div style="padding:4px 0"><div class="bar big" style="margin-bottom:6px">📊 ONE PAGE · ÁREA DE OPERACIONES 2026</div>' +
+    '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:12.5px"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><b>Mes de trabajo:</b><select onchange="OP.mes=+this.value;opPintar()" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:8px">' + OP_MF.map((m, i) => '<option value="' + i + '"' + (i === OP.mes ? ' selected' : '') + '>' + m + '</option>').join('') + '</select>' +
+    '<button class="btn btn-p btn-sm" onclick="opAuto()">⚡ Traer del portal / Siesa</button>' +
+    '<label class="btn btn-bl btn-sm" style="cursor:pointer">📥 One Page (Excel)<input type="file" accept=".xlsx,.xlsb,.xls" style="display:none" onchange="opSubir(this,\'one\')"></label>' +
+    '<label class="btn btn-bl btn-sm" style="cursor:pointer">📥 Demanda no abastecida<input type="file" accept=".xlsx,.xlsb,.xls" style="display:none" onchange="opSubir(this,\'dna\')"></label>' +
+    '<label class="btn btn-bl btn-sm" style="cursor:pointer">📥 Devoluciones x motivo<input type="file" accept=".xlsx,.xlsb,.xls" style="display:none" onchange="opSubir(this,\'dev\')"></label>' +
+    '<button class="btn btn-g btn-sm" onclick="opExcel()">⬇ Excel</button></div>' +
+    '<div style="margin-top:6px;color:#92400e">«Traer del portal» llena el mes elegido con: ventas y ventas Homecenter (facturas Siesa), unidades (historial de ventas), innovación (módulo Innovación) e inventario de línea/descontinuado (existencias actuales × costo). Los archivos de Siesa se revisan antes de aplicar.' + (OP.d.actualizado ? ' Guardado: ' + new Date(OP.d.actualizado).toLocaleString('es-CO') + '.' : '') + '</div></div>' +
+    opHtmlTabla() + opHtmlBase() + opHtmlDetalle() +
+    '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:12px 14px;margin-top:14px"><div style="font-weight:800;margin-bottom:6px">📝 Observaciones</div>' +
+    [['PERDIDA', 'Venta perdida / no entregado'], ['ONTIME', 'On time'], ['GENERAL', 'General']].map(o => '<div style="font-size:11px;font-weight:700;color:#64748b;margin-top:6px">' + o[1] + '</div><textarea onchange="OP.d.obs[\'' + o[0] + '\']=this.value;opGuardar()" style="width:100%;min-height:54px;border:1px solid #cbd5e1;border-radius:8px;padding:6px;font-size:12px">' + innEsc(obs[o[0]] || '') + '</textarea>').join('') + '</div></div>' +
+    '<div id="op-modal"></div>';
+  window.scrollTo(0, sy);
+}
+async function renderOnePageMod() { const el = document.getElementById('onepage-mod'); if (el && !OP.d) el.innerHTML = '<div class="empty">Cargando One Page…</div>'; await opPintar(); }
+// ---- Traer del portal / Siesa para el mes elegido ----
+async function opAuto() {
+  const i = OP.mes, y = 2026, mm = String(i + 1).padStart(2, '0'), nx = i === 11 ? (y + 1) + '-01-01' : y + '-' + String(i + 2).padStart(2, '0') + '-01', ch = [];
+  showLoader('Consultando ' + OP_MF[i] + '…');
+  try {
+    let rows = [], off = 0; for (;;) { const r = await sb.get('ventas_facturas_siesa', 'select=subtotal,canal&estado=neq.9&fecha=gte.' + y + '-' + mm + '-01&fecha=lt.' + nx + '&order=rowid.asc&limit=1000&offset=' + off); rows = rows.concat(r || []); if (!r || r.length < 1000) break; off += 1000; if (off > 20000) break; }
+    const tot = rows.reduce((a, x) => a + (+x.subtotal || 0), 0), hc = rows.filter(x => String(x.canal).trim() === '0013').reduce((a, x) => a + (+x.subtotal || 0), 0);
+    if (rows.length) { ch.push(['VENTAS', tot / 1e6]); ch.push(['VENTAS_HC', hc / 1e6]); }
+    // unidades: historial de ventas (solo si el valor cuadra con las facturas; el historial tiene filas repetidas con el canal escrito distinto)
+    let hv = [], o2 = 0; for (;;) { const r = await sb.get('ventas_historico', 'select=unidades,valor_cop,canal,referencia&anio=eq.' + y + '&mes=eq.' + (i + 1) + '&order=id.asc&limit=1000&offset=' + o2); hv = hv.concat(r || []); if (!r || r.length < 1000) break; o2 += 1000; }
+    if (hv.some(x => x.canal === String(x.canal).toUpperCase())) hv = hv.filter(x => x.canal === String(x.canal).toUpperCase());
+    const hU = hv.reduce((a, x) => a + (+x.unidades || 0), 0), hVv = hv.reduce((a, x) => a + (+x.valor_cop || 0), 0);
+    if (tot && Math.abs(hVv - tot) / tot < 0.03) ch.push(['VENTAS_U', hU]); else if (hv.length) toast('Unidades: el historial de ' + OP_MF[i] + ' aún no está completo, se dejan sin cambio', 'wa');
+    // innovación
+    try { await innLiveCargar(); const ex = INN3.t.some(x => x[1] === y && x[2] === i + 1); if (ex) { const a = inn3Agg(y, new Set([i + 1]), null); ch.push(['INNOV_PART', a.inn.part]); if (a.inn.mg != null) ch.push(['INNOV_MG', a.inn.mg]); } } catch (e) {}
+    // inventario actual (solo tiene sentido para el mes en curso o el último cerrado)
+    try { if (typeof INV_DATA !== 'undefined' && INV_DATA.length) { const cl = new Set((IVS.clasif && IVS.clasif.d) || []), act = IVS.clasif && Array.isArray(IVS.clasif.act) ? new Set(IVS.clasif.act) : null; let L = 0, D = 0; INV_DATA.forEach(r => { const v = (parseFloat(r.existencia) || 0) * (parseFloat(r.costo_prom) || 0); if (v <= 0) return; const k = String(r.referencia).trim(); if (cl.has(k) || (act && !act.has(k))) D += v; else L += v; }); if (L + D > 0) { ch.push(['INV_LINEA', L / 1e6]); ch.push(['INV_DESC', D / 1e6]); } } } catch (e) {}
+  } catch (e) { hideLoader(); toast('Error consultando: ' + e.message, 'er'); return; }
+  hideLoader(); opPrevia('Traer del portal · ' + OP_MF[i], ch.map(c => ({ k: c[0], i, v: c[1] })), null);
+}
+// ---- Archivos de Siesa / Excel ----
+function opLeer(file) { return new Promise((ok, no) => { const r = new FileReader(); r.onload = e => { try { ok(XLSX.read(new Uint8Array(e.target.result), { type: 'array' })); } catch (x) { no(x); } }; r.onerror = () => no(new Error('No se pudo leer el archivo')); r.readAsArrayBuffer(file); }); }
+function opTabla(wb, nombre, clave) { // devuelve {rows, idx} de la hoja con encabezado que contiene `clave`
+  const names = [nombre].concat(wb.SheetNames); for (const n of names) { const ws = wb.Sheets[n]; if (!ws) continue; const A = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true }); for (let r = 0; r < Math.min(A.length, 30); r++) { if (A[r] && A[r].some(c => String(c).trim() === clave)) { const idx = {}; A[r].forEach((c, j) => { if (c != null && !(String(c).trim() in idx)) idx[String(c).trim()] = j; }); return { rows: A.slice(r + 1), idx, hoja: n }; } } }
+  return null;
+}
+const OP_AV = ['DAÑO MECANICO O ROTURA', 'DEVOLUCION DESTRUIDA EN PUNTO DE VENTA', 'ERROR MARCACION ESPECIFICACION TECNICA', 'FALLA IP FILTRACION DE AGUA', 'FALLA PANEL SOLAR', 'FLICKEO', 'NO ENCIENDE'];
+const OP_ADM = ['CAMBIO DE FACTURA POR FECHA', 'DEVOLUCION ERROR EN FACTURACION', 'DEVOLUCION ERROR EN TOMA DE PEDIDO'];
+async function opSubir(inp, tipo) {
+  const f = inp.files && inp.files[0]; inp.value = ''; if (!f) return; showLoader('Leyendo ' + f.name + '…');
+  try { const wb = await opLeer(f); await opCargar();
+    if (tipo === 'one') await opProcOne(wb); else if (tipo === 'dna') await opProcDna(wb); else await opProcDev(wb);
+  } catch (e) { toast('No se pudo procesar: ' + e.message, 'er'); console.warn(e); }
+  hideLoader();
+}
+async function opProcOne(wb) {
+  const ws = wb.Sheets['V6'] || wb.Sheets[wb.SheetNames[0]], A = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true }), ch = [];
+  const MAP = [['VENTAS', 'VENTAS'], ['PPTO DE VENTAS', 'PPTO'], ['VENTA PERDIDA POR AGOTADOS', 'PERDIDA'], ['NO ENTREGADO', 'NOENT'], ['ON TIME', 'ONTIME'], ['EXACTITUD INV', 'EXACT'], ['FLETE GENERAL', 'FLETE'], ['FLETE DE DEVOLUCIONES', 'FLETE_DEV'], ['COSTO DE VENTA', 'COSTO'], ['TRANSITO PY', 'TRANSITO'], ['INVENTARIO DE LINEA - ', 'INV_LINEA'], ['INVENTARIO DESCONTINUADO - ', 'INV_DESC'], ['PARTICIPACION DE LA INNOVACION', 'INNOV_PART'], ['MARGEN DE LA INNOVACION', 'INNOV_MG'], ['FACTOR DE IMPORTACION SIN ARANCEL', 'FACT_SIN'], ['FACTOR DE IMPORTACION CON ARANCEL', 'FACT_CON']];
+  const nrm = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+  A.forEach(row => { if (!row) return; const lab = nrm(row[0]); if (!lab) return; const m = MAP.find(x => lab === nrm(x[0]) || (x[0].endsWith('- ') ? lab.startsWith(nrm(x[0]).replace(/ -$/, '')) && lab.includes('(MI') : lab.startsWith(nrm(x[0])) && !lab.includes('%'))); if (!m) return;
+    if (m[1] === 'TRANSITO') { /* col. L–N del Excel son proyecciones */ }
+    for (let j = 0; j < 12; j++) { if (m[1] === 'TRANSITO' && j >= 9) continue; let x = row[2 + j]; if (typeof x === 'string') { const s = x.trim().replace('%', '').replace(',', '.'); x = s === '' || isNaN(Number(s)) ? null : Number(s) / (x.includes('%') ? 100 : 1); } if (typeof x !== 'number' || !isFinite(x) || x === 0) continue; if (Math.abs(x - (opVal(m[1], j) ?? NaN)) > 1e-9) ch.push({ k: m[1], i: j, v: x }); }
+    if (['TRANSITO', 'INV_LINEA', 'INV_DESC'].includes(m[1]) && typeof row[14] === 'number' && row[14] > 0 && Math.abs(row[14] - (opVal(m[1], 9) ?? NaN)) > 1e-9) ch.push({ k: m[1], i: 9, v: row[14] }); });
+  opPrevia('One Page (Excel)', ch, null);
+}
+async function opProcDna(wb) {
+  const T = opTabla(wb, 'BD', 'Periodo'); if (!T || T.idx['Vlr. Pendiente'] == null) throw new Error('No encontré las columnas de «Demanda no abastecida» (Periodo, Vlr. Pendiente)');
+  const ix = T.idx, g = (r, n) => r[ix[n]], L = [];
+  T.rows.forEach(r => { const p = String(g(r, 'Periodo') == null ? '' : g(r, 'Periodo')).trim(); if (!/^\d{6}$/.test(p)) return; L.push({ p, tc: String(g(r, 'Tipo cliente') || '').trim(), doc: g(r, 'Numero docto'), fe: String(g(r, 'Fecha') || ''), ref: String(g(r, 'Referencia Item') || '').trim(), nom: String(g(r, 'Nombre Item') || '').trim(), q: +g(r, 'Cant pendi inv') || 0, v: +g(r, 'Vlr. Pendiente') || 0 }); });
+  if (!L.length) throw new Error('El archivo no trae líneas');
+  const stock = {}; try { for (let off = 0; ; off += 1000) { const r = await sb.get('inventario_resumen', 'select=referencia,cantidad&bodega=eq.BA&order=referencia&limit=1000&offset=' + off); (r || []).forEach(x => { const k = String(x.referencia).trim(); stock[k] = (stock[k] || 0) + (+x.cantidad || 0); }); if (!r || r.length < 1000) break; } } catch (e) { toast('No pude leer el inventario: se cruza con 0', 'wa'); }
+  const rem = Object.assign({}, stock), S = {}; L.sort((a, b) => (a.fe + String(a.doc)).localeCompare(b.fe + String(b.doc)));
+  L.forEach(x => { const s = S[x.p] = S[x.p] || { tot: 0, hc: 0, lineas: 0, sin: 0, con: 0, sinHC: 0, conHC: 0, top: {} }; const r0 = rem[x.ref] || 0; let con = 0; if (x.q > 0) { const c = Math.min(r0, x.q); rem[x.ref] = r0 - c; con = x.v * (c / x.q); } const sin = x.v - con; s.tot += x.v; s.lineas++; s.con += con; s.sin += sin; if (x.tc === '0013') { s.hc += x.v; s.conHC += con; s.sinHC += sin; }
+    if (sin > 0) { const t = s.top[x.ref] = s.top[x.ref] || [x.ref, x.nom, 0, stock[x.ref] || 0, 0]; t[2] += x.q; t[4] += sin; } });
+  const ch = [], dna = {};
+  Object.keys(S).sort().forEach(p => { const s = S[p], i = +p.slice(4) - 1, y = +p.slice(0, 4); if (y !== 2026 || i < 0 || i > 11) return; dna[p] = { tot: Math.round(s.tot), hc: Math.round(s.hc), lineas: s.lineas, sin: Math.round(s.sin), con: Math.round(s.con), sinHC: Math.round(s.sinHC), conHC: Math.round(s.conHC), top: Object.values(s.top).sort((a, b) => b[4] - a[4]).slice(0, 25).map(t => [t[0], t[1], t[2], t[3], Math.round(t[4])]) };
+    ch.push({ k: 'PERDIDA', i, v: s.tot / 1e6 }); ch.push({ k: 'PERDIDA_HC', i, v: s.hc / 1e6 }); });
+  opPrevia('Demanda no abastecida', ch, { dna }, 'La venta perdida usa el total pendiente de pedidos (como el Excel); Homecenter = clientes tipo 0013, y puede diferir de cifras históricas ya cargadas (revisa la vista previa). El detalle por mes muestra cuánto de eso NO tiene existencia hoy (agotado real) y cuánto sí (no se facturó por otra causa).');
+}
+async function opProcDev(wb) {
+  const T = opTabla(wb, 'BD', 'Desc Causal devolucion'); if (!T || T.idx['Valor_sub_local'] == null) throw new Error('No encontré las columnas de «Devoluciones x motivo» (Desc Causal devolucion, Valor_sub_local)');
+  const ix = T.idx, S = {};
+  T.rows.forEach(r => { const p = String(r[ix['Periodo']] == null ? '' : r[ix['Periodo']]).trim(); if (!/^\d{6}$/.test(p)) return; const c = String(r[ix['Desc Causal devolucion']] || '').trim().toUpperCase(), cn = String(r[ix['Desc Tipo_cliente']] || 'SIN CANAL').trim(), u = Math.abs(+r[ix['Cantidad_base']] || 0), v = Math.abs(+r[ix['Valor_sub_local']] || 0); const s = S[p] = S[p] || { causal: {}, canal: {}, du: 0, dv: 0, au: 0, av: 0 }; const tipo = OP_ADM.includes(c) ? 'AD' : OP_AV.includes(c) ? 'AV' : 'DV'; const q = s.causal[c] = s.causal[c] || [0, 0, tipo]; q[0] += u; q[1] += v; if (tipo !== 'AD') { s.du += u; s.dv += v; const k = s.canal[cn] = s.canal[cn] || [0, 0]; k[0] += u; k[1] += v; } if (tipo === 'AV') { s.au += u; s.av += v; } });
+  const ch = [], dev = {};
+  Object.keys(S).sort().forEach(p => { const s = S[p], i = +p.slice(4) - 1, y = +p.slice(0, 4); if (y !== 2026 || i < 0 || i > 11) return; dev[p] = { causal: s.causal, canal: s.canal }; ch.push({ k: 'DEV_U', i, v: s.du }); ch.push({ k: 'DEV_V', i, v: Math.round(s.dv) }); ch.push({ k: 'AV_U', i, v: s.au }); ch.push({ k: 'AV_V', i, v: Math.round(s.av) }); });
+  opPrevia('Devoluciones x motivo', ch, { dev }, 'Devoluciones = todos los motivos menos los 3 administrativos (cambio de factura por fecha, error en facturación, error en toma de pedido). Averías = daño mecánico, destruida en punto de venta, marcación/especificación técnica, falla IP, falla panel solar, flickeo y no enciende (las averías también cuentan dentro de las devoluciones, como en el Excel).');
+}
+// ---- Vista previa antes de aplicar ----
+function opPrevia(titulo, ch, extra, nota) {
+  const ch2 = ch.filter(c => c.v != null && isFinite(c.v)); if (!ch2.length && !extra) { toast('Nada que actualizar', 'inf'); return; }
+  OP.pre = { ch: ch2, extra };
+  const lab = k => { const f = OP_FILAS.find(x => x[1] === k); const b = OP_BASE.find(x => x[0] === k); return f ? f[2] : b ? b[1] : k; }, fmt = k => { const f = OP_FILAS.find(x => x[1] === k); return f ? f[5] : 'n'; };
+  const rows = ch2.map(c => { const a = opVal(c.k, c.i); return '<tr style="border-top:1px solid #e2e8f0"><td style="padding:3px 8px">' + lab(c.k) + '</td><td>' + OP_MF[c.i] + '</td><td style="text-align:right;color:#94a3b8">' + opFmt(a, fmt(c.k)) + '</td><td style="text-align:right;font-weight:700;color:' + (a == null ? '#16a34a' : '#d97706') + '">' + opFmt(c.v, fmt(c.k)) + '</td></tr>'; }).join('');
+  document.getElementById('op-modal').innerHTML = '<div onclick="if(event.target===this)this.remove()" style="position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:24px 10px;overflow:auto"><div style="background:#fff;border-radius:16px;max-width:680px;width:100%;padding:16px 18px"><div style="font-weight:800;font-size:15px">' + titulo + '</div>' + (nota ? '<div style="font-size:11.5px;color:#64748b;margin:4px 0 8px">' + nota + '</div>' : '') +
+    '<div class="wrap" style="max-height:55vh;overflow:auto"><table style="border-collapse:collapse;font-size:12px;width:100%"><tr style="color:#64748b;text-align:left"><th style="padding:3px 8px">Indicador</th><th>Mes</th><th style="text-align:right">Actual</th><th style="text-align:right">Nuevo</th></tr>' + (rows || '<tr><td colspan="4" class="empty">Solo se guardará el detalle</td></tr>') + '</table></div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button class="btn btn-g btn-sm" onclick="document.getElementById(\'op-modal\').innerHTML=\'\'">Cancelar</button><button class="btn btn-p btn-sm" onclick="opAplicar()">Aplicar ' + ch2.length + ' valores</button></div></div></div>';
+}
+async function opAplicar() {
+  const P = OP.pre; if (!P) return; P.ch.forEach(c => opSet(c.k, c.i, c.v)); if (P.extra) { Object.assign(OP.d.dna, P.extra.dna || {}); Object.assign(OP.d.dev, P.extra.dev || {}); }
+  OP.pre = null; document.getElementById('op-modal').innerHTML = ''; await opGuardar(); toast('One Page actualizado', 'ok'); opPintar();
+}
+function opExcel() {
+  const A = [['INDICADOR', 'META'].concat(OP_MF).concat(['ACUM. 2026'])];
+  OP_FILAS.forEach(f => { if (f[0] === 'sec') { A.push([f[1]]); return; } const k = f[1], calc = f[0] === 'calc', row = [f[2], opMeta(k)]; for (let i = 0; i < 12; i++) row.push(calc ? f[6](opG(i)) : opVal(k, i)); row.push(calc ? f[6](opG('T')) : opG('T')(k)); A.push(row); });
+  const ws = XLSX.utils.aoa_to_sheet(A), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'One Page'); ws['!cols'] = [{ wch: 42 }].concat(Array(14).fill({ wch: 11 })); XLSX.writeFile(wb, 'One_Page_Operaciones_2026.xlsx');
+}
+
+const ABAST_TABS = [['reabast', '🔁', 'Abastecimiento'], ['comext', '🌐', 'Comercio Exterior'], ['inv', '📦', 'Inventario'], ['tesoreria', '💸', 'Tesorería'], ['compras', '🛒', 'Módulo de compras'], ['innov', '💡', 'Innovación'], ['onepage', '📊', 'One Page']];
 function buildNav() {
   const n = document.getElementById('nav'); if (!n) return;
   n.innerHTML = ABAST_TABS.map(t => '<div class="nt" id="tab-' + t[0] + '" onclick="goPage(\'' + t[0] + '\')">' + t[1] + ' ' + t[2] + '</div>').join('');
@@ -18703,8 +18950,22 @@ function ivsCalc() {
   tr.sort((a, b) => (a.fecha || 8e15) - (b.fecha || 8e15));
   return { refs, bod, tr, pendRef };
 }
+// Referencias NUEVAS (innovación): primera venta hace menos de 12 meses → no cuentan en el análisis de agotados
+async function ivsNuevasCargar() {
+  if (IVS._nuevasCarg) return; IVS._nuevasCarg = true;
+  try {
+    const lim = new Date(); lim.setFullYear(lim.getFullYear() - 1); const L = lim.toISOString().slice(0, 10), mn = {};
+    const [ini, rf] = await Promise.all([sb.get('innov_ini', 'select=ref,ini&limit=5000'), sb.get('innov_refs', 'select=ref,primera_venta&limit=3000')]);
+    (ini || []).forEach(r => { const k = pvClaveRef(r.ref); if (r.ini && (!mn[k] || r.ini < mn[k])) mn[k] = r.ini; });
+    (rf || []).forEach(r => { const k = pvClaveRef(r.ref); if (r.primera_venta && (!mn[k] || r.primera_venta < mn[k])) mn[k] = r.primera_venta; });
+    IVS.nuevas = new Set(Object.keys(mn).filter(k => mn[k] >= L));
+  } catch (e) { console.warn('Referencias nuevas:', e); IVS.nuevas = new Set(); }
+  if (typeof ivsPintar === 'function' && document.getElementById('inv-seg')) ivsPintar();
+}
 function ivsPintar() {
   const seg = document.getElementById('inv-seg'); if (!seg) return;
+  if (typeof INV_VPROM !== 'undefined' && !INV_VPROM && !INV_VFALLO) invVentasCargar();
+  if (!IVS.nuevas) ivsNuevasCargar();
   const C = ivsCalc(), reg = C.refs.filter(p => !p.desc_), des = C.refs.filter(p => p.desc_);
   const sum = (L, k) => L.reduce((a, p) => a + p[k], 0), hay = !!(IVS.clasif && IVS.clasif.d);
   const tile = (v, l, c) => '<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'var(--tx)') + ';">' + v + '</div><div style="font-size:10.5px;color:var(--mu);">' + l + '</div></div>';
@@ -18712,10 +18973,21 @@ function ivsPintar() {
   IVS._trVivo = totTr > 0 ? Math.round(totTr / 1e6) : null; IVS._vivo = hay ? { lin: Math.round(sum(reg, 'valor') / 1e6), des: Math.round(sum(des, 'valor') / 1e6) } : null;
   // 4) agotados regulares
   const CNb = (IVS.clasif && IVS.clasif.cn) || {}, cnNom = v => v === 'EXCLUSIVO' ? 'Home Center' : v.charAt(0) + v.slice(1).toLowerCase();
-  const ago = reg.filter(p => !(p.disp > 0)).map(p => { const cn = invCanalDe(p.k).length ? invCanalDe(p.k) : (CNb[p.k] ? [cnNom(CNb[p.k])] : []); const ll = (C.pendRef[p.k] || []).slice().sort((a, b) => (a.fecha || 8e15) - (b.fecha || 8e15))[0]; return { p, canales: cn.length ? cn : ['Sin canal asignado'], ll }; });
+  const esNueva = p => !!(IVS.nuevas && IVS.nuevas.has(pvClaveRef(p.ref))), regB = reg.filter(p => !esNueva(p));   // regulares = sin descontinuadas ni nuevas
+  const canalDe = p => { const cn = invCanalDe(p.k).length ? invCanalDe(p.k) : (CNb[p.k] ? [cnNom(CNb[p.k])] : []); return cn.length ? cn : ['Sin canal asignado']; };
+  const vtaU = p => (INV_VPROM && INV_VPROM[pvClaveRef(p.ref)]) || 0, vtaV = p => (INV_VPROM_V && INV_VPROM_V[pvClaveRef(p.ref)]) || 0;
+  const ago = regB.filter(p => !(p.disp > 0)).map(p => { const cn = canalDe(p); const ll = (C.pendRef[p.k] || []).slice().sort((a, b) => (a.fecha || 8e15) - (b.fecha || 8e15))[0];
+    const vu = vtaU(p), vv = vtaV(p), dias = ll && ll.fecha ? Math.max(0, (new Date(ll.fecha) - Date.now()) / 864e5) : null;
+    return { p, canales: cn, ll, vu, vv, perd: dias == null ? null : vv / 30 * dias }; });
   const canales = [...new Set(ago.flatMap(a => a.canales))].sort();
   const q = (IVS.q || '').toLowerCase().trim(), fil = ago.filter(a => (!IVS.canal || a.canales.includes(IVS.canal)) && (!q || (a.p.ref + ' ' + a.p.desc).toLowerCase().includes(q))).sort((a, b) => ((a.ll && a.ll.fecha) || 8e15) - ((b.ll && b.ll.fecha) || 8e15));
   const porCanal = canales.map(c => ({ c, n: ago.filter(a => a.canales.includes(c)).length, conLl: ago.filter(a => a.canales.includes(c) && a.ll).length }));
+  const th0 = (t, r) => '<th' + (r ? ' style="text-align:right;"' : '') + '>' + t + '</th>';
+  const resRow = (nom, tot, L, act) => { const n = L.length, vu = L.reduce((s, a) => s + a.vu, 0), vv = L.reduce((s, a) => s + a.vv, 0), pe = L.reduce((s, a) => s + (a.perd || 0), 0), sl = L.filter(a => a.perd == null).reduce((s, a) => s + a.vv, 0);
+    return '<tr' + (nom == null ? ' style="font-weight:800;background:var(--s1);"' : ' style="cursor:pointer;' + (act ? 'background:#eff6ff;' : '') + '" onclick="IVS.canal=\'' + ivsE(nom).replace(/\'/g, '') + '\';ivsPintar()" title="Filtrar por este canal"') + '><td>' + (nom == null ? 'TOTAL (referencias únicas)' : ivsE(nom)) + '</td><td style="text-align:right;">' + ivsN(tot) + '</td><td style="text-align:right;color:#991b1b;font-weight:700;">' + ivsN(n) + '</td><td style="text-align:right;font-weight:700;">' + (tot ? (n / tot * 100).toFixed(1) : '0.0') + '%</td><td style="text-align:right;">' + ivsN(L.filter(a => a.ll).length) + '</td><td style="text-align:right;">' + ivsN(vu) + '</td><td style="text-align:right;">' + ivsM(vv) + '</td><td style="text-align:right;">' + ivsM(pe) + '</td><td style="text-align:right;">' + ivsM(sl) + '</td></tr>'; };
+  const resumen = '<div style="font-weight:800;font-size:12.5px;margin-bottom:4px;">Resumen de agotados por canal</div><div class="arte-mu" style="font-size:11px;margin-bottom:6px;">Solo referencias regulares: se excluyen las descontinuadas y las nuevas (primera venta hace menos de 12 meses). Venta promedio = últimos ' + (INV_VMESES || 6) + ' meses completos' + (INV_VPROM ? '' : ' (cargando…)') + '. <b>Venta perdida hasta llegada</b> = venta promedio $ × días que faltan para que llegue la orden. <b>Pérdida/mes sin orden</b> = lo que se pierde cada mes porque no hay nada en camino. Una referencia en varios canales cuenta en cada uno; el total no la repite. Clic en un canal para filtrar.</div>'
+    + '<div class="tw"><table class="cbl-t"><thead><tr>' + th0('Canal') + th0('Refs. regulares', 1) + th0('Agotadas', 1) + th0('% agotado', 1) + th0('Con orden en camino', 1) + th0('Venta prom. mes (und)', 1) + th0('Venta prom. mes ($)', 1) + th0('Venta perdida hasta llegada ($)', 1) + th0('Pérdida/mes sin orden ($)', 1) + '</tr></thead><tbody>'
+    + porCanal.map(x => resRow(x.c, regB.filter(p => canalDe(p).includes(x.c)).length, ago.filter(a => a.canales.includes(x.c)), IVS.canal === x.c)).join('') + resRow(null, regB.length, ago, false) + '</tbody></table></div><div style="height:10px;"></div>';
   const par = (tit, val, nota, k, st) => '<label title="' + ivsE(nota) + '" style="display:flex;align-items:center;gap:6px;background:#fff;border:1.5px solid var(--bl);border-radius:8px;padding:3px 8px;cursor:text;"><span style="font-size:10px;font-weight:800;color:var(--bl);text-transform:uppercase;white-space:nowrap;">' + tit + '</span><input type="number" step="' + st + '" class="inp" style="width:84px;font-size:13px;font-weight:800;padding:1px 6px;" value="' + ivsE(val) + '" placeholder="auto" onchange="ivsSetParam(\'' + k + '\', this.value)"></label>';
   const th = (t, r) => '<th' + (r ? ' style="text-align:right;"' : '') + '>' + t + '</th>';
   seg.innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">${tile(ivsM(totDisp), 'Inventario DISPONIBLE · bodegas ' + IVS.bodegas.join(', '), 'var(--bl)')}${tile(ivsM(totTr), 'En tránsito (ordenado sin ingresar) · USD × ' + ivsFac() + ' × TRM', '#b45309')}${tile(ivsM(totDisp + totTr), 'Disponible + tránsito')}${tile(ago.length + '', 'Regulares agotados', ago.length ? '#991b1b' : '#16a34a')}<div style="display:flex;flex-direction:column;gap:6px;justify-content:center;"><span class="arte-mu" style="font-size:10.5px;">${ivsTrmTxt()}</span></div><div style="display:flex;flex-direction:column;gap:6px;justify-content:center;">${par('TRM', IVS.trmFijo || '', IVS.trm ? 'Aplica a todas las órdenes · vacío = la de cada OC / última registrada (' + ivsE(IVS.trm) + ')' : 'Aplica a todas las órdenes', 'trm', '0.01')}${par('Factor import.', IVS.factor, 'Multiplica el valor FOB en USD (flete, seguro, aranceles…)', 'factor', '0.01')}</div></div>
@@ -18728,12 +19000,14 @@ function ivsPintar() {
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><label class="btn btn-bl btn-sm" style="cursor:pointer;">📥 Cargar BASE DE PRODUCTO (Excel)<input type="file" accept=".xlsx,.xls" style="display:none;" onchange="ivsCargarClasif(this)"></label>${hay ? '<span class="arte-mu" style="font-size:11px;">' + ivsE(IVS.clasif.archivo || '') + ' · ' + ivsE((IVS.clasif.fecha || '').slice(0, 10)) + ' · ' + ivsN(IVS.clasif.d.length) + ' descontinuadas</span>' : ''}</div>
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><span class="arte-mu" style="font-size:11.5px;">Se cuentan como <b>activas</b> aunque la base diga descontinuada:</span>${(IVS.forzarAct || []).map(k => '<span class="chip on" title="Quitar" onclick="ivsForzarQuitar(\'' + ivsE(k).replace(/'/g, '') + '\')">' + ivsE(k) + ' ✕</span>').join('') || '<span class="arte-mu" style="font-size:11px;">ninguna</span>'}<input id="ivs-forz" class="inp" style="width:110px;font-size:12px;" placeholder="Referencia" onkeydown="if(event.key==='Enter')ivsForzarAdd()"><button class="btn btn-g btn-sm" onclick="ivsForzarAdd()">Agregar</button></div>
     <div class="tw"><table class="cbl-t"><thead><tr>${th('Clasificación')}${th('Referencias', 1)}${th('Con stock disp.', 1)}${th('Unidades disp.', 1)}${th('Valor disponible', 1)}${th('%', 1)}</tr></thead><tbody>
-      ${[['Activo', reg], ['Descontinuado', des]].map(([n, L]) => { const fila = (nom, X, sub) => `<tr${sub ? '' : ' style="background:var(--s1);"'}><td style="${sub ? 'padding-left:26px;' : 'font-weight:800;'}">${sub ? ivsE(nom) : '▾ ' + n}</td><td style="text-align:right;">${ivsN(X.length)}</td><td style="text-align:right;">${ivsN(X.filter(p => p.disp > 0).length)}</td><td style="text-align:right;">${ivsN(sum(X, 'disp'))}</td><td style="text-align:right;${sub ? '' : 'font-weight:800;'}">${ivsM(sum(X, 'valor'))}</td><td style="text-align:right;">${totDisp ? (sum(X, 'valor') / totDisp * 100).toFixed(1) : 0}%</td></tr>`; const ests = {}; L.forEach(p => (ests[p.est] = ests[p.est] || []).push(p)); return fila(n, L, false) + Object.keys(ests).sort((x, y) => sum(ests[y], 'valor') - sum(ests[x], 'valor')).map(e => fila(e, ests[e], true)).join(''); }).join('')}
+      ${[['Activo', reg], ['Descontinuado', des]].map(([n, L]) => { const fila = (nom, X, sub) => `<tr${sub ? '' : ' style="background:var(--s1);"'}><td style="${sub ? 'padding-left:26px;' : 'font-weight:800;'}">${sub ? ivsE(nom) : n}</td><td style="text-align:right;">${ivsN(X.length)}</td><td style="text-align:right;">${ivsN(X.filter(p => p.disp > 0).length)}</td><td style="text-align:right;">${ivsN(sum(X, 'disp'))}</td><td style="text-align:right;${sub ? '' : 'font-weight:800;'}">${ivsM(sum(X, 'valor'))}</td><td style="text-align:right;">${totDisp ? (sum(X, 'valor') / totDisp * 100).toFixed(1) : 0}%</td></tr>`; return fila(n, L, false); }).join('')}
       <tr style="font-weight:800;background:var(--s1);"><td>Total general</td><td style="text-align:right;">${ivsN(C.refs.length)}</td><td style="text-align:right;">${ivsN(C.refs.filter(p => p.disp > 0).length)}</td><td style="text-align:right;">${ivsN(sum(C.refs, 'disp'))}</td><td style="text-align:right;">${ivsM(totDisp)}</td><td></td></tr></tbody></table></div></div></div>
   <div class="card"><div class="ch"><div class="ct">4️⃣ Productos regulares agotados · por canal y fecha de llegada</div></div><div class="cb">
+    ${resumen}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"><span class="chip ${IVS.canal ? '' : 'on'}" onclick="IVS.canal='';ivsPintar()">Todos (${ago.length})</span>${porCanal.map(x => `<span class="chip ${IVS.canal === x.c ? 'on' : ''}" onclick="IVS.canal='${ivsE(x.c).replace(/'/g, '')}';ivsPintar()">${ivsE(x.c)} (${x.n})</span>`).join('')}</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><input class="inp" placeholder="🔎 Buscar referencia o descripción…" value="${ivsE(IVS.q)}" style="flex:1;min-width:220px;max-width:380px;" oninput="IVS.q=this.value;clearTimeout(window.__ivsT);window.__ivsT=setTimeout(()=>{ivsPintar();const i=document.querySelector('#inv-seg input[placeholder^=\\'🔎\\']');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},300)"><button class="btn btn-g btn-sm" onclick="ivsExcelAgotados()">⬇ Excel</button><span class="arte-mu" style="font-size:11px;">${fil.length} de ${ago.length} · ${ago.filter(a => a.ll).length} con orden en camino</span></div>
-    ${fil.length ? `<div class="tw" style="max-height:520px;overflow:auto;"><table class="cbl-t"><thead><tr>${th('Referencia')}${th('Descripción')}${th('Canal')}${th('Orden en camino')}${th('Unidades por llegar', 1)}${th('Fecha de llegada')}</tr></thead><tbody>${fil.slice(0, 600).map(a => `<tr><td style="font-family:monospace;font-weight:700;">${ivsE(a.p.ref)}</td><td style="font-size:11px;">${ivsE(a.p.desc)}</td><td style="font-size:11px;">${ivsE(a.canales.join(', '))}</td><td>${a.ll ? '<b>' + ivsE(a.ll.oc) + '</b>' : '<span style="color:#991b1b;font-weight:700;">Sin orden</span>'}</td><td style="text-align:right;">${a.ll ? ivsN((C.pendRef[a.p.k] || []).reduce((s, x) => s + x.pend, 0)) : '—'}</td><td>${a.ll && a.ll.fecha ? (a.ll.estim ? '≈ ' : '') + ivsFd(a.ll.fecha) : a.ll ? 'sin fecha' : '—'}</td></tr>`).join('')}</tbody></table></div>${fil.length > 600 ? '<div class="arte-mu" style="font-size:11px;">Se muestran las primeras 600; usa el filtro o el Excel.</div>' : ''}` : '<div class="empty">✅ No hay regulares agotados con ese filtro.</div>'}</div></div>`;
+    ${fil.length ? `<div class="tw" style="max-height:520px;overflow:auto;"><table class="cbl-t"><thead><tr>${th('Referencia')}${th('Descripción')}${th('Canal')}${th('Orden en camino')}${th('Unidades por llegar', 1)}${th('Fecha de llegada')}${th('Venta prom. mes (und)', 1)}${th('Venta prom. mes ($)', 1)}${th('Venta perdida hasta llegada ($)', 1)}</tr></thead><tbody>${fil.slice(0, 600).map(a => `<tr><td style="font-family:monospace;font-weight:700;">${ivsE(a.p.ref)}</td><td style="font-size:11px;">${ivsE(a.p.desc)}</td><td style="font-size:11px;">${ivsE(a.canales.join(', '))}</td><td>${a.ll ? '<b>' + ivsE(a.ll.oc) + '</b>' : '<span style="color:#991b1b;font-weight:700;">Sin orden</span>'}</td><td style="text-align:right;">${a.ll ? ivsN((C.pendRef[a.p.k] || []).reduce((s, x) => s + x.pend, 0)) : '—'}</td><td>${a.ll && a.ll.fecha ? (a.ll.estim ? '≈ ' : '') + ivsFd(a.ll.fecha) : a.ll ? 'sin fecha' : '—'}</td><td style="text-align:right;">${a.vu ? ivsN(a.vu) : '<span class="arte-mu">—</span>'}</td><td style="text-align:right;">${a.vv ? ivsM(a.vv) : '<span class="arte-mu">—</span>'}</td><td style="text-align:right;">${a.perd != null ? ivsM(a.perd) : a.vv ? '<span style="color:#991b1b;" title="Sin orden: se pierde esto cada mes">' + ivsM(a.vv) + '/mes</span>' : '<span class="arte-mu">—</span>'}</td></tr>`).join('')}</tbody></table></div>${fil.length > 600 ? '<div class="arte-mu" style="font-size:11px;">Se muestran las primeras 600; usa el filtro o el Excel.</div>' : ''}` : '<div class="empty">✅ No hay regulares agotados con ese filtro.</div>'}</div></div>`;
+  seg.insertAdjacentHTML('beforeend', ivsExceso(C));
   IVS._C = C; IVS._ago = fil;
 }
 async function ivsSetParam(k, v) {
@@ -18772,8 +19046,38 @@ async function ivsCargarClasif(inp) {
 function ivsExcelTransito() {
   const C = IVS._C; if (!C) return; const ws = XLSX.utils.aoa_to_sheet([['OC', 'Proveedor', 'Llegada', 'Unidades pendientes', 'Valor USD', 'USD x ' + ivsFac(), 'TRM', 'Valor COP']].concat(C.tr.map(x => [x.oc, x.prov, x.fecha ? new Date(x.fecha).toISOString().slice(0, 10) : '', Math.round(x.uds), Math.round(x.usd), Math.round(x.usd * (Number(IVS.factor) || 1.15)), x.trm, Math.round(x.cop)]))), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'En transito'); XLSX.writeFile(wb, 'Inventario_en_transito_' + new Date().toISOString().slice(0, 10) + '.xlsx');
 }
+function ivsExceso(C) {
+  const CNb = (IVS.clasif && IVS.clasif.cn) || {}, cnNom = v => v === 'EXCLUSIVO' ? 'Home Center' : v.charAt(0) + v.slice(1).toLowerCase();
+  const canalDe = p => { const cn = invCanalDe(p.k).length ? invCanalDe(p.k) : (CNb[p.k] ? [cnNom(CNb[p.k])] : []); return cn.length ? cn : ['Sin canal asignado']; };
+  const N = Number(IVS.exN) > 0 ? Number(IVS.exN) : 8, M = Number(IVS.brN) > 0 ? Number(IVS.brN) : 12, tab = IVS.exTab || 'ex';
+  const th = (t, r) => '<th' + (r ? ' style="text-align:right;"' : '') + '>' + t + '</th>';
+  const ctl = '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
+    + '<label style="font-size:12px;">Exceso si hay más de <input type="number" min="1" step="1" class="inp" style="width:62px;font-size:12px;" value="' + N + '" onchange="IVS.exN=+this.value||8;ivsPintar()"> meses de venta</label>'
+    + '<label style="font-size:12px;">Baja rotación si hay más de <input type="number" min="1" step="1" class="inp" style="width:62px;font-size:12px;" value="' + M + '" onchange="IVS.brN=+this.value||12;ivsPintar()"> meses (o no vende)</label>'
+    + '<label style="font-size:12px;cursor:pointer;"><input type="checkbox" ' + (IVS.exTr ? 'checked ' : '') + 'onchange="IVS.exTr=this.checked;ivsPintar()"> sumar lo que viene en tránsito</label>'
+    + '<label style="font-size:12px;cursor:pointer;"><input type="checkbox" ' + (IVS.exDesc ? 'checked ' : '') + 'onchange="IVS.exDesc=this.checked;ivsPintar()"> incluir descontinuadas</label></div>';
+  if (!INV_VPROM) return '<div class="card" style="margin-bottom:12px;"><div class="ch"><div class="ct">5️⃣ Exceso de inventario y baja rotación</div></div><div class="cb">' + ctl + '<div class="arte-mu">' + (INV_VFALLO ? 'No pude cargar las ventas.' : '⏳ Cargando ventas promedio…') + '</div></div></div>';
+  const rows = C.refs.filter(p => p.disp > 0 && (IVS.exDesc || !p.desc_) && !(IVS.nuevas && IVS.nuevas.has(pvClaveRef(p.ref)))).map(p => {
+    const vu = INV_VPROM[pvClaveRef(p.ref)] || 0, tr = (C.pendRef[p.k] || []).reduce((s, x) => s + x.pend, 0), base = p.disp + (IVS.exTr ? tr : 0), cob = vu > 0 ? base / vu : Infinity, cu = p.disp ? p.valor / p.disp : 0, exU = vu > 0 ? Math.max(0, base - N * vu) : 0;
+    return { p, vu, tr, base, cob, cu, exU, exV: exU * cu, canales: canalDe(p) }; });
+  const ex = rows.filter(r => r.vu > 0 && r.cob > N).sort((a, b) => b.exV - a.exV), br = rows.filter(r => r.cob > M).sort((a, b) => b.p.valor - a.p.valor);
+  const totV = rows.reduce((s, r) => s + r.p.valor, 0), L = tab === 'br' ? br : ex; IVS._exL = { L, tab, N, M };
+  const tile = (v, l, c) => '<div style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;min-width:150px;"><div style="font-size:19px;font-weight:800;color:' + c + ';">' + v + '</div><div style="font-size:10.5px;color:var(--mu);">' + l + '</div></div>';
+  const tabB = (k, t) => '<span class="chip ' + (tab === k ? 'on' : '') + '" onclick="IVS.exTab=\'' + k + '\';ivsPintar()">' + t + '</span>';
+  const fila = r => '<tr><td style="font-family:monospace;font-weight:700;">' + ivsE(r.p.ref) + '</td><td style="font-size:11px;">' + ivsE(r.p.desc) + '</td><td style="font-size:11px;">' + ivsE(r.canales.join(', ')) + '</td><td style="text-align:right;">' + ivsN(r.p.disp) + '</td><td style="text-align:right;">' + (r.tr ? ivsN(r.tr) : '—') + '</td><td style="text-align:right;">' + (r.vu ? ivsN(r.vu) : '<span style="color:#991b1b;font-weight:700;">Sin ventas</span>') + '</td><td style="text-align:right;font-weight:700;">' + (isFinite(r.cob) ? r.cob.toFixed(1) : '∞') + '</td>'
+    + (tab === 'br' ? '' : '<td style="text-align:right;">' + ivsN(r.exU) + '</td><td style="text-align:right;font-weight:700;color:#b45309;">' + ivsM(r.exV) + '</td>') + '<td style="text-align:right;">' + ivsM(r.p.valor) + '</td></tr>';
+  return '<div class="card" style="margin-bottom:12px;"><div class="ch"><div class="ct">5️⃣ Exceso de inventario y baja rotación</div><div class="arte-mu" style="font-size:11px;">Meses de cobertura = existencia ÷ venta promedio mensual (últimos ' + (INV_VMESES || 6) + ' meses completos). Sin descontinuadas ni nuevas.</div></div><div class="cb">' + ctl
+    + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">' + tile(ivsN(ex.length), 'Referencias con exceso (> ' + N + ' meses)', '#b45309') + tile(ivsM(ex.reduce((s, r) => s + r.exV, 0)), 'Valor del exceso (lo que sobra sobre ' + N + ' meses)', '#b45309') + tile(totV ? (ex.reduce((s, r) => s + r.exV, 0) / totV * 100).toFixed(1) + '%' : '0%', 'Exceso sobre el inventario analizado', '#b45309') + tile(ivsN(br.length), '⚠ Baja rotación (> ' + M + ' meses o sin ventas)', '#991b1b') + tile(ivsM(br.reduce((s, r) => s + r.p.valor, 0)), 'Valor en baja rotación', '#991b1b') + '</div>'
+    + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">' + tabB('ex', 'Exceso (' + ex.length + ')') + tabB('br', 'Baja rotación (' + br.length + ')') + '<button class="btn btn-g btn-sm" onclick="ivsExcelExceso()">⬇ Excel</button></div>'
+    + (L.length ? '<div class="tw" style="max-height:520px;overflow:auto;"><table class="cbl-t"><thead><tr>' + th('Referencia') + th('Descripción') + th('Canal') + th('Existencia', 1) + th('En tránsito', 1) + th('Venta prom. mes (und)', 1) + th('Meses de cobertura', 1) + (tab === 'br' ? '' : th('Exceso (und)', 1) + th('Valor del exceso', 1)) + th('Valor inventario', 1) + '</tr></thead><tbody>' + L.slice(0, 400).map(fila).join('') + '</tbody></table></div>' + (L.length > 400 ? '<div class="arte-mu" style="font-size:11px;">Se muestran las 400 de mayor valor; el Excel trae todas.</div>' : '') : '<div class="empty">✅ Nada por encima de ese umbral.</div>') + '</div></div>';
+}
+function ivsExcelExceso() {
+  const X = IVS._exL; if (!X) return; const br = X.tab === 'br';
+  const ws = XLSX.utils.aoa_to_sheet([['Referencia', 'Descripción', 'Canal', 'Existencia', 'En tránsito', 'Venta prom. mes (und)', 'Meses de cobertura'].concat(br ? [] : ['Exceso (und)', 'Valor del exceso']).concat(['Valor inventario'])].concat(X.L.map(r => [r.p.ref, r.p.desc, r.canales.join(', '), Math.round(r.p.disp), Math.round(r.tr), Math.round(r.vu), isFinite(r.cob) ? Math.round(r.cob * 10) / 10 : 'Sin ventas'].concat(br ? [] : [Math.round(r.exU), Math.round(r.exV)]).concat([Math.round(r.p.valor)])))), wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, br ? 'Baja rotación' : 'Exceso'); XLSX.writeFile(wb, (br ? 'Baja_rotacion_' : 'Exceso_inventario_') + new Date().toISOString().slice(0, 10) + '.xlsx');
+}
 function ivsExcelAgotados() {
-  const L = IVS._ago || []; const ws = XLSX.utils.aoa_to_sheet([['Referencia', 'Descripción', 'Canal', 'Orden en camino', 'Unidades por llegar', 'Fecha de llegada']].concat(L.map(a => [a.p.ref, a.p.desc, a.canales.join(', '), a.ll ? a.ll.oc : 'Sin orden', a.ll ? Math.round((IVS._C.pendRef[a.p.k] || []).reduce((s, x) => s + x.pend, 0)) : '', a.ll && a.ll.fecha ? new Date(a.ll.fecha).toISOString().slice(0, 10) : '']))), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Agotados regulares'); XLSX.writeFile(wb, 'Regulares_agotados_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+  const L = IVS._ago || []; const ws = XLSX.utils.aoa_to_sheet([['Referencia', 'Descripción', 'Canal', 'Orden en camino', 'Unidades por llegar', 'Fecha de llegada', 'Venta prom. mes (und)', 'Venta prom. mes ($)', 'Venta perdida hasta llegada ($)']].concat(L.map(a => [a.p.ref, a.p.desc, a.canales.join(', '), a.ll ? a.ll.oc : 'Sin orden', a.ll ? Math.round((IVS._C.pendRef[a.p.k] || []).reduce((s, x) => s + x.pend, 0)) : '', a.ll && a.ll.fecha ? new Date(a.ll.fecha).toISOString().slice(0, 10) : '', Math.round(a.vu), Math.round(a.vv), a.perd != null ? Math.round(a.perd) : '']))), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Agotados regulares'); XLSX.writeFile(wb, 'Regulares_agotados_' + new Date().toISOString().slice(0, 10) + '.xlsx');
 }
 
 /* ===== Gráfica histórica (One Page operaciones 2026) y bodegas desplegables ===== */
@@ -18789,7 +19093,20 @@ function ivsGrafCard() {
   const chips = IVS_GS.map(g => `<span class="chip ${IVS_G.on[g[0]] ? 'on' : ''}" style="${IVS_G.on[g[0]] ? 'border-color:' + g[2] + ';' : ''}" onclick="IVS_G.on['${g[0]}']=IVS_G.on['${g[0]}']?0:1;ivsGraf()"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${g[2]};margin-right:5px;"></span>${g[1]}</span>`).join('');
   return `<div class="card" id="ivs-gcard" style="margin-bottom:12px;"><div class="ch"><div class="ct">1️⃣ Cómo se ha comportado el inventario</div><div class="arte-mu" style="font-size:11px;">Fuente: One Page Operaciones · millones COP y días · pasa el mouse sobre un mes</div></div><div class="cb">
   <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">${chips}<span style="flex:1"></span><button class="btn btn-g btn-sm" onclick="IVS_G.val=IVS_G.val?0:1;ivsGraf()">${IVS_G.val ? '🔢 Ocultar valores' : '🔢 Ver valores'}</button><button class="btn btn-g btn-sm" onclick="IVS_G.bar=IVS_G.bar?0:1;ivsGraf()">${IVS_G.bar ? '📈 Líneas' : '📊 Barras'}</button></div>
+  ${ivsGrafLeyenda()}
   <div id="ivs-graf" style="position:relative;">${ivsGrafSvg()}</div></div></div>`;
+}
+const IVS_GDEF = {
+  lin: ['Activo (regular)', 'Inventario disponible de referencias regulares (activas), valorizado a costo promedio. Eje izquierdo, millones de pesos.'],
+  tot: ['Total inventario disponible', 'Activo + Descontinuado: todo el inventario disponible de la compañía a costo promedio. Eje izquierdo, millones de pesos.'],
+  tr: ['Tránsito', 'Lo ya ordenado a proveedores que todavía no ingresa a bodega (USD × factor × TRM). Eje izquierdo, millones de pesos.'],
+  des: ['Descontinuado', 'Inventario disponible de referencias descontinuadas (evacuar, saldos, renuncia). Eje izquierdo, millones de pesos.'],
+  db: ['Días en bodega', 'Días de inventario que hay en bodega (cuántos días de venta cubre). Línea punteada, eje derecho en días.'],
+  dt: ['Días con tránsito', 'Días de inventario sumando lo que viene en tránsito. Línea punteada, eje derecho en días.']
+};
+function ivsGrafLeyenda() {
+  return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px 18px;margin:2px 0 10px;padding:8px 10px;background:var(--s1);border:1px solid var(--b1);border-radius:10px;">' + IVS_GS.map(g => { const d = IVS_GDEF[g[0]] || [g[1], ''], dash = g[3] === 'D', on = IVS_G.on[g[0]];
+    return '<div style="display:flex;gap:8px;align-items:flex-start;font-size:11px;line-height:1.35;' + (on ? '' : 'opacity:.45;') + '"><svg width="38" height="12" style="flex:none;margin-top:2px;"><line x1="2" x2="36" y1="6" y2="6" stroke="' + g[2] + '" stroke-width="3" stroke-linecap="round"' + (dash ? ' stroke-dasharray="6 4"' : '') + '/></svg><span><b>' + ivsE(d[0]) + '</b> · <span style="color:' + (dash ? '#0f766e' : '#1d4ed8') + ';font-weight:700;">' + (dash ? 'línea punteada · días' : 'línea continua · $ millones') + '</span><br><span class="arte-mu">' + ivsE(d[1]) + '</span></span></div>'; }).join('') + '</div>';
 }
 function ivsGraf() { const el = document.getElementById('ivs-gcard'); if (el) el.outerHTML = ivsGrafCard(); }
 function ivsGrafSvg() {
@@ -19161,10 +19478,43 @@ function innSvgMensual(D) {
 function innBarrasH(items, fmt, color, max) { // [{nom, v, extra}]
   const mx = max || Math.max(1, ...items.map(i => i.v)); return items.map(i => '<div style="display:grid;grid-template-columns:150px 1fr 90px;gap:8px;align-items:center;margin:4px 0;font-size:12px" data-t="' + (i.tip || '') + '"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + innEsc(i.nom) + '</div><div style="background:#f1f5f9;border-radius:5px;height:16px"><div style="height:16px;border-radius:5px;width:' + Math.max(1, i.v / mx * 100) + '%;background:' + (color || INN_C.az) + '"></div></div><div style="text-align:right;font-weight:700">' + fmt(i.v) + '</div></div>').join('');
 }
+function innMesChips() { return '<div style="margin-bottom:8px">' + INN.meses.map(m => '<button onclick="innTog(\'mes\',' + m + ')" style="border:1px solid ' + (INN.mesesSel.has(m) ? INN_C.nv : '#cbd5e1') + ';background:' + (INN.mesesSel.has(m) ? INN_C.nv : '#fff') + ';color:' + (INN.mesesSel.has(m) ? '#fff' : '#334155') + ';border-radius:14px;padding:2px 9px;font-size:11px;font-weight:600;cursor:pointer;margin:2px">' + INN_MESES[m].slice(0, 3) + '</button>').join('') + '<a href="#" onclick="innTodos(\'mes\');return false" style="font-size:11px;margin-left:6px">todos</a></div>'; }
 function innHeat(CD, ms) {
-  const mx = Math.max(1, ...CD.flatMap(c => ms.map(m => c.por[m].v))); let h = '<div class="wrap"><table style="border-collapse:separate;border-spacing:3px;font-size:11.5px"><tr><th style="text-align:left;border:0"></th>' + ms.map(m => '<th style="border:0;color:#64748b">' + INN_MESES[m].slice(0, 3) + '</th>').join('') + '</tr>';
-  CD.forEach(c => { h += '<tr><td style="font-weight:600;padding-right:8px">' + innEsc(c.nom.replace('CANAL ', '')) + '</td>' + ms.map(m => { const v = c.por[m].v, a = v / mx; return '<td data-t="<b>' + innEsc(c.nom) + ' · ' + INN_MESES[m] + '</b><br>$' + innM(v) + 'M · margen ' + innP(c.por[m].g, 1) + '" style="text-align:center;border-radius:6px;padding:7px 9px;background:rgba(37,99,235,' + (v ? .08 + a * .85 : 0.03) + ');color:' + (a > .5 ? '#fff' : '#0f172a') + '">' + (v ? innM(v) : '·') + '</td>'; }).join('') + '</tr>'; });
-  return h + '</table></div>';
+  const tm = {}, tc = {}; let gt = 0; ms.forEach(m => { tm[m] = CD.reduce((a, c) => a + c.por[m].v, 0); gt += tm[m]; }); CD.forEach(c => { tc[c.nom] = ms.reduce((a, m) => a + c.por[m].v, 0); });
+  const mx = Math.max(1, ...CD.flatMap(c => ms.map(m => c.por[m].v)));
+  const th = 'border:0;color:#64748b;cursor:pointer', tt = 'text-align:center;font-weight:800;padding:7px 9px;background:#f1f5f9;border-radius:6px;cursor:pointer';
+  let h = '<div class="wrap"><table style="border-collapse:separate;border-spacing:3px;font-size:11.5px"><tr><th style="text-align:left;border:0"></th>' + ms.map(m => '<th style="' + th + '" onclick="innDetalle(null,' + m + ')" title="Ver referencias de ' + INN_MESES[m] + '">' + INN_MESES[m].slice(0, 3) + '</th>').join('') + '<th style="' + th + ';color:#0f172a" onclick="innDetalle(null,null)">Total</th></tr>';
+  CD.forEach((c, k) => { const ci = INN3.can.indexOf(inn3Nom(c.nom)); h += '<tr><td style="font-weight:600;padding-right:8px;cursor:pointer" onclick="innDetalle(' + ci + ',null)" title="Ver referencias del canal">' + innEsc(c.nom.replace('CANAL ', '')) + '</td>' + ms.map(m => { const v = c.por[m].v, a = v / mx; return '<td onclick="innDetalle(' + ci + ',' + m + ')" data-t="<b>' + innEsc(c.nom) + ' · ' + INN_MESES[m] + '</b><br>$' + innM(v) + 'M · margen ' + innP(c.por[m].g, 1) + '<br>clic para ver referencias" style="cursor:pointer;text-align:center;border-radius:6px;padding:7px 9px;background:rgba(37,99,235,' + (v ? .08 + a * .85 : 0.03) + ';color:' + (a > .5 ? '#fff' : '#0f172a') + '">' + (v ? innM(v) : '·') + '</td>'; }).join('') + '<td onclick="innDetalle(' + ci + ',null)" style="' + tt + '">' + innM(tc[c.nom]) + '</td></tr>'; });
+  h += '<tr><td style="font-weight:800;padding-right:8px">Total</td>' + ms.map(m => '<td onclick="innDetalle(null,' + m + ')" style="' + tt + '">' + innM(tm[m]) + '</td>').join('') + '<td onclick="innDetalle(null,null)" style="' + tt + ';background:#203864;color:#fff">' + innM(gt) + '</td></tr>';
+  return h + '</table></div><div style="font-size:11px;color:#64748b;margin-top:4px">Clic en una celda, canal, mes o total para ver las referencias.</div>';
+}
+// ---- Detalle de referencias de innovación (panel con foto, canal, costo, precio, tipo, vigencia, empaque) ----
+INN.pan = INN.pan || { precio: null, cargando: false };
+async function innPanelCargar() {
+  if (INN.pan.precio || INN.pan.cargando) return; INN.pan.cargando = true;
+  try { await wfotosCargar(); } catch (e) {}
+  try { const r = await sb.get('precios_lista', 'select=referencia,precio,periodo&lista=eq.1&order=periodo.desc&limit=4000'), m = {}; (r || []).forEach(x => { const k = wfNz(x.referencia); if (!(k in m)) m[k] = Number(x.precio) || 0; }); INN.pan.precio = m; } catch (e) { INN.pan.precio = {}; }
+  INN.pan.cargando = false; if (document.getElementById('inn-mo')) innDetallePintar();
+}
+function innRef(k) { innDetalle(null, null, k); }
+function innDetalle(ci, m, ref) { INN.det = { ci, m, ref }; let o = document.getElementById('inn-mo'); if (!o) { o = document.createElement('div'); o.id = 'inn-mo'; o.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:24px 10px;overflow:auto'; o.onclick = e => { if (e.target === o) o.remove(); }; document.body.appendChild(o); } innDetallePintar(); innPanelCargar(); }
+function innDetallePintar() {
+  const o = document.getElementById('inn-mo'); if (!o) return; const { ci, m, ref } = INN.det, hoy = (Date.now() / 864e5) + 25569, by = {};
+  const ms = ref ? INN.meses : m == null ? INN.meses.filter(x => INN.mesesSel.has(x)) : [m];
+  INN3.r.forEach(x => { if (x[4] === 1 && x[2] === 2026 && ms.includes(x[3] - 1) && (ci == null || x[0] === ci) && (!ref || String(x[1]) === String(ref))) { const b = by[x[1]] = by[x[1]] || { v: 0, c: 0, cn: {} }; b.v += x[5]; b.c += x[6]; b.cn[x[0]] = (b.cn[x[0]] || 0) + x[5]; } });
+  const costo = {}; (typeof INV_DATA !== 'undefined' ? INV_DATA : []).forEach(r => { const c = parseFloat(r.costo_prom) || 0; if (c > 0) costo[wfNz(r.referencia)] = c; });
+  const st = (IVS.clasif && IVS.clasif.st) || {}, P = INN.pan.precio || {};
+  const L = Object.keys(by).map(k => ({ k, v: by[k].v, g: by[k].v ? 1 - by[k].c / by[k].v : null, cn: by[k].cn })).sort((a, b) => b.v - a.v);
+  const tit = ref ? 'Referencia ' + ref + ' · 2026' : (ci == null ? 'Todos los canales' : INN3.can[ci]) + ' · ' + (m == null ? (ms.length === INN.meses.length ? 'todos los meses' : ms.map(x => INN_MESES[x].slice(0, 3)).join(', ')) : INN_MESES[m]);
+  const tp = k => { const t = String(st[k] || '').toUpperCase(); return t.includes('IN') && t.includes('OUT') ? 'IN & OUT' : (t || 'Regular'); };
+  const card = x => { const nm = (INN3.ref[x.k] || ['', ''])[0], sub = (INN3.ref[x.k] || ['', ''])[1], rk = wfNz(x.k), foto = wfotoUrl(x.k), cs = costo[rk], pr = P[rk];
+    const vig = Object.keys(x.cn).map(c => { const ini = INN3.ini[x.k + '|' + c]; return ini ? '<div style="white-space:nowrap">' + innEsc(INN3.can[c]) + ': ' + inn3F(ini) + ' → <b style="color:' + (ini + 365 > hoy ? '#16a34a' : '#94a3b8') + '">' + inn3F(ini + 365) + '</b></div>' : ''; }).join('');
+    const cx = typeof cblUxCaja === 'function' ? cblUxCaja(x.k) : null;
+    return '<div style="display:flex;gap:12px;border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff;margin-bottom:8px;flex-wrap:wrap"><div style="width:84px;height:84px;flex:none;border-radius:10px;background:#f1f5f9;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:11px">' + (foto ? '<img src="' + String(foto).replace(/"/g, '&quot;') + '" data-wf="' + String(foto).replace(/"/g, '&quot;') + '" style="width:100%;height:100%;object-fit:cover">' : 'sin foto') + '</div>' +
+      '<div style="flex:1;min-width:220px"><div style="font-weight:800">' + x.k + ' · ' + innEsc(nm) + '</div><div style="font-size:11px;color:#64748b">' + innEsc(sub) + '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:4px 12px;font-size:12px;margin-top:6px"><div>Venta: <b>$' + innM(x.v) + 'M</b></div><div>Margen: <b>' + innP(x.g, 1) + '</b></div><div>Costo: <b>' + (cs ? '$' + Math.round(cs).toLocaleString('es-CO') : '—') + '</b></div><div>Precio P1: <b>' + (pr ? '$' + Math.round(pr).toLocaleString('es-CO') : (INN.pan.precio ? '—' : '…')) + '</b></div><div>Tipo: <b>' + innEsc(tp(x.k)) + '</b></div><div>Empaque: <b>' + (cx ? cx + ' und' : '—') + '</b></div></div>' +
+      '<div style="font-size:11.5px;color:#334155;margin-top:6px"><span style="color:#64748b">Canal · inicio → fin de participación</span>' + vig + '</div></div></div>'; };
+  o.innerHTML = '<div style="background:#f8fafc;border-radius:16px;max-width:860px;width:100%;padding:16px 18px"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:10px"><div><div style="font-weight:800;font-size:15px">💡 Referencias de innovación</div><div style="font-size:12px;color:#64748b">' + innEsc(tit) + ' · ' + L.length + ' referencias · $' + innM(L.reduce((a, x) => a + x.v, 0)) + 'M</div></div><button onclick="document.getElementById(\'inn-mo\').remove()" style="border:0;background:#e2e8f0;border-radius:8px;padding:5px 11px;cursor:pointer;font-weight:700">✕</button></div>' + (L.length ? L.map(card).join('') : '<div class="empty">Sin ventas de innovación en esa selección</div>') + '</div>';
 }
 function innChips() {
   const chip = (on, f, tx) => '<button onclick="' + f + '" style="border:1px solid ' + (on ? INN_C.nv : '#cbd5e1') + ';background:' + (on ? INN_C.nv : '#fff') + ';color:' + (on ? '#fff' : '#334155') + ';border-radius:16px;padding:4px 11px;font-size:11.5px;font-weight:600;cursor:pointer;margin:2px">' + tx + '</button>';
@@ -19198,8 +19548,8 @@ function innDash() {
     innCard('Margen bruto: innovación vs regular', 'Comparado con la meta de 45%', innSvgMargen(A)) + '</div>' +
     '<div style="margin-bottom:14px">' + innCard('Evolución mensual 2026', 'Ventas regular + innovación ($M, barras) y peso de la innovación (línea morada, eje derecho)', innSvgMensual(MD)) + '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;margin-bottom:14px">' +
-    innCard('Venta de innovación por canal 2026', 'Meses y canales seleccionados · $M', innBarrasH(CD.slice().sort((a, b) => b.v - a.v).map(c => ({ nom: c.nom.replace('CANAL ', ''), v: c.v, tip: '<b>' + innEsc(c.nom) + '</b><br>$' + innM(c.v) + 'M<br>Margen ' + innP(c.g, 1) })), v => '$' + innM(v) + 'M', INN_C.az)) +
-    innCard('Mapa de calor canal × mes', 'Venta de innovación · más oscuro = más venta ($M)', innHeat(CD, ms)) + '</div>' +
+    innCard('Venta de innovación por canal 2026', 'Meses y canales seleccionados · $M', innMesChips() + innBarrasH(CD.slice().sort((a, b) => b.v - a.v).map(c => ({ nom: c.nom.replace('CANAL ', ''), v: c.v, tip: '<b>' + innEsc(c.nom) + '</b><br>$' + innM(c.v) + 'M<br>Margen ' + innP(c.g, 1) })), v => '$' + innM(v) + 'M', INN_C.az)) +
+    innCard('Mapa de calor canal × mes', 'Venta de innovación · más oscuro = más venta ($M) · clic para ver referencias', innMesChips() + innHeat(CD, ms)) + '</div>' +
     '<div style="margin-bottom:14px">' + innCard('Vigencia de la innovación por canal', 'Días que faltan para que cada referencia pase a regular en cada canal · selección actual', innVigencia(RD.refs, RD.det, RD.hoy)) + '</div>' +
     '<div style="margin-bottom:14px">' + innCard('Productos de innovación', 'Referencias marcadas como innovación y su ventana de 1 año por canal', innListaCard()) + '</div>' +
     innCard('Top referencias de innovación 2026', 'Por valor neto · ' + refs.length + ' referencias · total $' + innM(totRef) + 'M', '<input placeholder="Buscar referencia o nombre…" value="' + innEsc(INN.refQ) + '" oninput="INN.refQ=this.value;innPintar();setTimeout(()=>{const i=document.querySelector(\'#innov-mod input\');if(i){i.focus();i.setSelectionRange(99,99)}},0)" style="width:100%;max-width:340px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;margin-bottom:8px">' +
@@ -19271,7 +19621,7 @@ function innListaHTML() {
   const chip = (e, t) => '<button onclick="INN.lf=\'' + e + '\';innListaPintar()" style="border:1px solid ' + (f === e ? INN_C.nv : '#cbd5e1') + ';background:' + (f === e ? INN_C.nv : '#fff') + ';color:' + (f === e ? '#fff' : '#334155') + ';border-radius:16px;padding:4px 11px;font-size:11.5px;font-weight:600;cursor:pointer;margin:2px 4px 6px 0">' + t + '</button>';
   return chip('Vigente', 'Vigentes (' + n('Vigente') + ')') + chip('Vencida', 'Vencidas (' + n('Vencida') + ')') + chip('Sin ventas', 'Sin ventas (' + n('Sin ventas') + ')') + chip('Todas', 'Todas (' + L.length + ')') +
     '<div class="wrap" style="max-height:440px;overflow:auto"><table style="border-collapse:collapse;font-size:12px;width:100%"><tr style="text-align:left;color:#64748b;position:sticky;top:0;background:#fff"><th style="padding:5px 8px">Ref.</th><th>Producto</th><th>Categoría</th><th>Canales (inicio → vence)</th><th style="text-align:right">Venta 2026</th><th>Estado</th></tr>' +
-    rows.slice(0, 200).map(x => '<tr style="border-top:1px solid #e2e8f0;vertical-align:top"><td style="padding:5px 8px;font-weight:700">' + x.ref + '</td><td>' + innEsc(x.nom) + '</td><td>' + innEsc(x.sub) + '</td><td>' + x.vig.sort((a, b) => a.ini - b.ini).map(v => '<div style="white-space:nowrap;color:' + (v.fin > hoy ? '#0f172a' : '#94a3b8') + '">' + innEsc(v.can) + ': ' + inn3F(v.ini) + ' → ' + inn3F(v.fin) + '</div>').join('') + '</td><td style="text-align:right">$' + innM(x.v) + 'M</td><td><span style="font-weight:700;color:' + (x.est === 'Vigente' ? '#16a34a' : x.est === 'Vencida' ? '#94a3b8' : '#d97706') + '">' + x.est + '</span></td></tr>').join('') + '</table></div>' + (rows.length > 200 ? '<div style="font-size:11px;color:#64748b;margin-top:4px">Mostrando 200 de ' + rows.length + ' · usa el buscador</div>' : '');
+    rows.slice(0, 200).map(x => '<tr style="border-top:1px solid #e2e8f0;vertical-align:top"><td style="padding:5px 8px;font-weight:700;cursor:pointer;color:#2563eb" onclick="innRef(\'' + x.ref + '\')" title="Ver ficha">' + x.ref + '</td><td>' + innEsc(x.nom) + '</td><td>' + innEsc(x.sub) + '</td><td>' + x.vig.sort((a, b) => a.ini - b.ini).map(v => '<div style="white-space:nowrap;color:' + (v.fin > hoy ? '#0f172a' : '#94a3b8') + '">' + innEsc(v.can) + ': ' + inn3F(v.ini) + ' → ' + inn3F(v.fin) + '</div>').join('') + '</td><td style="text-align:right">$' + innM(x.v) + 'M</td><td><span style="font-weight:700;color:' + (x.est === 'Vigente' ? '#16a34a' : x.est === 'Vencida' ? '#94a3b8' : '#d97706') + '">' + x.est + '</span></td></tr>').join('') + '</table></div>' + (rows.length > 200 ? '<div style="font-size:11px;color:#64748b;margin-top:4px">Mostrando 200 de ' + rows.length + ' · usa el buscador</div>' : '');
 }
 function innListaPintar() { const e = document.getElementById('inn-lista'); if (e) e.innerHTML = innListaHTML(); }
 function innListaCard() { return '<input placeholder="Buscar referencia, producto o categoría…" value="' + innEsc(INN.lq || '') + '" oninput="INN.lq=this.value;innListaPintar()" style="width:100%;max-width:340px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;margin-bottom:8px;display:block"><div id="inn-lista">' + innListaHTML() + '</div>'; }
