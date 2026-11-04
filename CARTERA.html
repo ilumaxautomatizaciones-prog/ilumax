@@ -272,7 +272,7 @@ function conCompute(items, docsL, icaMil, rtPct, icaMil2) {
     r.iva = Math.round(r.bruto * 0.19);
     const icaT = Math.round(r.bruto * icaMil / 1000), icaT2 = icaMil2 ? Math.round(r.bruto * icaMil2 / 1000) : null, rtT = Math.round(r.iva * rtPct / 100), dif = r.dif;
     const zB = 'ICA Bogotá ' + icaMil + ' ‰', zY = 'ICA Yumbo ' + icaMil2 + ' ‰';
-    if (Math.abs(dif) <= 1) { /* sin retenciones */ }
+    if (Math.abs(dif) <= 10) { /* sin retenciones: ajuste al peso */ }
     else if (Math.abs(dif - icaT) <= 2) { r.ica = dif; r.zona = 'B'; r.obs = zB; }
     else if (icaT2 != null && Math.abs(dif - icaT2) <= 2) { r.ica = dif; r.zona = 'Y'; r.obs = zY; }
     else if (Math.abs(dif - (icaT + rtT)) <= 2) { r.rte = rtT; r.ica = dif - rtT; r.zona = 'B'; r.obs = zB + ' + RTE IVA'; }
@@ -440,7 +440,7 @@ function conPlano(items, o) {
   });
   its.forEach(x => lines.push(plCart(n++, o.tipo, o.cons, x.d, o.nit, x.cartera, o.notas)));
   const dif0 = Math.round((pagC + ica + rte - car) * 100) / 100;
-  if (dif0 !== 0 && Math.abs(dif0) <= 2) lines.push(plRet(n++, o.tipo, o.cons, dif0 < 0 ? (o.ctaAjGasto || '53959505') : (o.ctaAjIngreso || '42955115'), o.nit, dif0 < 0 ? -dif0 : -dif0, 0, 'AJUSTE AL PESO', o.ccAj || '11005'));
+  if (dif0 !== 0 && Math.abs(dif0) <= 10) lines.push(plRet(n++, o.tipo, o.cons, dif0 < 0 ? (o.ctaAjGasto || '53959505') : (o.ctaAjIngreso || '42955115'), o.nit, dif0 < 0 ? -dif0 : -dif0, 0, 'AJUSTE AL PESO', o.ccAj || '11005'));
   lines.push(plSeq(n) + '99990001001');
   const chk = plCheck(lines.join('\r\n'));
   return { chk, txt: ['000000100000001001'].concat(lines).join('\r\n') + '\r\n', ica, rte, pag, car, dif, n: its.length };
@@ -538,7 +538,7 @@ function conCxpMatch(digs, monto, docs, usados) {
   let best = null, bs = -1, por = '';
   docs.forEach(d => {
     if (usados.has(cxpKey(d))) return;
-    const runs = (String(d.notas || '').match(/\d{4,}/g) || []).concat(d.consec > 0 ? [String(d.consec)] : []);
+    const runs = (String(d.notas || '').match(/\d{4,}/g) || []).concat((String(d.notas || '').toUpperCase().match(/[A-Z]{2}\d{3,}/g) || []).map(x => x.replace(/\D/g, ''))).concat(d.consec > 0 ? [String(d.consec)] : []);
     const nl = runs.reduce((m, c) => Math.max(m, (c === digs || c.replace(/^0+/, '') === digs.replace(/^0+/, '')) && c.length >= 3 ? Math.max(lcsLen(digs, c), 6) : lcsLen(digs, c)), 0);
     const numOk = nl >= 6, valOk = Math.abs(cxpSaldo(d) - Math.abs(monto)) <= 1;
     if (!numOk && !valOk) return;
@@ -580,14 +580,14 @@ function conNhHtml() {
 function conNhFiltrar() { const b = $('conRes'); if (!b) return; const a = document.activeElement, pos = a && a.selectionStart; conRepintar(); const i = b.querySelector('input[oninput*="conNhFiltrar"]'); if (i) { i.focus(); try { i.setSelectionRange(pos, pos); } catch (e) { } } }
 // ---- Selector de cuenta por pagar dentro de la tabla (filas MAS/VPP) ----
 function conCxpTag(digs, monto, d) {
-  const runs = (String(d.notas || '').match(/\d{4,}/g) || []).concat(d.consec > 0 ? [String(d.consec)] : []);
+  const runs = (String(d.notas || '').match(/\d{4,}/g) || []).concat((String(d.notas || '').toUpperCase().match(/[A-Z]{2}\d{3,}/g) || []).map(x => x.replace(/\D/g, ''))).concat(d.consec > 0 ? [String(d.consec)] : []);
   const nl = runs.reduce((m, c) => Math.max(m, lcsLen(digs, c)), 0), numOk = nl >= 6 || runs.some(c => c.replace(/^0+/, '') === digs.replace(/^0+/, '') && c.length >= 3), valOk = Math.abs(cxpSaldo(d) - Math.abs(monto)) <= 1;
   return { sc: (numOk ? 2 : 0) + (valOk ? 1 : 0), txt: numOk && valOk ? '✅ número y valor' : numOk ? '🟢 número' : valOk ? '🟡 valor' : '' };
 }
 const lcsStr = (a, b) => { let m = 0, e = 0; const d = Array(b.length + 1).fill(0); for (let i = 1; i <= a.length; i++) { let p = 0; for (let j = 1; j <= b.length; j++) { const t = d[j]; d[j] = a[i - 1] === b[j - 1] ? p + 1 : 0; if (d[j] > m) { m = d[j]; e = i; } p = t; } } return a.slice(e - m, e); };
 function conCxpCaja(r) {
   const d = (CON.cxp || []).find(x => cxpKey(x) === r.cxp.key); if (!d) return '';
-  const digs = r.num.replace(/\D/g, ''), runs = (String(d.notas || '').match(/\d{4,}/g) || []).concat(d.consec > 0 ? [String(d.consec)] : []);
+  const digs = r.num.replace(/\D/g, ''), runs = (String(d.notas || '').match(/\d{4,}/g) || []).concat((String(d.notas || '').toUpperCase().match(/[A-Z]{2}\d{3,}/g) || []).map(x => x.replace(/\D/g, ''))).concat(d.consec > 0 ? [String(d.consec)] : []);
   let mejor = '', ms = ''; runs.forEach(c => { const x = lcsStr(digs, c); if (x.length > mejor.length) { mejor = x; ms = c; } });
   const t = conCxpTag(digs, r.monto, d), dif = cxpSaldo(d) - Math.abs(r.monto), okv = Math.abs(dif) <= 1;
   const fila = (a, b) => '<tr><td style="text-align:left;color:#475569;padding:2px 8px 2px 0;white-space:nowrap">' + a + '</td><td style="text-align:left;padding:2px 0">' + b + '</td></tr>';
@@ -677,7 +677,7 @@ async function conPlanoGen() {
   const otros = pendR.length ? [{ cta: ctaP, monto: pendR.reduce((a, r) => a + r.monto, 0), notas: 'DESCUENTOS CLIENTE (PENDIENTES)', n: pendR.length }] : [];
   const o = { banco: !previo && CON.total != null ? CON.total : null, otros, tipo: P.tipo.toUpperCase(), cons: +P.cons, fecha: P.fecha, nit: nitC, ctaIca: P.ctaIca, ctaIcaY: P.ctaIcaY, ctaRte: P.ctaRte, ctaBanco: P.ctaBanco, ctaMas: ctaMas || '23359590', elab: P.elab !== false, mas, notas: 'PAGO FACTURAS ' + (its[0].cli || '').slice(0, 30) };
   const r = conPlano(its.map(x => ({ d: x.d, cartera: x.cartera, monto: x.monto, ica: x.ica, rte: x.rte, bruto: x.bruto, iva: x.iva, zona: x.zona })), o);
-  if (Math.abs(r.dif) > 2) { alert('Las facturas no cuadran con ICA / RTE IVA (diferencia ' + fm(r.dif) + '). Revisa la conciliación.'); return; }
+  if (Math.abs(r.dif) > 10) { alert('Las facturas no cuadran con ICA / RTE IVA (diferencia ' + fm(r.dif) + '). Revisa la conciliación.'); return; }
   const pend = conPend();
   if (r.chk !== 0 && !confirm('El banco va por ' + (o.banco != null ? 'el monto pagado del archivo' : 'los documentos de este plano') + ' (' + fm(r.pag) + '), pero el plano queda descuadrado por ' + fm(r.chk) + (pend.length && !ctaP ? ' (hay ' + pend.length + ' pendiente(s) por ' + fm(pend.reduce((a, x) => a + x.monto, 0)) + ' sin cuenta)' : '') + '. Complétalo en Siesa mientras está en elaboración.\n¿Descargar el plano de todos modos?')) return;
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([r.txt], { type: 'text/plain;charset=iso-8859-1' })); a.download = 'Plano_' + o.tipo + '_' + (String(its[0].cli || nitC).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 28) || o.cons) + '.txt'; a.click();
