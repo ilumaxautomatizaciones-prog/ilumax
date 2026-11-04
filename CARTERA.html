@@ -641,15 +641,21 @@ async function conCxpResolver(masR, nit, cli, extras) {
   }
   return out;
 }
-// ¿El plano (ej. RC-801) ya existe creado en Siesa? Mientras no exista, no bloquea: se puede volver a generar/imprimir y cambiar el consecutivo
+// ¿El plano (ej. RC-801) ya existe creado en Siesa PARA ESTE CLIENTE? Si el número lo tiene otro recibo (otro NIT) o no existe, no cuenta: se puede volver a generar con el siguiente consecutivo libre
+function conRecDe(tag) {
+  const m = String(tag || '').match(/^([A-Za-z]+)-?(\d+)$/); if (!m) return null; const tp = m[1].toUpperCase(), n = +m[2];
+  return (D.recs || []).find(r => { const s = String(r.doc).toUpperCase().replace(/[\s-]/g, ''); return s.startsWith(tp) && /^\d+$/.test(s.slice(tp.length)) && parseInt(s.slice(tp.length), 10) === n; }) || null;
+}
 function conEnSiesa(tag) {
-  const m = String(tag || '').match(/^([A-Za-z]+)-?(\d+)$/); if (!m) return true; const tp = m[1].toUpperCase(), n = +m[2];
-  return (D.recs || []).some(r => { const s = String(r.doc).toUpperCase().replace(/[\s-]/g, ''); return s.startsWith(tp) && /^\d+$/.test(s.slice(tp.length)) && parseInt(s.slice(tp.length), 10) === n; });
+  const m = String(tag || '').match(/^([A-Za-z]+)-?(\d+)$/); if (!m) return true;
+  const r = conRecDe(tag), nit = String(((CON.rows.find(x => x.d) || { d: {} }).d.nit) || '').replace(/\D/g, '');
+  return !!r && !!nit && String(r.nit || '').replace(/\D/g, '') === nit;
 }
 async function conPlanoGen() {
   const bloq = [...new Set(CON.rows.filter(r => r.plano && !conEnSiesa(r.plano)).map(r => r.plano))];
   if (bloq.length) {
-    if (!confirm('El plano ' + bloq.join(', ') + ' todavía no aparece creado en Siesa.\n¿Generarlo de nuevo? (Si ya lo importaste en Siesa, cancela. Para usar otro consecutivo, escríbelo antes en el campo del plano.)')) return;
+    const otros = bloq.map(t => { const r = conRecDe(t); return r ? t + ' ya lo usa en Siesa otro recibo (' + String(r.cli || '').slice(0, 30) + ')' : t + ' todavía no aparece en Siesa'; }).join('\n');
+    if (!confirm(otros + '.\n¿Generar el plano de nuevo con el siguiente consecutivo libre? (Si ya lo importaste en Siesa, cancela. Para usar otro número, escríbelo antes en el campo del plano.)')) return;
     CON.rows.forEach(r => { if (r.plano && bloq.includes(r.plano)) r.plano = ''; });
   }
   let mas; const P = CON.pl, ok = CON.rows.filter(r => r.ok && r.d && !r.plano), its = ok.filter(conIncl), masR = CON.rows.filter(conEsMas).filter(r => !r.plano && (CON.inc == null || CON.inc[r.num] !== false)), _m0 = masR.map(r => ({ monto: r.monto, consec: +r.num.slice(4), fecha: r.fecha })), previo = CON.rows.some(r => r.plano);
