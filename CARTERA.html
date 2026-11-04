@@ -205,6 +205,12 @@ const conKey = s => { const m = String(s || '').toUpperCase().replace(/\s+/g, ''
 function conParseLines(lines) {
   const out = []; let total = null, fp = '';
   lines.forEach(l => {
+    // Formato Mecanelectro (comprobante de egreso por tercero): facturas de ILUMAX al débito ("00 05-049757-01 10 -000000049757  398,864.00") y
+    // documentos del cliente a favor de ILUMAX-cuentas por pagar al crédito, con el signo al final ("00 01-000615-03 -000615  100,105.00-"). El pago neto sale en el encabezado.
+    const me = l.trim().replace(/\s+/g, ' ').match(/^00 (\d{2})-(\d+)-(\d{2})\b.*?-0*(\d+) ([\d,]+\.\d{2})(-?)$/);
+    if (me) { const v = Math.round(parseFloat(me[5].replace(/,/g, ''))), n = me[4]; out.push({ fecha: fp, num: (me[6] ? 'VPP-' : 'VE-') + n, monto: me[6] ? -v : v }); return; }
+    const mh = l.trim().replace(/\s+/g, ' ').match(/^\d{4,7} (\d{4})\/(\d{2})\/(\d{2}) CANCELACION DE FACTURAS ([\d,]+\.\d{2}) ([\d,]+\.\d{2}) ([\d,]+\.\d{2})$/);
+    if (mh) { fp = mh[1] + '-' + mh[2] + '-' + mh[3]; total = Math.round(parseFloat(mh[4].replace(/,/g, ''))); return; }
     // Formato Jerónimo Martins: "VE50963  base  retIVA  retICA  retRenta  cree  descPP  importePago" (la fecha está en "Fecha Pago:20.10.2026")
     const fd = l.match(/Fecha\s*Pago\s*:\s*(\d{2})\.(\d{2})\.(\d{4})/i); if (fd) fp = fd[3] + '-' + fd[2] + '-' + fd[1];
     const jm = l.trim().match(/^([A-Z]{2,3})\s?(\d{3,})\s+((?:[\d.]+\s+){6}[\d.]+)\s*$/);
