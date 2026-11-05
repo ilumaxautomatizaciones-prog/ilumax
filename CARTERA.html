@@ -992,7 +992,7 @@ function extPintar(solo) {
   const R = EXT.cache[EXT.mes] || [], F = extFiltrar(R), tot = a => a.reduce((s, r) => s + Number(r.monto), 0);
   const por = e => R.filter(r => extEst(r) === e), tc = tot(R);
   const titulo = (EXT.mes === 'pend' ? 'Movimientos pendientes (sin RC)' : EXT.mes === 'ant' ? 'Movimientos de 2025' : MESES[+EXT.mes.slice(5, 7) - 1] + ' ' + EXT.mes.slice(0, 4)) + ' · ' + F.length + ' de ' + R.length + ' · ' + fm(tot(F));
-  if (solo && $('xg_ext')) { XG.ext.rows = F; $('xh2').textContent = titulo; xgPaint('ext'); return; }
+  if (solo && $('xg_ext')) { XG.ext.rows = F; $('xh2').textContent = titulo; xgPaint('ext'); if (EXT.cruce && EXT.cruce.mes === EXT.mes) { cruPintar(); extSubPintar(); } return; }
   const tabs = '<div class="tabs">' + extMeses().map(m => '<button class="tab' + (EXT.mes === m[0] ? ' on' : '') + '" onclick="extMes(\'' + m[0] + '\')">' + m[1] + '</button>').join('') + '<button class="tab' + (EXT.mes === 'ant' ? ' on' : '') + '" onclick="extMes(\'ant\')">2025</button><button class="tab' + (EXT.mes === 'pend' ? ' on' : '') + '" onclick="extMes(\'pend\')">⏳ Pendientes</button></div>';
   const ejs = [...new Set(R.map(r => r.ejecutivo).filter(Boolean))].sort();
   const bar = '<div class="bar"><input id="xq" placeholder="Buscar banco, cliente, RC, valor, referencia, ejecutivo…" value="' + esc(EXT.q) + '" oninput="EXT.q=this.value;extPintar(true)">'
@@ -1154,8 +1154,15 @@ const CRU_COLS = [
   { k: 'sie', t: 'Siesa', num: 1, sum: 1, v: r => r.sie == null ? '' : r.sie, h: r => r.sie == null ? '–' : fm(r.sie) },
   { k: 'dif', t: 'Diferencia', num: 1, sum: 1, v: r => r.dif || 0, h: r => r.dif ? fm(r.dif) : '–' },
   { k: 'est', t: 'Estado', v: r => r.est, h: r => '<span class="pill ' + (r.est === 'OK' ? 'p-ok' : /sin extracto|no está/i.test(r.est) ? 'p-rd' : 'p-or') + '">' + esc(r.est) + '</span>' }];
+function cruFiltrar(A) {
+  const q = nz(EXT.q), en = EXT.ej ? nz(ejNom(EXT.ej) || EXT.ej) : '';
+  if (!q && !EXT.banco && !EXT.ej) return A;
+  return A.filter(x => (!EXT.banco || (x.fil || []).some(f => f.banco === EXT.banco))
+    && (!EXT.ej || x.ejExt.split(' / ').includes(EXT.ej) || nz(x.ejSies).includes(en))
+    && (!q || nz([x.rc, x.cliente, x.ejExt, x.ejSies, x.ext, x.sie, x.est].concat((x.fil || []).map(f => [f.descripcion, f.texto_ref, f.ref_cliente, f.nit, f.cliente, f.observacion, f.monto, f.banco].join(' '))).join(' ')).includes(q)));
+}
 function cruPintar() {
-  const b = $('xcruce'); if (!b || !EXT.cruce) return; const C = EXT.cruce, L = C.solo ? C.L.filter(x => x.est !== 'OK') : C.L;
+  const b = $('xcruce'); if (!b || !EXT.cruce) return; const C = EXT.cruce, L = cruFiltrar(C.solo ? C.L.filter(x => x.est !== 'OK') : C.L);
   const cn = e => C.L.filter(x => x.est === e).length, te = C.L.reduce((s, x) => s + (x.ext || 0), 0), ts = C.L.reduce((s, x) => s + (x.sie || 0), 0);
   b.innerHTML = '<div class="card"><h2>🔎 Cruce extracto vs Siesa · ' + MESES[+C.mes.slice(5, 7) - 1] + ' · ' + C.L.filter(x => x.est === 'OK').length + ' OK · ' + C.L.filter(x => x.est !== 'OK').length + ' con diferencia</h2><div style="padding:10px 14px;font-size:12px;color:#475569;line-height:1.7">Extracto (RC del mes): <b>' + fm(te) + '</b> · Siesa (banco por RC): <b>' + fm(ts) + '</b> · Diferencia: <b>' + fm(te - ts) + '</b><br>Valor distinto: ' + cn('Valor distinto') + ' · Ejecutivo distinto: ' + cn('Ejecutivo distinto') + ' · Valor y ejecutivo: ' + cn('Valor y ejecutivo distintos') + ' · RC no está en Siesa: ' + cn('RC no está en Siesa') + ' · En Siesa sin extracto: ' + cn('En Siesa sin extracto')
     + '</div><div class="bar" style="padding:0 14px"><label class="chk"><input type="checkbox" ' + (C.solo ? 'checked' : '') + ' onchange="EXT.cruce.solo=this.checked;cruPintar()"> Solo diferencias</label><button class="btn g" onclick="xgCols(event,\'cru\')">▦ Columnas</button><button class="btn g" onclick="xgLimpiar(\'cru\')">✖ Quitar filtros y orden</button><button class="btn g" onclick="xgExcel(\'cru\')">⬇ Excel de esta vista</button><button class="btn g" onclick="cruExcel()">⬇ Excel completo del cruce</button><button class="btn g" onclick="EXT.cruce=null;$(\'xcruce\').innerHTML=\'\'">Cerrar</button></div><div class="tw" id="xg_cru"></div></div>';
