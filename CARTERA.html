@@ -58,7 +58,12 @@ tr.det td{background:#f8fafc;font-size:11px;color:#334155}
 .lst div{padding:7px 10px;cursor:pointer;font-size:12px;border-bottom:1px solid #f1f5f9}.lst div:hover{background:#f1f5f9}
 .pill{display:inline-block;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;white-space:nowrap}
 .p-ok{background:#dcfce7;color:#166534}.p-or{background:#ffedd5;color:#9a3412}.p-rd{background:#fee2e2;color:#991b1b}.p-bl{background:#dbeafe;color:#1e40af}
-#xtab td,#xtab th{text-align:left}#xtab td:nth-child(4),#xtab th:nth-child(4){text-align:right}
+.xgh{white-space:nowrap}.xgb{border:0;background:#ffffff26;color:#fff;border-radius:5px;margin-left:5px;cursor:pointer;font-size:10px;padding:2px 5px}.xgb.on{background:#f5c518;color:#0f172a}
+.xgm{position:fixed;z-index:90;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 12px 32px #0004;width:264px;padding:10px;font-size:12px;color:#0f172a}
+.xgm input:not([type=checkbox]){display:block;width:100%;font:inherit;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:2px}
+.xgm .li{max-height:210px;overflow:auto;border:1px solid #e2e8f0;border-radius:6px;margin:6px 0;padding:4px 6px}.xgm label{display:flex;gap:6px;align-items:center;padding:2px 0;cursor:pointer}
+.chk{display:flex;gap:6px;align-items:center;font-size:12px;font-weight:600}.chk input{width:auto;min-width:0;flex:none}
+#xtab td.n{max-width:none}
 @media(max-width:640px){.mb{grid-template-columns:minmax(0,1fr)}}
 </style>
 </head>
@@ -856,6 +861,73 @@ async function conPlanoLista(id) {
 async function conBorrar(id) { if (!confirm('¿Eliminar esta conciliación guardada?')) return; const j = await conApi({ accion: 'borrar', id }); if (!j.ok) { alert(j.error || 'No se pudo borrar'); return; } if (CON.id === id) CON.id = null; conLista(); }
 
 cargar();
+/* ===== Rejilla tipo Excel: ordenar y filtrar desde el encabezado, elegir columnas ===== */
+const XG = {};
+function xgInit(id, cols, opt) { const g = XG[id] || (XG[id] = { sort: null, f: {}, hide: new Set(), rows: [], limit: 600 }); g.cols = cols; Object.assign(g, opt || {}); return g; }
+const xgV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
+function xgView(id) {
+  const g = XG[id];
+  let R = g.rows.filter(r => g.cols.every(c => {
+    const f = g.f[c.k]; if (!f) return true; const v = xgV(c, r);
+    if (f.sel && !f.sel.has(String(v))) return false;
+    if (c.num || c.date) {
+      if (f.min !== '' && f.min != null) { if (v === '') return false; if (c.num ? Number(v) < Number(f.min) : String(v) < f.min) return false; }
+      if (f.max !== '' && f.max != null) { if (v === '') return false; if (c.num ? Number(v) > Number(f.max) : String(v) > f.max) return false; }
+    }
+    return true;
+  }));
+  if (g.sort) { const c = g.cols.find(x => x.k === g.sort.k), d = g.sort.dir; if (c) R = R.map((r, i) => [r, i]).sort((a, b) => { const x = xgV(c, a[0]), y = xgV(c, b[0]); let o; if (c.num) o = (x === '' ? -Infinity : Number(x)) - (y === '' ? -Infinity : Number(y)); else o = String(x).localeCompare(String(y), 'es', { numeric: true }); return (o || a[1] - b[1]) * (o ? d : 1); }).map(x => x[0]); }
+  return R;
+}
+const xgOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !== '' && f.max != null));
+function xgBar(id) { return '<div class="bar" style="padding:0 14px"><button class="btn g" onclick="xgCols(event,\'' + id + '\')">▦ Columnas</button><button class="btn g" onclick="xgLimpiar(\'' + id + '\')">✖ Quitar filtros y orden</button><button class="btn g" onclick="xgExcel(\'' + id + '\')">⬇ Excel de esta vista</button></div>'; }
+function xgPaint(id) {
+  const g = XG[id], box = $('xg_' + id); if (!box) return; const V = xgView(id), cols = g.cols.filter(c => !g.hide.has(c.k));
+  const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="xgh" style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '"><span style="cursor:pointer" onclick="xgSort(\'' + id + '\',\'' + c.k + '\')">' + esc(c.t) + s + '</span><button class="xgb' + (xgOn(g.f[c.k]) ? ' on' : '') + '" onclick="xgMenu(event,\'' + id + '\',\'' + c.k + '\')">▾</button></th>'; }).join('');
+  const rows = V.slice(0, g.limit).map(r => '<tr' + (g.attr ? g.attr(r) : '') + '>' + cols.map(c => '<td style="text-align:' + (c.num && !c.al ? 'right' : 'left') + (c.wrap ? ';white-space:normal;min-width:150px;max-width:280px;overflow-wrap:anywhere' : '') + '">' + (c.h ? c.h(r) : esc(xgV(c, r))) + '</td>').join('') + '</tr>').join('');
+  const tot = '<tr class="tot">' + cols.map((c, i) => '<td style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '">' + (i === 0 ? V.length + ' filas' : c.sum ? fm(V.reduce((s, r) => s + (Number(xgV(c, r)) || 0), 0)) : '') + '</td>').join('') + '</tr>';
+  box.innerHTML = '<table><thead><tr>' + th + '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + cols.length + '" class="empty">Sin resultados</td></tr>') + '</tbody><tfoot>' + tot + '</tfoot></table>' + (V.length > g.limit ? '<div class="foot">Se muestran ' + g.limit + ' de ' + V.length + '; filtra para ver el resto (el Excel trae todas).</div>' : '');
+}
+function xgSort(id, k) { const g = XG[id]; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; xgPaint(id); }
+function xgLimpiar(id) { const g = XG[id]; g.f = {}; g.sort = null; xgPaint(id); }
+function xgCerrar() { const m = $('xgm'); if (m) m.remove(); }
+document.addEventListener('click', xgCerrar);
+function xgPos(d, ev) { const b = ev.currentTarget.getBoundingClientRect(); d.style.top = Math.max(8, Math.min(b.bottom + 4, innerHeight - 440)) + 'px'; d.style.left = Math.max(8, Math.min(b.left - 120, innerWidth - 280)) + 'px'; }
+function xgCols(ev, id) {
+  ev.stopPropagation(); xgCerrar(); const g = XG[id], d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); xgPos(d, ev);
+  d.innerHTML = '<b>Columnas visibles</b><div class="li" style="max-height:300px">' + g.cols.map((c, i) => '<label><input type="checkbox" ' + (g.hide.has(c.k) ? '' : 'checked') + ' onchange="xgToggle(\'' + id + '\',' + i + ',this.checked)"> ' + esc(c.t) + '</label>').join('') + '</div>';
+  document.body.appendChild(d);
+}
+function xgToggle(id, i, on) { const g = XG[id], k = g.cols[i].k; if (on) g.hide.delete(k); else g.hide.add(k); xgPaint(id); }
+let XGM = null;
+function xgMenu(ev, id, k) {
+  ev.stopPropagation(); xgCerrar(); const g = XG[id], c = g.cols.find(x => x.k === k), f = g.f[k] || {}, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); xgPos(d, ev);
+  const vals = c.num || c.date ? null : [...new Set(g.rows.map(r => String(xgV(c, r))))].sort((a, b) => a.localeCompare(b, 'es', { numeric: true })).slice(0, 600);
+  XGM = { id, k, vals };
+  const num = c.num ? 'menor a mayor' : 'A → Z', num2 = c.num ? 'mayor a menor' : 'Z → A';
+  d.innerHTML = '<button class="btn g" style="width:100%;margin-bottom:4px" onclick="xgOrden(1)">↑ Ordenar ' + num + '</button><button class="btn g" style="width:100%" onclick="xgOrden(-1)">↓ Ordenar ' + num2 + '</button>'
+    + (c.num ? '<div style="margin-top:8px">Mayor o igual a<input id="xgMin" value="' + esc(f.min == null ? '' : f.min) + '"></div><div>Menor o igual a<input id="xgMax" value="' + esc(f.max == null ? '' : f.max) + '"></div>' : '')
+    + (c.date ? '<div style="margin-top:8px">Desde<input type="date" id="xgMin" value="' + esc(f.min || '') + '"></div><div>Hasta<input type="date" id="xgMax" value="' + esc(f.max || '') + '"></div>' : '')
+    + (vals ? '<input id="xgBus" placeholder="Buscar…" style="margin-top:8px" oninput="xgBuscar(this.value)"><label style="margin-top:4px"><input type="checkbox" id="xgAll" ' + (!f.sel ? 'checked' : '') + ' onchange="xgTodos(this.checked)"> <b>(Seleccionar visibles)</b></label><div class="li" id="xgLi">' + vals.map((v, i) => '<label data-t="' + esc(nz(v)) + '"><input type="checkbox" class="xgc" data-i="' + i + '" ' + (!f.sel || f.sel.has(v) ? 'checked' : '') + '> ' + (v === '' ? '(vacío)' : esc(v)) + '</label>').join('') + '</div>' : '')
+    + '<div style="display:flex;gap:6px;margin-top:8px"><button class="btn" style="flex:1" onclick="xgAplicar()">Aplicar</button><button class="btn g" style="flex:1" onclick="xgQuitar()">Quitar filtro</button></div>';
+  document.body.appendChild(d);
+}
+function xgOrden(dir) { const g = XG[XGM.id]; g.sort = { k: XGM.k, dir }; xgCerrar(); xgPaint(XGM.id); }
+function xgBuscar(t) { const q = nz(t); document.querySelectorAll('#xgLi label').forEach(l => { const ok = !q || l.dataset.t.includes(q); l.style.display = ok ? '' : 'none'; l.querySelector('input').checked = ok; }); const a = $('xgAll'); if (a) a.checked = true; }  // como en Excel: al buscar quedan marcados solo los que coinciden
+function xgTodos(on) { document.querySelectorAll('#xgLi label').forEach(l => { if (l.style.display !== 'none') l.querySelector('input').checked = on; }); }
+function xgAplicar() {
+  const g = XG[XGM.id], c = g.cols.find(x => x.k === XGM.k), f = {};
+  if (c.num || c.date) { const mn = $('xgMin').value.trim(), mx = $('xgMax').value.trim(); f.min = c.num ? (mn === '' ? '' : String(xNum(mn))) : mn; f.max = c.num ? (mx === '' ? '' : String(xNum(mx))) : mx; if (c.num && (f.min === 'NaN' || f.max === 'NaN')) { alert('Escribe números válidos.'); return; } }
+  if (XGM.vals) { const chk = [...document.querySelectorAll('.xgc')], on = chk.filter(x => x.checked).map(x => XGM.vals[+x.dataset.i]); if (on.length < chk.length) f.sel = new Set(on); }
+  if (xgOn(f)) g.f[XGM.k] = f; else delete g.f[XGM.k]; const id = XGM.id; xgCerrar(); xgPaint(id);
+}
+function xgQuitar() { const id = XGM.id; delete XG[id].f[XGM.k]; xgCerrar(); xgPaint(id); }
+function xgExcel(id) {
+  const g = XG[id], V = xgView(id), cols = g.cols.filter(c => !g.hide.has(c.k)); if (!V.length) { alert('No hay filas para exportar.'); return; }
+  const ws = XLSX.utils.json_to_sheet(V.map(r => { const o = {}; cols.forEach(c => { const v = xgV(c, r); o[c.t] = c.num && v !== '' ? Number(v) : v; }); return o; })), wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'VISTA'); XLSX.writeFile(wb, (g.nombre || id) + '.xlsx');
+}
+
 /* ===== Extracto bancario (lo que realmente entra a los bancos) ===== */
 const EXT_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-extracto';
 const nz = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
@@ -903,24 +975,34 @@ function extFiltrar(R) {
   const q = nz(EXT.q);
   return R.filter(r => (!EXT.banco || r.banco === EXT.banco) && (!EXT.est || extEst(r) === EXT.est) && (!EXT.ej || r.ejecutivo === EXT.ej) && (!q || nz([r.banco, r.descripcion, r.texto_ref, r.ref_cliente, r.cliente, r.rc, r.ejecutivo, r.observacion, r.monto, r.nit].join(' ')).includes(q)));
 }
+const EXT_COLS = [
+  { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha, h: r => esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7) + '/' + r.fecha.slice(2, 4)) },
+  { k: 'banco', t: 'Banco', v: r => r.banco },
+  { k: 'desc', t: 'Descripción', wrap: 1, v: r => r.descripcion, h: r => esc(r.descripcion) + (r.texto_ref ? '<div style="font-size:10px;color:#64748b">' + esc(String(r.texto_ref).slice(0, 90)) + '</div>' : '') },
+  { k: 'monto', t: 'Monto', num: 1, sum: 1, v: r => Number(r.monto), h: r => '<b>' + fm(Number(r.monto)) + '</b>' },
+  { k: 'ref', t: 'Ref. cliente', v: r => r.ref_cliente },
+  { k: 'cli', t: 'Cliente', wrap: 1, v: r => r.cliente },
+  { k: 'rc', t: 'RC', v: r => r.rc || EXT_PILL[extEst(r)][1], h: r => '<span class="pill ' + EXT_PILL[extEst(r)][0] + '">' + esc(r.rc || EXT_PILL[extEst(r)][1]) + '</span>' },
+  { k: 'ej', t: 'Ejecutivo', v: r => r.ejecutivo },
+  { k: 'canal', t: 'Canal', v: r => r.canal },
+  { k: 'obs', t: 'Observación', wrap: 1, v: r => r.observacion }];
 function extPintar(solo) {
   const c = $('cont'); if (!c) return;
   const R = EXT.cache[EXT.mes] || [], F = extFiltrar(R), tot = a => a.reduce((s, r) => s + Number(r.monto), 0);
   const por = e => R.filter(r => extEst(r) === e), tc = tot(R);
+  const titulo = (EXT.mes === 'pend' ? 'Movimientos pendientes (sin RC)' : EXT.mes === 'ant' ? 'Movimientos de 2025' : MESES[+EXT.mes.slice(5, 7) - 1] + ' ' + EXT.mes.slice(0, 4)) + ' · ' + F.length + ' de ' + R.length + ' · ' + fm(tot(F));
+  if (solo && $('xg_ext')) { XG.ext.rows = F; $('xh2').textContent = titulo; xgPaint('ext'); return; }
   const tabs = '<div class="tabs">' + extMeses().map(m => '<button class="tab' + (EXT.mes === m[0] ? ' on' : '') + '" onclick="extMes(\'' + m[0] + '\')">' + m[1] + '</button>').join('') + '<button class="tab' + (EXT.mes === 'ant' ? ' on' : '') + '" onclick="extMes(\'ant\')">2025</button><button class="tab' + (EXT.mes === 'pend' ? ' on' : '') + '" onclick="extMes(\'pend\')">⏳ Pendientes</button></div>';
   const ejs = [...new Set(R.map(r => r.ejecutivo).filter(Boolean))].sort();
   const bar = '<div class="bar"><input id="xq" placeholder="Buscar banco, cliente, RC, valor, referencia, ejecutivo…" value="' + esc(EXT.q) + '" oninput="EXT.q=this.value;extPintar(true)">'
     + '<select onchange="EXT.banco=this.value;extPintar(true)"><option value="">Todos los bancos</option>' + [...new Set(R.map(r => r.banco).filter(Boolean))].sort().map(b => '<option' + (EXT.banco === b ? ' selected' : '') + '>' + esc(b) + '</option>').join('') + '</select>'
     + '<select onchange="EXT.est=this.value;extPintar(true)"><option value="">Todos los estados</option>' + Object.entries(EXT_PILL).map(([k, v]) => '<option value="' + k + '"' + (EXT.est === k ? ' selected' : '') + '>' + v[1] + '</option>').join('') + '</select>'
     + '<select onchange="EXT.ej=this.value;extPintar(true)"><option value="">Todos los ejecutivos</option>' + ejs.map(e => '<option' + (EXT.ej === e ? ' selected' : '') + '>' + esc(e) + '</option>').join('') + '</select></div>'
-    + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extExcel()">⬇ Excel</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
-  const rows = F.slice(0, 400).map(r => { const e = EXT_PILL[extEst(r)]; return '<tr class="c" onclick="extEditar(' + r.id + ')"><td>' + esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7)) + '</td><td class="n">' + esc(r.banco) + '</td><td class="n">' + esc(r.descripcion) + (r.texto_ref ? '<div style="font-size:10px;color:#64748b">' + esc(String(r.texto_ref).slice(0, 90)) + '</div>' : '') + '</td><td><b>' + fm(Number(r.monto)) + '</b></td><td>' + esc(r.ref_cliente) + '</td><td class="n">' + esc(r.cliente) + '</td><td><span class="pill ' + e[0] + '">' + (r.rc ? esc(r.rc) : e[1]) + '</span></td><td>' + esc(r.ejecutivo) + '</td><td>' + esc(r.canal) + '</td><td class="n">' + esc(r.observacion) + '</td></tr>'; }).join('');
-  const ext = $('xtab');
-  const cuerpo = '<div class="card"><h2>' + (EXT.mes === 'pend' ? 'Movimientos pendientes (sin RC)' : EXT.mes === 'ant' ? 'Movimientos de 2025' : MESES[+EXT.mes.slice(5, 7) - 1] + ' ' + EXT.mes.slice(0, 4)) + ' · ' + F.length + ' de ' + R.length + ' · ' + fm(tot(F)) + '</h2><div class="tw"><table><thead><tr><th>Fecha</th><th>Banco</th><th>Descripción</th><th>Monto</th><th>Ref. cliente</th><th>Cliente</th><th>RC</th><th>Ejecutivo</th><th>Canal</th><th>Observación</th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="empty">Sin movimientos</td></tr>') + '</tbody></table></div>' + (F.length > 400 ? '<div class="foot">Se muestran 400; usa los filtros para acotar.</div>' : '') + '</div>';
-  if (solo && ext) { ext.innerHTML = cuerpo; return; }
+    + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
   c.innerHTML = '<div id="xtab">'
     + '<div class="kpis">' + kpi('Entró al banco', fmc(tc), R.length + ' movimientos') + kpi('Con RC', fmc(tot(por('rc'))), por('rc').length + ' mov.') + kpi('Sin RC', fmc(tot(por('sinrc'))), por('sinrc').length + ' con cliente, falta RC') + kpi('Sin identificar', fmc(tot(por('sinid'))), por('sinid').length + ' sin cliente') + kpi('Otros', fmc(tot(por('otro'))), 'tesorería, nómina, NA…') + '</div>'
-    + tabs + bar + '<div id="xcruce"></div>' + cuerpo + '</div>';
+    + tabs + bar + '<div id="xcruce"></div><div class="card"><h2 id="xh2">' + esc(titulo) + '</h2>' + xgBar('ext') + '<div class="tw" id="xg_ext"></div></div></div>';
+  xgInit('ext', EXT_COLS, { rows: F, limit: 600, nombre: 'Extracto_' + EXT.mes, attr: r => ' class="c" onclick="extEditar(' + r.id + ')"' }); xgPaint('ext');
   if (EXT.cruce && EXT.cruce.mes === EXT.mes) cruPintar();
 }
 async function extMes(m) { EXT.mes = m; EXT.q = ''; EXT.banco = ''; EXT.est = ''; EXT.ej = ''; EXT.cruce = null; await extVista(); }
@@ -1043,13 +1125,22 @@ async function extCruzar() {
   L.sort((a, c) => a.fecha.localeCompare(c.fecha) || Number(a.rc) - Number(c.rc));
   EXT.cruce = { mes: m, L, sies, solo: true }; cruPintar();
 }
+const CRU_COLS = [
+  { k: 'rc', t: 'RC', num: 1, al: 1, v: r => Number(r.rc), h: r => '<b>' + esc(r.rc) + '</b>' },
+  { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha, h: r => esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7)) },
+  { k: 'cli', t: 'Cliente', wrap: 1, v: r => r.cliente },
+  { k: 'ejx', t: 'Ejecutivo extracto', v: r => r.ejExt },
+  { k: 'ejs', t: 'Ejecutivo Siesa', wrap: 1, v: r => r.ejSies },
+  { k: 'ext', t: 'Extracto', num: 1, sum: 1, v: r => r.ext == null ? '' : r.ext, h: r => r.ext == null ? '–' : fm(r.ext) },
+  { k: 'sie', t: 'Siesa', num: 1, sum: 1, v: r => r.sie == null ? '' : r.sie, h: r => r.sie == null ? '–' : fm(r.sie) },
+  { k: 'dif', t: 'Diferencia', num: 1, sum: 1, v: r => r.dif || 0, h: r => r.dif ? fm(r.dif) : '–' },
+  { k: 'est', t: 'Estado', v: r => r.est, h: r => '<span class="pill ' + (r.est === 'OK' ? 'p-ok' : /sin extracto|no está/i.test(r.est) ? 'p-rd' : 'p-or') + '">' + esc(r.est) + '</span>' }];
 function cruPintar() {
   const b = $('xcruce'); if (!b || !EXT.cruce) return; const C = EXT.cruce, L = C.solo ? C.L.filter(x => x.est !== 'OK') : C.L;
   const cn = e => C.L.filter(x => x.est === e).length, te = C.L.reduce((s, x) => s + (x.ext || 0), 0), ts = C.L.reduce((s, x) => s + (x.sie || 0), 0);
-  const col = e => e === 'OK' ? 'p-ok' : /sin extracto|no está/i.test(e) ? 'p-rd' : 'p-or';
   b.innerHTML = '<div class="card"><h2>🔎 Cruce extracto vs Siesa · ' + MESES[+C.mes.slice(5, 7) - 1] + ' · ' + C.L.filter(x => x.est === 'OK').length + ' OK · ' + C.L.filter(x => x.est !== 'OK').length + ' con diferencia</h2><div style="padding:10px 14px;font-size:12px;color:#475569;line-height:1.7">Extracto (RC del mes): <b>' + fm(te) + '</b> · Siesa (banco por RC): <b>' + fm(ts) + '</b> · Diferencia: <b>' + fm(te - ts) + '</b><br>Valor distinto: ' + cn('Valor distinto') + ' · Ejecutivo distinto: ' + cn('Ejecutivo distinto') + ' · Valor y ejecutivo: ' + cn('Valor y ejecutivo distintos') + ' · RC no está en Siesa: ' + cn('RC no está en Siesa') + ' · En Siesa sin extracto: ' + cn('En Siesa sin extracto')
-    + '<div class="bar"><label style="font-size:12px"><input type="checkbox" ' + (C.solo ? 'checked' : '') + ' onchange="EXT.cruce.solo=this.checked;cruPintar()"> Solo diferencias</label><button class="btn g" onclick="cruExcel()">⬇ Excel del cruce</button><button class="btn g" onclick="EXT.cruce=null;$(\'xcruce\').innerHTML=\'\'">Cerrar</button></div></div><div class="tw"><table><thead><tr><th>RC</th><th>Fecha</th><th>Cliente</th><th>Ejecutivo extracto</th><th>Ejecutivo Siesa</th><th>Extracto</th><th>Siesa</th><th>Dif.</th><th>Estado</th></tr></thead><tbody>'
-    + (L.map(x => '<tr class="c" ' + (x.n ? 'onclick="cruIr(\'' + x.rc + '\')"' : '') + '><td><b>' + esc(x.rc) + '</b></td><td>' + esc(x.fecha.slice(8, 10) + '/' + x.fecha.slice(5, 7)) + '</td><td class="n">' + esc(x.cliente) + '</td><td>' + esc(x.ejExt) + '</td><td class="n">' + esc(x.ejSies) + '</td><td>' + (x.ext == null ? '–' : fm(x.ext)) + '</td><td>' + (x.sie == null ? '–' : fm(x.sie)) + '</td><td>' + (x.dif ? fm(x.dif) : '–') + '</td><td><span class="pill ' + col(x.est) + '">' + esc(x.est) + '</span></td></tr>').join('') || '<tr><td colspan="9" class="empty">Sin diferencias 🎉</td></tr>') + '</tbody></table></div></div>';
+    + '</div><div class="bar" style="padding:0 14px"><label class="chk"><input type="checkbox" ' + (C.solo ? 'checked' : '') + ' onchange="EXT.cruce.solo=this.checked;cruPintar()"> Solo diferencias</label><button class="btn g" onclick="xgCols(event,\'cru\')">▦ Columnas</button><button class="btn g" onclick="xgLimpiar(\'cru\')">✖ Quitar filtros y orden</button><button class="btn g" onclick="xgExcel(\'cru\')">⬇ Excel de esta vista</button><button class="btn g" onclick="cruExcel()">⬇ Excel completo del cruce</button><button class="btn g" onclick="EXT.cruce=null;$(\'xcruce\').innerHTML=\'\'">Cerrar</button></div><div class="tw" id="xg_cru"></div></div>';
+  xgInit('cru', CRU_COLS, { rows: L, limit: 1500, nombre: 'Cruce_extracto_' + C.mes, attr: r => r.n ? ' class="c" onclick="cruIr(\'' + r.rc + '\')"' : '' }); xgPaint('cru');
 }
 function cruIr(rc) { EXT.q = rc; extPintar(); const x = $('xq'); if (x) x.focus(); }
 async function cruExcel() {
@@ -1066,11 +1157,6 @@ async function cruExcel() {
   const w2 = wb.addWorksheet('CRUCE COMPLETO'); cols(w2); fill(w2, C.L);
   const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'Cruce_extracto_Siesa_' + C.mes + '.xlsx'; a.click();
-}
-async function extExcel() {
-  const R = extFiltrar(EXT.cache[EXT.mes] || []); if (!R.length) { alert('No hay movimientos para exportar.'); return; }
-  const ws = XLSX.utils.json_to_sheet(R.map(r => ({ Banco: r.banco, Fecha: r.fecha, 'Descripción de Transacción': r.descripcion, 'Texto de Referencia': r.texto_ref, Monto: Number(r.monto), 'Monto en cheque': r.monto_cheque, 'Referencia del cliente': r.ref_cliente, Cliente: r.cliente, RC: r.rc, Ejecutivo: r.ejecutivo, Canal: r.canal, Observacion: r.observacion }))), wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'EXTRACTO'); XLSX.writeFile(wb, 'Extracto_' + EXT.mes + '.xlsx');
 }
 /* ---- carga inicial desde el Excel EXTRACTO 2026 (solo administrador) ---- */
 const ORD_MES = { ENERO: 1, FEBRERO: 2, MARZO: 3, ABRIL: 4, MAYO: 5, JUNIO: 6, JULIO: 7, AGOSTO: 8, SEPTIEMBRE: 9, OCTUBRE: 10, NOVIEMBRE: 11, DICIEMBRE: 12 };
