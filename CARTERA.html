@@ -197,7 +197,7 @@ function vista(soloTabla) {
     const porDia = {}; L.forEach(r => porDia[r.fecha] = (porDia[r.fecha] || 0) + r.valor);
     const dd = Object.keys(porDia).sort().reverse().slice(0, 14);
     const tot = L.reduce((s, r) => s + r.valor, 0);
-    c.innerHTML = barra('') + '<div class="card"><h2>Recaudo por día · últimos 14 días con movimiento</h2><div class="tw" style="max-height:none"><table><thead><tr><th>Fecha</th><th>Valor</th></tr></thead><tbody>' + (dd.map(f => '<tr><td>' + esc(f) + '</td><td>' + fm(porDia[f]) + '</td></tr>').join('') || '<tr><td colspan="2" class="empty">Sin recaudos</td></tr>') + '</tbody></table></div></div>'
+    c.innerHTML = barra('<button class="btn" onclick="recMes()">📊 Recaudo del mes por asesor</button>') + '<div class="card"><h2>Recaudo por día · últimos 14 días con movimiento</h2><div class="tw" style="max-height:none"><table><thead><tr><th>Fecha</th><th>Valor</th></tr></thead><tbody>' + (dd.map(f => '<tr><td>' + esc(f) + '</td><td>' + fm(porDia[f]) + '</td></tr>').join('') || '<tr><td colspan="2" class="empty">Sin recaudos</td></tr>') + '</tbody></table></div></div>'
       + '<div class="card"><h2>Recibos de caja · 90 días (' + L.length + ') · ' + fm(tot) + '</h2><div class="tw"><table><thead><tr><th>Fecha</th><th>Recibo</th><th style="text-align:left">Cliente</th><th>Valor</th><th style="text-align:left">Banco / nota</th></tr></thead><tbody>'
       + (L.slice(0, 300).map(r => '<tr><td>' + esc(r.fecha) + '</td><td>' + esc(r.doc) + '</td><td class="n" style="text-align:left">' + esc(r.cli || r.nit) + '</td><td>' + fm(r.valor) + '</td><td class="n" style="text-align:left">' + esc((r.banco ? r.banco + ' · ' : '') + r.notas) + '</td></tr>').join('') || '<tr><td colspan="5" class="empty">Sin recaudos</td></tr>') + '</tbody></table></div></div>'
       + (L.length > 300 ? '<div class="err">Se muestran los 300 más recientes; el Excel trae todos.</div>' : '');
@@ -396,6 +396,62 @@ async function conExcel() {
   ws.views = [{ state: 'frozen', ySplit: 1 }];
   const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'Conciliacion_' + (CON.nombre || 'pagos').replace(/\.[^.]+$/, '') + '.xlsx'; a.click();
+}
+
+async function recMes() {
+  const hy = new Date((D.hoy || new Date().toISOString().slice(0, 10)) + 'T12:00:00Z'), d = prompt('Recaudo (RC) desde (AAAA-MM-DD):', new Date(Date.UTC(hy.getUTCFullYear(), hy.getUTCMonth() - 1, 1)).toISOString().slice(0, 10)); if (!d) return;
+  const h = prompt('Hasta (AAAA-MM-DD):', new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 0)).toISOString().slice(0, 10)); if (!h) return;
+  const cd = prompt('Una factura es de CONTADO si su plazo (vencimiento − fecha) es de hasta cuántos días:', '3'); if (cd === null) return;
+  const r = await conApi({ accion: 'recaudo', desde: d, hasta: h, contadoDias: cd });
+  if (!r || !r.ok) { alert((r && r.error) || 'No se pudo generar'); return; }
+  if (typeof ExcelJS === 'undefined') await loadJs('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
+  const wb = new ExcelJS.Workbook(), fmt = '#,##0', hdr = (ws, row) => { const x = ws.getRow(row); x.font = { bold: true, color: { argb: 'FFFFFFFF' } }; x.eachCell(c => c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } }); };
+  const ase = f => (f.vendedor || '').trim() || 'SIN ASESOR / OTROS (no ventas)', CL = v => /GARCIA NOGUERA/i.test(v);
+  const por = {}; r.filas.forEach(f => (por[ase(f)] = por[ase(f)] || []).push(f));
+  const rcs = {}; r.filas.forEach(f => { const o = rcs[f.rc] = rcs[f.rc] || { f, ases: new Set(), cruz: 0 }; o.ases.add(ase(f)); });
+  const est = e => e == 1 ? 'Aprobado' : 'En elaboración';
+  // 1. Consolidado
+  let ws = wb.addWorksheet('CONSOLIDADO RC');
+  ws.addRow(['Recaudo RC del ' + r.desde + ' al ' + r.hasta + ' · RC en estado elaboración y aprobado · valores con IVA']); ws.getRow(1).font = { bold: true };
+  ws.addRow(['Fecha', 'RC', 'NIT', 'Cliente', 'Estado', 'Banco', 'Notas', 'Valor RC', 'Asesor(es)']); hdr(ws, 2);
+  Object.values(rcs).sort((a, b) => a.f.fecha.localeCompare(b.f.fecha) || a.f.rc - b.f.rc).forEach(o => ws.addRow([o.f.fecha, o.f.rc, o.f.nit, o.f.cliente, est(o.f.estado), o.f.banco, o.f.notas, o.f.valorRc, [...o.ases].join(' / ')]));
+  const n1 = ws.rowCount; const t1 = ws.addRow(['TOTAL', '', '', '', '', '', '', { formula: 'SUM(H3:H' + n1 + ')' }, '']); t1.font = { bold: true };
+  ws.getColumn(8).numFmt = fmt; [12, 10, 14, 40, 14, 22, 40, 16, 40].forEach((w, i) => ws.getColumn(i + 1).width = w); ws.views = [{ state: 'frozen', ySplit: 2 }];
+  // 2. Resumen por asesor
+  const nombres = Object.keys(por).sort((a, b) => por[b].reduce((s, f) => s + f.asignado, 0) - por[a].reduce((s, f) => s + f.asignado, 0));
+  const hojas = {}, usados = new Set(['CONSOLIDADO RC', 'RESUMEN ASESORES']);
+  nombres.forEach(n => { let b = n.replace(/[\\\/\?\*\[\]:]/g, ' ').slice(0, 28).trim() || 'ASESOR', x = b, i = 2; while (usados.has(x)) x = b.slice(0, 26) + ' ' + i++; usados.add(x); hojas[n] = x; });
+  const rs = wb.addWorksheet('RESUMEN ASESORES');
+  rs.addRow(['Asesor', 'Hoja', 'N° pagos (RC)', 'Total recaudado', 'Contado', 'Crédito', 'Sin factura cerrada / otros', 'Cuenta para comisión*']); hdr(rs, 1);
+  nombres.forEach(n => {
+    const L = por[n], sm = t => L.filter(f => f.tipoPago === t).reduce((s, f) => s + f.asignado, 0), tot = L.reduce((s, f) => s + f.asignado, 0), cr = sm('Crédito');
+    const row = rs.addRow([n, hojas[n], new Set(L.map(f => f.rc)).size, tot, sm('Contado'), cr, tot - sm('Contado') - cr, CL(n) ? cr : tot]);
+    row.getCell(2).value = { text: hojas[n], hyperlink: "#'" + hojas[n] + "'!A1" }; row.getCell(2).font = { color: { argb: 'FF2563EB' }, underline: true };
+  });
+  const nr = rs.rowCount, tr = rs.addRow(['TOTAL', '', { formula: 'SUM(C2:C' + nr + ')' }, { formula: 'SUM(D2:D' + nr + ')' }, { formula: 'SUM(E2:E' + nr + ')' }, { formula: 'SUM(F2:F' + nr + ')' }, { formula: 'SUM(G2:G' + nr + ')' }, { formula: 'SUM(H2:H' + nr + ')' }]); tr.font = { bold: true };
+  rs.addRow([]); rs.addRow(['* Para Claudia García solo cuenta el recaudo de facturas a crédito; para los demás cuenta todo lo recaudado. Contado = plazo de la factura de hasta ' + r.contadoDias + ' día(s).']);
+  [4, 5, 6, 7, 8].forEach(i => rs.getColumn(i).numFmt = fmt); [34, 30, 14, 18, 18, 18, 24, 22].forEach((w, i) => rs.getColumn(i + 1).width = w); rs.views = [{ state: 'frozen', ySplit: 1 }];
+  // 3. Una hoja por asesor
+  nombres.forEach(n => {
+    const L = por[n].slice().sort((a, b) => a.fecha.localeCompare(b.fecha) || a.rc - b.rc), w = wb.addWorksheet(hojas[n]), esC = CL(n);
+    w.addRow([n + ' · recaudo ' + r.desde + ' a ' + r.hasta]); w.getRow(1).font = { bold: true, size: 13 };
+    let hr = 3;
+    if (esC) {
+      w.addRow(['Crédito (SUMA a Claudia)', '', '', '', '', '', '', '', '', '', '', '', '', { formula: 'SUMIF(L6:L' + (L.length + 5) + ',"Crédito",N6:N' + (L.length + 5) + ')' }]);
+      w.addRow(['Contado (NO suma)', '', '', '', '', '', '', '', '', '', '', '', '', { formula: 'SUMIF(L6:L' + (L.length + 5) + ',"Contado",N6:N' + (L.length + 5) + ')' }]);
+      w.addRow(['Sin factura cerrada / revisar (NO suma)', '', '', '', '', '', '', '', '', '', '', '', '', { formula: 'SUM(N6:N' + (L.length + 5) + ')-N2-N3' }]);
+      [2, 3, 4].forEach(i => { w.getRow(i).font = { bold: true }; w.getRow(i).getCell(14).numFmt = fmt; }); hr = 5; w.getRow(2).getCell(14).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+    } else { w.addRow([]); }
+    w.addRow(['RC', 'Fecha RC', 'NIT', 'Cliente', 'Estado', 'Banco', 'Valor RC', 'Documento', 'Fecha factura', 'Vence', 'Plazo (días)', 'Tipo', 'Valor documento', 'Valor asignado']);
+    const hrow = esC ? 5 : 3; hdr(w, hrow);
+    L.forEach(f => { const x = w.addRow([f.rc, f.fecha, f.nit, f.cliente, est(f.estado), f.banco, f.valorRc, f.doc, f.fFac, f.vcto, f.plazo, f.tipoPago, f.valorDoc, f.asignado]); if (f.tipoPago === 'Contado') x.eachCell(c => c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF9C3' } }); });
+    const last = w.rowCount, first = hrow + 1;
+    if (!esC) { /* fórmulas con el rango real */ }
+    const t = w.addRow(['TOTAL', '', '', '', '', '', '', '', '', '', '', '', '', { formula: 'SUM(N' + first + ':N' + last + ')' }]); t.font = { bold: true };
+    [7, 13, 14].forEach(i => w.getColumn(i).numFmt = fmt); [8, 12, 14, 36, 14, 20, 15, 16, 13, 13, 11, 18, 16, 16].forEach((x, i) => w.getColumn(i + 1).width = x); w.views = [{ state: 'frozen', ySplit: hrow }];
+  });
+  const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'Recaudo_RC_' + r.desde + '_a_' + r.hasta + '.xlsx'; a.click();
 }
 
 const PL_T350="0000002035000020011001RC 0000352620260916800242106      0003011PAGO DE FACTURAS SEGUN RELACION ADJUNTA                                                                                                                                                                                                                                       ";
