@@ -1001,10 +1001,19 @@ function extPintar(solo) {
     + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
   c.innerHTML = '<div id="xtab">'
     + '<div class="kpis">' + kpi('Entró al banco', fmc(tc), R.length + ' movimientos') + kpi('Con RC', fmc(tot(por('rc'))), por('rc').length + ' mov.') + kpi('Sin RC', fmc(tot(por('sinrc'))), por('sinrc').length + ' con cliente, falta RC') + kpi('Sin identificar', fmc(tot(por('sinid'))), por('sinid').length + ' sin cliente') + kpi('Otros', fmc(tot(por('otro'))), 'tesorería, nómina, NA…') + '</div>'
-    + tabs + bar + '<div id="xcruce"></div><div class="card"><h2 id="xh2">' + esc(titulo) + '</h2>' + xgBar('ext') + '<div class="tw" id="xg_ext"></div></div></div>';
+    + tabs + bar + '<div id="xsub"></div><div id="xcruce"></div><div class="card" id="xcardext"><h2 id="xh2">' + esc(titulo) + '</h2>' + xgBar('ext') + '<div class="tw" id="xg_ext"></div></div></div>';
   xgInit('ext', EXT_COLS, { rows: F, limit: 600, nombre: 'Extracto_' + EXT.mes, attr: r => ' class="c" onclick="extEditar(' + r.id + ')"' }); xgPaint('ext');
-  if (EXT.cruce && EXT.cruce.mes === EXT.mes) cruPintar();
+  if (EXT.cruce && EXT.cruce.mes === EXT.mes) cruPintar(); else EXT.vista = 'ext';
+  extSubPintar();
 }
+function extSubPintar() {
+  const s = $('xsub'), ok = EXT.cruce && EXT.cruce.mes === EXT.mes; if (!s) return;
+  if (!ok) { s.innerHTML = ''; if ($('xcardext')) $('xcardext').style.display = ''; return; }
+  const nd = EXT.cruce.L.filter(x => x.est !== 'OK').length, v = EXT.vista === 'cru' ? 'cru' : 'ext';
+  s.innerHTML = '<div class="tabs" style="border-top:2px solid #1e293b;padding-top:6px"><button class="tab' + (v === 'cru' ? ' on' : '') + '" onclick="extSub(\'cru\')">🔎 Cruce con Siesa · ' + nd + ' con diferencia</button><button class="tab' + (v === 'ext' ? ' on' : '') + '" onclick="extSub(\'ext\')">🏦 Extracto' + (EXT.q ? ' · filtro: ' + esc(EXT.q) : '') + '</button></div>';
+  $('xcruce').style.display = v === 'cru' ? '' : 'none'; $('xcardext').style.display = v === 'ext' ? '' : 'none';
+}
+function extSub(v) { EXT.vista = v; extSubPintar(); }
 async function extMes(m) { EXT.mes = m; EXT.q = ''; EXT.banco = ''; EXT.est = ''; EXT.ej = ''; EXT.cruce = null; await extVista(); }
 /* ---- buscador de clientes ---- */
 function cliBuscar(v) {
@@ -1117,7 +1126,7 @@ async function extCruzar() {
   if (!r || !r.ok) { b.innerHTML = '<div class="err">' + esc((r && r.error) || 'No se pudo consultar Siesa') + '</div>'; return; }
   if (!e || !e.ok) { b.innerHTML = '<div class="err">' + esc((e && e.error) || 'No se pudo leer el extracto') + '</div>'; return; }
   const sies = cruSies(r), L = cruCalc(e.filas, sies, m);
-  EXT.cruce = { mes: m, L, sies, ini, fin, solo: true }; cruPintar();
+  EXT.cruce = { mes: m, L, sies, ini, fin, solo: true }; EXT.vista = 'cru'; extPintar();
 }
 function cruCalc(filas, sies, m) {
   const [d0, d1] = extRango(m), X = {};
@@ -1152,7 +1161,7 @@ function cruPintar() {
   xgInit('cru', CRU_COLS, { rows: L, limit: 1500, nombre: 'Cruce_extracto_' + C.mes, attr: r => r.n ? ' class="c" onclick="cruIr(\'' + r.rc + '\')"' : '' }); xgPaint('cru');
 }
 function cruEd(rc) { const f = EXT.cruce && EXT.cruce.L.find(x => String(x.rc) === String(rc)); if (f && f.fil && f.fil.length === 1) extAbrir(f.fil[0]); else cruIr(rc); }
-function cruIr(rc) { EXT.q = rc; extPintar(); const x = $('xq'); if (x) x.focus(); }
+function cruIr(rc) { EXT.q = rc; EXT.vista = 'ext'; extPintar(); const x = $('xq'); if (x) x.focus(); }
 async function cruExcel() {
   const C = EXT.cruce; if (!C) return; if (typeof ExcelJS === 'undefined') await loadJs('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
   const wb = new ExcelJS.Workbook(), fmt = '#,##0', hd = ws => { const r = ws.getRow(1); r.font = { bold: true, color: { argb: 'FFFFFFFF' } }; r.eachCell(c => c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } }); ws.views = [{ state: 'frozen', ySplit: 1 }]; };
