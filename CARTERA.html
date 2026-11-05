@@ -193,6 +193,7 @@ function vista(soloTabla) {
     c.innerHTML = barra('') + '<div class="card"><h2>Facturas vencidas por vendedor (' + L.length + ')</h2><div class="tw"><table><thead><tr><th>Vendedor</th><th>1-30 d</th><th>31-60 d</th><th>61-90 d</th><th>+90 d</th><th>Total vencido</th><th>% de su cartera</th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Sin vencidas</td></tr>') + '<tr class="tot"><td>TOTAL</td><td>' + fm(t[1]) + '</td><td>' + fm(t[2]) + '</td><td>' + fm(t[3]) + '</td><td>' + fm(t[4]) + '</td><td>' + fm(tv) + '</td><td></td></tr></tbody></table></div></div>';
     keepFocus();
   } else {
+    if (REC) { recPintar(); return; }
     const q = Q.trim().toUpperCase(), L = D.recs.filter(r => !q || (r.cli + ' ' + r.nit + ' ' + r.doc).toUpperCase().includes(q));
     const porDia = {}; L.forEach(r => porDia[r.fecha] = (porDia[r.fecha] || 0) + r.valor);
     const dd = Object.keys(porDia).sort().reverse().slice(0, 14);
@@ -398,12 +399,17 @@ async function conExcel() {
   a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'Conciliacion_' + (CON.nombre || 'pagos').replace(/\.[^.]+$/, '') + '.xlsx'; a.click();
 }
 
+let REC = null;
 async function recMes() {
   const hy = new Date((D.hoy || new Date().toISOString().slice(0, 10)) + 'T12:00:00Z'), d = prompt('Recaudo (RC) desde (AAAA-MM-DD):', new Date(Date.UTC(hy.getUTCFullYear(), hy.getUTCMonth() - 1, 1)).toISOString().slice(0, 10)); if (!d) return;
   const h = prompt('Hasta (AAAA-MM-DD):', new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 0)).toISOString().slice(0, 10)); if (!h) return;
   const cd = prompt('Una factura es de CONTADO si su plazo (vencimiento − fecha) es de hasta cuántos días:', '3'); if (cd === null) return;
   const r = await conApi({ accion: 'recaudo', desde: d, hasta: h, contadoDias: cd });
   if (!r || !r.ok) { alert((r && r.error) || 'No se pudo generar'); return; }
+  REC = { r, i: 0 }; TAB = 'rec'; recPintar();
+}
+async function recExcel() {
+  const r = REC.r;
   if (typeof ExcelJS === 'undefined') await loadJs('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
   const wb = new ExcelJS.Workbook(), fmt = '#,##0', hdr = (ws, row) => { const x = ws.getRow(row); x.font = { bold: true, color: { argb: 'FFFFFFFF' } }; x.eachCell(c => c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } }); };
   const ase = f => (f.vendedor || '').trim() || 'SIN ASESOR / OTROS (no ventas)', CL = v => /GARCIA NOGUERA/i.test(v);
@@ -452,6 +458,39 @@ async function recMes() {
   });
   const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'Recaudo_RC_' + r.desde + '_a_' + r.hasta + '.xlsx'; a.click();
+}
+
+function recPrep(r) {
+  const ase = f => (f.vendedor || '').trim() || 'SIN ASESOR / OTROS (no ventas)', por = {}, rcs = {};
+  r.filas.forEach(f => { (por[ase(f)] = por[ase(f)] || []).push(f); const o = rcs[f.rc] = rcs[f.rc] || { f, ases: new Set() }; o.ases.add(ase(f)); });
+  const nombres = Object.keys(por).sort((a, b) => por[b].reduce((s, f) => s + f.asignado, 0) - por[a].reduce((s, f) => s + f.asignado, 0));
+  return { por, rcs: Object.values(rcs).sort((a, b) => a.f.fecha.localeCompare(b.f.fecha) || a.f.rc - b.f.rc), nombres };
+}
+function recPintar() {
+  const c = $('cont'); if (!c || !REC) return;
+  const r = REC.r, P = recPrep(r), est = e => e == 1 ? 'Aprobado' : 'En elaboración', CL = v => /GARCIA NOGUERA/i.test(v), sm = (L, t) => L.filter(f => f.tipoPago === t).reduce((s, f) => s + f.asignado, 0), tt = L => L.reduce((s, f) => s + f.asignado, 0);
+  const T = ['CONSOLIDADO RC', 'RESUMEN ASESORES'].concat(P.nombres), i = Math.min(REC.i, T.length - 1);
+  const tabs = '<div class="tabs">' + T.map((n, k) => '<div class="tab' + (k === i ? ' on' : '') + '" onclick="REC.i=' + k + ';recPintar()">' + esc(n.length > 24 ? n.slice(0, 22) + '…' : n) + '</div>').join('') + '</div>';
+  const top = '<div class="bar"><button class="btn" onclick="REC=null;vista()">← Volver a recaudos</button><button class="btn" onclick="recExcel()">⬇ Excel (con pestañas)</button><b style="font-size:12px">Recaudo RC ' + esc(r.desde) + ' a ' + esc(r.hasta) + ' · contado = plazo ≤ ' + r.contadoDias + ' día(s) · con IVA</b></div>';
+  let h = '';
+  if (i === 0) {
+    h = '<div class="card"><h2>Consolidado de RC (' + P.rcs.length + ') · ' + fm(P.rcs.reduce((s, o) => s + o.f.valorRc, 0)) + '</h2><div class="tw"><table><thead><tr><th>Fecha</th><th>RC</th><th style="text-align:left">Cliente</th><th>Estado</th><th>Valor</th><th style="text-align:left">Asesor(es)</th></tr></thead><tbody>'
+      + P.rcs.map(o => '<tr><td>' + esc(o.f.fecha) + '</td><td>' + esc(o.f.rc) + '</td><td class="n" style="text-align:left">' + esc(o.f.cliente || o.f.nit) + '</td><td>' + est(o.f.estado) + '</td><td>' + fm(o.f.valorRc) + '</td><td class="n" style="text-align:left">' + esc([...o.ases].join(' / ')) + '</td></tr>').join('') + '</tbody></table></div></div>';
+  } else if (i === 1) {
+    const rows = P.nombres.map((n, k) => { const L = P.por[n], cr = sm(L, 'Crédito'), co = sm(L, 'Contado'), t = tt(L); return '<tr class="c" onclick="REC.i=' + (k + 2) + ';recPintar()"><td class="n" style="text-align:left">' + esc(n) + '</td><td>' + new Set(L.map(f => f.rc)).size + '</td><td>' + fm(t) + '</td><td>' + fm(co) + '</td><td>' + fm(cr) + '</td><td>' + fm(t - co - cr) + '</td><td><b>' + fm(CL(n) ? cr : t) + '</b></td></tr>'; }).join('');
+    const A = r.filas, tot = tt(A);
+    h = '<div class="card"><h2>Resumen por asesor · toca una fila para ver su detalle</h2><div class="tw"><table><thead><tr><th style="text-align:left">Asesor</th><th>N° RC</th><th>Total recaudado</th><th>Contado</th><th>Crédito</th><th>Sin factura / otros</th><th>Cuenta para comisión*</th></tr></thead><tbody>' + rows
+      + '<tr><td class="n" style="text-align:left"><b>TOTAL</b></td><td><b>' + P.rcs.length + '</b></td><td><b>' + fm(tot) + '</b></td><td><b>' + fm(sm(A, 'Contado')) + '</b></td><td><b>' + fm(sm(A, 'Crédito')) + '</b></td><td><b>' + fm(tot - sm(A, 'Contado') - sm(A, 'Crédito')) + '</b></td><td></td></tr></tbody></table></div></div><div class="err" style="background:#f1f5f9;color:#334155">* Para Claudia García solo cuenta el recaudo de facturas a crédito; para los demás, todo lo recaudado.</div>';
+  } else {
+    const n = T[i], L = P.por[n].slice().sort((a, b) => a.fecha.localeCompare(b.fecha) || a.rc - b.rc), esC = CL(n);
+    const cr = sm(L, 'Crédito'), co = sm(L, 'Contado'), ot = tt(L) - cr - co;
+    const card = (t, v, col) => '<div class="card" style="flex:1;min-width:170px;border-left:4px solid ' + col + '"><div style="font-size:11px;color:#64748b">' + t + '</div><div style="font-size:18px;font-weight:800">' + fm(v) + '</div></div>';
+    h = (esC ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + card('Crédito · SUMA a Claudia', cr, '#16a34a') + card('Contado · no suma', co, '#eab308') + card('Sin factura cerrada / revisar · no suma', ot, '#94a3b8') + '</div>' : '<div style="display:flex;gap:8px;flex-wrap:wrap">' + card('Total recaudado', tt(L), '#2563eb') + card('Contado', co, '#eab308') + card('Crédito', cr, '#16a34a') + '</div>')
+      + '<div class="card"><h2>' + esc(n) + ' (' + L.length + ' líneas)</h2><div class="tw"><table><thead><tr><th>Fecha</th><th>RC</th><th style="text-align:left">Cliente</th><th>Documento</th><th>Plazo</th><th>Tipo</th><th>Valor doc</th><th>Asignado</th></tr></thead><tbody>'
+      + L.map(f => '<tr' + (f.tipoPago === 'Contado' ? ' style="background:#fef9c3"' : '') + '><td>' + esc(f.fecha) + '</td><td>' + esc(f.rc) + '</td><td class="n" style="text-align:left">' + esc(f.cliente || f.nit) + '</td><td>' + esc(f.doc || '–') + '</td><td>' + (f.plazo == null ? '–' : f.plazo) + '</td><td>' + esc(f.tipoPago) + '</td><td>' + (f.valorDoc ? fm(f.valorDoc) : '–') + '</td><td>' + fm(f.asignado) + '</td></tr>').join('')
+      + '<tr><td colspan="7" class="n" style="text-align:left"><b>TOTAL</b></td><td><b>' + fm(tt(L)) + '</b></td></tr></tbody></table></div></div>';
+  }
+  c.innerHTML = top + tabs + h;
 }
 
 const PL_T350="0000002035000020011001RC 0000352620260916800242106      0003011PAGO DE FACTURAS SEGUN RELACION ADJUNTA                                                                                                                                                                                                                                       ";
