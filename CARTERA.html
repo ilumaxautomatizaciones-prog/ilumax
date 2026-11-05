@@ -44,6 +44,22 @@ tr.det td{background:#f8fafc;font-size:11px;color:#334155}
 .foot{font-size:11px;color:#64748b;text-align:center;padding:8px 0 24px}
 .empty{padding:22px;text-align:center;color:#64748b}
 @media(max-width:640px){.kpi .v{font-size:16px}th{padding:6px 5px;font-size:9px}td{padding:5px 6px;font-size:11px}.wrap{padding:10px 10px 24px}}
+
+.ov{position:fixed;inset:0;background:#0f172a99;display:none;align-items:flex-start;justify-content:center;overflow:auto;padding:16px;z-index:50}.ov.on{display:flex}
+.mo{background:#fff;border-radius:14px;width:100%;max-width:660px;margin:auto}
+.mh{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid #e2e8f0;font-weight:800}
+.mb{padding:14px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.mb .f{display:flex;flex-direction:column;gap:3px;position:relative}.mb .f.w{grid-column:1/-1}
+.mb label{font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase}
+.mb input,.mb select{font:inherit;font-size:13px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;width:100%;background:#fff}
+.mf{padding:12px 14px;border-top:1px solid #e2e8f0;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.btn.g{background:#e2e8f0;color:#0f172a}.btn.r{background:#fee2e2;color:#b91c1c;margin-right:auto}
+.lst{position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #cbd5e1;border-radius:8px;max-height:260px;overflow:auto;z-index:60;box-shadow:0 8px 24px #0002;text-align:left}
+.lst div{padding:7px 10px;cursor:pointer;font-size:12px;border-bottom:1px solid #f1f5f9}.lst div:hover{background:#f1f5f9}
+.pill{display:inline-block;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;white-space:nowrap}
+.p-ok{background:#dcfce7;color:#166534}.p-or{background:#ffedd5;color:#9a3412}.p-rd{background:#fee2e2;color:#991b1b}.p-bl{background:#dbeafe;color:#1e40af}
+#xtab td,#xtab th{text-align:left}#xtab td:nth-child(4),#xtab th:nth-child(4){text-align:right}
+@media(max-width:640px){.mb{grid-template-columns:minmax(0,1fr)}}
 </style>
 </head>
 <body>
@@ -116,7 +132,7 @@ function pintar() {
   $('out').style.display = '';
   const pos = sumB(D.cls), venc = D.cls.reduce((s, c) => s + c.b[1] + c.b[2] + c.b[3] + c.b[4], 0), v90 = D.cls.reduce((s, c) => s + c.b[4], 0), fav = D.cls.reduce((s, c) => s + c.fav, 0);
   const rec30 = D.recs.filter(r => Date.parse(hoy) - Date.parse(r.fecha) < 30 * 864e5).reduce((s, r) => s + r.valor, 0);
-  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos']];
+  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ext', '🏦 Extracto bancario']];
   $('app').innerHTML = '<div class="kpis">'
     + kpi('Cartera por cobrar', fmc(pos), D.cls.filter(c => c.tot > 0).length + ' clientes con saldo')
     + kpi('Vencida', fmc(venc), pos ? Math.round(venc / pos * 100) + '% de la cartera' : '')
@@ -192,6 +208,8 @@ function vista(soloTabla) {
     const tv = t[1] + t[2] + t[3] + t[4];
     c.innerHTML = barra('') + '<div class="card"><h2>Facturas vencidas por vendedor (' + L.length + ')</h2><div class="tw"><table><thead><tr><th>Vendedor</th><th>1-30 d</th><th>31-60 d</th><th>61-90 d</th><th>+90 d</th><th>Total vencido</th><th>% de su cartera</th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Sin vencidas</td></tr>') + '<tr class="tot"><td>TOTAL</td><td>' + fm(t[1]) + '</td><td>' + fm(t[2]) + '</td><td>' + fm(t[3]) + '</td><td>' + fm(t[4]) + '</td><td>' + fm(tv) + '</td><td></td></tr></tbody></table></div></div>';
     keepFocus();
+  } else if (TAB === 'ext') {
+    extVista();
   } else {
     if (REC) { recPintar(); return; }
     const q = Q.trim().toUpperCase(), L = D.recs.filter(r => !q || (r.cli + ' ' + r.nit + ' ' + r.doc).toUpperCase().includes(q));
@@ -838,6 +856,267 @@ async function conPlanoLista(id) {
 async function conBorrar(id) { if (!confirm('¿Eliminar esta conciliación guardada?')) return; const j = await conApi({ accion: 'borrar', id }); if (!j.ok) { alert(j.error || 'No se pudo borrar'); return; } if (CON.id === id) CON.id = null; conLista(); }
 
 cargar();
+/* ===== Extracto bancario (lo que realmente entra a los bancos) ===== */
+const EXT_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-extracto';
+const nz = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+const BANCOS = ['BANCOLOMBIA', 'BANCO DE BOGOTA', 'BDO OCCIDENTE', 'DAVIVIENDA'];
+// Código del ejecutivo en el extracto -> nombre del vendedor en Siesa (para el cruce)
+const EJ_MAP = { CFLOREZ: 'FLOREZ PELAEZ CARMELINA', CTAYLOR: 'TAYLOR RAMOS CAMILO GUSTAVO', GCHAVES: 'CHAVES ZULUAGA GERSSON ANDRES', JFERREIRA: 'FERREIRA TORRES JAIME', CGARCIA: 'GARCIA NOGUERA CLAUDIA LORENA', KSANCHEZ: 'SANCHEZ LEON LIZ KATHERINE', MFERRO: 'FERRO BAQUERO MAURICIO', SPARRA: 'PARRA ZAPATA SERGIO ANDRES', RPADILLA: 'PADILLA MORALES ROSA ANGELICA', LLOSADA: 'LOZADA ACOSTA LUIS FELIPE', LLOZADA: 'LOZADA ACOSTA LUIS FELIPE', JLOPEZ: 'CUBILLOS HENAO GHISLAINE JOHANNA', JCUBILLOS: 'CUBILLOS HENAO GHISLAINE JOHANNA', JMADRIÑAN: 'MADRINAN PALACIO JUAN CAMILO', PSANTOFIMIO: 'SANTOFIMIO YENY PAHOLA', 'VENTAS DIRECTAS': 'VENTAS DIRECTAS ILUMAX', 'VENTAS DIRECTAS ILUMAX': 'VENTAS DIRECTAS ILUMAX' };
+const ejNom = c => { const k = nz(c); return EJ_MAP[k] ? nz(EJ_MAP[k]) : ''; };
+let EXT = { mes: '', cache: {}, clientes: null, cidx: null, admin: false, q: '', banco: '', est: '', ej: '', cruce: null, cargando: false, edit: null };
+const extApi = async b => { try { const r = await fetch(EXT_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
+const pad2 = n => String(n).padStart(2, '0');
+function extRango(m) {
+  if (m === 'ant') return ['2025-01-01', '2025-12-31'];
+  const y = +m.slice(0, 4), mo = +m.slice(5, 7), ult = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  return [m + '-01', m + '-' + pad2(ult)];
+}
+function extMeses() {
+  const hoy = (D && D.hoy) || new Date().toISOString().slice(0, 10), y = +hoy.slice(0, 4), mo = +hoy.slice(5, 7), L = [];
+  for (let i = 1; i <= mo; i++) L.push([y + '-' + pad2(i), MESES[i - 1]]);
+  return L;
+}
+const extEst = r => !r.rc ? (r.cliente ? 'sinrc' : 'sinid') : (/^\d+$/.test(r.rc) ? 'rc' : 'otro');
+const EXT_PILL = { sinid: ['p-rd', 'Sin identificar'], sinrc: ['p-or', 'Sin RC'], rc: ['p-ok', 'Con RC'], otro: ['p-bl', 'Otro'] };
+async function extClientes() {
+  if (EXT.clientes) return true;
+  const j = await extApi({ accion: 'clientes' });
+  if (!j || !j.ok) { return false; }
+  EXT.admin = !!j.admin; EXT.clientes = j.clientes.map(c => ({ nit: String(c[0]), nombre: c[1], ej: c[2], canal: c[3], proy: c[4], k: nz(c[0] + ' ' + c[1]) }));
+  EXT.cidx = new Map(EXT.clientes.map(c => [c.nit, c])); return true;
+}
+async function extCargarMes(m, forzar) {
+  if (!forzar && EXT.cache[m]) return EXT.cache[m];
+  const j = m === 'pend' ? await extApi({ accion: 'listar', pendientes: true }) : await extApi({ accion: 'listar', desde: extRango(m)[0], hasta: extRango(m)[1] });
+  if (!j || !j.ok) throw new Error((j && j.error) || 'No se pudo cargar');
+  return (EXT.cache[m] = j.filas);
+}
+async function extVista(forzar) {
+  const c = $('cont'); if (!c) return;
+  if (!EXT.mes) { const h = (D && D.hoy) || new Date().toISOString().slice(0, 10); EXT.mes = h.slice(0, 7); }
+  c.innerHTML = '<div class="err">Cargando extracto…</div>';
+  try { if (!(await extClientes())) { c.innerHTML = '<div class="err">No se pudo cargar la lista de clientes. Intenta de nuevo.</div>'; return; } await extCargarMes(EXT.mes, forzar); } catch (e) { c.innerHTML = '<div class="err">' + esc(e.message) + '</div>'; return; }
+  extPintar();
+}
+function extFiltrar(R) {
+  const q = nz(EXT.q);
+  return R.filter(r => (!EXT.banco || r.banco === EXT.banco) && (!EXT.est || extEst(r) === EXT.est) && (!EXT.ej || r.ejecutivo === EXT.ej) && (!q || nz([r.banco, r.descripcion, r.texto_ref, r.ref_cliente, r.cliente, r.rc, r.ejecutivo, r.observacion, r.monto, r.nit].join(' ')).includes(q)));
+}
+function extPintar(solo) {
+  const c = $('cont'); if (!c) return;
+  const R = EXT.cache[EXT.mes] || [], F = extFiltrar(R), tot = a => a.reduce((s, r) => s + Number(r.monto), 0);
+  const por = e => R.filter(r => extEst(r) === e), tc = tot(R);
+  const tabs = '<div class="tabs">' + extMeses().map(m => '<button class="tab' + (EXT.mes === m[0] ? ' on' : '') + '" onclick="extMes(\'' + m[0] + '\')">' + m[1] + '</button>').join('') + '<button class="tab' + (EXT.mes === 'ant' ? ' on' : '') + '" onclick="extMes(\'ant\')">2025</button><button class="tab' + (EXT.mes === 'pend' ? ' on' : '') + '" onclick="extMes(\'pend\')">⏳ Pendientes</button></div>';
+  const ejs = [...new Set(R.map(r => r.ejecutivo).filter(Boolean))].sort();
+  const bar = '<div class="bar"><input id="xq" placeholder="Buscar banco, cliente, RC, valor, referencia, ejecutivo…" value="' + esc(EXT.q) + '" oninput="EXT.q=this.value;extPintar(true)">'
+    + '<select onchange="EXT.banco=this.value;extPintar(true)"><option value="">Todos los bancos</option>' + [...new Set(R.map(r => r.banco).filter(Boolean))].sort().map(b => '<option' + (EXT.banco === b ? ' selected' : '') + '>' + esc(b) + '</option>').join('') + '</select>'
+    + '<select onchange="EXT.est=this.value;extPintar(true)"><option value="">Todos los estados</option>' + Object.entries(EXT_PILL).map(([k, v]) => '<option value="' + k + '"' + (EXT.est === k ? ' selected' : '') + '>' + v[1] + '</option>').join('') + '</select>'
+    + '<select onchange="EXT.ej=this.value;extPintar(true)"><option value="">Todos los ejecutivos</option>' + ejs.map(e => '<option' + (EXT.ej === e ? ' selected' : '') + '>' + esc(e) + '</option>').join('') + '</select></div>'
+    + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extExcel()">⬇ Excel</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
+  const rows = F.slice(0, 400).map(r => { const e = EXT_PILL[extEst(r)]; return '<tr class="c" onclick="extEditar(' + r.id + ')"><td>' + esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7)) + '</td><td class="n">' + esc(r.banco) + '</td><td class="n">' + esc(r.descripcion) + (r.texto_ref ? '<div style="font-size:10px;color:#64748b">' + esc(String(r.texto_ref).slice(0, 90)) + '</div>' : '') + '</td><td><b>' + fm(Number(r.monto)) + '</b></td><td>' + esc(r.ref_cliente) + '</td><td class="n">' + esc(r.cliente) + '</td><td><span class="pill ' + e[0] + '">' + (r.rc ? esc(r.rc) : e[1]) + '</span></td><td>' + esc(r.ejecutivo) + '</td><td>' + esc(r.canal) + '</td><td class="n">' + esc(r.observacion) + '</td></tr>'; }).join('');
+  const ext = $('xtab');
+  const cuerpo = '<div class="card"><h2>' + (EXT.mes === 'pend' ? 'Movimientos pendientes (sin RC)' : EXT.mes === 'ant' ? 'Movimientos de 2025' : MESES[+EXT.mes.slice(5, 7) - 1] + ' ' + EXT.mes.slice(0, 4)) + ' · ' + F.length + ' de ' + R.length + ' · ' + fm(tot(F)) + '</h2><div class="tw"><table><thead><tr><th>Fecha</th><th>Banco</th><th>Descripción</th><th>Monto</th><th>Ref. cliente</th><th>Cliente</th><th>RC</th><th>Ejecutivo</th><th>Canal</th><th>Observación</th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="empty">Sin movimientos</td></tr>') + '</tbody></table></div>' + (F.length > 400 ? '<div class="foot">Se muestran 400; usa los filtros para acotar.</div>' : '') + '</div>';
+  if (solo && ext) { ext.innerHTML = cuerpo; return; }
+  c.innerHTML = '<div id="xtab">'
+    + '<div class="kpis">' + kpi('Entró al banco', fmc(tc), R.length + ' movimientos') + kpi('Con RC', fmc(tot(por('rc'))), por('rc').length + ' mov.') + kpi('Sin RC', fmc(tot(por('sinrc'))), por('sinrc').length + ' con cliente, falta RC') + kpi('Sin identificar', fmc(tot(por('sinid'))), por('sinid').length + ' sin cliente') + kpi('Otros', fmc(tot(por('otro'))), 'tesorería, nómina, NA…') + '</div>'
+    + tabs + bar + '<div id="xcruce"></div>' + cuerpo + '</div>';
+  if (EXT.cruce && EXT.cruce.mes === EXT.mes) cruPintar();
+}
+async function extMes(m) { EXT.mes = m; EXT.q = ''; EXT.banco = ''; EXT.est = ''; EXT.ej = ''; EXT.cruce = null; await extVista(); }
+/* ---- buscador de clientes ---- */
+function cliBuscar(v) {
+  const L = $('fLista'); if (!L) return; const t = nz(v).split(/\s+/).filter(Boolean);
+  if (!t.length) { L.style.display = 'none'; return; }
+  const r = EXT.clientes.filter(c => t.every(x => c.k.includes(x))).slice(0, 40);
+  L.innerHTML = r.map(c => '<div onclick="cliElegir(\'' + esc(c.nit) + '\')"><b>' + esc(c.nombre) + '</b><br><span style="color:#64748b;font-size:11px">' + esc(c.nit) + ' · ' + esc(c.ej) + ' · ' + esc(c.canal) + '</span></div>').join('') + '<div onclick="cliNuevo()" style="color:#1d4ed8;font-weight:700">➕ Cliente nuevo (no está en la lista)</div>';
+  L.style.display = 'block';
+}
+function cliElegir(nit) {
+  const c = EXT.cidx.get(String(nit)); if (!c) return;
+  $('fNit').value = c.nit; $('fCli').value = c.nombre; $('fEj').value = c.ej; $('fCan').value = c.canal; $('fLista').style.display = 'none';
+  if (!$('fRef').value) $('fRef').value = c.nit;
+}
+function cliPorRef() { const c = EXT.cidx.get(String($('fRef').value).trim()); if (c && !$('fCli').value) cliElegir(c.nit); }
+async function cliNuevo() {
+  $('fLista').style.display = 'none';
+  const nit = prompt('NIT / cédula del cliente nuevo (sin puntos ni dígito de verificación):', $('fRef').value || ''); if (!nit) return;
+  const nombre = prompt('Nombre del cliente:', $('fCli').value || ''); if (!nombre) return;
+  const ej = prompt('Código del ejecutivo (ej. CFLOREZ, CTAYLOR, VENTAS DIRECTAS):', $('fEj').value || ''); if (ej === null) return;
+  const canal = prompt('Canal (ESPECIALIZADO, MIXTO, ONLINE, PROYECTOS, MODERNO…):', $('fCan').value || 'ESPECIALIZADO'); if (canal === null) return;
+  const j = await extApi({ accion: 'cliente_guardar', cliente: { nit: nit.trim(), nombre: nombre.trim(), ejecutivo: ej.trim(), canal: canal.trim() } });
+  if (!j || !j.ok) { alert((j && j.error) || 'No se pudo guardar el cliente'); return; }
+  const c = { nit: nit.trim(), nombre: nombre.trim().toUpperCase(), ej: ej.trim().toUpperCase(), canal: canal.trim().toUpperCase(), proy: '', k: nz(nit + ' ' + nombre) };
+  const i = EXT.clientes.findIndex(x => x.nit === c.nit); if (i >= 0) EXT.clientes[i] = c; else EXT.clientes.push(c); EXT.cidx.set(c.nit, c); cliElegir(c.nit);
+}
+/* ---- formulario ---- */
+const CAMPOS = [['fBan', 'banco'], ['fFec', 'fecha'], ['fDes', 'descripcion'], ['fTxt', 'texto_ref'], ['fMon', 'monto'], ['fChe', 'monto_cheque'], ['fRef', 'ref_cliente'], ['fNit', 'nit'], ['fCli', 'cliente'], ['fRc', 'rc'], ['fEj', 'ejecutivo'], ['fCan', 'canal'], ['fObs', 'observacion']];
+function extForm(r) {
+  const eje = [...new Set(EXT.clientes.map(c => c.ej).filter(Boolean))].sort(), can = [...new Set(EXT.clientes.map(c => c.canal).filter(Boolean))].sort();
+  const f = (id, l, h, w) => '<div class="f' + (w ? ' w' : '') + '"><label>' + l + '</label>' + h + '</div>';
+  return '<div class="ov on" id="xov"><div class="mo"><div class="mh"><span>' + (r.id ? 'Editar movimiento' : 'Nuevo movimiento') + '</span><button class="btn g" onclick="extCerrar()">✕</button></div><div class="mb">'
+    + f('', 'Banco', '<select id="fBan">' + [...new Set(BANCOS.concat(r.banco ? [r.banco] : []))].map(b => '<option' + (b === r.banco ? ' selected' : '') + '>' + esc(b) + '</option>').join('') + '</select>')
+    + f('', 'Fecha', '<input id="fFec" type="date" value="' + esc(r.fecha || '') + '">')
+    + f('', 'Descripción de transacción', '<input id="fDes" value="' + esc(r.descripcion || '') + '">', 1)
+    + f('', 'Texto de referencia', '<input id="fTxt" value="' + esc(r.texto_ref || '') + '">', 1)
+    + f('', 'Monto', '<input id="fMon" inputmode="decimal" value="' + esc(r.monto == null ? '' : r.monto) + '">')
+    + f('', 'Monto en cheque / facturas', '<input id="fChe" value="' + esc(r.monto_cheque || '') + '">')
+    + f('', 'Referencia del cliente (NIT que trae el banco)', '<input id="fRef" value="' + esc(r.ref_cliente || '') + '" onchange="cliPorRef()">')
+    + f('', 'RC (número o NA-/TES-)', '<input id="fRc" value="' + esc(r.rc || '') + '" onchange="rcInfo()"><div id="fRcInfo" style="font-size:11px;color:#475569"></div>')
+    + f('', 'Cliente (escribe nombre o NIT y elige)', '<input id="fCli" autocomplete="off" value="' + esc(r.cliente || '') + '" oninput="cliBuscar(this.value)"><div class="lst" id="fLista" style="display:none"></div>', 1)
+    + f('', 'NIT', '<input id="fNit" value="' + esc(r.nit || '') + '">')
+    + f('', 'Ejecutivo', '<input id="fEj" list="dlEj" value="' + esc(r.ejecutivo || '') + '"><datalist id="dlEj">' + eje.map(e => '<option value="' + esc(e) + '">').join('') + '</datalist>')
+    + f('', 'Canal', '<input id="fCan" list="dlCan" value="' + esc(r.canal || '') + '"><datalist id="dlCan">' + can.map(e => '<option value="' + esc(e) + '">').join('') + '</datalist>')
+    + f('', 'Observación', '<input id="fObs" value="' + esc(r.observacion || '') + '">', 1)
+    + '</div><div class="mf">' + (r.id ? '<button class="btn r" onclick="extBorrar(' + r.id + ')">🗑 Eliminar</button>' : '') + '<button class="btn g" onclick="extCerrar()">Cancelar</button><button class="btn" onclick="extGuardar(' + (r.id || 0) + ')">💾 Guardar</button></div></div></div>';
+}
+function extAbrir(r) { const d = document.createElement('div'); d.id = 'xwrap'; d.innerHTML = extForm(r); document.body.appendChild(d); setTimeout(() => { if (!r.id) $('fBan').focus(); rcInfo(); }, 30); }
+function extCerrar() { const w = $('xwrap'); if (w) w.remove(); }
+function extNuevo() { const hoy = (D && D.hoy) || new Date().toISOString().slice(0, 10), m = /^\d{4}-\d{2}$/.test(EXT.mes) ? EXT.mes : hoy.slice(0, 7); extAbrir({ banco: 'BANCOLOMBIA', fecha: m === hoy.slice(0, 7) ? hoy : m + '-01' }); }
+function extEditar(id) { const r = (EXT.cache[EXT.mes] || []).find(x => x.id === id); if (r) extAbrir(r); }
+async function extGuardar(id) {
+  const fila = { id }; CAMPOS.forEach(([e, k]) => fila[k] = $(e).value);
+  if (!fila.fecha) { alert('Falta la fecha.'); return; }
+  if (!String(fila.monto).trim() || isNaN(Number(String(fila.monto).replace(/[$.\s]/g, '').replace(',', '.')))) { alert('El monto no es un número válido.'); return; }
+  fila.monto = Number(String(fila.monto).replace(/[$\s]/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'));
+  const j = await extApi({ accion: 'guardar', fila });
+  if (!j || !j.ok) { alert((j && j.error) || 'No se pudo guardar'); return; }
+  extCerrar(); EXT.cache = {}; EXT.cruce = null; await extVista();
+}
+async function extBorrar(id) { if (!confirm('¿Eliminar este movimiento del extracto?')) return; const j = await extApi({ accion: 'borrar', id }); if (!j || !j.ok) { alert((j && j.error) || 'No se pudo eliminar'); return; } extCerrar(); EXT.cache = {}; EXT.cruce = null; await extVista(); }
+function rcInfo() {
+  const b = $('fRcInfo'); if (!b) return; const rc = $('fRc').value.trim();
+  if (!EXT.cruce || !/^\d+$/.test(rc)) { b.textContent = ''; return; }
+  const s = EXT.cruce.sies[rc]; b.textContent = s ? 'Siesa: ' + s.cliente + ' · ' + fm(s.bank) + ' · ' + (s.ejes.join(' / ') || 'sin ejecutivo') : 'Este RC no aparece en Siesa (rango consultado).';
+}
+/* ---- pegar movimientos del banco ---- */
+function extPegar() {
+  const d = document.createElement('div'); d.id = 'xwrap';
+  d.innerHTML = '<div class="ov on"><div class="mo"><div class="mh"><span>Pegar movimientos del banco</span><button class="btn g" onclick="extCerrar()">✕</button></div><div style="padding:14px"><div style="font-size:12px;color:#475569;margin-bottom:8px">Copia las filas desde Excel con estas columnas, en este orden: <b>Banco · Fecha · Descripción · Texto de referencia · Monto · Monto en cheque · Referencia del cliente</b>. Los que ya estén cargados se omiten, y el cliente y ejecutivo se completan solos si la referencia es un NIT conocido.</div><textarea id="xpega" style="width:100%;height:200px;font:12px monospace;border:1px solid #cbd5e1;border-radius:8px;padding:8px" placeholder="Pega aquí…"></textarea><div id="xpmsg" style="font-size:12px;margin-top:6px"></div></div><div class="mf"><button class="btn g" onclick="extCerrar()">Cancelar</button><button class="btn" id="xpbtn" onclick="extPegarOk()">Agregar</button></div></div></div>';
+  document.body.appendChild(d);
+}
+function xFecha(v) {
+  if (v == null || v === '') return ''; if (typeof v === 'number' || /^\d{5}(\.\d+)?$/.test(String(v).trim())) { const n = Number(v); if (n > 20000 && n < 80000) return new Date(Math.round((n - 25569) * 864e5)).toISOString().slice(0, 10); }
+  const s = String(v).trim(); let m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/); if (m) return m[1] + '-' + pad2(m[2]) + '-' + pad2(m[3]);
+  m = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/); return m ? m[3] + '-' + pad2(m[2]) + '-' + pad2(m[1]) : '';
+}
+const xNum = v => { if (typeof v === 'number') return v; let s = String(v == null ? '' : v).replace(/[$\s]/g, ''); if (/,\d{1,2}$/.test(s) && /\./.test(s)) s = s.replace(/\./g, '').replace(',', '.'); else if (/,/.test(s) && !/\./.test(s)) s = /,\d{1,2}$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, ''); else s = s.replace(/,/g, ''); const n = Number(s); return isFinite(n) ? n : NaN; };
+async function extPegarOk() {
+  const t = $('xpega').value, L = t.split(/\r?\n/).map(l => l.split('\t')).filter(c => c.length > 4), filas = [], malas = [];
+  for (const c of L) {
+    const fecha = xFecha(c[1]), monto = xNum(c[4]);
+    if (!fecha || !isFinite(monto)) { if (!/^banco$/i.test(String(c[0]).trim())) malas.push(c.slice(0, 5).join(' | ')); continue; }
+    const ref = String(c[6] == null ? '' : c[6]).trim().replace(/\.0+$/, ''), cl = EXT.cidx.get(ref);
+    filas.push({ banco: c[0], fecha, descripcion: c[2], texto_ref: c[3], monto, monto_cheque: c[5], ref_cliente: ref, nit: cl ? cl.nit : '', cliente: cl ? cl.nombre : '', ejecutivo: cl ? cl.ej : '', canal: cl ? cl.canal : '' });
+  }
+  const m = $('xpmsg'); if (!filas.length) { m.innerHTML = '<span style="color:#b91c1c">No encontré filas válidas (Fecha en la 2.ª columna y Monto en la 5.ª).</span>'; return; }
+  $('xpbtn').disabled = true; m.textContent = 'Agregando ' + filas.length + '…'; let nu = 0, om = 0;
+  for (let i = 0; i < filas.length; i += 400) { const j = await extApi({ accion: 'lote', filas: filas.slice(i, i + 400) }); if (!j || !j.ok) { m.innerHTML = '<span style="color:#b91c1c">' + esc((j && j.error) || 'Error') + '</span>'; $('xpbtn').disabled = false; return; } nu += j.nuevas; om += j.omitidas; }
+  alert('Agregados ' + nu + ' movimientos' + (om ? ' · ' + om + ' ya existían' : '') + (malas.length ? ' · ' + malas.length + ' filas ignoradas (fecha o monto no válidos)' : '')); extCerrar(); EXT.cache = {}; await extVista();
+}
+/* ---- cruce con Siesa ---- */
+function cruSies(r) {
+  const S = {};
+  r.filas.forEach(f => { const o = S[f.rc] || (S[f.rc] = { rc: f.rc, fecha: f.fecha, cliente: f.cliente, byNit: {}, ejes: new Set(), bank: 0 }); if (o.byNit[f.nit] == null) { o.byNit[f.nit] = f.valorRc; o.bank += f.valorRc; } if ((f.vendedor || '').trim()) o.ejes.add(f.vendedor.trim()); });
+  (r.otros || []).forEach(x => { S[x.rc] = { rc: x.rc, fecha: x.fecha, cliente: x.cliente + ' (' + String(x.notas || '').slice(0, 40) + ')', byNit: {}, ejes: new Set(), bank: x.valor, otro: true }; });
+  Object.values(S).forEach(o => { o.ejes = [...o.ejes]; o.bank = Math.round(o.bank * 100) / 100; }); return S;
+}
+async function extCruzar() {
+  const m = EXT.mes; if (!/^\d{4}-\d{2}$/.test(m)) { alert('Elige un mes (Enero a Diciembre) para cruzar.'); return; }
+  const [d0, d1] = extRango(m), ini = new Date(Date.parse(d0 + 'T12:00:00Z') - 10 * 864e5).toISOString().slice(0, 10), hoy = (D && D.hoy) || new Date().toISOString().slice(0, 10);
+  const fin = new Date(Math.min(Date.parse(d1 + 'T12:00:00Z') + 15 * 864e5, Date.parse(hoy + 'T12:00:00Z'))).toISOString().slice(0, 10);
+  const b = $('xcruce'); b.innerHTML = '<div class="err">Consultando los RC de Siesa del ' + ini + ' al ' + fin + ' y cruzando con el extracto… puede tardar hasta 1–2 minutos.</div>';
+  const [r, e] = await Promise.all([conApi({ accion: 'recaudo', desde: ini, hasta: fin, contadoDias: 1 }), extApi({ accion: 'listar', desde: ini, hasta: fin })]);
+  if (!r || !r.ok) { b.innerHTML = '<div class="err">' + esc((r && r.error) || 'No se pudo consultar Siesa') + '</div>'; return; }
+  if (!e || !e.ok) { b.innerHTML = '<div class="err">' + esc((e && e.error) || 'No se pudo leer el extracto') + '</div>'; return; }
+  const sies = cruSies(r), X = {};
+  e.filas.filter(x => /^\d+$/.test(x.rc)).forEach(x => { const o = X[x.rc] || (X[x.rc] = { rc: x.rc, fecha: x.fecha, filas: [], monto: 0, ejs: new Set(), clis: new Set() }); o.filas.push(x); o.monto += Number(x.monto); if (x.ejecutivo) o.ejs.add(x.ejecutivo); if (x.cliente) o.clis.add(x.cliente); if (x.fecha < o.fecha) o.fecha = x.fecha; });
+  const L = [];
+  Object.values(X).filter(o => o.fecha >= d0 && o.fecha <= d1).forEach(o => {
+    const s = sies[o.rc], ejs = [...o.ejs], mp = ejs.map(ejNom).filter(Boolean), monto = Math.round(o.monto * 100) / 100;
+    let est = 'OK', dif = 0;
+    if (!s) est = 'RC no está en Siesa';
+    else { dif = Math.round((monto - s.bank) * 100) / 100; const vd = Math.abs(dif) >= 1, sn = s.ejes.map(nz), ed = mp.length && sn.length && !mp.some(x => sn.includes(x)); est = vd && ed ? 'Valor y ejecutivo distintos' : vd ? 'Valor distinto' : ed ? 'Ejecutivo distinto' : 'OK'; }
+    L.push({ rc: o.rc, fecha: o.fecha, cliente: [...o.clis].join(' / ') || (s ? s.cliente : ''), ejExt: ejs.join(' / '), ejSies: s ? s.ejes.join(' / ') : '', ext: monto, sie: s ? s.bank : null, dif, est, n: o.filas.length });
+  });
+  Object.values(sies).filter(s => s.fecha >= d0 && s.fecha <= d1 && !X[s.rc] && s.bank).forEach(s => L.push({ rc: String(s.rc), fecha: s.fecha, cliente: s.cliente, ejExt: '', ejSies: s.ejes.join(' / '), ext: null, sie: s.bank, dif: -s.bank, est: 'En Siesa sin extracto', n: 0 }));
+  L.sort((a, c) => a.fecha.localeCompare(c.fecha) || Number(a.rc) - Number(c.rc));
+  EXT.cruce = { mes: m, L, sies, solo: true }; cruPintar();
+}
+function cruPintar() {
+  const b = $('xcruce'); if (!b || !EXT.cruce) return; const C = EXT.cruce, L = C.solo ? C.L.filter(x => x.est !== 'OK') : C.L;
+  const cn = e => C.L.filter(x => x.est === e).length, te = C.L.reduce((s, x) => s + (x.ext || 0), 0), ts = C.L.reduce((s, x) => s + (x.sie || 0), 0);
+  const col = e => e === 'OK' ? 'p-ok' : /sin extracto|no está/i.test(e) ? 'p-rd' : 'p-or';
+  b.innerHTML = '<div class="card"><h2>🔎 Cruce extracto vs Siesa · ' + MESES[+C.mes.slice(5, 7) - 1] + ' · ' + C.L.filter(x => x.est === 'OK').length + ' OK · ' + C.L.filter(x => x.est !== 'OK').length + ' con diferencia</h2><div style="padding:10px 14px;font-size:12px;color:#475569;line-height:1.7">Extracto (RC del mes): <b>' + fm(te) + '</b> · Siesa (banco por RC): <b>' + fm(ts) + '</b> · Diferencia: <b>' + fm(te - ts) + '</b><br>Valor distinto: ' + cn('Valor distinto') + ' · Ejecutivo distinto: ' + cn('Ejecutivo distinto') + ' · Valor y ejecutivo: ' + cn('Valor y ejecutivo distintos') + ' · RC no está en Siesa: ' + cn('RC no está en Siesa') + ' · En Siesa sin extracto: ' + cn('En Siesa sin extracto')
+    + '<div class="bar"><label style="font-size:12px"><input type="checkbox" ' + (C.solo ? 'checked' : '') + ' onchange="EXT.cruce.solo=this.checked;cruPintar()"> Solo diferencias</label><button class="btn g" onclick="cruExcel()">⬇ Excel del cruce</button><button class="btn g" onclick="EXT.cruce=null;$(\'xcruce\').innerHTML=\'\'">Cerrar</button></div></div><div class="tw"><table><thead><tr><th>RC</th><th>Fecha</th><th>Cliente</th><th>Ejecutivo extracto</th><th>Ejecutivo Siesa</th><th>Extracto</th><th>Siesa</th><th>Dif.</th><th>Estado</th></tr></thead><tbody>'
+    + (L.map(x => '<tr class="c" ' + (x.n ? 'onclick="cruIr(\'' + x.rc + '\')"' : '') + '><td><b>' + esc(x.rc) + '</b></td><td>' + esc(x.fecha.slice(8, 10) + '/' + x.fecha.slice(5, 7)) + '</td><td class="n">' + esc(x.cliente) + '</td><td>' + esc(x.ejExt) + '</td><td class="n">' + esc(x.ejSies) + '</td><td>' + (x.ext == null ? '–' : fm(x.ext)) + '</td><td>' + (x.sie == null ? '–' : fm(x.sie)) + '</td><td>' + (x.dif ? fm(x.dif) : '–') + '</td><td><span class="pill ' + col(x.est) + '">' + esc(x.est) + '</span></td></tr>').join('') || '<tr><td colspan="9" class="empty">Sin diferencias 🎉</td></tr>') + '</tbody></table></div></div>';
+}
+function cruIr(rc) { EXT.q = rc; extPintar(); const x = $('xq'); if (x) x.focus(); }
+async function cruExcel() {
+  const C = EXT.cruce; if (!C) return; if (typeof ExcelJS === 'undefined') await loadJs('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
+  const wb = new ExcelJS.Workbook(), fmt = '#,##0', hd = ws => { const r = ws.getRow(1); r.font = { bold: true, color: { argb: 'FFFFFFFF' } }; r.eachCell(c => c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } }); ws.views = [{ state: 'frozen', ySplit: 1 }]; };
+  const cols = ws => { ws.columns = [{ header: 'RC', width: 9 }, { header: 'Fecha', width: 12 }, { header: 'Cliente', width: 44 }, { header: 'Ejecutivo extracto', width: 22 }, { header: 'Ejecutivo Siesa', width: 34 }, { header: 'Extracto', width: 16 }, { header: 'Siesa', width: 16 }, { header: 'Diferencia', width: 16 }, { header: 'Estado', width: 30 }]; hd(ws); };
+  const fill = (ws, A) => { A.forEach(x => ws.addRow([Number(x.rc), x.fecha, x.cliente, x.ejExt, x.ejSies, x.ext, x.sie, x.dif, x.est])); [6, 7, 8].forEach(i => ws.getColumn(i).numFmt = fmt); };
+  const w0 = wb.addWorksheet('RESUMEN'); w0.columns = [{ width: 44 }, { width: 18 }, { width: 10 }]; const est = [...new Set(C.L.map(x => x.est))];
+  w0.addRow(['Cruce extracto bancario vs Siesa · ' + MESES[+C.mes.slice(5, 7) - 1] + ' ' + C.mes.slice(0, 4)]).font = { bold: true, size: 13 }; w0.addRow([]);
+  w0.addRow(['Estado', 'Valor extracto', '# RC']).font = { bold: true };
+  est.forEach(e => { const A = C.L.filter(x => x.est === e); w0.addRow([e, A.reduce((s, x) => s + (x.ext || 0), 0), A.length]); }); w0.getColumn(2).numFmt = fmt;
+  w0.addRow([]); w0.addRow(['Total extracto con RC', C.L.reduce((s, x) => s + (x.ext || 0), 0)]); w0.addRow(['Total Siesa (banco por RC)', C.L.reduce((s, x) => s + (x.sie || 0), 0)]);
+  const w1 = wb.addWorksheet('DIFERENCIAS'); cols(w1); fill(w1, C.L.filter(x => x.est !== 'OK'));
+  const w2 = wb.addWorksheet('CRUCE COMPLETO'); cols(w2); fill(w2, C.L);
+  const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'Cruce_extracto_Siesa_' + C.mes + '.xlsx'; a.click();
+}
+async function extExcel() {
+  const R = extFiltrar(EXT.cache[EXT.mes] || []); if (!R.length) { alert('No hay movimientos para exportar.'); return; }
+  const ws = XLSX.utils.json_to_sheet(R.map(r => ({ Banco: r.banco, Fecha: r.fecha, 'Descripción de Transacción': r.descripcion, 'Texto de Referencia': r.texto_ref, Monto: Number(r.monto), 'Monto en cheque': r.monto_cheque, 'Referencia del cliente': r.ref_cliente, Cliente: r.cliente, RC: r.rc, Ejecutivo: r.ejecutivo, Canal: r.canal, Observacion: r.observacion }))), wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'EXTRACTO'); XLSX.writeFile(wb, 'Extracto_' + EXT.mes + '.xlsx');
+}
+/* ---- carga inicial desde el Excel EXTRACTO 2026 (solo administrador) ---- */
+const ORD_MES = { ENERO: 1, FEBRERO: 2, MARZO: 3, ABRIL: 4, MAYO: 5, JUNIO: 6, JULIO: 7, AGOSTO: 8, SEPTIEMBRE: 9, OCTUBRE: 10, NOVIEMBRE: 11, DICIEMBRE: 12 };
+const xLimpia = v => { const s = String(v == null ? '' : v).trim(); return s === '#N/A' || s === '0' || /^none$/i.test(s) ? '' : s; };
+const xNit = v => { if (v == null || v === '') return ''; if (typeof v === 'number') return Number.isInteger(v) ? String(v) : String(v); return String(v).trim().replace(/\.0+$/, ''); };
+function extParseLibro(wb) {
+  const bd = wb.SheetNames.find(n => nz(n) === 'BD CLIENTES'), cli = [], cm = new Map();
+  if (bd) XLSX.utils.sheet_to_json(wb.Sheets[bd], { header: 1, raw: true }).slice(1).forEach(r => { const nit = xNit(r[0]); if (nit && xLimpia(r[1])) { cm.set(nit, [nit, String(r[1]).trim(), xLimpia(r[3]), xLimpia(r[4]), xLimpia(r[2])]); } });
+  cm.forEach(v => cli.push(v)); const byNom = new Map(); cli.forEach(c => byNom.set(nz(c[1]), c));
+  const hojas = wb.SheetNames.filter(n => ORD_MES[nz(n)]).sort((a, b) => ORD_MES[nz(a)] - ORD_MES[nz(b)]), vers = new Map();
+  hojas.forEach(n => {
+    const cnt = new Map();
+    XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }).slice(1).forEach(r => {
+      if (r[4] == null || r[4] === '') return; const fecha = xFecha(r[1]), monto = xNum(r[4]); if (!fecha || !isFinite(monto)) return;
+      const ref = xNit(r[6]), rcv = r[9], rc = typeof rcv === 'number' ? (rcv ? String(Math.round(rcv)) : '') : xLimpia(rcv);
+      let nom = xLimpia(r[7]); const c0 = (ref && cm.get(ref)) || (nom && byNom.get(nz(nom))) || null;
+      const tx = r[3], txt = typeof tx === 'number' && tx > 20000 && tx < 80000 ? xFecha(tx) : (tx == null ? '' : String(tx));
+      const f = { banco: String(r[0] || '').trim().toUpperCase(), fecha, descripcion: String(r[2] || '').trim(), texto_ref: txt, monto, monto_cheque: r[5] == null || /^\s*$/.test(String(r[5])) ? '' : String(r[5]), ref_cliente: ref, nit: c0 ? c0[0] : '', cliente: nom, rc, ejecutivo: xLimpia(r[10]), canal: xLimpia(r[11]), observacion: xLimpia(r[12]) };
+      const k = [f.banco, f.fecha, f.descripcion, f.monto].join('|'), i = (cnt.get(k) || 0) + 1; cnt.set(k, i);
+      vers.set(k + '#' + i, f);   // la versión de la hoja más reciente reemplaza a las anteriores
+    });
+  });
+  return { clientes: cli, filas: [...vers.values()], hojas };
+}
+async function extImportar() {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xlsm';
+  inp.onchange = async () => {
+    const f = inp.files[0]; if (!f) return; const c = $('cont'); c.innerHTML = '<div class="err" id="xprog">Leyendo el Excel…</div>';
+    try {
+      const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' }), P = extParseLibro(wb), prog = t => { $('xprog').textContent = t; };
+      if (!P.filas.length) { prog('No encontré hojas de meses con movimientos (ENERO, FEBRERO, …).'); return; }
+      if (!confirm('Se cargarán ' + P.filas.length + ' movimientos (hojas ' + P.hojas.map(h => h.trim()).join(', ') + ') y ' + P.clientes.length + ' clientes de BD CLIENTES.\nLos movimientos repetidos entre hojas se cargan una sola vez. ¿Continuar?')) { extVista(); return; }
+      for (let i = 0; i < P.clientes.length; i += 800) { prog('Clientes ' + Math.min(i + 800, P.clientes.length) + ' / ' + P.clientes.length + '…'); const j = await extApi({ accion: 'import_clientes', clientes: P.clientes.slice(i, i + 800) }); if (!j || !j.ok) throw new Error((j && j.error) || 'Error cargando clientes'); }
+      let forzar = false;
+      for (let i = 0; i < P.filas.length; i += 600) {
+        prog('Movimientos ' + Math.min(i + 600, P.filas.length) + ' / ' + P.filas.length + '…');
+        let j = await extApi({ accion: 'import_filas', filas: P.filas.slice(i, i + 600), inicio: i === 0, forzar });
+        if (j && j.hay && i === 0) { if (!confirm('Ya hay movimientos cargados en el sistema. ¿Reemplazarlos TODOS por los del Excel? (se pierden las ediciones hechas en el sistema)')) { extVista(); return; } forzar = true; j = await extApi({ accion: 'import_filas', filas: P.filas.slice(0, 600), inicio: true, forzar }); }
+        if (!j || !j.ok) throw new Error((j && j.error) || 'Error cargando movimientos');
+      }
+      EXT.cache = {}; EXT.clientes = null; alert('Listo: ' + P.filas.length + ' movimientos y ' + P.clientes.length + ' clientes cargados.'); await extVista(true);
+    } catch (e) { $('cont').innerHTML = '<div class="err">' + esc(e.message || e) + '</div>'; }
+  };
+  inp.click();
+}
+
 </script>
 </body>
 </html>
