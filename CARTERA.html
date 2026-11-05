@@ -406,6 +406,7 @@ async function recMes() {
   const cd = prompt('Una factura es de CONTADO si su plazo (vencimiento − fecha) es de hasta cuántos días:', '1'); if (cd === null) return;
   const r = await conApi({ accion: 'recaudo', desde: d, hasta: h, contadoDias: cd });
   if (!r || !r.ok) { alert((r && r.error) || 'No se pudo generar'); return; }
+  r.filas = r.filas.filter(f => (f.vendedor || '').trim()); r.otros = [];  // solo RC con ejecutivo: sin incapacidades, nómina ni otros conceptos
   REC = { r, i: 0 }; TAB = 'rec'; recPintar();
 }
 async function recExcel() {
@@ -418,26 +419,24 @@ async function recExcel() {
   const est = e => e == 1 ? 'Aprobado' : 'En elaboración';
   // 1. Consolidado
   let ws = wb.addWorksheet('CONSOLIDADO RC');
-  ws.addRow(['Recaudo RC del ' + r.desde + ' al ' + r.hasta + ' · RC aprobados con cartera 13050505 · valor = lo que entró al banco']); ws.getRow(1).font = { bold: true };
+  ws.addRow(['Recaudo RC del ' + r.desde + ' al ' + r.hasta + ' · RC aprobados con ejecutivo · valor = lo que entró al banco']); ws.getRow(1).font = { bold: true };
   ws.addRow(['Fecha', 'RC', 'NIT', 'Cliente', 'Estado', 'Banco', 'Notas', 'Valor RC', 'Asesor(es)']); hdr(ws, 2);
   Object.values(rcs).sort((a, b) => a.f.fecha.localeCompare(b.f.fecha) || a.f.rc - b.f.rc).forEach(o => ws.addRow([o.f.fecha, o.f.rc, o.f.nit, o.f.cliente, est(o.f.estado), o.f.banco, o.f.notas, o.val, [...o.ases].join(' / ')]));
-  (r.otros || []).forEach(o => ws.addRow([o.fecha, o.rc, '', o.cliente, 'Aprobado', o.banco, o.notas, o.valor, 'OTROS INGRESOS (no cartera)']));
-  const n1 = ws.rowCount; const t1 = ws.addRow(['TOTAL INGRESOS AL BANCO POR RC', '', '', '', '', '', '', { formula: 'SUM(H3:H' + n1 + ')' }, '']); t1.font = { bold: true };
-  ws.addRow(['  De los cuales cartera (clientes)', '', '', '', '', '', '', { formula: 'H' + (n1 + 1) + '-H' + (n1 + 3) }, '']); ws.addRow(['  De los cuales otros ingresos (no cartera)', '', '', '', '', '', '', { formula: 'SUMIF(I3:I' + n1 + ',"OTROS INGRESOS (no cartera)",H3:H' + n1 + ')' }, '']);
+  const n1 = ws.rowCount; const t1 = ws.addRow(['TOTAL', '', '', '', '', '', '', { formula: 'SUM(H3:H' + n1 + ')' }, '']); t1.font = { bold: true };
   ws.getColumn(8).numFmt = fmt; [12, 10, 14, 40, 14, 22, 40, 16, 40].forEach((w, i) => ws.getColumn(i + 1).width = w); ws.views = [{ state: 'frozen', ySplit: 2 }];
   // 2. Resumen por asesor
   const nombres = Object.keys(por).sort((a, b) => por[b].reduce((s, f) => s + f.asignado, 0) - por[a].reduce((s, f) => s + f.asignado, 0));
   const hojas = {}, usados = new Set(['CONSOLIDADO RC', 'RESUMEN ASESORES']);
   nombres.forEach(n => { let b = n.replace(/[\\\/\?\*\[\]:]/g, ' ').slice(0, 28).trim() || 'ASESOR', x = b, i = 2; while (usados.has(x)) x = b.slice(0, 26) + ' ' + i++; usados.add(x); hojas[n] = x; });
   const rs = wb.addWorksheet('RESUMEN ASESORES');
-  rs.addRow(['Asesor', 'Hoja', 'N° pagos (RC)', 'Total recaudado', 'Contado', 'Crédito', 'Notas / sin factura', 'Cuenta para comisión*']); hdr(rs, 1);
+  rs.addRow(['Asesor', 'Hoja', 'N° pagos (RC)', 'Total recaudado', 'Contado', 'Crédito', 'Notas / sin factura', 'Total que suma']); hdr(rs, 1);
   nombres.forEach(n => {
     const L = por[n], sm = t => L.filter(f => f.tipoPago === t).reduce((s, f) => s + f.asignado, 0), tot = L.reduce((s, f) => s + f.asignado, 0), cr = sm('Crédito');
-    const row = rs.addRow([n, hojas[n], new Set(L.map(f => f.rc)).size, tot, sm('Contado'), cr, tot - sm('Contado') - cr, CL(n) ? cr : tot]);
+    const row = rs.addRow([n, hojas[n], new Set(L.map(f => f.rc)).size, tot, sm('Contado'), cr, tot - sm('Contado') - cr, tot]);
     row.getCell(2).value = { text: hojas[n], hyperlink: "#'" + hojas[n] + "'!A1" }; row.getCell(2).font = { color: { argb: 'FF2563EB' }, underline: true };
   });
   const nr = rs.rowCount, tr = rs.addRow(['TOTAL', '', { formula: 'SUM(C2:C' + nr + ')' }, { formula: 'SUM(D2:D' + nr + ')' }, { formula: 'SUM(E2:E' + nr + ')' }, { formula: 'SUM(F2:F' + nr + ')' }, { formula: 'SUM(G2:G' + nr + ')' }, { formula: 'SUM(H2:H' + nr + ')' }]); tr.font = { bold: true };
-  rs.addRow([]); rs.addRow(['* Para Claudia García solo cuenta el recaudo de facturas a crédito; para los demás cuenta todo lo recaudado. Contado = plazo de la factura de hasta ' + r.contadoDias + ' día(s).']);
+  rs.addRow([]); rs.addRow(['* Todo el recaudo suma (contado y crédito) y hace parte del recaudo total. Contado = plazo de la factura de hasta ' + r.contadoDias + ' día(s).']);
   [4, 5, 6, 7, 8].forEach(i => rs.getColumn(i).numFmt = fmt); [34, 30, 14, 18, 18, 18, 24, 22].forEach((w, i) => rs.getColumn(i + 1).width = w); rs.views = [{ state: 'frozen', ySplit: 1 }];
   // 3. Una hoja por asesor
   nombres.forEach(n => {
@@ -445,9 +444,9 @@ async function recExcel() {
     w.addRow([n + ' · recaudo ' + r.desde + ' a ' + r.hasta]); w.getRow(1).font = { bold: true, size: 13 };
     let hr = 3;
     if (esC) {
-      w.addRow(['Crédito (SUMA a Claudia)', '', '', '', '', '', '', '', '', '', '', '', '', { formula: 'SUMIF(L6:L' + (L.length + 5) + ',"Crédito",N6:N' + (L.length + 5) + ')' }]);
-      w.addRow(['Contado (NO suma)', '', '', '', '', '', '', '', '', '', '', '', '', { formula: 'SUMIF(L6:L' + (L.length + 5) + ',"Contado",N6:N' + (L.length + 5) + ')' }]);
-      w.addRow(['Sin factura cerrada / revisar (NO suma)', '', '', '', '', '', '', '', '', '', '', '', '', { formula: 'SUM(N6:N' + (L.length + 5) + ')-N2-N3' }]);
+      w.addRow(['Crédito', '', '', '', '', '', '', '', '', '', '', '', '', { formula: 'SUMIF(L6:L' + (L.length + 5) + ',"Crédito",N6:N' + (L.length + 5) + ')' }]);
+      w.addRow(['Contado', '', '', '', '', '', '', '', '', '', '', '', '', { formula: 'SUMIF(L6:L' + (L.length + 5) + ',"Contado",N6:N' + (L.length + 5) + ')' }]);
+      w.addRow(['Sin factura cerrada / revisar', '', '', '', '', '', '', '', '', '', '', '', '', { formula: 'SUM(N6:N' + (L.length + 5) + ')-N2-N3' }]);
       [2, 3, 4].forEach(i => { w.getRow(i).font = { bold: true }; w.getRow(i).getCell(14).numFmt = fmt; }); hr = 5; w.getRow(2).getCell(14).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
     } else { w.addRow([]); }
     w.addRow(['RC', 'Fecha RC', 'NIT', 'Cliente', 'Estado', 'Banco', 'Valor RC', 'Documento', 'Fecha factura', 'Vence', 'Plazo (días)', 'Tipo', 'Valor documento', 'Valor asignado']);
@@ -474,24 +473,23 @@ function recPintar() {
   const r = REC.r, P = recPrep(r), est = e => e == 1 ? 'Aprobado' : 'En elaboración', CL = v => /GARCIA NOGUERA/i.test(v), sm = (L, t) => L.filter(f => f.tipoPago === t).reduce((s, f) => s + f.asignado, 0), tt = L => L.reduce((s, f) => s + f.asignado, 0);
   const hasO = r.otros && r.otros.length, T = ['CONSOLIDADO RC', 'RESUMEN ASESORES'].concat(P.nombres, hasO ? ['OTROS INGRESOS'] : []), i = Math.min(REC.i, T.length - 1);
   const tabs = '<div class="tabs">' + T.map((n, k) => '<div class="tab' + (k === i ? ' on' : '') + '" onclick="REC.i=' + k + ';recPintar()">' + esc(n.length > 24 ? n.slice(0, 22) + '…' : n) + '</div>').join('') + '</div>';
-  const top = '<div class="bar"><button class="btn" onclick="REC=null;vista()">← Volver a recaudos</button><button class="btn" onclick="recExcel()">⬇ Excel (con pestañas)</button><b style="font-size:12px">Recaudo RC ' + esc(r.desde) + ' a ' + esc(r.hasta) + ' · valor = lo que entró al banco · solo RC aprobados · contado = plazo ≤ ' + r.contadoDias + ' día(s)</b></div>';
+  const top = '<div class="bar"><button class="btn" onclick="REC=null;vista()">← Volver a recaudos</button><button class="btn" onclick="recExcel()">⬇ Excel (con pestañas)</button><b style="font-size:12px">Recaudo RC ' + esc(r.desde) + ' a ' + esc(r.hasta) + ' · valor = lo que entró al banco por RC · solo RC aprobados con ejecutivo · contado = plazo ≤ ' + r.contadoDias + ' día(s)</b></div>';
   let h = '';
   if (i === 0) {
-    const vc = P.rcs.reduce((s, o) => s + o.val, 0), vo = (r.otros || []).reduce((s, o) => s + o.valor, 0);
-    h = '<div class="card"><h2>Total ingresos al banco por RC (' + (P.rcs.length + (r.otros || []).length) + ') · ' + fm(vc + vo) + '</h2><div style="font-size:12px;margin:2px 0 8px">Cartera (clientes): <b>' + fm(vc) + '</b> · Otros ingresos (no cartera): <b>' + fm(vo) + '</b></div><div class="tw"><table><thead><tr><th>Fecha</th><th>RC</th><th style="text-align:left">Cliente</th><th>Estado</th><th>Valor</th><th style="text-align:left">Asesor(es)</th></tr></thead><tbody>'
-      + P.rcs.map(o => '<tr><td>' + esc(o.f.fecha) + '</td><td>' + esc(o.f.rc) + '</td><td class="n" style="text-align:left">' + esc(o.f.cliente || o.f.nit) + '</td><td>' + est(o.f.estado) + '</td><td>' + fm(o.val) + '</td><td class="n" style="text-align:left">' + esc([...o.ases].join(' / ')) + '</td></tr>').join('') + (r.otros || []).map(o => '<tr style="background:#f1f5f9"><td>' + esc(o.fecha) + '</td><td>' + esc(o.rc) + '</td><td class="n" style="text-align:left">' + esc(o.cliente) + '</td><td>Aprobado</td><td>' + fm(o.valor) + '</td><td class="n" style="text-align:left">OTROS INGRESOS (no cartera)</td></tr>').join('') + '</tbody></table></div></div>';
+    h = '<div class="card"><h2>Consolidado de RC (' + P.rcs.length + ') · ' + fm(P.rcs.reduce((s, o) => s + o.val, 0)) + '</h2><div class="tw"><table><thead><tr><th>Fecha</th><th>RC</th><th style="text-align:left">Cliente</th><th>Estado</th><th>Valor</th><th style="text-align:left">Asesor(es)</th></tr></thead><tbody>'
+      + P.rcs.map(o => '<tr><td>' + esc(o.f.fecha) + '</td><td>' + esc(o.f.rc) + '</td><td class="n" style="text-align:left">' + esc(o.f.cliente || o.f.nit) + '</td><td>' + est(o.f.estado) + '</td><td>' + fm(o.val) + '</td><td class="n" style="text-align:left">' + esc([...o.ases].join(' / ')) + '</td></tr>').join('') + '</tbody></table></div></div>';
   } else if (i === 1) {
-    const rows = P.nombres.map((n, k) => { const L = P.por[n], cr = sm(L, 'Crédito'), co = sm(L, 'Contado'), t = tt(L); return '<tr class="c" onclick="REC.i=' + (k + 2) + ';recPintar()"><td class="n" style="text-align:left">' + esc(n) + '</td><td>' + new Set(L.map(f => f.rc)).size + '</td><td>' + fm(t) + '</td><td>' + fm(co) + '</td><td>' + fm(cr) + '</td><td>' + fm(t - co - cr) + '</td><td><b>' + fm(CL(n) ? cr : t) + '</b></td></tr>'; }).join('');
+    const rows = P.nombres.map((n, k) => { const L = P.por[n], cr = sm(L, 'Crédito'), co = sm(L, 'Contado'), t = tt(L); return '<tr class="c" onclick="REC.i=' + (k + 2) + ';recPintar()"><td class="n" style="text-align:left">' + esc(n) + '</td><td>' + new Set(L.map(f => f.rc)).size + '</td><td>' + fm(t) + '</td><td>' + fm(co) + '</td><td>' + fm(cr) + '</td><td>' + fm(t - co - cr) + '</td><td><b>' + fm(t) + '</b></td></tr>'; }).join('');
     const A = r.filas, tot = tt(A);
-    h = '<div class="card"><h2>Resumen por asesor · toca una fila para ver su detalle</h2><div class="tw"><table><thead><tr><th style="text-align:left">Asesor</th><th>N° RC</th><th>Total recaudado</th><th>Contado</th><th>Crédito</th><th>Notas / sin factura</th><th>Cuenta para comisión*</th></tr></thead><tbody>' + rows
-      + '<tr><td class="n" style="text-align:left"><b>TOTAL</b></td><td><b>' + P.rcs.length + '</b></td><td><b>' + fm(tot) + '</b></td><td><b>' + fm(sm(A, 'Contado')) + '</b></td><td><b>' + fm(sm(A, 'Crédito')) + '</b></td><td><b>' + fm(tot - sm(A, 'Contado') - sm(A, 'Crédito')) + '</b></td><td></td></tr></tbody></table></div></div><div class="err" style="background:#f1f5f9;color:#334155">* Para Claudia García solo cuenta el recaudo de facturas a crédito; para los demás, todo lo recaudado.</div>';
+    h = '<div class="card"><h2>Resumen por asesor · toca una fila para ver su detalle</h2><div class="tw"><table><thead><tr><th style="text-align:left">Asesor</th><th>N° RC</th><th>Total recaudado</th><th>Contado</th><th>Crédito</th><th>Notas / sin factura</th><th>Total que suma</th></tr></thead><tbody>' + rows
+      + '<tr><td class="n" style="text-align:left"><b>TOTAL</b></td><td><b>' + P.rcs.length + '</b></td><td><b>' + fm(tot) + '</b></td><td><b>' + fm(sm(A, 'Contado')) + '</b></td><td><b>' + fm(sm(A, 'Crédito')) + '</b></td><td><b>' + fm(tot - sm(A, 'Contado') - sm(A, 'Crédito')) + '</b></td><td></td></tr></tbody></table></div></div><div class="err" style="background:#f1f5f9;color:#334155">* Todo el recaudo suma (contado y crédito); el contado se muestra aparte solo para diferenciarlo.</div>';
   } else if (hasO && i === T.length - 1) {
     h = '<div class="card"><h2>Otros ingresos en RC que NO son cartera (' + r.otros.length + ') · ' + fm(r.otros.reduce((s, o) => s + o.valor, 0)) + ' · no entran al recaudo por asesor</h2><div class="tw"><table><thead><tr><th>Fecha</th><th>RC</th><th style="text-align:left">Tercero</th><th>Valor banco</th><th style="text-align:left">Nota</th></tr></thead><tbody>' + r.otros.map(o => '<tr><td>' + esc(o.fecha) + '</td><td>' + esc(o.rc) + '</td><td class="n" style="text-align:left">' + esc(o.cliente) + '</td><td>' + fm(o.valor) + '</td><td class="n" style="text-align:left">' + esc(o.notas) + '</td></tr>').join('') + '</tbody></table></div></div>';
   } else {
     const n = T[i], L = P.por[n].slice().sort((a, b) => a.fecha.localeCompare(b.fecha) || a.rc - b.rc), esC = CL(n);
     const cr = sm(L, 'Crédito'), co = sm(L, 'Contado'), ot = tt(L) - cr - co;
     const card = (t, v, col) => '<div class="card" style="flex:1;min-width:170px;border-left:4px solid ' + col + '"><div style="font-size:11px;color:#64748b">' + t + '</div><div style="font-size:18px;font-weight:800">' + fm(v) + '</div></div>';
-    h = (esC ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + card('Crédito · SUMA a Claudia', cr, '#16a34a') + card('Contado · no suma', co, '#eab308') + card('Sin factura cerrada / revisar · no suma', ot, '#94a3b8') + '</div>' : '<div style="display:flex;gap:8px;flex-wrap:wrap">' + card('Total recaudado', tt(L), '#2563eb') + card('Contado', co, '#eab308') + card('Crédito', cr, '#16a34a') + '</div>')
+    h = (esC ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + card('Total recaudado', tt(L), '#2563eb') + card('Crédito', cr, '#16a34a') + card('Contado', co, '#eab308') + card('Sin factura cerrada / revisar', ot, '#94a3b8') + '</div>' : '<div style="display:flex;gap:8px;flex-wrap:wrap">' + card('Total recaudado', tt(L), '#2563eb') + card('Contado', co, '#eab308') + card('Crédito', cr, '#16a34a') + '</div>')
       + '<div class="card"><h2>' + esc(n) + ' (' + L.length + ' líneas)</h2><div class="tw"><table><thead><tr><th>Fecha</th><th>RC</th><th style="text-align:left">Cliente</th><th>Documento</th><th>Plazo</th><th>Tipo</th><th>Valor doc</th><th>Asignado</th></tr></thead><tbody>'
       + L.map(f => '<tr' + (f.tipoPago === 'Contado' ? ' style="background:#fef9c3"' : '') + '><td>' + esc(f.fecha) + '</td><td>' + esc(f.rc) + '</td><td class="n" style="text-align:left">' + esc(f.cliente || f.nit) + '</td><td>' + esc(f.doc || '–') + '</td><td>' + (f.plazo == null ? '–' : f.plazo) + '</td><td>' + esc(f.tipoPago) + '</td><td>' + (f.valorDoc ? fm(f.valorDoc) : '–') + '</td><td>' + fm(f.asignado) + '</td></tr>').join('')
       + '<tr><td colspan="7" class="n" style="text-align:left"><b>TOTAL</b></td><td><b>' + fm(tt(L)) + '</b></td></tr></tbody></table></div></div>';
