@@ -403,7 +403,7 @@ let REC = null;
 async function recMes() {
   const hy = new Date((D.hoy || new Date().toISOString().slice(0, 10)) + 'T12:00:00Z'), d = prompt('Recaudo (RC) desde (AAAA-MM-DD):', new Date(Date.UTC(hy.getUTCFullYear(), hy.getUTCMonth() - 1, 1)).toISOString().slice(0, 10)); if (!d) return;
   const h = prompt('Hasta (AAAA-MM-DD):', new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 0)).toISOString().slice(0, 10)); if (!h) return;
-  const cd = prompt('Una factura es de CONTADO si su plazo (vencimiento − fecha) es de hasta cuántos días:', '3'); if (cd === null) return;
+  const cd = prompt('Una factura es de CONTADO si su plazo (vencimiento − fecha) es de hasta cuántos días:', '1'); if (cd === null) return;
   const r = await conApi({ accion: 'recaudo', desde: d, hasta: h, contadoDias: cd });
   if (!r || !r.ok) { alert((r && r.error) || 'No se pudo generar'); return; }
   REC = { r, i: 0 }; TAB = 'rec'; recPintar();
@@ -421,7 +421,9 @@ async function recExcel() {
   ws.addRow(['Recaudo RC del ' + r.desde + ' al ' + r.hasta + ' · RC aprobados con cartera 13050505 · valor = lo que entró al banco']); ws.getRow(1).font = { bold: true };
   ws.addRow(['Fecha', 'RC', 'NIT', 'Cliente', 'Estado', 'Banco', 'Notas', 'Valor RC', 'Asesor(es)']); hdr(ws, 2);
   Object.values(rcs).sort((a, b) => a.f.fecha.localeCompare(b.f.fecha) || a.f.rc - b.f.rc).forEach(o => ws.addRow([o.f.fecha, o.f.rc, o.f.nit, o.f.cliente, est(o.f.estado), o.f.banco, o.f.notas, o.val, [...o.ases].join(' / ')]));
-  const n1 = ws.rowCount; const t1 = ws.addRow(['TOTAL', '', '', '', '', '', '', { formula: 'SUM(H3:H' + n1 + ')' }, '']); t1.font = { bold: true };
+  (r.otros || []).forEach(o => ws.addRow([o.fecha, o.rc, '', o.cliente, 'Aprobado', o.banco, o.notas, o.valor, 'OTROS INGRESOS (no cartera)']));
+  const n1 = ws.rowCount; const t1 = ws.addRow(['TOTAL INGRESOS AL BANCO POR RC', '', '', '', '', '', '', { formula: 'SUM(H3:H' + n1 + ')' }, '']); t1.font = { bold: true };
+  ws.addRow(['  De los cuales cartera (clientes)', '', '', '', '', '', '', { formula: 'H' + (n1 + 1) + '-H' + (n1 + 3) }, '']); ws.addRow(['  De los cuales otros ingresos (no cartera)', '', '', '', '', '', '', { formula: 'SUMIF(I3:I' + n1 + ',"OTROS INGRESOS (no cartera)",H3:H' + n1 + ')' }, '']);
   ws.getColumn(8).numFmt = fmt; [12, 10, 14, 40, 14, 22, 40, 16, 40].forEach((w, i) => ws.getColumn(i + 1).width = w); ws.views = [{ state: 'frozen', ySplit: 2 }];
   // 2. Resumen por asesor
   const nombres = Object.keys(por).sort((a, b) => por[b].reduce((s, f) => s + f.asignado, 0) - por[a].reduce((s, f) => s + f.asignado, 0));
@@ -472,11 +474,12 @@ function recPintar() {
   const r = REC.r, P = recPrep(r), est = e => e == 1 ? 'Aprobado' : 'En elaboración', CL = v => /GARCIA NOGUERA/i.test(v), sm = (L, t) => L.filter(f => f.tipoPago === t).reduce((s, f) => s + f.asignado, 0), tt = L => L.reduce((s, f) => s + f.asignado, 0);
   const hasO = r.otros && r.otros.length, T = ['CONSOLIDADO RC', 'RESUMEN ASESORES'].concat(P.nombres, hasO ? ['OTROS INGRESOS'] : []), i = Math.min(REC.i, T.length - 1);
   const tabs = '<div class="tabs">' + T.map((n, k) => '<div class="tab' + (k === i ? ' on' : '') + '" onclick="REC.i=' + k + ';recPintar()">' + esc(n.length > 24 ? n.slice(0, 22) + '…' : n) + '</div>').join('') + '</div>';
-  const top = '<div class="bar"><button class="btn" onclick="REC=null;vista()">← Volver a recaudos</button><button class="btn" onclick="recExcel()">⬇ Excel (con pestañas)</button><b style="font-size:12px">Recaudo RC ' + esc(r.desde) + ' a ' + esc(r.hasta) + ' · valor = lo que entró al banco · solo RC aprobados con cartera 13050505 · contado = plazo ≤ ' + r.contadoDias + ' día(s)</b></div>';
+  const top = '<div class="bar"><button class="btn" onclick="REC=null;vista()">← Volver a recaudos</button><button class="btn" onclick="recExcel()">⬇ Excel (con pestañas)</button><b style="font-size:12px">Recaudo RC ' + esc(r.desde) + ' a ' + esc(r.hasta) + ' · valor = lo que entró al banco · solo RC aprobados · contado = plazo ≤ ' + r.contadoDias + ' día(s)</b></div>';
   let h = '';
   if (i === 0) {
-    h = '<div class="card"><h2>Consolidado de RC (' + P.rcs.length + ') · ' + fm(P.rcs.reduce((s, o) => s + o.val, 0)) + '</h2><div class="tw"><table><thead><tr><th>Fecha</th><th>RC</th><th style="text-align:left">Cliente</th><th>Estado</th><th>Valor</th><th style="text-align:left">Asesor(es)</th></tr></thead><tbody>'
-      + P.rcs.map(o => '<tr><td>' + esc(o.f.fecha) + '</td><td>' + esc(o.f.rc) + '</td><td class="n" style="text-align:left">' + esc(o.f.cliente || o.f.nit) + '</td><td>' + est(o.f.estado) + '</td><td>' + fm(o.val) + '</td><td class="n" style="text-align:left">' + esc([...o.ases].join(' / ')) + '</td></tr>').join('') + '</tbody></table></div></div>';
+    const vc = P.rcs.reduce((s, o) => s + o.val, 0), vo = (r.otros || []).reduce((s, o) => s + o.valor, 0);
+    h = '<div class="card"><h2>Total ingresos al banco por RC (' + (P.rcs.length + (r.otros || []).length) + ') · ' + fm(vc + vo) + '</h2><div style="font-size:12px;margin:2px 0 8px">Cartera (clientes): <b>' + fm(vc) + '</b> · Otros ingresos (no cartera): <b>' + fm(vo) + '</b></div><div class="tw"><table><thead><tr><th>Fecha</th><th>RC</th><th style="text-align:left">Cliente</th><th>Estado</th><th>Valor</th><th style="text-align:left">Asesor(es)</th></tr></thead><tbody>'
+      + P.rcs.map(o => '<tr><td>' + esc(o.f.fecha) + '</td><td>' + esc(o.f.rc) + '</td><td class="n" style="text-align:left">' + esc(o.f.cliente || o.f.nit) + '</td><td>' + est(o.f.estado) + '</td><td>' + fm(o.val) + '</td><td class="n" style="text-align:left">' + esc([...o.ases].join(' / ')) + '</td></tr>').join('') + (r.otros || []).map(o => '<tr style="background:#f1f5f9"><td>' + esc(o.fecha) + '</td><td>' + esc(o.rc) + '</td><td class="n" style="text-align:left">' + esc(o.cliente) + '</td><td>Aprobado</td><td>' + fm(o.valor) + '</td><td class="n" style="text-align:left">OTROS INGRESOS (no cartera)</td></tr>').join('') + '</tbody></table></div></div>';
   } else if (i === 1) {
     const rows = P.nombres.map((n, k) => { const L = P.por[n], cr = sm(L, 'Crédito'), co = sm(L, 'Contado'), t = tt(L); return '<tr class="c" onclick="REC.i=' + (k + 2) + ';recPintar()"><td class="n" style="text-align:left">' + esc(n) + '</td><td>' + new Set(L.map(f => f.rc)).size + '</td><td>' + fm(t) + '</td><td>' + fm(co) + '</td><td>' + fm(cr) + '</td><td>' + fm(t - co - cr) + '</td><td><b>' + fm(CL(n) ? cr : t) + '</b></td></tr>'; }).join('');
     const A = r.filas, tot = tt(A);
