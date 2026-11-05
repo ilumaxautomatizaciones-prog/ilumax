@@ -887,6 +887,7 @@ function xgPaint(id) {
   const rows = V.slice(0, g.limit).map(r => '<tr' + (g.attr ? g.attr(r) : '') + '>' + cols.map(c => '<td style="text-align:' + (c.num && !c.al ? 'right' : 'left') + (c.wrap ? ';white-space:normal;min-width:150px;max-width:280px;overflow-wrap:anywhere' : '') + '">' + (c.h ? c.h(r) : esc(xgV(c, r))) + '</td>').join('') + '</tr>').join('');
   const tot = '<tr class="tot">' + cols.map((c, i) => '<td style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '">' + (i === 0 ? V.length + ' filas' : c.sum ? fm(V.reduce((s, r) => s + (Number(xgV(c, r)) || 0), 0)) : '') + '</td>').join('') + '</tr>';
   box.innerHTML = '<table><thead><tr>' + th + '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + cols.length + '" class="empty">Sin resultados</td></tr>') + '</tbody><tfoot>' + tot + '</tfoot></table>' + (V.length > g.limit ? '<div class="foot">Se muestran ' + g.limit + ' de ' + V.length + '; filtra para ver el resto (el Excel trae todas).</div>' : '');
+  if (g.after) g.after(box);
 }
 function xgSort(id, k) { const g = XG[id]; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; xgPaint(id); }
 function xgLimpiar(id) { const g = XG[id]; g.f = {}; g.sort = null; xgPaint(id); }
@@ -1126,7 +1127,7 @@ async function extCruzar() {
   if (!r || !r.ok) { b.innerHTML = '<div class="err">' + esc((r && r.error) || 'No se pudo consultar Siesa') + '</div>'; return; }
   if (!e || !e.ok) { b.innerHTML = '<div class="err">' + esc((e && e.error) || 'No se pudo leer el extracto') + '</div>'; return; }
   const sies = cruSies(r), L = cruCalc(e.filas, sies, m);
-  EXT.cruce = { mes: m, L, sies, ini, fin, solo: true }; EXT.vista = 'cru'; extPintar();
+  EXT.cruAb = new Set(); EXT.cruce = { mes: m, L, sies, ini, fin, solo: true }; EXT.vista = 'cru'; extPintar();
 }
 function cruCalc(filas, sies, m) {
   const [d0, d1] = extRango(m), X = {};
@@ -1158,9 +1159,40 @@ function cruPintar() {
   const cn = e => C.L.filter(x => x.est === e).length, te = C.L.reduce((s, x) => s + (x.ext || 0), 0), ts = C.L.reduce((s, x) => s + (x.sie || 0), 0);
   b.innerHTML = '<div class="card"><h2>🔎 Cruce extracto vs Siesa · ' + MESES[+C.mes.slice(5, 7) - 1] + ' · ' + C.L.filter(x => x.est === 'OK').length + ' OK · ' + C.L.filter(x => x.est !== 'OK').length + ' con diferencia</h2><div style="padding:10px 14px;font-size:12px;color:#475569;line-height:1.7">Extracto (RC del mes): <b>' + fm(te) + '</b> · Siesa (banco por RC): <b>' + fm(ts) + '</b> · Diferencia: <b>' + fm(te - ts) + '</b><br>Valor distinto: ' + cn('Valor distinto') + ' · Ejecutivo distinto: ' + cn('Ejecutivo distinto') + ' · Valor y ejecutivo: ' + cn('Valor y ejecutivo distintos') + ' · RC no está en Siesa: ' + cn('RC no está en Siesa') + ' · En Siesa sin extracto: ' + cn('En Siesa sin extracto')
     + '</div><div class="bar" style="padding:0 14px"><label class="chk"><input type="checkbox" ' + (C.solo ? 'checked' : '') + ' onchange="EXT.cruce.solo=this.checked;cruPintar()"> Solo diferencias</label><button class="btn g" onclick="xgCols(event,\'cru\')">▦ Columnas</button><button class="btn g" onclick="xgLimpiar(\'cru\')">✖ Quitar filtros y orden</button><button class="btn g" onclick="xgExcel(\'cru\')">⬇ Excel de esta vista</button><button class="btn g" onclick="cruExcel()">⬇ Excel completo del cruce</button><button class="btn g" onclick="EXT.cruce=null;$(\'xcruce\').innerHTML=\'\'">Cerrar</button></div><div class="tw" id="xg_cru"></div></div>';
-  xgInit('cru', CRU_COLS, { rows: L, limit: 1500, nombre: 'Cruce_extracto_' + C.mes, attr: r => r.n ? ' class="c" onclick="cruIr(\'' + r.rc + '\')"' : '' }); xgPaint('cru');
+  xgInit('cru', CRU_COLS, { rows: L, limit: 1500, nombre: 'Cruce_extracto_' + C.mes, after: cruDet, attr: r => r.n ? ' class="c" data-rc="' + r.rc + '" onclick="cruAb(\'' + r.rc + '\')"' : '' }); xgPaint('cru');
 }
 function cruEd(rc) { const f = EXT.cruce && EXT.cruce.L.find(x => String(x.rc) === String(rc)); if (f && f.fil && f.fil.length === 1) extAbrir(f.fil[0]); else cruIr(rc); }
+function cruAb(rc) { const A = EXT.cruAb || (EXT.cruAb = new Set()); rc = String(rc); if (A.has(rc)) A.delete(rc); else A.add(rc); cruDet(); }
+function cruDet() {
+  const box = $('xg_cru'); if (!box || !EXT.cruce) return; box.querySelectorAll('tr.cdet').forEach(x => x.remove());
+  const A = EXT.cruAb || new Set(), n = box.querySelectorAll('thead th').length, eje = [...new Set(EXT.clientes.map(c => c.ej).filter(Boolean))].sort();
+  box.querySelectorAll('tr[data-rc]').forEach(tr => {
+    const rc = tr.getAttribute('data-rc'); if (!A.has(rc)) return; tr.style.background = '#fef9c3';
+    const f = EXT.cruce.L.find(x => String(x.rc) === rc); if (!f || !f.fil) return; const s = EXT.cruce.sies[rc];
+    const inp = 'style="width:100%;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px"';
+    const d = document.createElement('tr'); d.className = 'cdet';
+    d.innerHTML = '<td colspan="' + n + '" style="background:#f8fafc;white-space:normal;padding:8px 12px;border-left:4px solid #f5c518"><div style="font-size:11px;color:#475569;margin-bottom:6px">Siesa: <b>' + (s ? esc(s.cliente) + ' · ' + fm(s.bank) + ' · ' + esc(s.ejes.join(' / ') || 'sin ejecutivo') : 'este RC no está en Siesa') + '</b></div>'
+      + '<datalist id="dlEj2">' + eje.map(e => '<option value="' + esc(e) + '">').join('') + '</datalist>'
+      + f.fil.map(x => '<div style="display:grid;grid-template-columns:70px 100px minmax(160px,2fr) 100px 90px minmax(110px,1fr) minmax(140px,1.5fr) auto;gap:6px;align-items:center;padding:4px 0;border-top:1px solid #e2e8f0;font-size:12px">'
+        + '<span>' + esc(x.fecha.slice(8, 10) + '/' + x.fecha.slice(5, 7)) + '</span><span>' + esc(x.banco) + '</span><span title="' + esc(x.descripcion) + '">' + esc(String(x.descripcion).slice(0, 60)) + '<br><span style="color:#64748b;font-size:11px">' + esc(x.cliente || 'sin cliente') + '</span></span><b style="text-align:right">' + fm(Number(x.monto)) + '</b>'
+        + '<input ' + inp + ' id="cd_rc_' + x.id + '" value="' + esc(x.rc || '') + '" placeholder="RC">'
+        + '<input ' + inp + ' id="cd_ej_' + x.id + '" list="dlEj2" value="' + esc(x.ejecutivo || '') + '" placeholder="Ejecutivo">'
+        + '<input ' + inp + ' id="cd_ob_' + x.id + '" value="' + esc(x.observacion || '') + '" placeholder="Observación">'
+        + '<span style="white-space:nowrap"><button class="btn" onclick="cruGuardar(' + x.id + ',\'' + rc + '\')">💾</button> <button class="btn g" title="Editar todo (cliente, monto…)" onclick="cruCompleto(' + x.id + ',\'' + rc + '\')">✏️</button></span></div>').join('')
+      + '<div style="margin-top:6px"><button class="btn g" onclick="cruIr(\'' + rc + '\')">🏦 Ver en el Extracto</button></div></td>';
+    tr.after(d);
+  });
+}
+function cruFila(id, rc) { const f = EXT.cruce.L.find(x => String(x.rc) === String(rc)); return f && f.fil.find(x => x.id === id); }
+function cruCompleto(id, rc) { const x = cruFila(id, rc); if (x) extAbrir(x); }
+async function cruGuardar(id, rc) {
+  const x = cruFila(id, rc); if (!x) return; const fila = { id };
+  CAMPOS.forEach(([e, k]) => fila[k] = x[k] == null ? '' : x[k]);
+  fila.rc = $('cd_rc_' + id).value.trim(); fila.ejecutivo = $('cd_ej_' + id).value.trim(); fila.observacion = $('cd_ob_' + id).value;
+  const j = await extApi({ accion: 'guardar', fila }); if (!j || !j.ok) { alert((j && j.error) || 'No se pudo guardar'); return; }
+  if (fila.rc !== String(rc)) { EXT.cruAb.delete(String(rc)); }
+  await extRefrescar();
+}
 function cruIr(rc) { EXT.q = rc; EXT.vista = 'ext'; extPintar(); const x = $('xq'); if (x) x.focus(); }
 async function cruExcel() {
   const C = EXT.cruce; if (!C) return; if (typeof ExcelJS === 'undefined') await loadJs('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
