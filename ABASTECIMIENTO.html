@@ -781,6 +781,7 @@ body:not(.sync-manual) [data-sync-manual]{display:none!important;}
     <div class="page" id="pg-innov"><div id="innov-mod"></div></div>
     <div class="page" id="pg-onepage"><div id="onepage-mod"></div></div>
     <div class="page" id="pg-autom"><div id="autom-mod"></div></div>
+    <div class="page" id="pg-calidad"><div id="calidad-mod"></div></div>
     <div class="page" id="pg-comext"><div id="comext-content"></div></div>
     <div class="page" id="pg-inv"><div id="inv-content"></div></div>
   </div>
@@ -9959,7 +9960,11 @@ function ppConstruir(){
   (REABAST.ordenesCompra||[]).forEach(o=>{
     if(['cancelada','suspendida'].includes(o.estado_general)) return;
     const num = ceNum(o.numero_oc), filas = grupos[num] || [], A = aj[num] || {};
-    const sumCol = k => filas.reduce((a,f)=>a+(ppNum(f[k])>0 ? ppNum(f[k]) : 0),0);
+    const sumCol0 = k => filas.reduce((a,f)=>a+(ppNum(f[k])>0 ? ppNum(f[k]) : 0),0);
+    // Si se cambiaron los ítems de la OC (quitar/agregar) y ya no cuadran con el Excel Base compras, mandan los ítems de la OC
+    const _itOC = REABAST.ocItems[o.id]||[], _fobOC = _itOC.reduce((q,it)=>q+(Number(it.precio_fob_usd)||0)*(Number(it.cantidad)||0),0);
+    const excelViejo = _itOC.length>0 && _fobOC>0 && sumCol0('Compras $')>0 && Math.abs(sumCol0('Compras $') - _fobOC) > 1;
+    const sumCol = k => (excelViejo && ['Compras $','VALOR ANTICIPO USD','VALOR SALDO USD'].includes(k)) ? 0 : sumCol0(k);
     const maxFecha = k => { let b = null; filas.forEach(f=>{ const d = pciFecha(f[k]); if(d && (!b || d>b)) b = d; }); return b; };
     const calc = tesoCalcularAnticipo(o);
     const extraOC = Number(o.costo_extra_usd)||0, pctX = calc.pct>1 ? calc.pct/100 : calc.pct; // costo extra del proveedor: mueve total, anticipo y saldo
@@ -18608,7 +18613,7 @@ function renderComextMod() {
   if (!CE_MOD_TABS.includes(REABAST.tab)) REABAST.tab = 'ce_hoy';
   return renderReabastMod();
 }
-const pgMap = { reabast: renderReabastMod, comext: renderComextMod, inv: renderInvAbast, tesoreria: renderTesoreriaMod, compras: renderComprasMod, innov: renderInnovMod, onepage: renderOnePageMod, autom: renderAutomMod };
+const pgMap = { reabast: renderReabastMod, comext: renderComextMod, inv: renderInvAbast, tesoreria: renderTesoreriaMod, compras: renderComprasMod, innov: renderInnovMod, onepage: renderOnePageMod, autom: renderAutomMod, calidad: renderCalidadMod };
 // ================= ONE PAGE OPERACIONES =================
 const OP = { d: null, mes: null, cargando: false, pre: null };
 const OP_M = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -18837,7 +18842,7 @@ function opExcel() {
   const ws = XLSX.utils.aoa_to_sheet(A), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'One Page'); ws['!cols'] = [{ wch: 42 }].concat(Array(14).fill({ wch: 11 })); XLSX.writeFile(wb, 'One_Page_Operaciones_2026.xlsx');
 }
 
-const ABAST_TABS = [['reabast', '🔁', 'Abastecimiento'], ['comext', '🌐', 'Comercio Exterior'], ['inv', '📦', 'Inventario'], ['tesoreria', '💸', 'Tesorería'], ['compras', '🛒', 'Módulo de compras'], ['innov', '💡', 'Innovación'], ['onepage', '📊', 'One Page'], ['autom', '🤖', 'Automatización']];
+const ABAST_TABS = [['reabast', '🔁', 'Abastecimiento'], ['comext', '🌐', 'Comercio Exterior'], ['inv', '📦', 'Inventario'], ['tesoreria', '💸', 'Tesorería'], ['compras', '🛒', 'Módulo de compras'], ['innov', '💡', 'Innovación'], ['onepage', '📊', 'One Page'], ['autom', '🤖', 'Automatización'], ['calidad', '🧪', 'Calidad']];
 function buildNav() {
   const n = document.getElementById('nav'); if (!n) return;
   n.innerHTML = ABAST_TABS.map(t => '<div class="nt" id="tab-' + t[0] + '" onclick="goPage(\'' + t[0] + '\')">' + t[1] + ' ' + t[2] + '</div>').join('');
@@ -19811,6 +19816,170 @@ function autExcel() {
   AUT_INI.forEach(x => { const it = autIt(x.id); A.push([x.id, x.n, x.area, x.sis, x.cx, x.imp, 'Fase ' + x.fase, it.estado, it.resp, it.ini, it.fin, it.avance, x.ins.filter((_, i) => it.ins[i]).length + '/' + x.ins.length, it.notas]); });
   const ws = XLSX.utils.aoa_to_sheet(A), wb = XLSX.utils.book_new(); ws['!cols'] = [{ wch: 4 }, { wch: 52 }, { wch: 20 }, { wch: 28 }, { wch: 12 }, { wch: 32 }, { wch: 8 }, { wch: 14 }, { wch: 18 }, { wch: 11 }, { wch: 13 }, { wch: 9 }, { wch: 11 }, { wch: 50 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Iniciativas'); XLSX.writeFile(wb, 'Automatizacion_Tecnica_Calidad_' + autHoy() + '.xlsx');
+}
+
+// ═══ Módulo CALIDAD — tablero visual del proceso de compra integrado con Calidad (OC → API → artes → producción → embarque → inspección → inventario) ═══
+// Los casos (una OC cada uno) y los tiempos por etapa se guardan en configuracion.calidad_proceso. Productos regulares.
+const CAL_ET = [
+  { k: 'ficha', n: 'Ficha técnica + OC', ic: '📝', ar: 'Compras', nx: 'artes', ds: 'Compras envía la ficha técnica de compra junto con la OC.' },
+  { k: 'artes', n: 'Artes (Diseño)', ic: '🎨', ar: 'Diseño', nx: 'api', ds: 'Diseño inicia la elaboración de artes con la ficha técnica.' },
+  { k: 'api', n: 'Revisión API', ic: '🔎', ar: 'Compras + Calidad', dec: [['✅ Aprobada', 'firma'], ['❌ No aprobada', 'api_aj']], ds: 'Compras y Calidad revisan la API (proforma) del proveedor.' },
+  { k: 'api_aj', n: 'Ajuste de API', ic: '↩️', ar: 'Compras', nx: 'api', ds: 'Se pide al proveedor corregir la API y se vuelve a revisar.' },
+  { k: 'firma', n: 'Firma API y envío a China', ic: '✍️', ar: 'Compras', nx: 'anticipo', ds: 'Compras firma la API y envía API + artes al proveedor.' },
+  { k: 'anticipo', n: 'Anticipo', ic: '💵', ar: 'Cartera / Tesorería', nx: 'preprensa', skip: 'preprensa', ds: 'Solo si aplica (puede marcarse "No aplica").' },
+  { k: 'preprensa', n: 'Preprensa', ic: '🖨️', ar: 'Diseño', nx: 'produccion', ds: 'Diseño aprueba la preprensa enviada por el proveedor.' },
+  { k: 'produccion', n: 'Producción (~45 d)', ic: '🏭', ar: 'Proveedor', nx: 'checklist', ds: 'Fabricación en planta del proveedor.' },
+  { k: 'checklist', n: 'Checklist de producción', ic: '📋', ar: 'Calidad', dec: [['✅ Aprobado', 'embarque'], ['⚠️ Aprobado con límite', 'embarque'], ['❌ Rechazado', 'rechazo']], ds: 'Excel de checklist aprobado por Calidad. Comercio Exterior busca reserva en paralelo.' },
+  { k: 'rechazo', n: 'Rechazo en producción', ic: '🚫', ar: 'Compras / Com. Exterior', dec: [['Reclamo enviado · rehacer', 'produccion'], ['Cerrar caso (cancelar)', 'cerrado']], ds: 'Se cancela la reserva; si es rechazo total se hace reclamo al proveedor.' },
+  { k: 'embarque', n: 'Embarque', ic: '🚢', ar: 'Comercio Exterior', nx: 'transito', ds: 'Mercancía despachada.' },
+  { k: 'transito', n: 'Tránsito', ic: '🌊', ar: 'Comercio Exterior', nx: 'nacion', ds: 'En tránsito marítimo.' },
+  { k: 'nacion', n: 'Nacionalización', ic: '🛃', ar: 'Comercio Exterior', nx: 'llegada', ds: 'Trámite aduanero. La certificación se valida desde el inicio.' },
+  { k: 'llegada', n: 'Llegada física', ic: '📦', ar: 'Bodega', nx: 'inspeccion', ds: 'Llegó a bodega pero aún NO está en inventario disponible.' },
+  { k: 'inspeccion', n: 'Inspección de Calidad', ic: '🧪', ar: 'Calidad', dec: [['✅ Aprobado', 'inventario'], ['❌ Rechazado', 'cuarentena']], ds: 'Inspección por muestreo con semáforo por proveedor/producto.' },
+  { k: 'cuarentena', n: 'Cuarentena + informe', ic: '⛔', ar: 'Calidad', nx: 'fabricante', ds: 'Producto retenido; Calidad elabora el informe técnico.' },
+  { k: 'fabricante', n: 'Informe al fabricante', ic: '📨', ar: 'Compras', nx: 'cerrado', ds: 'Se envía el informe técnico al fabricante / reclamación.' },
+  { k: 'inventario', n: 'Inventario disponible', ic: '✅', ar: '—', fin: 1, ds: 'Ingresó a inventario disponible.' },
+  { k: 'cerrado', n: 'Cerrado', ic: '🔒', ar: '—', fin: 1, ds: 'Caso cerrado sin ingreso a inventario.' }];
+const CAL_CERT = ['Pendiente', 'En trámite', 'Validada', 'No aplica'];
+const CAL_RES = ['Sin definir', 'Encontrada', 'Cancelada'];
+const CAL_SEM = [['Verde', '#15803d', '#dcfce7'], ['Amarillo', '#b45309', '#fef3c7'], ['Rojo', '#b91c1c', '#fee2e2']];
+const CAL = { d: null, vista: 'tab', f: '', sel: null, ar: '' };
+const calE = s => reabastEsc(s);
+const calPuede = () => { try { return reabastEsAdmin() || !!(CU && /calidad/i.test(CU.area || '')); } catch (e) { return false; } };
+const calEt = k => CAL_ET.find(x => x.k === k) || CAL_ET[0];
+const calAhora = () => new Date().toISOString();
+const calDias = iso => iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 864e5)) : 0;
+const calFd = iso => iso ? new Date(iso).toLocaleString('es-CO', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+async function calCargar() {
+  let d = null;
+  try { const r = await sb.get('configuracion', 'clave=eq.calidad_proceso&select=valor', { fresh: true }); if (r && r[0]) d = typeof r[0].valor === 'string' ? JSON.parse(r[0].valor) : r[0].valor; } catch (e) { console.warn('calidad_proceso', e); }
+  CAL.d = d && d.casos ? d : { casos: [], metas: {} };
+}
+async function calGuardar(msg) {
+  CAL.d.act = calAhora(); CAL.d.quien = (CU && CU.nombre) || '';
+  try { await sb.upsert('configuracion', { clave: 'calidad_proceso', valor: JSON.stringify(CAL.d), tipo: 'json' }, 'clave'); if (typeof toast === 'function') toast(msg || 'Guardado', 'ok'); }
+  catch (e) { if (typeof toast === 'function') toast('No se pudo guardar: ' + e.message, 'er'); }
+}
+async function renderCalidadMod() { const el = document.getElementById('calidad-mod'); if (!el) return; if (!CAL.d) { el.innerHTML = '<div class="empty">Cargando…</div>'; await calCargar(); } calPintar(); }
+const calCaso = id => CAL.d.casos.find(c => c.id === id);
+function calLog(c, txt) { c.hist.push({ t: calAhora(), quien: (CU && CU.nombre) || '', et: c.et, txt }); }
+function calNuevo() {
+  if (!calPuede()) return;
+  const ocs = ((typeof REABAST !== 'undefined' && REABAST.ordenesCompra) || []).filter(o => o.estado_general !== 'cancelada' && !CAL.d.casos.some(c => c.oc === o.numero_oc)).slice(0, 400);
+  const opts = '<option value="">— Escribir manualmente —</option>' + ocs.map(o => '<option value="' + calE(o.numero_oc) + '">' + calE(o.numero_oc) + ' · ' + calE(o.proveedor || '') + '</option>').join('');
+  const ini = CAL_ET.filter(e => !e.fin).map(e => '<option value="' + e.k + '"' + (e.k === 'ficha' ? ' selected' : '') + '>' + e.ic + ' ' + calE(e.n) + '</option>').join('');
+  const m = document.createElement('div'); m.id = 'cal-new'; m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  m.innerHTML = '<div style="background:#fff;border-radius:14px;padding:18px;max-width:440px;width:100%;max-height:90vh;overflow:auto"><div style="font-weight:800;margin-bottom:10px">➕ Nuevo caso</div>' +
+    '<div class="fg"><div class="fl">OC existente</div><select class="inp" id="cal-n-oc" onchange="calNuevoOc()">' + opts + '</select></div>' +
+    '<div class="fg"><div class="fl">Número de OC</div><input class="inp" id="cal-n-num"></div><div class="fg"><div class="fl">Proveedor</div><input class="inp" id="cal-n-prov"></div>' +
+    '<div class="fg"><div class="fl">Referencias / producto</div><input class="inp" id="cal-n-ref" placeholder="Ej: 2609, 2610"></div>' +
+    '<div class="fg"><div class="fl">Etapa actual</div><select class="inp" id="cal-n-et">' + ini + '</select></div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button class="btn" onclick="document.getElementById(\'cal-new\').remove()">Cancelar</button><button class="btn" style="background:var(--acc);font-weight:700" onclick="calNuevoOk()">Crear</button></div></div>';
+  document.body.appendChild(m);
+}
+function calNuevoOc() {
+  const n = document.getElementById('cal-n-oc').value; if (!n) return;
+  const o = REABAST.ordenesCompra.find(x => x.numero_oc === n); if (!o) return;
+  document.getElementById('cal-n-num').value = n; document.getElementById('cal-n-prov').value = o.proveedor || '';
+  const refs = ((REABAST.ocItems || {})[o.id] || []).map(i => i.referencia).filter(Boolean); document.getElementById('cal-n-ref').value = [...new Set(refs)].slice(0, 12).join(', ');
+}
+function calNuevoOk() {
+  const num = document.getElementById('cal-n-num').value.trim(); if (!num) { toast('Escribe el número de OC', 'wa'); return; }
+  if (CAL.d.casos.some(c => c.oc === num)) { toast('Esa OC ya está en el tablero', 'wa'); return; }
+  const et = document.getElementById('cal-n-et').value;
+  const c = { id: 'c' + Date.now().toString(36), oc: num, prov: document.getElementById('cal-n-prov').value.trim(), ref: document.getElementById('cal-n-ref').value.trim(), et, desde: calAhora(), creado: calAhora(), cert: 'Pendiente', reserva: 'Sin definir', resp: '', sem: '', muestra: '', nota: '', hist: [] };
+  calLog(c, 'Caso creado en «' + calEt(et).n + '»'); CAL.d.casos.push(c); document.getElementById('cal-new').remove(); CAL.sel = c.id; calGuardar('Caso creado').then(calPintar);
+}
+function calMover(id, k, txt) {
+  if (!calPuede()) return; const c = calCaso(id); if (!c || c.et === k) return;
+  const dias = calDias(c.desde); calLog(c, (txt ? txt + ' · ' : '') + calEt(c.et).n + ' → ' + calEt(k).n + ' (' + dias + ' d en la etapa)');
+  c.et = k; c.desde = calAhora(); calGuardar('Movido a «' + calEt(k).n + '»').then(calPintar);
+}
+function calSet(id, campo, v) { if (!calPuede()) return; const c = calCaso(id); if (!c) return; const a = c[campo]; c[campo] = v; if (['cert', 'reserva', 'sem', 'muestra'].includes(campo) && a !== v) calLog(c, campo + ': ' + (a || '—') + ' → ' + (v || '—')); calGuardar().then(calPintar); }
+function calNota(id) { if (!calPuede()) return; const x = document.getElementById('cal-hn'), t = x ? x.value.trim() : ''; if (!t) return; const c = calCaso(id); calLog(c, t); calGuardar('Anotado').then(calPintar); }
+function calQuitar(id) { if (!calPuede() || !confirm('¿Eliminar este caso del tablero?')) return; CAL.d.casos = CAL.d.casos.filter(c => c.id !== id); CAL.sel = null; calGuardar('Eliminado').then(calPintar); }
+function calMeta(k, v) { if (!calPuede()) return; const n = Math.max(0, Math.round(Number(v) || 0)); if (n) CAL.d.metas[k] = n; else delete CAL.d.metas[k]; calGuardar('Meta guardada').then(calPintar); }
+function calVista(v) { CAL.vista = v; calPintar(); }
+function calSelec(id) { CAL.sel = CAL.sel === id ? null : id; calPintar(); if (CAL.sel) { const el = document.getElementById('cal-det'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } }
+function calArea(v) { CAL.ar = v; calPintar(); }
+function calBusca(v) { CAL.f = v; calPintar(); const i = document.getElementById('cal-q'); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); } }
+function calColor(c) {
+  const e = calEt(c.et); if (e.fin) return ['#64748b', '#f1f5f9']; const d = calDias(c.desde), m = CAL.d.metas[c.et];
+  if (m) return d > m ? ['#b91c1c', '#fee2e2'] : d > m * 0.8 ? ['#b45309', '#fef3c7'] : ['#15803d', '#dcfce7'];
+  return ['#334155', '#f1f5f9'];
+}
+const calChip = (t, f, b) => '<span style="display:inline-block;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:700;color:' + f + ';background:' + b + '">' + t + '</span>';
+function calCertChip(c) { const m = { 'Pendiente': ['#b45309', '#fef3c7'], 'En trámite': ['#1d4ed8', '#dbeafe'], 'Validada': ['#15803d', '#dcfce7'], 'No aplica': ['#64748b', '#f1f5f9'] }[c.cert] || ['#64748b', '#f1f5f9']; return calChip('🏷️ Cert: ' + calE(c.cert), m[0], m[1]); }
+function calVisible() {
+  const q = CAL.f.toLowerCase();
+  return CAL.d.casos.filter(c => (!CAL.ar || calEt(c.et).ar.indexOf(CAL.ar) >= 0) && (!q || (c.oc + ' ' + c.prov + ' ' + c.ref).toLowerCase().indexOf(q) >= 0));
+}
+function calTarj(c) {
+  const col = calColor(c), e = calEt(c.et), sel = CAL.sel === c.id;
+  return '<div onclick="calSelec(\'' + c.id + '\')" style="background:#fff;border:1.5px solid ' + (sel ? 'var(--bl)' : 'var(--b1)') + ';border-radius:10px;padding:8px 9px;margin-bottom:7px;cursor:pointer;box-shadow:var(--sh)">' +
+    '<div style="display:flex;justify-content:space-between;gap:6px;align-items:center"><b style="font-size:12.5px">' + calE(c.oc) + '</b>' + (e.fin ? '' : calChip(calDias(c.desde) + ' d', col[0], col[1])) + '</div>' +
+    '<div style="font-size:11px;color:var(--mu);overflow-wrap:anywhere">' + calE(c.prov || '—') + '</div>' + (c.ref ? '<div style="font-size:10.5px;color:var(--mu);overflow-wrap:anywhere">Ref: ' + calE(c.ref) + '</div>' : '') +
+    '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">' + calCertChip(c) + (c.resp ? calChip('👤 ' + calE(c.resp), '#334155', '#f1f5f9') : '') + '</div></div>';
+}
+function calTablero(vis) {
+  const cols = CAL_ET.filter(e => !e.fin || vis.some(c => c.et === e.k)).filter(e => !['api_aj', 'rechazo', 'cuarentena', 'fabricante'].includes(e.k) || vis.some(c => c.et === e.k));
+  return '<div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:8px;align-items:flex-start">' + cols.map(e => {
+    const cs = vis.filter(c => c.et === e.k);
+    return '<div style="flex:0 0 190px;background:#f8fafc;border:1px solid var(--b1);border-radius:12px;padding:8px"><div style="font-size:12px;font-weight:800;line-height:1.25">' + e.ic + ' ' + calE(e.n) + '</div>' +
+      '<div style="font-size:10px;color:var(--mu);margin:2px 0 7px">' + calE(e.ar) + ' · ' + cs.length + (CAL.d.metas[e.k] ? ' · meta ' + CAL.d.metas[e.k] + ' d' : '') + '</div>' + (cs.map(calTarj).join('') || '<div style="font-size:10.5px;color:#94a3b8;text-align:center;padding:8px 0">—</div>') + '</div>';
+  }).join('') + '</div>';
+}
+function calLista(vis) {
+  const f = vis.slice().sort((a, b) => calDias(b.desde) - calDias(a.desde));
+  if (!f.length) return '<div class="empty">Sin casos.</div>';
+  return '<div class="tw"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:var(--mu)"><th>OC</th><th>Proveedor</th><th>Etapa</th><th>En manos de</th><th>Días</th><th>Cert.</th></tr></thead><tbody>' + f.map(c => {
+    const e = calEt(c.et), col = calColor(c);
+    return '<tr onclick="calSelec(\'' + c.id + '\')" style="cursor:pointer;border-top:1px solid var(--b1)"><td style="padding:6px 4px"><b>' + calE(c.oc) + '</b></td><td>' + calE(c.prov) + '</td><td>' + e.ic + ' ' + calE(e.n) + '</td><td>' + calE(c.resp || e.ar) + '</td><td>' + (e.fin ? '' : calChip(calDias(c.desde) + ' d', col[0], col[1])) + '</td><td>' + calCertChip(c) + '</td></tr>';
+  }).join('') + '</tbody></table></div>';
+}
+function calProv() {
+  const m = {}; CAL.d.casos.forEach(c => { const p = c.prov || '—'; const o = m[p] || (m[p] = { n: 0, V: 0, A: 0, R: 0, ult: '' }); o.n++; if (c.sem) { o[c.sem[0]]++; o.ult = c.sem; } });
+  const rows = Object.keys(m).sort().map(p => { const o = m[p], s = CAL_SEM.find(x => x[0] === o.ult);
+    return '<tr style="border-top:1px solid var(--b1)"><td style="padding:6px 4px"><b>' + calE(p) + '</b></td><td>' + o.n + '</td><td>' + o.V + '</td><td>' + o.A + '</td><td>' + o.R + '</td><td>' + (s ? calChip(s[0], s[1], s[2]) : '<span style="color:#94a3b8">—</span>') + '</td></tr>'; }).join('');
+  return '<div style="font-size:11.5px;color:var(--mu);margin-bottom:8px">Semáforo de inspección por proveedor (se registra en el detalle de cada caso, en la etapa de Inspección). Tamaños de muestra: 5 · 10 · 20 · 100 · 200.</div>' +
+    (rows ? '<div class="tw"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:var(--mu)"><th>Proveedor</th><th>Casos</th><th>Verde</th><th>Amarillo</th><th>Rojo</th><th>Último</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="empty">Aún no hay casos.</div>');
+}
+function calAjustes() {
+  const rows = CAL_ET.filter(e => !e.fin).map(e => '<tr style="border-top:1px solid var(--b1)"><td style="padding:6px 4px">' + e.ic + ' ' + calE(e.n) + '</td><td>' + calE(e.ar) + '</td><td><input class="inp" type="number" min="0" style="width:80px;padding:5px" value="' + (CAL.d.metas[e.k] || '') + '" placeholder="—" ' + (calPuede() ? '' : 'disabled') + ' onchange="calMeta(\'' + e.k + '\',this.value)"></td></tr>').join('');
+  return '<div style="font-size:11.5px;color:var(--mu);margin-bottom:8px">Días esperados por etapa (opcional, aún no hay SLA definidos). Si pones una meta, la tarjeta se pone amarilla al 80% y roja al pasarse.</div><div class="tw"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:var(--mu)"><th>Etapa</th><th>Responsable</th><th>Meta (días)</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+function calDetalle() {
+  const c = CAL.sel && calCaso(CAL.sel); if (!c) return ''; const e = calEt(c.et), p = calPuede(), dis = p ? '' : ' disabled';
+  let acc = '';
+  if (e.dec) acc += e.dec.map(d => '<button class="btn" style="margin:2px" onclick="calMover(\'' + c.id + '\',\'' + d[1] + '\',\'' + d[0].replace(/'/g, '') + '\')"' + dis + '>' + calE(d[0]) + ' → ' + calE(calEt(d[1]).n) + '</button>').join('');
+  if (e.nx) acc += '<button class="btn" style="margin:2px;background:var(--acc);font-weight:700" onclick="calMover(\'' + c.id + '\',\'' + e.nx + '\')"' + dis + '>Avanzar → ' + calE(calEt(e.nx).n) + '</button>';
+  if (e.skip) acc += '<button class="btn" style="margin:2px" onclick="calMover(\'' + c.id + '\',\'' + e.skip + '\',\'No aplica anticipo\')"' + dis + '>No aplica</button>';
+  const sel = (campo, arr, val) => '<select class="inp" onchange="calSet(\'' + c.id + '\',\'' + campo + '\',this.value)"' + dis + '>' + arr.map(x => '<option' + (x === val ? ' selected' : '') + '>' + calE(x) + '</option>').join('') + '</select>';
+  const ir = c.et === 'inspeccion' || c.et === 'cuarentena' || c.sem;
+  const hist = c.hist.slice().reverse().map(h => '<div style="font-size:11.5px;border-top:1px solid var(--b1);padding:4px 0"><span style="color:var(--mu)">' + calFd(h.t) + ' · ' + calE(h.quien) + '</span><br>' + calE(h.txt) + '</div>').join('');
+  return '<div id="cal-det" class="card" style="margin-top:12px"><div class="ch"><div class="ct">' + e.ic + ' OC ' + calE(c.oc) + ' · ' + calE(c.prov) + '</div><button class="btn" onclick="calSelec(null)">✕</button></div><div class="cb">' +
+    '<div style="font-size:12px;margin-bottom:8px"><b>' + calE(e.n) + '</b> · en manos de <b>' + calE(c.resp || e.ar) + '</b> · ' + (e.fin ? 'finalizado' : '<b>' + calDias(c.desde) + ' días</b> en la etapa (desde ' + calFd(c.desde) + ')') + '<br><span style="color:var(--mu)">' + calE(e.ds) + '</span></div>' +
+    '<div style="margin-bottom:10px">' + acc + '</div>' +
+    '<div class="fg2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">' +
+    '<div class="fg"><div class="fl">Certificación</div>' + sel('cert', CAL_CERT, c.cert) + '</div><div class="fg"><div class="fl">Reserva (Com. Exterior)</div>' + sel('reserva', CAL_RES, c.reserva) + '</div>' +
+    '<div class="fg"><div class="fl">Persona responsable</div><input class="inp" value="' + calE(c.resp) + '" placeholder="Nombre" onchange="calSet(\'' + c.id + '\',\'resp\',this.value)"' + dis + '></div>' +
+    '<div class="fg"><div class="fl">Referencias</div><input class="inp" value="' + calE(c.ref) + '" onchange="calSet(\'' + c.id + '\',\'ref\',this.value)"' + dis + '></div>' +
+    (ir ? '<div class="fg"><div class="fl">Semáforo inspección</div>' + sel('sem', ['', 'Verde', 'Amarillo', 'Rojo'], c.sem) + '</div><div class="fg"><div class="fl">Tamaño de muestra</div>' + sel('muestra', ['', '5', '10', '20', '100', '200'], c.muestra) + '</div>' : '') + '</div>' +
+    '<div style="display:flex;gap:6px;margin-top:10px"><input class="inp" id="cal-hn" placeholder="Anotar novedad…"' + dis + '><button class="btn" onclick="calNota(\'' + c.id + '\')"' + dis + '>Anotar</button></div>' +
+    '<div style="margin-top:10px">' + (hist || '') + '</div>' + (p ? '<div style="margin-top:10px"><button class="btn" style="color:var(--rd)" onclick="calQuitar(\'' + c.id + '\')">🗑️ Eliminar caso</button></div>' : '') + '</div></div>';
+}
+function calPintar() {
+  const el = document.getElementById('calidad-mod'); if (!el || !CAL.d) return; const vis = calVisible(), act = CAL.d.casos.filter(c => !calEt(c.et).fin);
+  const enCal = act.filter(c => calEt(c.et).ar.indexOf('Calidad') >= 0).length, atras = act.filter(c => CAL.d.metas[c.et] && calDias(c.desde) > CAL.d.metas[c.et]).length, cuar = act.filter(c => c.et === 'cuarentena' || c.et === 'fabricante').length;
+  const k = (v, l) => '<div class="sc"><div class="sv">' + v + '</div><div class="sl">' + l + '</div></div>';
+  const areas = ['', 'Compras', 'Calidad', 'Diseño', 'Comercio Exterior', 'Bodega', 'Cartera', 'Proveedor'];
+  const tab = (id, t) => '<span class="chip' + (CAL.vista === id ? ' on' : '') + '" onclick="calVista(\'' + id + '\')">' + t + '</span>';
+  const cuerpo = CAL.vista === 'lis' ? calLista(vis) : CAL.vista === 'prv' ? calProv() : CAL.vista === 'aju' ? calAjustes() : calTablero(vis);
+  el.innerHTML = '<div class="sg" style="margin-bottom:12px">' + k(act.length, 'Casos activos') + k(enCal, 'En manos de Calidad') + k(cuar, 'En cuarentena / reclamo') + k(atras, 'Pasados de meta') + '</div>' +
+    '<div class="card"><div class="ch"><div class="ct">🧪 Proceso de compra con Calidad</div>' + (calPuede() ? '<button class="btn" style="background:var(--acc);font-weight:700" onclick="calNuevo()">➕ Nuevo caso</button>' : '') + '</div><div class="cb">' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">' + tab('tab', '📊 Tablero') + tab('lis', '📋 Lista') + tab('prv', '🚦 Proveedores') + tab('aju', '⏱️ Metas') +
+    '<select class="inp" style="width:auto;padding:4px 8px" onchange="calArea(this.value)">' + areas.map(a => '<option value="' + a + '"' + (a === CAL.ar ? ' selected' : '') + '>' + (a || 'Todas las áreas') + '</option>').join('') + '</select>' +
+    '<input class="inp" id="cal-q" style="width:160px;padding:4px 8px" placeholder="Buscar OC / proveedor" value="' + calE(CAL.f) + '" oninput="calBusca(this.value)"></div>' + cuerpo + '</div></div>' + calDetalle();
 }
 
 </script>
