@@ -34098,6 +34098,7 @@ async function cargarCentro() {
   try {
     // Cargar tabla por tabla para identificar cuál falla
     try { CT.tareas    = await sb.get('mis_tareas',   'order=fecha_limite.asc.nullslast,prioridad.asc') || []; } catch(e){ console.warn('mis_tareas:', e.message); CT.tareas=[]; }
+    try { CT.rutinas = await sb.get('ti_rutinas', 'order=nro.asc,titulo.asc') || []; } catch(e){ console.warn('ti_rutinas:', e.message); CT.rutinas=[]; }
     try { CT.manuales  = await sb.get('manuales',     'order=categoria.asc,titulo.asc') || []; } catch(e){ console.warn('manuales:', e.message); CT.manuales=[]; }
     try { CT.contactos = await sb.get('contactos_ti', 'order=favorito.desc,empresa.asc') || []; } catch(e){ console.warn('contactos_ti:', e.message); CT.contactos=[]; }
     try { CT.tramites  = await sb.get('tramites',     'order=fecha_limite.asc.nullslast') || []; } catch(e){ console.warn('tramites:', e.message); CT.tramites=[]; }
@@ -34158,6 +34159,7 @@ function renderCentroShell(el) {
     <!-- TABS -->
     <div style="display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap;">
       <button id="ct-tab-tareas"    class="flt on" onclick="ctTab('tareas')"    style="font-size:11px;padding:7px 14px;">📌 Tareas</button>
+      <button id="ct-tab-funciones" class="flt" onclick="ctTab('funciones')" style="font-size:11px;padding:7px 14px;">🎯 Funciones del cargo</button>
       <button id="ct-tab-manuales"  class="flt"    onclick="ctTab('manuales')"  style="font-size:11px;padding:7px 14px;">📖 Manuales</button>
       <button id="ct-tab-contactos" class="flt"    onclick="ctTab('contactos')" style="font-size:11px;padding:7px 14px;">📞 Contactos TI</button>
       <button id="ct-tab-tramites"  class="flt"    onclick="ctTab('tramites')"  style="font-size:11px;padding:7px 14px;">📄 Trámites</button>
@@ -34686,7 +34688,7 @@ async function cmExcel(){
 // ── TABS ──────────────────────────────────────────────────────────────
 function ctTab(tab) {
   CT.tabActivo = tab;
-  ['tareas','manuales','contactos','tramites','briefing','reporte','comisiones','zona','consumo'].forEach(t => {
+  ['tareas','funciones','manuales','contactos','tramites','briefing','reporte','comisiones','zona','consumo'].forEach(t => {
     const btn = document.getElementById('ct-tab-'+t);
     if(btn) btn.classList.toggle('on', t===tab);
   });
@@ -34694,6 +34696,7 @@ function ctTab(tab) {
   if(!el) return;
   if(tab==='tareas')    renderCtTareas(el);
   if(tab==='manuales')  renderCtManuales(el);
+  if(tab==='funciones') renderCtFunciones(el);
   if(tab==='contactos') renderCtContactos(el);
   if(tab==='tramites')  renderCtTramites(el);
   if(tab==='briefing')  renderCtBriefing(el);
@@ -35727,6 +35730,56 @@ async function renderCtConsumo(el){
     </div></div>`;
 }
 
+// ── TAB FUNCIONES DEL CARGO: rutinas por función del perfil del cargo (tabla ti_rutinas), con manual y aviso ──
+const CTR_DIAS = ['', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes'];
+const CTR_IND = { 1: '% proyectos de automatización y tecnología a tiempo y dentro del presupuesto', 2: '% informes y tableros entregados en la fecha acordada', 3: '% cumplimiento del plan de trabajo del proveedor de servicios informáticos' };
+const ctrE = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function ctrCuando(r) {
+  if (r.frecuencia === 'semanal') return 'Cada ' + (CTR_DIAS[r.dia] || 'semana');
+  const d = r.dia === 0 ? 'primer día hábil' : 'día ' + r.dia;
+  return (r.frecuencia === 'mensual' ? 'Mensual' : r.frecuencia === 'trimestral' ? 'Trimestral' : r.frecuencia === 'semestral' ? 'Semestral' : 'Anual') + ' · ' + d;
+}
+const ctrTareas = id => (CT.tareas || []).filter(t => String(t.etiquetas || '').startsWith('rutina:' + id + ':')).sort((a, b) => String(b.fecha_limite || '').localeCompare(String(a.fecha_limite || '')));
+function renderCtFunciones(el) {
+  const R = CT.rutinas || [], hoy = new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10), mes = hoy.slice(0, 7);
+  const fmt = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '—';
+  const ind = [1, 2, 3].map(n => {
+    const ids = R.filter(r => r.indicador === n).map(r => r.id), T = (CT.tareas || []).filter(t => String(t.etiquetas || '').startsWith('rutina:') && ids.includes(String(t.etiquetas).split(':')[1]) && String(t.fecha_limite || '').slice(0, 7) === mes && t.estado !== 'Cancelado');
+    const ok = T.filter(t => t.estado === 'Completado' && String(t.completado_en || t.actualizado || '').slice(0, 10) <= t.fecha_limite).length, p = T.length ? Math.round(ok / T.length * 100) : null;
+    return '<div style="flex:1 1 220px;background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:10px 12px"><div style="font-size:24px;font-weight:800;color:' + (p == null ? 'var(--mu)' : p >= 90 ? '#16a34a' : p >= 70 ? '#f59e0b' : '#ef4444') + '">' + (p == null ? '—' : p + '%') + '</div><div style="font-size:11px;color:var(--mu)">' + CTR_IND[n] + '</div><div style="font-size:10px;color:var(--mu);margin-top:2px">' + ok + ' de ' + T.length + ' a tiempo este mes</div></div>';
+  }).join('');
+  const fn = {}; R.forEach(r => { (fn[r.nro] = fn[r.nro] || { n: r.funcion, L: [] }).L.push(r); });
+  const cards = Object.keys(fn).map(Number).sort((a, b) => a - b).map(k => {
+    const F = fn[k];
+    return '<div style="background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:10px 12px;margin-bottom:8px"><div style="font-weight:800;font-size:12.5px;margin-bottom:4px">' + k + '. ' + ctrE(F.n) + '</div>' + F.L.map(r => {
+      const t = ctrTareas(r.id)[0], st = !t ? '<span style="color:var(--mu)">Aún no generada</span>' : t.estado === 'Completado' ? '<span style="color:#16a34a">✅ Hecha · ' + fmt(t.fecha_limite) + '</span>' : (t.fecha_limite < hoy ? '<span style="color:#ef4444;font-weight:700">⚠️ Atrasada · ' + fmt(t.fecha_limite) + '</span>' : '<span style="color:#f59e0b">⏳ Pendiente · vence ' + fmt(t.fecha_limite) + '</span>');
+      return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:5px 0;border-top:1px solid var(--b1);' + (r.activo ? '' : 'opacity:.5') + '"><div style="flex:1 1 260px"><div style="font-size:12px">' + ctrE(r.titulo) + '</div><div style="font-size:10.5px;color:var(--mu)">' + ctrCuando(r) + ' · ' + st + '</div></div>' +
+        (r.manual_id ? '<button class="btn btn-g btn-sm" onclick="ctVerManual(\'' + r.manual_id + '\')">📖 Manual</button>' : '') +
+        (t && t.estado !== 'Completado' ? '<button class="btn btn-gr btn-sm" onclick="ctrHecha(\'' + t.id + '\')">✅ Hecha</button>' : '') +
+        '<button class="btn btn-g btn-sm" title="' + (r.activo ? 'Desactivar aviso' : 'Activar') + '" onclick="ctrToggle(\'' + r.id + '\')">' + (r.activo ? '🔔' : '🔕') + '</button></div>';
+    }).join('') + '</div>';
+  }).join('');
+  el.innerHTML = '<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center"><button class="btn btn-bl btn-sm" onclick="ctrGenerar()">▶ Generar tareas de hoy</button><span style="font-size:11px;color:var(--mu)">Cada día hábil a las 7:00 a. m. se crean solas las tareas que tocan y llega un aviso por WhatsApp con las del día o atrasadas.</span></div>' +
+    '<div style="font-size:10px;font-weight:800;color:var(--mu);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Indicadores del mes (informes e indicadores del cargo)</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' + ind + '</div>' +
+    '<div style="font-size:10px;font-weight:800;color:var(--mu);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Funciones del cargo y sus rutinas</div>' + (cards || '<div class="empty">Sin rutinas</div>');
+}
+async function ctrGenerar() {
+  try {
+    const r = await fetch(SB_URL + '/rest/v1/rpc/ti_generar_rutinas', { method: 'POST', headers: sb.headers, body: JSON.stringify({ p_avisar: false }) });
+    if (!r.ok) throw new Error(await r.text());
+    const n = await r.json(); CT.tareas = await sb.get('mis_tareas', 'order=fecha_limite.asc.nullslast,prioridad.asc', { fresh: true }) || CT.tareas;
+    toast(n ? '✅ Se crearon ' + n + ' tarea(s)' : 'No había tareas nuevas por crear', 'ok'); ctTab('funciones');
+  } catch (e) { toast('Error: ' + e.message, 'er'); }
+}
+async function ctrHecha(id) {
+  try { const p = { estado: 'Completado', completado_en: new Date().toISOString(), actualizado: new Date().toISOString() }; await sb.patch('mis_tareas', 'id=eq.' + id, p); const i = CT.tareas.findIndex(t => t.id === id); if (i >= 0) CT.tareas[i] = { ...CT.tareas[i], ...p }; ctTab(CT.tabActivo); toast('✅ Tarea completada', 'ok'); } catch (e) { toast('Error: ' + e.message, 'er'); }
+}
+async function ctrToggle(id) {
+  const r = (CT.rutinas || []).find(x => x.id === id); if (!r) return;
+  try { await sb.patch('ti_rutinas', 'id=eq.' + id, { activo: !r.activo }); r.activo = !r.activo; ctTab('funciones'); } catch (e) { toast('Error: ' + e.message, 'er'); }
+}
+function ctrManualDe(etq) { const id = String(etq || '').split(':')[1], r = (CT.rutinas || []).find(x => x.id === id); if (r && r.manual_id) ctVerManual(r.manual_id); }
+
 // ── TAB TAREAS ─────────────────────────────────────────────────────────
 function renderCtTareas(el) {
   const hoy    = new Date().toISOString().split('T')[0];
@@ -35778,7 +35831,7 @@ function renderCtTareas(el) {
               <div style="width:50px;height:4px;background:var(--b1);border-radius:2px;overflow:hidden;">
                 <div style="width:${Math.min(pct,100)}%;height:100%;background:${pct>=100?'#22c55e':'#2563eb'};border-radius:2px;"></div>
               </div>${pct}%</div>`:''}
-            ${t.notif_wa?'<span style="font-size:10px;">📱</span>':''}
+            ${t.notif_wa?'<span style="font-size:10px;">📱</span>':''}${String(t.etiquetas||'').startsWith('rutina:')?`<span onclick="event.stopPropagation();ctrManualDe('${t.etiquetas}')" style="font-size:10px;color:var(--bl);font-weight:700;">📖 Manual</span>`:''}
           </div>
         </div>`;
       }).join('')}
