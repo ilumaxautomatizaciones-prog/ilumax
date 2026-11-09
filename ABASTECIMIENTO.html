@@ -7750,7 +7750,9 @@ async function reabastSincronizarProveedorEnOC(antes, nuevo){
 }
 const OC_DESBLOQUEADAS = {};
 const OC_DESBLOQUEO_MIN = 30;
+function ocPadre(o){ if(!ocEsRama(o)) return null; const f = ocFamiliaNum(o).trim(); return (REABAST.ordenesCompra||[]).find(x=>x.id!==o.id && !ocEsRama(x) && String(x.numero_oc||'').trim()===f) || null; }
 function ocEstaBloqueada(ocId){
+  if(ocEsRama((REABAST.ordenesCompra||[]).find(x=>x.id===ocId))) return false;
   const pi = (REABAST.ocEtapas[ocId]||[]).find(e=>e.etapa_id==='pi_confirmada');
   if(!pi || pi.estado!=='completada') return false;
   const t = OC_DESBLOQUEADAS[ocId];
@@ -12944,9 +12946,10 @@ function reabastAbrirDetalleOC(ocId){
         <button class="btn btn-bl btn-sm" onclick="reabastDescargarExcelOC('${ocId}')">📊 Excel (ILUMAX TRADING → proveedor)</button>
         <button class="btn btn-g btn-sm" onclick="reabastVerDocumentoOC('${ocId}','intercompania')">🖨️ Ver / imprimir OC intercompañía (ILUMAX SA → ILUMAX TRADING)</button>
         <button class="btn btn-g btn-sm" onclick="reabastDescargarExcelOC('${ocId}','intercompania')">📊 Excel intercompañía (ILUMAX SA → ILUMAX TRADING)</button>
-        ${reabastEsAdmin()?`<button class="btn btn-g btn-sm" style="color:var(--rd);margin-left:auto;" onclick="reabastEliminarOC('${ocId}')">🗑️ Eliminar esta OC</button>`:''}
+        ${(reabastEsAdmin()||ocEsRama(o))?`<button class="btn btn-g btn-sm" style="color:var(--rd);margin-left:auto;" onclick="reabastEliminarOC('${ocId}')">🗑️ Eliminar esta OC${ocEsRama(o)?' parcial':''}</button>`:''}
       </div>
     </div>
+    ${/⏳ Pendiente de/.test(o.notas||'')?`<div style="margin:0 0 12px;padding:9px 12px;border-radius:9px;background:#fef3c7;border:1px solid #fcd34d;font-size:12px;white-space:pre-line;"><b>⏳ Pendientes de órdenes parciales</b>\n${reabastEsc(o.notas)}<div style="margin-top:6px;"><button class="btn btn-g btn-sm" onclick="ocLimpiarPendiente('${ocId}')">✔ Ya resuelto, quitar nota</button></div></div>`:''}
     ${ceHtmlDetalle(o)}
     ${anticipoSaldoHtml}
     ${(REABAST.ocEtapas[ocId]||[]).some(e=>e.etapa_id==='anticipo_pagado')?`<div id="ocd-teso" style="margin:-6px 0 14px;padding:9px 11px;border:1px dashed var(--b2);border-radius:8px;"><span class="arte-mu">⏳ Anticipo…</span></div>`:''}
@@ -13216,8 +13219,27 @@ async function ocdAgregarItem(ocId){
 }
 async function reabastEliminarOC(ocId){
   const o = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId); if(!o) return;
-  if(!confirm('¿Eliminar definitivamente la OC '+o.numero_oc+'? Esta acción no se puede deshacer y también borra sus filas sincronizadas en el Panel de compras.')) return;
+  const padre = ocPadre(o), its = (REABAST.ocItems[ocId]||[]);
+  const msg = padre ? '¿Eliminar la orden parcial '+o.numero_oc+'?\n\nLo que tenga ('+(its.length? its.map(i=>i.referencia+' '+reabastFmtN(i.cantidad)).join(', ') : 'sin ítems')+') queda como PENDIENTE en la orden principal '+padre.numero_oc+', con una nota.'
+    : '¿Eliminar definitivamente la OC '+o.numero_oc+'? Esta acción no se puede deshacer y también borra sus filas sincronizadas en el Panel de compras.';
+  if(!confirm(msg)) return;
   try{
+    if(padre){
+      const quien = (CU&&CU.nombre)||'Usuario', hoy = new Date().toLocaleDateString('es-CO');
+      const itP = REABAST.ocItems[padre.id] = REABAST.ocItems[padre.id] || [];
+      for(const it of its){
+        const ya = itP.find(x=>x.referencia===it.referencia && (x.lote||'')===(it.lote||''));
+        const obs = '⏳ Pendiente de '+o.numero_oc+' ('+reabastFmtN(it.cantidad)+' u.)';
+        if(ya){ const c = (Number(ya.cantidad)||0)+(Number(it.cantidad)||0), ob = (ya.observacion?ya.observacion+' · ':'')+obs; await sbReabast.patch('oc_items','id=eq.'+ya.id,{cantidad:c, observacion:ob}); ya.cantidad = c; ya.observacion = ob; await sbReabast.delete('oc_items','id=eq.'+it.id); }
+        else { const ob = (it.observacion?it.observacion+' · ':'')+obs; await sbReabast.patch('oc_items','id=eq.'+it.id,{oc_id:padre.id, observacion:ob}); it.oc_id = padre.id; it.observacion = ob; itP.push(it); }
+      }
+      const linea = '⏳ Pendiente de '+o.numero_oc+' (eliminada '+hoy+' por '+quien+'): '+(its.length? its.map(i=>i.referencia+' '+reabastFmtN(i.cantidad)+' u.').join(', ') : 'orden sin ítems, falta definir qué se pide');
+      const notas = (padre.notas?padre.notas+'\n':'')+linea;
+      await sbReabast.patch('ordenes_compra','id=eq.'+padre.id,{notas}); padre.notas = notas;
+      try{ await sbReabast.delete('oc_parciales','oc_destino_id=eq.'+ocId); PARC.rows = (PARC.rows||[]).filter(x=>x.oc_destino_id!==ocId); }catch(e){ console.warn('oc_parciales', e); }
+      try{ if(PRODF.datos[ocId]){ delete PRODF.datos[ocId]; await prodfGuardar(); } }catch(e){}
+      REABAST.ocItems[ocId] = [];
+    }
     await sbReabast.delete('oc_items', 'oc_id=eq.'+ocId);
     await sbReabast.delete('oc_etapas', 'oc_id=eq.'+ocId);
     await sbReabast.delete('ordenes_compra', 'id=eq.'+ocId);
@@ -13227,9 +13249,14 @@ async function reabastEliminarOC(ocId){
     delete REABAST.ocItems[ocId]; delete REABAST.ocEtapas[ocId];
     REABAST.panelCompras = (REABAST.panelCompras||[]).filter(f=>f.oi!==o.numero_oc);
     document.getElementById('modal-oc-detalle')?.classList.remove('on');
-    reabastRepintarOC();
-    if(typeof toast==='function') toast('OC '+o.numero_oc+' eliminada','ok');
+    reabastRepintarOC(); try{ reabastPintar(); }catch(e){}
+    if(typeof toast==='function') toast('OC '+o.numero_oc+' eliminada'+(padre?' · el pendiente quedó en '+padre.numero_oc:''),'ok');
   }catch(e){ if(typeof toast==='function') toast('Error eliminando: '+e.message,'er'); }
+}
+async function ocLimpiarPendiente(ocId){
+  const o = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId); if(!o) return;
+  const nn = String(o.notas||'').split('\n').filter(l=>!/^⏳ Pendiente de/.test(l)).join('\n');
+  try{ await sbReabast.patch('ordenes_compra','id=eq.'+ocId,{notas:nn||null}); o.notas = nn||null; reabastAbrirDetalleOC(ocId); }catch(e){ toast('Error: '+e.message,'er'); }
 }
 const OC_DOC_ILUMAX_SA = {
   nombre: 'ILUMAX SA',
@@ -20764,7 +20791,8 @@ async function parcCargar(force){
   PARC.cargando = false;
 }
 function parcPend(){ return (PARC.rows||[]).filter(x=>!x.revisado).length; }
-function parcTag(o){
+function parcTag(o){ return (o && /⏳ Pendiente de/.test(o.notas||'') ? ' <span title="'+reabastEsc(o.notas)+'" style="font-size:10px;background:#fee2e2;color:#991b1b;border-radius:999px;padding:1px 7px;font-weight:700;">⏳ pendiente de parcial</span>' : '') + parcTag0(o); }
+function parcTag0(o){
   try{ const d = (PARC.rows||[]).filter(x=>x.oc_destino_id===o.id); if(d.length) return ' <span title="Parcial de '+reabastEsc(d[0].oc_origen)+': '+reabastEsc(d.map(x=>x.referencia+' ('+reabastFmtN(x.cant_movida)+')').join(', '))+'" style="font-size:10px;background:#fef3c7;color:#92400e;border-radius:999px;padding:1px 7px;font-weight:700;">✂️ parcial de '+reabastEsc(d[0].oc_origen)+'</span>';
     const s = (PARC.rows||[]).filter(x=>x.oc_origen_id===o.id); if(s.length){ const ds = new Set(s.map(x=>x.oc_destino)); return ' <span title="Se movieron unidades a: '+reabastEsc([...ds].join(', '))+'" style="font-size:10px;background:#e0f2fe;color:#075985;border-radius:999px;padding:1px 7px;font-weight:700;">✂️ '+ds.size+' parcial'+(ds.size>1?'es':'')+'</span>'; } }catch(e){} return '';
 }
