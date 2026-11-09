@@ -438,9 +438,127 @@ async function ppeCargar() {
   const r = await recApi({ accion: 'recaudo', desde: M.desde, hasta: M.hasta, contadoDias: '1' });
   PPE.cargando = false; PPE.r = (r && r.ok) ? r : { error: (r && r.error) || 'No se pudo traer el recaudo de Siesa' }; ppeVista();
 }
+
+// ── Excel avanzado de Ppto vs Ejecución: hoja principal (como la plantilla) + gráficos + tablero con selector + detalle por cliente + RC como tabla ──
+const PPE_COD = { 'CHAVES ZULUAGA GERSSON ANDRES': 103, 'FERREIRA TORRES JAIME': 107, 'FERRO BAQUERO MAURICIO': 120, 'FLOREZ PELAEZ CARMELINA': 149, 'GARCIA NOGUERA CLAUDIA LORENA': 177, 'LOZADA ACOSTA LUIS FELIPE': 198, 'PADILLA MORALES ROSA ANGELICA': 202, 'PARRA ZAPATA SERGIO ANDRES': 201, 'SANCHEZ LEON LIZ KATHERINE': 532, 'TAYLOR RAMOS CAMILO GUSTAVO': 178 };
+const xe = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function ppeChartXml(c) {
+  const ns = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+  const titulo = '<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1300" b="1"/></a:pPr><a:r><a:rPr lang="es-CO" sz="1300" b="1"/><a:t>' + xe(c.titulo) + '</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>';
+  const dl = (fmt, pie) => '<c:dLbls>' + (fmt ? '<c:numFmt formatCode="' + xe(fmt) + '" sourceLinked="0"/>' : '') + '<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800"/></a:pPr><a:endParaRPr lang="es-CO"/></a:p></c:txPr>' + (pie ? '' : '<c:dLblPos val="outEnd"/>') + '<c:showLegendKey val="0"/><c:showVal val="' + (pie ? 0 : 1) + '"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="' + (pie ? 1 : 0) + '"/><c:showBubbleSize val="0"/></c:dLbls>';
+  const tx = s => '<c:tx><c:strRef><c:f>' + xe(s) + '</c:f></c:strRef></c:tx>';
+  let plot, leg = '<c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend>';
+  if (c.tipo === 'pie') {
+    const s = c.ser[0];
+    plot = '<c:pieChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/>' + tx(s.nombre) + dl('0.0%', true) + '<c:cat><c:strRef><c:f>' + xe(c.cat) + '</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>' + xe(s.vals) + '</c:f></c:numRef></c:val></c:ser><c:firstSliceAng val="0"/></c:pieChart>';
+    leg = '<c:legend><c:legendPos val="r"/><c:overlay val="0"/></c:legend>';
+  } else {
+    const col = c.dir !== 'bar', apilado = c.agrup === 'stacked';
+    const sers = c.ser.map((s, i) => '<c:ser><c:idx val="' + i + '"/><c:order val="' + i + '"/>' + tx(s.nombre) + '<c:spPr><a:solidFill><a:srgbClr val="' + s.color + '"/></a:solidFill></c:spPr><c:invertIfNegative val="0"/>' + (c.etiquetas ? dl(c.fmt) : '') + '<c:cat><c:strRef><c:f>' + xe(c.cat) + '</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>' + xe(s.vals) + '</c:f></c:numRef></c:val></c:ser>').join('');
+    plot = '<c:barChart><c:barDir val="' + (col ? 'col' : 'bar') + '"/><c:grouping val="' + (apilado ? 'stacked' : 'clustered') + '"/><c:varyColors val="0"/>' + sers + '<c:gapWidth val="70"/>' + (apilado ? '<c:overlap val="100"/>' : '') + '<c:axId val="111111"/><c:axId val="222222"/></c:barChart>'
+      + '<c:catAx><c:axId val="111111"/><c:scaling><c:orientation val="' + (col ? 'minMax' : 'maxMin') + '"/></c:scaling><c:delete val="0"/><c:axPos val="' + (col ? 'b' : 'l') + '"/><c:numFmt formatCode="General" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="low"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800"/></a:pPr><a:endParaRPr lang="es-CO"/></a:p></c:txPr><c:crossAx val="222222"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>'
+      + '<c:valAx><c:axId val="222222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="' + (col ? 'l' : 'b') + '"/><c:majorGridlines><c:spPr><a:ln w="6350"><a:solidFill><a:srgbClr val="E2E8F0"/></a:solidFill></a:ln></c:spPr></c:majorGridlines><c:numFmt formatCode="' + xe(c.fmt || '#,##0') + '" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800"/></a:pPr><a:endParaRPr lang="es-CO"/></a:p></c:txPr><c:crossAx val="111111"/><c:crosses val="' + (col ? 'autoZero' : 'max') + '"/><c:crossBetween val="between"/></c:valAx>';
+  }
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace ' + ns + '><c:roundedCorners val="0"/><c:chart>' + titulo + '<c:plotArea><c:layout/>' + plot + '</c:plotArea>' + leg + '<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart></c:chartSpace>';
+}
+// Inserta los gráficos (ExcelJS no los soporta) dentro del .xlsx ya generado
+async function ppeInyectarGraficos(buf, sheetId, charts) {
+  const Z = await JSZip.loadAsync(buf), shp = 'xl/worksheets/sheet' + sheetId + '.xml';
+  let sx = await Z.file(shp).async('string');
+  if (!/xmlns:r=/.test(sx.slice(0, 600))) sx = sx.replace('<worksheet ', '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ');
+  sx = sx.replace('</worksheet>', '<drawing r:id="rIdPpeD1"/></worksheet>'); Z.file(shp, sx);
+  const rp = 'xl/worksheets/_rels/sheet' + sheetId + '.xml.rels', rel = '<Relationship Id="rIdPpeD1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>';
+  let rx = Z.file(rp) ? await Z.file(rp).async('string') : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+  Z.file(rp, rx.replace('</Relationships>', rel + '</Relationships>'));
+  let dx = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">', dr = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">', ct = '';
+  charts.forEach((c, i) => {
+    const n = i + 1, [c0, r0, c1, r1] = c.pos;
+    dx += '<xdr:twoCellAnchor><xdr:from><xdr:col>' + c0 + '</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>' + r0 + '</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>' + c1 + '</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>' + r1 + '</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="' + (n + 1) + '" name="Gráfico ' + n + '"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId' + n + '"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>';
+    dr += '<Relationship Id="rId' + n + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart' + n + '.xml"/>';
+    Z.file('xl/charts/chart' + n + '.xml', ppeChartXml(c)); ct += '<Override PartName="/xl/charts/chart' + n + '.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>';
+  });
+  Z.file('xl/drawings/drawing1.xml', dx + '</xdr:wsDr>'); Z.file('xl/drawings/_rels/drawing1.xml.rels', dr + '</Relationships>');
+  ct += '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>';
+  Z.file('[Content_Types].xml', (await Z.file('[Content_Types].xml').async('string')).replace('</Types>', ct + '</Types>'));
+  return Z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+}
+async function ppeExcel() {
+  const M = PPE_DATA[PPE.mes], r = PPE.r; if (!r || !r.filas) { alert('Primero trae el recaudo de Siesa.'); return; }
+  if (typeof ExcelJS === 'undefined') await loadJs('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
+  if (typeof JSZip === 'undefined') await loadJs('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+  const nombres = Object.keys(M.f), idx = {}; nombres.forEach(n => idx[nz(n)] = n);
+  const filas = r.filas.filter(f => (f.vendedor || '').trim()).map(f => ({ ...f, ej: idx[nz(f.vendedor)] || f.vendedor.trim() })).sort((a, b) => a.fecha.localeCompare(b.fecha) || a.rc - b.rc);
+  const D_ = s => new Date(s + 'T12:00:00Z'), money = '"$" #,##0', pct = '0.0%', AZ = 'FF1E293B', AM = 'FFF5C518';
+  const wb = new ExcelJS.Workbook(); wb.calcProperties = { fullCalcOnLoad: true };
+  const ws = wb.addWorksheet('PPTO VS EJECUCION', { properties: { tabColor: { argb: AM } } }), wg = wb.addWorksheet('Gráficos', { properties: { tabColor: { argb: 'FF2563EB' } } }), wt = wb.addWorksheet('Tablero', { properties: { tabColor: { argb: 'FF16A34A' } } }), wc = wb.addWorksheet('Por cliente'), wd = wb.addWorksheet('RC SIESA');
+  const head = (row, fill) => row.eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill || AZ } }; c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; });
+  const fondo = (c, argb) => c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+  // ── RC SIESA (tabla de Excel: sirve de fuente para tablas dinámicas) ──
+  wd.addRow(['RC SIESA · recibos de caja de ' + M.titulo + ' (fuente de las fórmulas; puedes insertar una tabla dinámica sobre esta tabla)']); wd.getRow(1).font = { bold: true, size: 13 }; wd.addRow([]); wd.addRow([]);
+  const nd = filas.length, d0 = 5, dN = d0 + Math.max(nd, 1) - 1;
+  wd.addTable({ name: 'tblRC', ref: 'A4', headerRow: true, totalsRow: false, style: { theme: 'TableStyleMedium2', showRowStripes: true },
+    columns: ['Fecha', 'RC', 'NIT', 'Ejecutivo', 'Cliente', 'Tipo', 'Asignado', 'Documento'].map(n => ({ name: n, filterButton: true })),
+    rows: nd ? filas.map(f => [D_(f.fecha), f.rc, f.nit, f.ej, f.cliente || '', f.tipoPago || '', f.asignado, f.doc || '']) : [['', '', '', '', '', '', 0, '']] });
+  wd.getColumn(1).numFmt = 'dd/mm/yyyy'; wd.getColumn(7).numFmt = money; [12, 10, 14, 34, 40, 10, 16, 16].forEach((w, i) => wd.getColumn(i + 1).width = w); wd.views = [{ state: 'frozen', ySplit: 4 }];
+  const RF = "'RC SIESA'!$A$" + d0 + ":$A$" + dN, RE = "'RC SIESA'!$D$" + d0 + ":$D$" + dN, RN = "'RC SIESA'!$C$" + d0 + ":$C$" + dN, RV = "'RC SIESA'!$G$" + d0 + ":$G$" + dN;
+  // ── Hoja principal (formato de la plantilla de Cartera) ──
+  ws.getRow(1).height = 8;
+  ws.getCell('C2').value = M.titulo; ws.getCell('C2').font = { bold: true, size: 16 }; ws.getCell('D2').value = 'RECAUDO POR SEMANAS'; ws.mergeCells('D2:G2'); ws.getCell('D2').font = { bold: true, size: 12 }; ws.getCell('D2').alignment = { horizontal: 'center' };
+  head(ws.addRow(['COD', 'EJECUTIVO', 'PPTO ' + M.titulo.replace(' / ', ' '), 'SEMANA 1', 'SEMANA 2', 'SEMANA 3 (Siesa)', 'SEMANA 4 (cuadre)', 'CUMPLIMIENTO ACUMULADO', '% CUMPLTO VS PPTO', '$ FALTANTE', '% DEL FALTANTE', 'TOTAL MES SIESA', 'SIESA SEM 4 (registrado)', 'DIF. CUADRE vs SIESA SEM 4', 'ESTADO'])); ws.getRow(3).height = 36;
+  const T = {}; nombres.forEach(n => T[n] = { mes: 0, w: [0, 0, 0, 0] });
+  filas.forEach(f => { const t = T[f.ej]; if (!t) return; t.mes += f.asignado; M.sem.forEach((w, k) => { if (f.fecha >= w[0] && f.fecha <= w[1]) t.w[k] += f.asignado; }); });
+  const P = 4, PN = P + nombres.length - 1, PT = PN + 1, PD = PT + 4, PH = PD + 1;   // filas: datos, total, "desde", "hasta"
+  const sif = (col, k) => 'SUMIFS(' + RV + ',' + RE + ',$B' + k + ',' + RF + ',">="&' + col + '$' + PD + ',' + RF + ',"<="&' + col + '$' + PH + ')';
+  const tot = { pp: 0, ac: 0, fa: 0 }; nombres.forEach(n => { const [pp, s1, s2] = M.f[n], t = T[n], ac = s1 + s2 + t.w[2] + (t.mes - s1 - s2 - t.w[2]); tot.pp += pp; tot.ac += ac; tot.fa += Math.max(pp - ac, 0); });
+  nombres.forEach((n, i) => { const k = P + i, [pp, s1, s2] = M.f[n], t = T[n], s4 = t.mes - s1 - s2 - t.w[2], ac = s1 + s2 + t.w[2] + s4;
+    ws.addRow([PPE_COD[n] || '', n, pp, s1, s2, { formula: sif('F', k), result: t.w[2] }, { formula: 'L' + k + '-D' + k + '-E' + k + '-F' + k, result: s4 }, { formula: 'SUM(D' + k + ':G' + k + ')', result: ac }, { formula: 'IF(C' + k + '=0,0,H' + k + '/C' + k + ')', result: pp ? ac / pp : 0 }, { formula: 'MAX(C' + k + '-H' + k + ',0)', result: Math.max(pp - ac, 0) }, { formula: 'IF($J$' + PT + '=0,0,J' + k + '/$J$' + PT + ')', result: tot.fa ? Math.max(pp - ac, 0) / tot.fa : 0 }, { formula: 'SUMIFS(' + RV + ',' + RE + ',$B' + k + ')', result: t.mes }, { formula: sif('G', k), result: t.w[3] }, { formula: 'G' + k + '-M' + k, result: s4 - t.w[3] }, { formula: 'IF(I' + k + '>=1,"Cumplido",IF(I' + k + '>=0.7,"En ruta","Atrasado"))', result: pp && ac / pp >= 1 ? 'Cumplido' : pp && ac / pp >= .7 ? 'En ruta' : 'Atrasado' }]);
+    ws.getRow(k).eachCell(c => c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }); });
+  const tr = ws.addRow(['', 'TOTAL']); 'CDEFGHJKLMN'.split('').forEach(c => tr.getCell(c).value = { formula: 'SUM(' + c + P + ':' + c + PN + ')' }); tr.getCell('I').value = { formula: 'IF(C' + PT + '=0,0,H' + PT + '/C' + PT + ')' };
+  tr.font = { bold: true }; tr.eachCell({ includeEmpty: true }, c => { fondo(c, 'FFFDE68A'); c.border = { top: { style: 'medium' }, bottom: { style: 'medium' } }; });
+  ws.addRow([]); ws.addRow([]);
+  const rp = ws.addRow(['', 'Semanas (editables → recalculan todo)']); rp.font = { bold: true, color: { argb: 'FF64748B' } };
+  ws.addRow(['', 'Desde', '', ...M.sem.map(w => D_(w[0]))]); ws.addRow(['', 'Hasta', '', ...M.sem.map(w => D_(w[1]))]);
+  [PD, PH].forEach(k => { for (let c = 4; c <= 7; c++) { const x = ws.getCell(k, c); x.numFmt = 'dd/mm/yyyy'; x.alignment = { horizontal: 'center' }; fondo(x, 'FFFEF9C3'); } });
+  ws.getRow(PH + 2).getCell(2).value = 'Sem 1 y 2: valores del Excel de Cartera · Sem 3: recibos de Siesa · Sem 4: cuadre = total del mes en Siesa − semanas 1, 2 y 3'; ws.getRow(PH + 2).getCell(2).font = { italic: true, color: { argb: 'FF64748B' } };
+  for (let c = 3; c <= 14; c++) ws.getColumn(c).numFmt = money; ws.getColumn(9).numFmt = pct; ws.getColumn(11).numFmt = pct;
+  [PD, PH].forEach(k => { for (let c = 4; c <= 7; c++) ws.getCell(k, c).numFmt = 'dd/mm/yyyy'; });
+  ws.getColumn(1).width = 7; ws.getColumn(2).width = 34; for (let c = 3; c <= 14; c++) ws.getColumn(c).width = 17; ws.getColumn(15).width = 12;
+  ws.addConditionalFormatting({ ref: 'I' + P + ':I' + PT, rules: [{ type: 'expression', formulae: ['I' + P + '>=1'], style: { font: { color: { argb: 'FF16A34A' }, bold: true } } }, { type: 'expression', formulae: ['AND(I' + P + '>=0.7,I' + P + '<1)'], style: { font: { color: { argb: 'FFEA580C' }, bold: true } } }, { type: 'expression', formulae: ['I' + P + '<0.7'], style: { font: { color: { argb: 'FFDC2626' }, bold: true } } }] });
+  ws.addConditionalFormatting({ ref: 'O' + P + ':O' + PN, rules: [{ type: 'cellIs', operator: 'equal', formulae: ['"Cumplido"'], style: { font: { color: { argb: 'FF16A34A' }, bold: true } } }, { type: 'cellIs', operator: 'equal', formulae: ['"Atrasado"'], style: { font: { color: { argb: 'FFDC2626' }, bold: true } } }, { type: 'cellIs', operator: 'equal', formulae: ['"En ruta"'], style: { font: { color: { argb: 'FFEA580C' }, bold: true } } }] });
+  for (let k = P; k <= PN; k++) fondo(ws.getCell('G' + k), 'FFFEF9C3');
+  ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 3 }];
+  // ── Tablero con selector ──
+  const MS = "'PPTO VS EJECUCION'!", rg = c => MS + '$' + c + '$' + P + ':$' + c + '$' + PN, sel = col => 'IF($C$3="TODOS",' + MS + col + '$' + PT + ',SUMIF(' + rg('B') + ',$C$3,' + rg(col) + '))';
+  wt.getCell('B1').value = 'TABLERO · ' + M.titulo; wt.getCell('B1').font = { bold: true, size: 16 };
+  wt.getCell('B3').value = 'Ejecutivo (elige):'; wt.getCell('B3').font = { bold: true }; wt.getCell('C3').value = 'TODOS'; fondo(wt.getCell('C3'), 'FFFEF9C3'); wt.getCell('C3').font = { bold: true, size: 12 };
+  wt.getCell('C3').dataValidation = { type: 'list', allowBlank: false, formulae: ['"TODOS,' + nombres.join(',') + '"'] };
+  const kp = [['Presupuesto', sel('C'), money], ['Recaudado acumulado', sel('H'), money], ['Cumplimiento', 'IF(C5=0,0,C6/C5)', pct], ['Faltante', sel('J'), money], ['Semana 1', sel('D'), money], ['Semana 2', sel('E'), money], ['Semana 3 (Siesa)', sel('F'), money], ['Semana 4 (cuadre)', sel('G'), money], ['Mejor semana', 'INDEX({"Semana 1","Semana 2","Semana 3","Semana 4"},MATCH(MAX(C9:C12),C9:C12,0))', '@']];
+  kp.forEach((k, i) => { const x = wt.getCell(5 + i, 2), y = wt.getCell(5 + i, 3); x.value = k[0]; x.font = { bold: true }; y.value = { formula: k[1] }; y.numFmt = k[2]; y.font = { bold: true, size: 12 }; y.alignment = { horizontal: 'right' }; x.border = y.border = { bottom: { style: 'hair' } }; });
+  wt.getColumn(1).width = 3; wt.getColumn(2).width = 24; wt.getColumn(3).width = 36; wt.addRow([]);
+  wt.getCell('B15').value = 'Cambia el ejecutivo en la celda amarilla (C3) y todo el tablero se recalcula.'; wt.getCell('B15').font = { italic: true, color: { argb: 'FF64748B' } };
+  // ── Por cliente (Siesa, por fecha de recibo) ──
+  wc.addRow(['Recaudo por cliente y semana · según la fecha del recibo de caja en Siesa (el total puede diferir de la tabla principal en las semanas 1 y 2, que vienen del Excel de Cartera)']); wc.getRow(1).font = { bold: true, size: 12 }; wc.addRow([]);
+  head(wc.addRow(['Ejecutivo', 'NIT', 'Cliente', 'Semana 1', 'Semana 2', 'Semana 3', 'Semana 4', 'Total mes', '# RC'])); 
+  const cm = {}; filas.forEach(f => { const k = f.ej + '|' + f.nit, o = cm[k] || (cm[k] = { ej: f.ej, nit: f.nit, cli: f.cliente || f.nit, w: [0, 0, 0, 0], rcs: new Set() }); o.rcs.add(f.rc); M.sem.forEach((w, i) => { if (f.fecha >= w[0] && f.fecha <= w[1]) o.w[i] += f.asignado; }); });
+  const cl = Object.values(cm).sort((a, b) => a.ej.localeCompare(b.ej) || b.w.reduce((x, y) => x + y, 0) - a.w.reduce((x, y) => x + y, 0));
+  cl.forEach((o, i) => { const k = 4 + i, sc = (col, wk) => ({ formula: 'SUMIFS(' + RV + ',' + RE + ',$A' + k + ',' + RN + ',$B' + k + ',' + RF + ',">="&' + MS + wk + '$' + PD + ',' + RF + ',"<="&' + MS + wk + '$' + PH + ')', result: o.w['DEFG'.indexOf(wk)] });
+    wc.addRow([o.ej, o.nit, o.cli, sc('D', 'D'), sc('E', 'E'), sc('F', 'F'), sc('G', 'G'), { formula: 'SUM(D' + k + ':G' + k + ')', result: o.w.reduce((x, y) => x + y, 0) }, o.rcs.size]); });
+  const cN = 3 + cl.length; if (cl.length) { const t = wc.addRow(['TOTAL', '', '', ...'DEFGH'.split('').map(c => ({ formula: 'SUBTOTAL(9,' + c + '4:' + c + cN + ')' })), { formula: 'SUBTOTAL(9,I4:I' + cN + ')' }]); t.font = { bold: true }; t.eachCell({ includeEmpty: true }, c => fondo(c, 'FFFDE68A')); wc.autoFilter = 'A3:I' + cN; }
+  for (let c = 4; c <= 8; c++) wc.getColumn(c).numFmt = money; [30, 14, 44, 16, 16, 16, 16, 18, 8].forEach((w, i) => wc.getColumn(i + 1).width = w); wc.views = [{ state: 'frozen', ySplit: 3 }];
+  // ── Gráficos (se inyectan al final) ──
+  wg.getCell('A1').value = 'GRÁFICOS · ' + M.titulo + ' (se actualizan con la hoja «PPTO VS EJECUCION»)'; wg.getCell('A1').font = { bold: true, size: 14 };
+  const cat = MS + '$B$' + P + ':$B$' + PN, S = (c, color) => ({ nombre: MS + '$' + c + '$3', vals: MS + '$' + c + '$' + P + ':$' + c + '$' + PN, color });
+  const charts = [
+    { titulo: 'Presupuesto vs recaudado por ejecutivo', cat, ser: [S('C', '94A3B8'), S('H', '16A34A')], fmt: '#,##0', pos: [0, 2, 9, 24] },
+    { titulo: 'Recaudo por semana y ejecutivo', agrup: 'stacked', cat, ser: [S('D', '2563EB'), S('E', '7C3AED'), S('F', 'F5C518'), S('G', 'F97316')], fmt: '#,##0', pos: [9, 2, 18, 24] },
+    { titulo: '% de cumplimiento vs presupuesto', dir: 'bar', cat, ser: [S('I', '2563EB')], fmt: '0%', etiquetas: true, pos: [0, 25, 9, 47] },
+    { titulo: 'Participación en el recaudo total', tipo: 'pie', cat, ser: [S('H', '2563EB')], pos: [9, 25, 18, 47] }];
+  const out = await ppeInyectarGraficos(await wb.xlsx.writeBuffer(), wg.id, charts), a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'PPTO_VS_EJECUCION_RECAUDO_' + PPE.mes + '.xlsx'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
 function ppeVista() {
   const c = $('cont'); if (!c) return; const M = PPE_DATA[PPE.mes];
-  const bar = '<div class="bar"><b style="font-size:12px">' + esc(M.titulo) + ' · recaudo por ejecutivo y semana</b><button class="btn" onclick="ppeCargar()">🔄 Traer recaudo de Siesa</button></div>';
+  const bar = '<div class="bar"><b style="font-size:12px">' + esc(M.titulo) + ' · recaudo por ejecutivo y semana</b><button class="btn" onclick="ppeCargar()">🔄 Traer recaudo de Siesa</button>' + (PPE.r && PPE.r.filas ? '<button class="btn" onclick="ppeExcel()">⬇ Excel (con fórmulas)</button>' : '') + '</div>';
   if (PPE.cargando) { c.innerHTML = bar + '<div class="card">Trayendo el recaudo de Siesa…</div>'; return; }
   if (!PPE.r) { c.innerHTML = bar + '<div class="card">Pulsa «Traer recaudo de Siesa» para calcular la semana 3 y el cuadre de la semana 4.</div>'; ppeCargar(); return; }
   if (PPE.r.error) { c.innerHTML = bar + '<div class="card" style="color:#b91c1c">' + esc(PPE.r.error) + '</div>'; return; }
