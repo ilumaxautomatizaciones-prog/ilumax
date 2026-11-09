@@ -2782,7 +2782,7 @@ async function invVentasCargar(){
   }catch(e){ console.warn('Ventas promedio:', e); INV_VPROM = null; INV_VFALLO = true; }
   INV_VCARGANDO = false;
   if(INV_VPROM && document.getElementById('tbody-inv-mod') && typeof filtrarInvMod==='function') filtrarInvMod();
-  if(INV_VPROM && document.getElementById('inv-seg') && typeof ivsPintar==='function') ivsPintar();
+  if(INV_VPROM && document.getElementById('inv-seg') && typeof ivsPintar==='function') ivsPintar(); try{ if(IVS.tab==='proy' && typeof ivsProyPintar==='function') ivsProyPintar(); }catch(e){}
 }
 var INV_CAM_DIAS = 30, INV_FILTRO_CAM = '';
 function invDescRef(){ const m = {}; (typeof INV_DATA!=='undefined'?INV_DATA:[]).forEach(r => { const k = pvClaveRef(r.referencia); if(!m[k] || (!m[k].d && r.descripcion)) m[k] = {d:r.descripcion||'', ex:(m[k]?m[k].ex:0)}; if(invBodegaCuenta(r.bodega)) m[k].ex += parseFloat(r.existencia||0)||0; }); return m; }
@@ -3403,6 +3403,7 @@ async function cargarOC(){
   REABAST.ordenesCompra = ordenes||[];
   REABAST.ocEtapas = {}; (etapasRows||[]).filter(e=>e.etapa_id!=='arribo_puerto').forEach(e => { (REABAST.ocEtapas[e.oc_id]=REABAST.ocEtapas[e.oc_id]||[]).push(e); });
   REABAST.ocItems = {}; (itemsRows||[]).forEach(it => { (REABAST.ocItems[it.oc_id]=REABAST.ocItems[it.oc_id]||[]).push(it); });
+  try{ if(typeof PARC!=='undefined' && !PARC.ok) parcCargar().then(()=>{ try{ if(PARC.ok && typeof reabastPintar==='function') reabastPintar(); }catch(e){} }); }catch(e){}
   // Orden de los productos: se conserva el de la OC (columna oc_items.orden; ver oc_items_orden.sql). Sin la columna, queda el orden de la base.
   REABAST.itemsOrdenCol = (itemsRows||[]).some(r=>r && Object.prototype.hasOwnProperty.call(r,'orden'));
   if(REABAST.itemsOrdenCol){ for(const k in REABAST.ocItems){ REABAST.ocItems[k] = REABAST.ocItems[k].map((it,i)=>({it,i})).sort((a,b)=>{ const x = a.it.orden==null?1e9:Number(a.it.orden), y = b.it.orden==null?1e9:Number(b.it.orden); return x-y || a.i-b.i; }).map(z=>z.it); } }
@@ -3885,8 +3886,26 @@ function ingMapa(){
   ING_C = {sig, m, o:ord}; return m;
 }
 function ingDe(o, ref){ return ingMapa()[ceNum(o.numero_oc)+'|'+ceRefKey(ref)]||0; }
+let _ocDupC = null;
+function ocDupHijos(o, key, cant){
+  // Ítems de la orden madre que una rama (OCI136-1) repite sin que exista el registro de parcialización:
+  // se descuentan de la madre para no contar dos veces el tránsito.
+  if(!o || ocEsRama(o) || !(typeof PARC!=='undefined' && PARC.ok)) return 0;
+  const ocs = REABAST.ordenesCompra||[];
+  if(!_ocDupC || _ocDupC.a!==ocs || _ocDupC.b!==REABAST.ocItems || _ocDupC.c!==PARC.rows){
+    const h = {}; ocs.forEach(c=>{ if(!ocEsRama(c) || c.estado_general==='cancelada') return; const f = String(c.numero_oc||'').replace(/\s*-\d+$/,'').trim(); (h[f]=h[f]||[]).push(c); });
+    _ocDupC = {a:ocs, b:REABAST.ocItems, c:PARC.rows, h};
+  }
+  const hs = _ocDupC.h[String(o.numero_oc||'').trim()]; if(!hs) return 0;
+  let d = 0;
+  hs.forEach(c=>{ (REABAST.ocItems[c.id]||[]).forEach(x=>{ if(ceRefKey(x.referencia)!==key) return;
+    if((PARC.rows||[]).some(r=>r.oc_destino_id===c.id && ceRefKey(r.referencia)===key)) return; d += Number(x.cantidad)||0; }); });
+  return Math.min(d, cant);
+}
 function ocPendItem(o, it){
-  const k = ceRefKey(it.referencia), ing = ingDe(o, it.referencia), cant = Number(it.cantidad)||0; if(!ing) return cant;
+  const k = ceRefKey(it.referencia), ing = ingDe(o, it.referencia); let cant = Number(it.cantidad)||0;
+  const dup = ocDupHijos(o, k, cant); if(dup>0) cant = cant - dup;
+  if(!ing) return cant;
   const tot = (REABAST.ocItems[o.id]||[]).filter(x=>ceRefKey(x.referencia)===k).reduce((a,x)=>a+(Number(x.cantidad)||0),0);
   return tot>0 ? Math.max(0, cant*Math.max(0, tot-ing)/tot) : cant;
 }
@@ -4266,13 +4285,13 @@ function cblHtmlSinVig(){
     <td style="white-space:nowrap;"><input type="date" class="inp" style="font-size:11px;" value="${cblRimEf(m.it).rimf}" ${dis} onchange="cblItemRimF('${m.id}',${m.ix},this.value)"></td></tr>`).join('')}
   </tbody></table></div>`;
 }
-function cblCabBL(){ return `<thead><tr><th>BL</th><th>DIM</th><th>OC</th><th>Agente</th><th>Origen → Destino</th><th>ETD</th><th>ETA</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th>Estado</th><th>Registro de importación</th><th>Siguiente paso</th></tr></thead>`; }
+function cblCabBL(){ return `<thead><tr><th>BL</th><th>DIM</th><th>OC</th><th>Agente</th><th>Origen → Destino</th><th>ETD</th><th>ETA</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th>Estado</th><th>Registro de importación</th><th title="(proveedor + fletes + aduana) ÷ proveedor">Factor imp.</th><th>Siguiente paso</th></tr></thead>`; }
 function cblFilaBL(b, hoy, clk){ const d = b.eta ? Math.ceil((new Date(b.eta+'T12:00:00')-hoy)/86400000) : null, fase = cblFaseBL(b), ocs = [...new Set((b.items||[]).map(it=>it.oc))], cbm = (b.items||[]).reduce((a,it)=>a+(it.cbm>0?it.cant*it.cbm:0),0), rim = b.registro && b.registro.numero;
     return `<tr style="cursor:pointer;" onclick="${clk}"><td style="font-family:monospace;font-weight:800;">${reabastEsc(b.bl)}</td><td onclick="event.stopPropagation()"><input class="inp" style="font-size:11px;width:120px;" placeholder="N.º DIM" title="Número de la declaración de importación (DIM) de este BL" value="${reabastEsc(b.dim||'')}" ${cblPuede()?'':'disabled'} onchange="cblDim('${b.id}',this.value)"></td><td title="${reabastEsc(ocs.join(', '))}">${reabastEsc(ocs.slice(0,3).join(', '))}${ocs.length>3?' +'+(ocs.length-3):''}</td><td>${reabastEsc(b.agente||'—')}</td><td>${reabastEsc((b.po||'—')+' → '+(b.pd||'—'))}</td><td onclick="event.stopPropagation()">${cblFd(b.etd)}${fase===5?` <span style="cursor:pointer;" title="Actualizar ETD" onclick="cblEditarFecha('${b.id}','etd')">✏️</span>`:''}</td>
     <td style="white-space:nowrap;" onclick="event.stopPropagation()"><b>${cblFd(b.eta)}</b>${b.etaConf?' <span title="ETA confirmada (verde en la sábana)" style="color:#16a34a;">✔</span>':''}${fase!==9&&fase!==-1?` <span style="cursor:pointer;" title="Actualizar ETA" onclick="cblEditarFecha('${b.id}','eta')">✏️</span>`:''}${fase!==9 && d!=null?`<div style="font-size:10px;color:${d<0?'#991b1b':d<=15?'#1e40af':'var(--mu)'};">${d<0?'hace '+(-d)+' d':d===0?'hoy':'en '+d+' d'}</div>`:''}</td>
     <td style="text-align:right;">${(b.items||[]).length}</td><td style="text-align:right;">${cblN(cbm,1)}</td>
     <td><span class="cbl-pill" style="${fase===9?'background:#dcfce7;color:#166534;':fase===5?'background:#ede9fe;color:#5b21b6;':fase===6?'background:#dbeafe;color:#1e40af;':fase===7?'background:#fef3c7;color:#92400e;':''}">${reabastEsc(cblEstadoBL(b))}</span>${cblParcial(b)?` <span class="cbl-pill" style="background:#fce7f3;color:#9d174d;" title="${reabastEsc(cblParcialTxt(b))}">◐ Parcial</span>`:''}</td>
-    <td>${rim?`<b>${reabastEsc(b.registro.numero)}</b>${b.registro.aprobado?' ✅':''}`:'<span class="arte-mu">—</span>'}${(nSV=>nSV?`<div style="font-size:10px;font-weight:700;color:#991b1b;" title="Ítems sin registro de importación">⚠️ ${nSV} ítem(s) sin registro</div>`:'')((b.items||[]).filter(cblSinVig).length)}</td><td style="white-space:nowrap;" onclick="event.stopPropagation()">${cblBotonAvanzar(b,true)}</td></tr>`; }
+    <td>${rim?`<b>${reabastEsc(b.registro.numero)}</b>${b.registro.aprobado?' ✅':''}`:'<span class="arte-mu">—</span>'}${(nSV=>nSV?`<div style="font-size:10px;font-weight:700;color:#991b1b;" title="Ítems sin registro de importación">⚠️ ${nSV} ítem(s) sin registro</div>`:'')((b.items||[]).filter(cblSinVig).length)}</td><td style="text-align:right;font-weight:700;">${(F=>F.factor!=null?F.factor.toFixed(3).replace('.',','):'<span class="arte-mu">—</span>')(cblFinCalc(b))}</td><td style="white-space:nowrap;" onclick="event.stopPropagation()">${cblBotonAvanzar(b,true)}</td></tr>`; }
 function cblHtmlTabla(){
   cblCupoMapa();
   const lista = cblBLsFiltrados(), hoy = Date.now();
@@ -4316,6 +4335,58 @@ function cblEditarFecha(id, campo){
 }
 function cblAbrir(id){ CBL.det = id; cblPintarDetalle(); }
 function cblCerrarDetalle(){ CBL.det = null; const m = document.getElementById('cbl-det'); if(m) m.remove(); reabastPintar(); }
+/* ===== Módulo financiero por BL: facturas (proveedor, flete internacional, agencia de aduanas, flete terrestre) → factor de importación ===== */
+const CBL_FIN_TIPOS = { proveedor:'Factura proveedor', flete_int:'Flete internacional', aduana:'Agencia de aduanas', flete_terr:'Flete terrestre' };
+function cblFinCop(f){ return f.moneda==='USD' ? (Number(f.valor)||0)*(Number(f.trm)||0) : (Number(f.valor)||0); }
+function cblFinCalc(b){
+  const L = (b.fin && b.fin.facturas) || [], s = {proveedor:0, flete_int:0, aduana:0, flete_terr:0}, usdProv = {v:0};
+  L.forEach(f=>{ if(s[f.tipo]!=null) s[f.tipo] += cblFinCop(f); if(f.tipo==='proveedor') usdProv.v += f.moneda==='USD' ? (Number(f.valor)||0) : 0; });
+  const extra = s.flete_int + s.aduana + s.flete_terr, total = s.proveedor + extra;
+  const cbm = Number(b.cbmc)>0 ? Number(b.cbmc) : (b.items||[]).reduce((a,it)=>a+(it.cbm>0?it.cant*it.cbm:0),0);
+  return {s, extra, total, usdProv:usdProv.v, factor: s.proveedor>0 ? total/s.proveedor : null, cbm, porCbm: cbm>0 && extra>0 ? extra/cbm : null, n:L.length};
+}
+function cblFinHtml(b, puede){
+  const F = cblFinCalc(b), L = (b.fin && b.fin.facturas) || [], dis = puede ? '' : 'disabled', m = v=>'$ '+Math.round(v||0).toLocaleString('es-CO');
+  const falta = ['proveedor','flete_int','aduana','flete_terr'].filter(t=>!L.some(f=>f.tipo===t)).map(t=>CBL_FIN_TIPOS[t]);
+  const tile = (t,v,c)=>`<div style="background:#fff;border:1px solid var(--b1);border-radius:8px;padding:6px 12px;min-width:130px;"><div style="font-weight:800;font-size:14px;color:${c||'var(--tx)'};">${v}</div><div class="arte-mu" style="font-size:10px;">${t}</div></div>`;
+  const trmDef = (L.length ? L[L.length-1].trm : '') || (typeof OC_TRM_APROX!=='undefined' ? OC_TRM_APROX : '');
+  return `<div id="cbl-fin" style="margin-top:14px;border-top:2px solid var(--b1);padding-top:10px;">
+    <div style="font-weight:800;font-size:13px;margin-bottom:6px;">💲 Costos de importación y factor <span class="arte-mu" style="font-weight:500;font-size:11px;">· carga las facturas de este BL; el factor = (proveedor + fletes + aduana) ÷ proveedor</span></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">${tile('Factura proveedor', m(F.s.proveedor))}${tile('Flete internacional', m(F.s.flete_int))}${tile('Agencia de aduanas', m(F.s.aduana))}${tile('Flete terrestre', m(F.s.flete_terr))}${tile('Costo total puesto en bodega', m(F.total))}${tile('FACTOR DE IMPORTACIÓN', F.factor!=null ? F.factor.toFixed(4).replace('.',',') : '—', F.factor!=null?'#1d4ed8':'#94a3b8')}${F.porCbm!=null?tile('Gastos por CBM ('+F.cbm.toLocaleString('es-CO',{maximumFractionDigits:2})+' m³)', m(F.porCbm)):''}</div>
+    ${falta.length && L.length ? `<div class="arte-mu" style="font-size:11px;margin-bottom:6px;color:#b45309;">⚠ Aún falta: ${falta.join(', ')} (el factor es parcial).</div>`:''}
+    ${L.length ? `<div class="tw"><table class="cbl-t" style="font-size:11.5px;"><thead><tr><th>Tipo</th><th>N.º factura</th><th>Proveedor / agencia</th><th>Fecha</th><th>Moneda</th><th style="text-align:right;">Valor</th><th style="text-align:right;">TRM</th><th style="text-align:right;">Valor COP</th><th>Nota</th><th></th></tr></thead><tbody>
+      ${L.map(f=>`<tr><td>${reabastEsc(CBL_FIN_TIPOS[f.tipo]||f.tipo)}</td><td style="font-family:monospace;">${reabastEsc(f.num||'')}</td><td>${reabastEsc(f.prov||'')}</td><td>${f.fecha?cblFd(f.fecha):''}</td><td>${reabastEsc(f.moneda)}</td><td style="text-align:right;">${(Number(f.valor)||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td><td style="text-align:right;">${f.moneda==='USD'?(Number(f.trm)||0).toLocaleString('es-CO'):'—'}</td><td style="text-align:right;font-weight:700;">${m(cblFinCop(f))}</td><td style="font-size:10.5px;">${reabastEsc(f.nota||'')}</td><td>${puede?`<button class="btn btn-g btn-xs" onclick="cblFinQuitar('${b.id}','${f.id}')">✕</button>`:''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="arte-mu" style="font-size:11.5px;margin-bottom:6px;">Sin facturas cargadas.</div>'}
+    ${puede ? `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;margin-top:8px;background:var(--s1,#f8fafc);padding:8px;border-radius:8px;">
+      <div><label class="fl">Tipo</label><select id="cblf-tipo" class="inp" ${dis}>${Object.keys(CBL_FIN_TIPOS).map(k=>`<option value="${k}">${CBL_FIN_TIPOS[k]}</option>`).join('')}</select></div>
+      <div><label class="fl">N.º factura</label><input id="cblf-num" class="inp" style="width:110px;"></div>
+      <div><label class="fl">Proveedor / agencia</label><input id="cblf-prov" class="inp" style="width:150px;"></div>
+      <div><label class="fl">Fecha</label><input id="cblf-fec" class="inp" type="date"></div>
+      <div><label class="fl">Moneda</label><select id="cblf-mon" class="inp"><option>USD</option><option>COP</option></select></div>
+      <div><label class="fl">Valor</label><input id="cblf-val" class="inp" type="number" step="0.01" min="0" style="width:110px;"></div>
+      <div><label class="fl">TRM (si es USD)</label><input id="cblf-trm" class="inp" type="number" step="0.01" min="0" style="width:90px;" value="${trmDef}"></div>
+      <div><label class="fl">Nota</label><input id="cblf-nota" class="inp" style="width:140px;"></div>
+      <button class="btn btn-bl btn-sm" onclick="cblFinAgregar('${b.id}')">+ Agregar factura</button></div>` : ''}
+  </div>`;
+}
+async function cblFinAgregar(id){
+  const b = CBL.bls.find(x=>x.id===id); if(!b) return; const g = k=>{ const e = document.getElementById('cblf-'+k); return e ? e.value : ''; };
+  const val = Number(g('val')), mon = g('mon'), trm = Number(g('trm'));
+  if(!(val>0)){ toast('Pon el valor de la factura','er'); return; }
+  if(mon==='USD' && !(trm>0)){ toast('Pon la TRM para convertir los dólares a pesos','er'); return; }
+  const f = {id:'f'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), tipo:g('tipo'), num:g('num').trim(), prov:g('prov').trim(), fecha:g('fec')||null, moneda:mon, valor:val, trm:mon==='USD'?trm:null, nota:g('nota').trim(), por:(CU&&CU.nombre)||'', en:new Date().toISOString()};
+  b.fin = b.fin || {facturas:[]}; b.fin.facturas = [...(b.fin.facturas||[]), f];
+  cblLog(b, 'Factura '+(CBL_FIN_TIPOS[f.tipo]||f.tipo)+(f.num?' '+f.num:'')+' · '+mon+' '+val.toLocaleString('es-CO'));
+  try{ await cblGuardar([b]); toast('✅ Factura agregada','ok'); }catch(e){ toast('No se pudo guardar: '+e.message,'er'); }
+  cblPintarDetalle();
+}
+async function cblFinQuitar(id, fid){
+  const b = CBL.bls.find(x=>x.id===id); if(!b || !b.fin) return; const f = b.fin.facturas.find(x=>x.id===fid); if(!f) return;
+  if(!confirm('¿Quitar la factura '+(f.num||CBL_FIN_TIPOS[f.tipo])+'?')) return;
+  b.fin.facturas = b.fin.facturas.filter(x=>x.id!==fid); cblLog(b, 'Quitó factura '+(CBL_FIN_TIPOS[f.tipo]||f.tipo)+(f.num?' '+f.num:''));
+  try{ await cblGuardar([b]); }catch(e){ toast('No se pudo guardar: '+e.message,'er'); }
+  cblPintarDetalle();
+}
+
 function cblPintarDetalle(){
   cblCupoMapa();
   const b = CBL.bls.find(x=>x.id===CBL.det); if(!b){ cblCerrarDetalle(); return; } cblCss();
@@ -4341,6 +4412,7 @@ function cblPintarDetalle(){
       <td><input type="date" class="inp" style="font-size:11px;" value="${it.ingreso||''}" ${dis} onchange="cblItemFecha('${b.id}',${ix},'ingreso',this.value)"></td>
       <td>${puede?`<button class="btn btn-g btn-xs" title="Sacar este ítem del BL (vuelve a 'por embarcar')" onclick="cblQuitarItem('${b.id}',${ix})">✕</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>
+    ${cblFinHtml(b, puede)}
     ${(b.hist||[]).length?`<details style="margin-top:10px;"><summary class="arte-mu" style="cursor:pointer;font-size:11px;">Historial (${b.hist.length})</summary><div style="font-size:11px;margin-top:4px;">${[...b.hist].reverse().map(h=>`<div>${new Date(h.t).toLocaleString('es-CO')} · <b>${reabastEsc(h.quien||'')}</b> · ${reabastEsc(h.accion||'')}</div>`).join('')}</div></details>`:''}
     ${puede?`<div style="margin-top:10px;"><button class="btn btn-rd btn-sm" onclick="cblEliminarBL('${b.id}')" title="Borra el BL; sus ítems vuelven a 'por embarcar'">🗑 Eliminar este BL</button></div>`:''}
   </div>`;
@@ -6333,6 +6405,7 @@ function segPlanFechas(o, celdas){
       if(col.id==='produccion'){ try{ const v = ceFinProduccion(o); if(v && v.fecha) fin = new Date(v.fecha); }catch(e){} }
       if(fin){ if(fin < hoy){ fin = new Date(hoy); atras = true; } else atras = false; cur = fin; } continue; }
     if(d.st==='pend'){
+      if(col.id==='produccion'){ const nv1 = typeof PRODF!=='undefined' && PRODF.datos && PRODF.datos[o.id] && PRODF.datos[o.id].nueva; if(nv1){ cur = new Date(nv1+'T12:00:00'); plan.produccion = cur; atras = false; continue; } }
       const desdeProd = col.id==='embarque' && prodCur;   // el embarque cuenta desde el día hábil siguiente a terminar Producción
       if(desdeProd) cur = new Date(prodCur);
       if(!cur) continue;   // sin etapa previa con fecha no hay desde dónde proyectar
@@ -9681,6 +9754,8 @@ function ceFinProduccion(o, ignorarNueva){
   const es = REABAST.ocEtapas[o.id]||[], by = {}; es.forEach(e=>{ by[e.etapa_id] = e; });
   const prod = by.produccion;
   if(prod && prod.estado==='completada' && prod.fecha_fin) return {fecha:new Date(prod.fecha_fin), fuente:'producción terminada'};
+  // la nueva fecha de entrega que registra Compras manda aunque la producción aún no arranque (artes/anticipo pendientes)
+  { const nv0 = !ignorarNueva && typeof PRODF!=='undefined' && PRODF.datos && PRODF.datos[o.id] && PRODF.datos[o.id].nueva; if(nv0) return {fecha:new Date(nv0+'T12:00:00'), fuente:'nueva fecha de entrega registrada por Compras', ajustada:true}; }
   // también cuenta como "en producción" si Comercio Exterior o Base compras ya la reportan en producción
   const rce = typeof ceDe==='function' ? ceDe(o.numero_oc) : null;
   const enProd = (prod && prod.estado==='en_curso') || (rce && rce.fase!=null && rce.fase>=3) || filas.some(f=>/produc/.test(pciNorm(f['ESTADO DIANA'])));
@@ -10033,6 +10108,9 @@ function ppConstruir(){
     if(ramasDe && !(A.saldo && A.saldo.usd!=null)) salUsd = Math.max(0, Math.round((calc.fob - (sinAnt ? 0 : calc.usd))*100)/100);
     // Si el anticipo se editó a mano, el saldo se recalcula solo: total de la compra − anticipo (salvo que el saldo también se haya ajustado a mano)
     if(!sinAnt && A.anticipo && A.anticipo.usd!=null && !(A.saldo && A.saldo.usd!=null)) salUsd = Math.max(0, Math.round(((ramasDe ? calc.fob : (compras||calc.fob)) - antUsd)*100)/100);
+    // Anticipo ya pagado por Tesorería: el saldo es lo que falta de la compra actual (si se quitaron/agregaron ítems después del pago)
+    { const _rp = typeof tesoRegDe==='function' ? tesoRegDe(o.id) : null;
+      if(_rp && _rp.estado==='pagado' && !sinAnt && !ramasDe && !(A.saldo && A.saldo.usd!=null) && !(A.anticipo && A.anticipo.usd!=null)) salUsd = Math.max(0, Math.round(((compras||calc.fob) - tesoPagadoUsd(_rp))*100)/100); }
     if(A.saldo && A.saldo.usd!=null) salUsd = Number(A.saldo.usd);
     else { const _rg = typeof tesoRegDe==='function' ? tesoRegDe(o.id) : null, _nc = _rg ? tesoNcUsd(_rg,'saldo') : 0; if(_nc>0) salUsd = Math.max(0, Math.round((salUsd - _nc)*100)/100); } // notas crédito del proveedor bajan el saldo
     const r = typeof ceDe==='function' ? ceDe(o.numero_oc) : null;
@@ -10126,8 +10204,9 @@ async function ppAbrirEn(contId){
   const el = document.getElementById(contId); if(!el) return;
   el.innerHTML = '<div style="padding:16px;" class="arte-mu">⏳ Armando la programación de pagos…</div>';
   try{
-    if(!REABAST.ordenesCompra || !REABAST.ordenesCompra.length) await cargarOC();
-    await Promise.all([ppCargarAjustes(true), typeof tesoCargar==='function' ? tesoCargar(false).catch(()=>{}) : null, typeof ceCargarResumen==='function' ? ceCargarResumen() : null]);
+    // siempre con los ítems/OC al día (si alguien quitó ítems de una orden, el pago se recalcula)
+    if(!REABAST.ordenesCompra || !REABAST.ordenesCompra.length || !REABAST._ocCargadasEn || Date.now()-REABAST._ocCargadasEn>30000){ await cargarOC(); REABAST._ocCargadasEn = Date.now(); }
+    await Promise.all([ppCargarAjustes(true), typeof tesoCargar==='function' ? tesoCargar(true).catch(()=>{}) : null, typeof ceCargarResumen==='function' ? ceCargarResumen() : null]);
   }catch(e){}
   PP.cont = contId; ppPintar();
 }
@@ -18957,7 +19036,7 @@ function ivsForzarAdd() { const i = document.getElementById('ivs-forz'); const k
 function ivsForzarQuitar(k) { IVS.forzarAct = (IVS.forzarAct || []).filter(x => x !== k); ivsForzarGuardar('Quitada de la lista. Vuelve a su estado de la base al cargar la BASE DE PRODUCTO otra vez.'); }
 async function renderInvAbast() {
   const pg = document.getElementById('pg-inv'); if (!pg) return;
-  if (!document.getElementById('ivs-bar')) pg.insertAdjacentHTML('afterbegin', '<div id="ivs-bar" style="display:flex;gap:6px;margin:0 0 12px;"></div><div id="inv-seg"></div>');
+  if (!document.getElementById('ivs-bar')) pg.insertAdjacentHTML('afterbegin', '<div id="ivs-bar" style="display:flex;gap:6px;margin:0 0 12px;flex-wrap:wrap;"></div><div id="inv-seg"></div><div id="inv-proy" style="display:none;"></div>');
   ivsBar();
   const seg = document.getElementById('inv-seg'); seg.innerHTML = '<div class="empty">Cargando inventario y órdenes de compra…</div>';
   ivsVista();
@@ -18968,9 +19047,9 @@ async function renderInvAbast() {
 }
 function ivsBar() {
   const b = document.getElementById('ivs-bar'); if (!b) return;
-  b.innerHTML = [['seg', '📊 Seguimiento'], ['det', '📦 Detalle del inventario']].map(t => '<button class="btn ' + (IVS.tab === t[0] ? 'btn-bl' : 'btn-g') + '" onclick="IVS.tab=\'' + t[0] + '\';ivsBar();ivsVista()">' + t[1] + '</button>').join('');
+  b.innerHTML = [['seg', '📊 Seguimiento'], ['proy', '📅 Proyección por mes'], ['det', '📦 Detalle del inventario']].map(t => '<button class="btn ' + (IVS.tab === t[0] ? 'btn-bl' : 'btn-g') + '" onclick="IVS.tab=\'' + t[0] + '\';ivsBar();ivsVista()">' + t[1] + '</button>').join('');
 }
-function ivsVista() { const s = document.getElementById('inv-seg'), d = document.getElementById('inv-content'); if (s) s.style.display = IVS.tab === 'seg' ? '' : 'none'; if (d) d.style.display = IVS.tab === 'det' ? '' : 'none'; }
+function ivsVista() { const s = document.getElementById('inv-seg'), d = document.getElementById('inv-content'), y = document.getElementById('inv-proy'); if (s) s.style.display = IVS.tab === 'seg' ? '' : 'none'; if (d) d.style.display = IVS.tab === 'det' ? '' : 'none'; if (y) { y.style.display = IVS.tab === 'proy' ? '' : 'none'; if (IVS.tab === 'proy') ivsProyPintar(); } }
 function ivsCalc() {
   const set = new Set(IVS.bodegas), por = {}, bod = {}, cl = new Set((IVS.clasif && IVS.clasif.d) || []);
   const actB = IVS.clasif && Array.isArray(IVS.clasif.act) ? new Set(IVS.clasif.act) : null; // referencias que no están en la BASE DE PRODUCTO se excluyen del análisis
@@ -18988,7 +19067,7 @@ function ivsCalc() {
     const trm = IVS.trmFijo || Number(o.trm) || trmDef, FAC = Number(IVS.factor) || 1.15; let uds = 0, usd = 0, sinFob = 0;
     invPendItems(o).forEach(({ it, pend }) => {
       const M = (REABAST.referenciasMaestro || {})[String(it.referencia || '').trim()] || {}, fob = Number(it.precio_fob_usd) || Number(M.fob_usd) || 0; if (!fob) sinFob++;
-      uds += pend; usd += pend * fob; const k = pvClaveRef(it.referencia); (pendRef[k] = pendRef[k] || []).push({ oc: o.numero_oc, pend, fecha: L && L.fecha ? L.fecha : null, estim: !!(L && (L.estimada || L.corregida)) });
+      uds += pend; usd += pend * fob; const k = pvClaveRef(it.referencia); (pendRef[k] = pendRef[k] || []).push({ oc: o.numero_oc, pend, fecha: L && L.fecha ? L.fecha : null, estim: !!(L && (L.estimada || L.corregida)), ref: it.referencia, desc: it.descripcion || M.descripcion || M.nombre || '', cop: pend * fob * FAC * trm });
     });
     if (uds > 0) tr.push({ oc: o.numero_oc, prov: o.proveedor || '', fecha: L && L.fecha ? L.fecha : null, estim: !!(L && (L.estimada || L.corregida)), uds, usd, trm, cop: usd * FAC * trm, sinFob });
   });
@@ -19123,6 +19202,109 @@ function ivsExcelExceso() {
 }
 function ivsExcelAgotados() {
   const L = IVS._ago || []; const ws = XLSX.utils.aoa_to_sheet([['Referencia', 'Descripción', 'Canal', 'Orden en camino', 'Unidades por llegar', 'Fecha de llegada', 'Venta prom. mes (und)', 'Venta prom. mes ($)', 'Venta perdida hasta llegada ($)']].concat(L.map(a => [a.p.ref, a.p.desc, a.canales.join(', '), a.ll ? a.ll.oc : 'Sin orden', a.ll ? Math.round((IVS._C.pendRef[a.p.k] || []).reduce((s, x) => s + x.pend, 0)) : '', a.ll && a.ll.fecha ? new Date(a.ll.fecha).toISOString().slice(0, 10) : '', Math.round(a.vu), Math.round(a.vv), a.perd != null ? Math.round(a.perd) : '']))), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Agotados regulares'); XLSX.writeFile(wb, 'Regulares_agotados_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+}
+
+
+/* ===== Proyección por mes: inventario + tránsito (cantidad / costo / CBM) y meses de inventario ===== */
+IVS.py = IVS.py || { m: 'q', n: 8, adj: 0, q: '', solo: 1, desc: 0 };
+function ivsProyMeses(n) {
+  const h = new Date(); const out = [];
+  for (let i = 0; i < n; i++) { const d = new Date(h.getFullYear(), h.getMonth() + i, 1, 12); out.push({ k: d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'), lbl: ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][d.getMonth()] + '-' + String(d.getFullYear()).slice(2) }); }
+  return out;
+}
+function ivsProyDatos(C) {
+  const P = IVS.py, meses = ivsProyMeses(Number(P.n) || 8), idx = {}; meses.forEach((m, i) => idx[m.k] = i);
+  const vp = (typeof INV_VPROM !== 'undefined' && INV_VPROM) || {}, adj = 1 + (Number(P.adj) || 0) / 100, filas = [], vistos = new Set();
+  const base = C.refs.filter(p => P.desc || !p.desc_).slice();
+  base.forEach(p => vistos.add(p.k));
+  Object.keys(C.pendRef).forEach(k => { if (vistos.has(k)) return; const f = C.pendRef[k][0] || {}; base.push({ k, ref: f.ref || k, desc: f.desc || '', disp: 0, valor: 0, desc_: false }); });
+  base.forEach(p => {
+    const E = C.pendRef[p.k] || [], vu = vp[pvClaveRef(p.ref)] || 0, vpr = vu * adj, n = meses.length;
+    const arr = new Array(n).fill(0), arrC = new Array(n).fill(0); let sinF = 0, sinFC = 0, desp = 0, despC = 0, trQ = 0, trC = 0;
+    E.forEach(x => {
+      trQ += x.pend; trC += x.cop || 0;
+      if (!x.fecha) { sinF += x.pend; sinFC += x.cop || 0; return; }
+      const d = new Date(x.fecha), k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      let i = idx[k]; if (i == null) { if (d < new Date(meses[0].k + '-01T12:00:00')) i = 0; else { desp += x.pend; despC += x.cop || 0; return; } }
+      arr[i] += x.pend; arrC[i] += x.cop || 0;
+    });
+    const cuInv = p.disp ? p.valor / p.disp : 0, cuTr = trQ ? trC / trQ : 0, cu = cuInv || cuTr, cbmU = Number((cbmRefInfo(p.ref) || {}).cbm) || 0;
+    let inv = p.disp; const invM = [], cob = [];
+    for (let i = 0; i < n; i++) { inv = Math.max(0, inv + arr[i] - vpr); invM.push(inv); cob.push(vpr > 0 ? inv / vpr : (inv > 0 ? Infinity : 0)); }
+    filas.push({ p, vu, vpr, cu, cuTr, cbmU, disp: p.disp, valor: p.valor, trQ, trC, arr, arrC, sinF, sinFC, desp, despC, invM, cob, cob0: vpr > 0 ? p.disp / vpr : (p.disp > 0 ? Infinity : 0) });
+  });
+  return { meses, filas };
+}
+function ivsProyVal(f, m, q, kind) {   // convierte una cantidad a la métrica elegida (q = cantidad, c = costo COP, b = CBM)
+  if (m === 'q') return q;
+  if (m === 'b') return q * f.cbmU;
+  return kind === 'inv' ? q * f.cu : q * (f.cuTr || f.cu);
+}
+function ivsProyFmt(m, v) { return m === 'b' ? (Math.round(v * 100) / 100).toLocaleString('es-CO') : (m === 'c' ? '$ ' + ivsN(v) : ivsN(v)); }
+function ivsProyCobHtml(c) {
+  if (c === Infinity) return '<td style="text-align:right;background:#ede9fe;color:#5b21b6;font-weight:700;">∞</td>';
+  const bg = c < 1 ? '#fee2e2' : c < 3 ? '#fef3c7' : c <= 8 ? '#dcfce7' : '#ffedd5', co = c < 1 ? '#991b1b' : c < 3 ? '#92400e' : c <= 8 ? '#166534' : '#9a3412';
+  return '<td style="text-align:right;background:' + bg + ';color:' + co + ';font-weight:700;">' + c.toFixed(1) + '</td>';
+}
+function ivsProyPintar() {
+  const el = document.getElementById('inv-proy'); if (!el) return;
+  if (typeof INV_VPROM !== 'undefined' && !INV_VPROM && !INV_VFALLO) invVentasCargar();
+  const C = IVS._C || (typeof INV_DATA !== 'undefined' && INV_DATA.length ? ivsCalc() : null);
+  if (!C) { el.innerHTML = '<div class="empty">Cargando inventario y órdenes de compra…</div>'; return; }
+  const P = IVS.py, m = P.m, D = ivsProyDatos(C); IVS._proy = D;
+  const q = String(P.q || '').toLowerCase().trim();
+  let L = D.filas.filter(f => (!P.solo || f.disp > 0 || f.trQ > 0) && (!q || String(f.p.ref).toLowerCase().includes(q) || String(f.p.desc).toLowerCase().includes(q)));
+  L.sort((a, b) => (ivsProyVal(b, m, b.disp, 'inv') + ivsProyVal(b, m, b.trQ, 'tr')) - (ivsProyVal(a, m, a.disp, 'inv') + ivsProyVal(a, m, a.trQ, 'tr')));
+  const T = { disp: 0, rotR: 0, rotP: 0, tr: 0, sinF: 0, desp: 0, arr: D.meses.map(() => 0), inv: D.meses.map(() => 0) };
+  L.forEach(f => { const mu = m === 'q' ? 1 : (m === 'b' ? f.cbmU : f.cu); T.disp += ivsProyVal(f, m, f.disp, 'inv'); T.rotR += f.vu * mu; T.rotP += f.vpr * mu; T.tr += ivsProyVal(f, m, f.trQ, 'tr'); T.sinF += ivsProyVal(f, m, f.sinF, 'tr'); T.desp += ivsProyVal(f, m, f.desp, 'tr');
+    f.arr.forEach((a, i) => T.arr[i] += ivsProyVal(f, m, a, 'tr')); f.invM.forEach((a, i) => T.inv[i] += a * mu); });
+  const cobT = D.meses.map((_, i) => T.rotP > 0 ? T.inv[i] / T.rotP : 0), cob0T = T.rotP > 0 ? T.disp / T.rotP : 0, F = v => ivsProyFmt(m, v);
+  const sinCbm = m === 'b' ? L.filter(f => !f.cbmU && (f.disp > 0 || f.trQ > 0)).length : 0;
+  const th = (t, extra) => '<th style="text-align:right;white-space:nowrap;' + (extra || '') + '">' + t + '</th>';
+  const chipM = (k, t) => '<span class="chip ' + (m === k ? 'on' : '') + '" onclick="IVS.py.m=\'' + k + '\';ivsProyPintar()">' + t + '</span>';
+  const ctl = '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
+    + '<div style="display:flex;gap:6px;">' + chipM('q', 'Cantidad') + chipM('c', 'Costo ($)') + chipM('b', 'CBM') + '</div>'
+    + '<label style="font-size:12px;">Meses a proyectar <select class="inp" style="width:auto;font-size:12px;" onchange="IVS.py.n=+this.value;ivsProyPintar()">' + [4, 6, 8, 10, 12].map(n => '<option ' + (Number(P.n) === n ? 'selected' : '') + '>' + n + '</option>').join('') + '</select></label>'
+    + '<label style="font-size:12px;" title="Rotación proyectada = rotación real × (1 + ajuste)">Ajuste de rotación <input type="number" step="5" class="inp" style="width:70px;font-size:12px;" value="' + (Number(P.adj) || 0) + '" onchange="IVS.py.adj=+this.value||0;ivsProyPintar()"> %</label>'
+    + '<input class="inp" style="width:200px;font-size:12px;" placeholder="Buscar referencia…" value="' + ivsE(P.q || '') + '" oninput="IVS.py.q=this.value;clearTimeout(IVS._pyT);IVS._pyT=setTimeout(ivsProyPintar,350)">'
+    + '<label style="font-size:12px;cursor:pointer;"><input type="checkbox" ' + (P.solo ? 'checked ' : '') + 'onchange="IVS.py.solo=this.checked?1:0;ivsProyPintar()"> solo con inventario o tránsito</label>'
+    + '<label style="font-size:12px;cursor:pointer;"><input type="checkbox" ' + (P.desc ? 'checked ' : '') + 'onchange="IVS.py.desc=this.checked?1:0;ivsProyPintar()"> incluir descontinuadas</label>'
+    + '<button class="btn btn-g btn-sm" onclick="ivsProyExcel()">⬇ Excel (cantidad, costo, CBM y meses)</button></div>';
+  const vp = (typeof INV_VPROM !== 'undefined' && INV_VPROM);
+  const head = '<tr><th rowspan="2" style="position:sticky;left:0;background:#f8fafc;z-index:2;">Referencia</th><th rowspan="2" style="min-width:170px;">Descripción</th>'
+    + th('Inventario', '') + th('Rotación', '') + th('Rotación', '') + th('Tránsito', '') + th('Meses inv.', '')
+    + '<th colspan="' + (D.meses.length + 2) + '" style="text-align:center;background:#eff6ff;">Llegadas por mes (tránsito)</th><th colspan="' + D.meses.length + '" style="text-align:center;background:#f0fdf4;">Meses de inventario a fin de mes (con la rotación proyectada)</th></tr>'
+    + '<tr>' + th('disponible') + th('real / mes') + th('proy. / mes') + th('total') + th('hoy')
+    + D.meses.map(x => th(x.lbl, 'background:#eff6ff;')).join('') + th('Después', 'background:#eff6ff;') + th('Sin fecha', 'background:#eff6ff;') + D.meses.map(x => th(x.lbl, 'background:#f0fdf4;')).join('') + '</tr>';
+  const fila = f => '<tr><td style="position:sticky;left:0;background:#fff;font-family:monospace;font-weight:700;">' + ivsE(f.p.ref) + '</td><td style="font-size:11px;">' + ivsE(f.p.desc) + '</td>'
+    + '<td style="text-align:right;">' + F(ivsProyVal(f, m, f.disp, 'inv')) + '</td>'
+    + '<td style="text-align:right;">' + (f.vu ? F(ivsProyVal(f, m, f.vu, 'inv')) : '<span style="color:#991b1b;">Sin ventas</span>') + '</td>'
+    + '<td style="text-align:right;">' + (f.vpr ? F(ivsProyVal(f, m, f.vpr, 'inv')) : '—') + '</td>'
+    + '<td style="text-align:right;font-weight:700;">' + (f.trQ ? F(ivsProyVal(f, m, f.trQ, 'tr')) : '—') + '</td>' + ivsProyCobHtml(f.cob0)
+    + f.arr.map(a => '<td style="text-align:right;background:#f8fbff;">' + (a ? F(ivsProyVal(f, m, a, 'tr')) : '') + '</td>').join('')
+    + '<td style="text-align:right;background:#f8fbff;">' + (f.desp ? F(ivsProyVal(f, m, f.desp, 'tr')) : '') + '</td><td style="text-align:right;background:#f8fbff;color:#b45309;">' + (f.sinF ? F(ivsProyVal(f, m, f.sinF, 'tr')) : '') + '</td>'
+    + f.cob.map(c => ivsProyCobHtml(c)).join('') + '</tr>';
+  const tot = '<tr style="font-weight:800;background:#f1f5f9;"><td style="position:sticky;left:0;background:#f1f5f9;">TOTAL</td><td>' + L.length + ' referencias</td><td style="text-align:right;">' + F(T.disp) + '</td><td style="text-align:right;">' + F(T.rotR) + '</td><td style="text-align:right;">' + F(T.rotP) + '</td><td style="text-align:right;">' + F(T.tr) + '</td>' + ivsProyCobHtml(cob0T)
+    + T.arr.map(a => '<td style="text-align:right;">' + F(a) + '</td>').join('') + '<td style="text-align:right;">' + F(T.desp) + '</td><td style="text-align:right;">' + F(T.sinF) + '</td>' + cobT.map(c => ivsProyCobHtml(c)).join('') + '</tr>';
+  el.innerHTML = '<div class="card" style="margin-bottom:12px;"><div class="ch"><div class="ct">📅 Proyección de inventario y tránsito por mes</div><div class="arte-mu" style="font-size:11px;">Inventario disponible (bodegas ' + ivsE(IVS.bodegas.join(', ')) + ') + tránsito por mes de llegada (fecha de llegada a bodega de cada orden). Meses de inventario = inventario proyectado a fin de mes ÷ rotación proyectada; la rotación real es la venta promedio de los últimos ' + (INV_VMESES || 6) + ' meses. Costo del tránsito = FOB × factor ' + ivsFac() + ' × TRM; costo del inventario = costo promedio.</div></div><div class="cb">' + ctl
+    + (vp ? '' : '<div class="alert" style="margin-bottom:8px;">' + (INV_VFALLO ? 'No pude cargar las ventas: la rotación sale en cero.' : '⏳ Cargando ventas promedio…') + '</div>')
+    + (sinCbm ? '<div class="arte-mu" style="font-size:11px;margin-bottom:6px;">⚠ ' + sinCbm + ' referencias no tienen CBM por unidad cargado: aparecen en 0.</div>' : '')
+    + '<div style="font-size:11px;margin-bottom:6px;"><span style="background:#fee2e2;padding:1px 6px;border-radius:4px;">&lt; 1 mes</span> <span style="background:#fef3c7;padding:1px 6px;border-radius:4px;">1–3</span> <span style="background:#dcfce7;padding:1px 6px;border-radius:4px;">3–8</span> <span style="background:#ffedd5;padding:1px 6px;border-radius:4px;">&gt; 8</span> <span style="background:#ede9fe;padding:1px 6px;border-radius:4px;">∞ sin ventas</span></div>'
+    + (L.length ? '<div class="tw" style="max-height:620px;overflow:auto;"><table class="cbl-t" style="font-size:11.5px;"><thead>' + head + '</thead><tbody>' + tot + L.slice(0, 500).map(fila).join('') + '</tbody></table></div>' + (L.length > 500 ? '<div class="arte-mu" style="font-size:11px;">Se muestran las 500 de mayor valor; el Excel trae todas.</div>' : '') : '<div class="empty">Sin referencias con ese filtro.</div>') + '</div></div>';
+}
+function ivsProyExcel() {
+  const D = IVS._proy; if (!D) return; const ms = D.meses, hoy = new Date().toISOString().slice(0, 10), wb = XLSX.utils.book_new();
+  const num = (m, f, q, kind) => { const v = ivsProyVal(f, m, q, kind); return m === 'b' ? Math.round(v * 1000) / 1000 : Math.round(v); };
+  const filas = D.filas.filter(f => f.disp > 0 || f.trQ > 0);
+  [['q', 'Cantidad'], ['c', 'Costo COP'], ['b', 'CBM']].forEach(([m, nom]) => {
+    const h = ['Referencia', 'Descripción', 'Inventario disponible', 'Rotación real/mes', 'Rotación proyectada/mes', 'Tránsito total'].concat(ms.map(x => 'Llega ' + x.lbl), ['Llega después', 'Llega sin fecha']);
+    const a = [h].concat(filas.map(f => [f.p.ref, f.p.desc, num(m, f, f.disp, 'inv'), num(m, f, f.vu, 'inv'), num(m, f, f.vpr, 'inv'), num(m, f, f.trQ, 'tr')].concat(f.arr.map(x => num(m, f, x, 'tr')), [num(m, f, f.desp, 'tr'), num(m, f, f.sinF, 'tr')])));
+    const ws = XLSX.utils.aoa_to_sheet(a); ws['!cols'] = [{ wch: 12 }, { wch: 38 }].concat(h.slice(2).map(() => ({ wch: 14 }))); XLSX.utils.book_append_sheet(wb, ws, nom);
+  });
+  const h = ['Referencia', 'Descripción', 'Meses inv. hoy'].concat(ms.map(x => 'Meses inv. fin ' + x.lbl));
+  const r1 = x => x === Infinity ? 'Sin ventas' : Math.round(x * 10) / 10;
+  const ws = XLSX.utils.aoa_to_sheet([h].concat(filas.map(f => [f.p.ref, f.p.desc, r1(f.cob0)].concat(f.cob.map(r1))))); ws['!cols'] = [{ wch: 12 }, { wch: 38 }].concat(h.slice(2).map(() => ({ wch: 14 }))); XLSX.utils.book_append_sheet(wb, ws, 'Meses de inventario');
+  XLSX.writeFile(wb, 'Proyeccion_inventario_transito_' + hoy + '.xlsx');
 }
 
 /* ===== Gráfica histórica (One Page operaciones 2026) y bodegas desplegables ===== */
