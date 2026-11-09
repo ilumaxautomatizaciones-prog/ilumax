@@ -6312,6 +6312,7 @@ function segPlanFechas(o, celdas){
   const mas = (d,n,hab) => hab ? ocSumarHabiles(d, n) : new Date(new Date(d).getTime()+n*86400000);
   const sigHabil = d => { const x = new Date(d); do{ x.setDate(x.getDate()+1); }while(!ocEsHabil(x)); return x; };
   const A = segEtdEta(o);
+  let etdDesc = false;   // el ETD de la sábana no cuadra con la producción/inspección actuales → se proyecta desde la producción
   let prodCur = false, prodSeen = false, inspD = null;   // Embarque e Inspección arrancan juntos al terminar Producción (la inspección no retrasa el embarque)
   for(const col of SEG_COLS){
     if(prodSeen && prodCur===false) prodCur = cur ? new Date(cur) : null;
@@ -6321,7 +6322,11 @@ function segPlanFechas(o, celdas){
     const hab = !!(d.es && d.es.length===1 && (OC_ETAPAS_POR_ID[d.es[0].etapa_id]||{}).habiles);
     if(d.st==='ok' || d.st==='tarde'){ if(d.fin){ cur = new Date(d.fin); atras = false; } continue; }
     // ETD ingresado → la salida (fin de Embarque) es esa fecha; ETA ingresado → fin de Tránsito es esa fecha
-    if((d.st==='curso' || d.st==='pend') && col.id==='embarque' && A.etd){ cur = new Date(A.etd); atras = false; plan.embarque = cur; continue; }
+    if((d.st==='curso' || d.st==='pend') && col.id==='embarque' && A.etd){
+      // el barco no puede salir antes de que termine producción ni antes de la inspección: si el ETD de Com. Ext. quedó anterior a eso (p. ej. se corrió la entrega de producción), no se usa y se recalcula la cadena
+      const minE = prodCur ? ((inspD && inspD.st==='pend') ? mas(sigHabil(prodCur<hoy ? hoy : prodCur), Number(inspD.obj)||0, true) : new Date(prodCur)) : null;
+      if(minE && A.etd < minE){ etdDesc = true; A.eta = null; }
+      else { cur = new Date(A.etd); atras = false; plan.embarque = cur; continue; } }
     if((d.st==='curso' || d.st==='pend') && col.id==='transito' && A.eta){ cur = new Date(A.eta); atras = false; plan.transito = cur; continue; }
     if(d.st==='curso'){
       let fin = d.vence ? new Date(d.vence) : (d.ini && d.obj!=null ? mas(d.ini, d.obj, hab) : null);
@@ -6337,6 +6342,7 @@ function segPlanFechas(o, celdas){
       cur = mas(base, Number(d.obj)||0, hab); plan[col.id] = cur; }
   }
   if(inspD && inspD.st==='pend' && prodCur){ let b = new Date(prodCur); if(b<hoy) b = new Date(hoy); plan.inspeccion = mas(sigHabil(b), Number(inspD.obj)||0, true); }
+  if(etdDesc) plan._etdDesc = true;
   return plan;
 }
 function segCelda(o, col){
@@ -9751,7 +9757,7 @@ function ceValidar(o, r){
       if(planAuto && planAuto.embarque){ sale = new Date(planAuto.embarque); pasos.push(`cadena automática del tablero → sale ${dm(sale)}`); minEta = mas(sale, CE_TRANSITO_MIN - TOL); } }
   }
   // Regla de KD (22-oct-2026): en proceso de embarque, tránsito y nacionalización la ETA es la de la sábana de Com. Ext., sin recalcular
-  const usaCE = !!(etaCE && (fase===5 || fase===6 || fase===7));
+  const usaCE = !!(etaCE && (fase===5 || fase===6 || fase===7)) && !(planAuto && planAuto._etdDesc);   // salvo que el ETD de la sábana ya no cuadre con producción/inspección
   const usaPlan = !usaCE && !zarpo && planAuto && planAuto.embarque && planAuto.transito;
   const incons = usaCE ? false : usaPlan ? !!(etaCE && etaCE < new Date(planAuto.transito).getTime() - 3*86400000) : !!(etaCE && etaCE < minEta);
   const etaOk = usaCE ? etaCE : usaPlan ? new Date(planAuto.transito) : (etaCE && !incons ? etaCE : mas(sale, zarpo ? CE_TRANSITO_MIN : CE_TRANSITO));
