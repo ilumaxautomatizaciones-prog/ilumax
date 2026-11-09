@@ -425,7 +425,17 @@ async function conExcel() {
 let REC = null;
 // Ejecutivos que ya no están: sus pagos se pasan al ejecutivo que quedó con la cartera (nombre como sale en Siesa)
 const VEND_ALIAS = { 'SANTOFIMIO YENY PAHOLA': 'LOZADA ACOSTA LUIS FELIPE' };
-async function recApi(b) { const r = await conApi(b); if (r && r.ok) (r.filas || []).forEach(f => { const a = VEND_ALIAS[nz(f.vendedor)]; if (a) f.vendedor = a; }); return r; }
+// RC que no cuentan en el recaudo (se causan por otra parte) y RC cuyo ejecutivo se fija a mano
+const RC_EXCLUIR = { '4195': 'CETSE · indemnización, se causa por otra parte' };
+const RC_VEND = { '4205': 'VENTAS DIRECTAS ILUMAX' };
+async function recApi(b) {
+  const r = await conApi(b);
+  if (r && r.ok) {
+    r.filas = (r.filas || []).filter(f => !RC_EXCLUIR[String(f.rc)]); r.otros = (r.otros || []).filter(x => !RC_EXCLUIR[String(x.rc)]);
+    r.filas.forEach(f => { const a = RC_VEND[String(f.rc)] || VEND_ALIAS[nz(f.vendedor)]; if (a) f.vendedor = a; });
+  }
+  return r;
+}
 async function recMes() {
   const hy = new Date((D.hoy || new Date().toISOString().slice(0, 10)) + 'T12:00:00Z'), d = prompt('Recaudo (RC) desde (AAAA-MM-DD):', new Date(Date.UTC(hy.getUTCFullYear(), hy.getUTCMonth() - 1, 1)).toISOString().slice(0, 10)); if (!d) return;
   const h = prompt('Hasta (AAAA-MM-DD):', new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 0)).toISOString().slice(0, 10)); if (!h) return;
