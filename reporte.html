@@ -189,18 +189,20 @@ function pinOk() {
   cargar();
 }
 function pinSalir() { try { localStorage.removeItem('rv_pin'); } catch (e) {} location.reload(); }
-let LAST = null, RANGO = 'mes', ACC = null;
+let LAST = null, RANGO = 'mes', ACC = null, CUST = null;
 const dr = f => ' data-f="' + encodeURIComponent(JSON.stringify(f)) + '"';
 const iso = d => d.toISOString().slice(0, 10);
 const lunesDe = s => { const d = new Date(s + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7); return iso(d); };
 const sumDias = (s, n) => { const d = new Date(s + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
 function rangoFechas() {
   const c = LAST.corte;
+  if (RANGO === 'cust' && CUST) return CUST;
   if (RANGO === 'hoy') return [c, c];
   if (RANGO === 'sem') return [lunesDe(c), c];
   if (RANGO === 'semp') { const l = sumDias(lunesDe(c), -7); return [l, sumDias(l, 6)]; }
   return [c.slice(0, 8) + '01', c];
 }
+function setCust() { const a = document.getElementById('cdA').value, b = document.getElementById('cdB').value; if (!a || !b) { alert('Elige el día de inicio y el de fin.'); return; } CUST = a <= b ? [a, b] : [b, a]; setRango('cust'); }
 function setRango(r) { RANGO = r; if (r !== 'mes' && !DET.cargado) { DET.mes = ''; cargarDet(''); return; } pintar(LAST); }
 // Resumen para un rango: venta real de las facturas del rango; presupuesto prorrateado por días con venta
 function sintetizar(d) {
@@ -245,7 +247,8 @@ function pintar(d0) {
   LAST = d0;
   let d = d0;
   if (RANGO !== 'mes' && DET.cargado && DET.mes !== d0.corte.slice(0, 7)) { cargarDet(d0.corte.slice(0, 7)); return; }
-  const filtro = '<div class="bar" style="margin-bottom:10px">' + [['mes', 'Todo el mes'], ['hoy', 'Último día'], ['sem', 'Esta semana'], ['semp', 'Semana pasada']].map(x => '<div class="chip' + (RANGO === x[0] ? ' on' : '') + '" onclick="setRango(\'' + x[0] + '\')">' + x[1] + '</div>').join('') + '</div>';
+  const filtro = '<div class="bar" style="margin-bottom:10px">' + [['mes', 'Todo el mes'], ['hoy', 'Último día'], ['sem', 'Esta semana'], ['semp', 'Semana pasada']].map(x => '<div class="chip' + (RANGO === x[0] ? ' on' : '') + '" onclick="setRango(\'' + x[0] + '\')">' + x[1] + '</div>').join('')
+    + (() => { const c = d0.corte, ini = c.slice(0, 8) + '01', v = RANGO === 'cust' && CUST ? CUST : [ini, c]; return '<div class="chip' + (RANGO === 'cust' ? ' on' : '') + '" style="display:inline-flex;gap:6px;align-items:center;cursor:default">📅 Días: <input type="date" id="cdA" min="' + ini + '" max="' + c + '" value="' + v[0] + '" style="border:1px solid #cbd5e1;border-radius:6px;padding:2px 4px;font-size:12px"> a <input type="date" id="cdB" min="' + ini + '" max="' + c + '" value="' + v[1] + '" style="border:1px solid #cbd5e1;border-radius:6px;padding:2px 4px;font-size:12px"> <button class="btn" style="padding:3px 10px" onclick="setCust()">Ver</button></div>'; })() + '</div>';
   if (RANGO !== 'mes' && DET.cargado) { try { d = sintetizar(d0); } catch (e) { d = d0; } }
   const nota = RANGO !== 'mes' && d._rango ? '<div class="warn" style="background:#eff6ff;color:#1e40af;border-color:#bfdbfe">Mostrando del <b>' + dmy(d._rango[0]) + '</b> al <b>' + dmy(d._rango[1]) + '</b>. El presupuesto se prorratea por días con venta.</div>' : '';
   const k = d.kpis, cum = k.ppto > 0 ? k.acum / k.ppto : 0;
@@ -644,9 +647,10 @@ async function descargarExcel() {
     M.forEach((m, i) => { const r = wr.addRow([m[0], { formula: m[1] }]); r.getCell(2).numFmt = m[2]; r.getCell(1).font = { bold: true }; r.getCell(2).font = { bold: true, size: 12 }; r.getCell(2).alignment = { horizontal: 'right' }; });
     wr.addRow([]); const nt = wr.addRow(['Cómo usarlo']); nt.font = { bold: true };
     ['1) Elige el asesor en la celda amarilla (B3). Todo se recalcula solo.', '2) Hoja «Clientes»: filtra la columna «En mi selección» = Sí para ver solo tus clientes, u ordena por Venta mes, Variación o Estado.', '3) Hoja «Facturas»: todas las facturas de ' + mesLbl(mes) + ' y ' + mesLbl(prev) + ' con filtros; puedes insertar una tabla dinámica sobre ella.', '4) Hoja «Equipo»: todos los asesores, para ver la meta total del equipo.', '5) Los datos son los facturados en Siesa hasta el ' + dmy(DET.corte) + '.'].forEach(t => wr.addRow([t]));
+    try { const R = await traerRefs([mes], RANGO !== 'mes' ? rangoFechas() : null); if (R && (R.disponibles || []).length) infHojas(wb, HD, R, [mes]); } catch (e) { console.warn('Sin referencias en el Excel:', e.message); }
     const buf = await wb.xlsx.writeBuffer();
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-    a.download = 'Ventas_por_asesor_' + mes + '.xlsx'; document.body.appendChild(a); a.click(); a.remove();
+    a.download = 'Ventas_por_asesor_' + mes + (RANGO !== 'mes' ? '_' + rangoFechas().map(x => x.slice(5)).join('_a_') : '') + '.xlsx'; document.body.appendChild(a); a.click(); a.remove();
   } catch (e) { alert('No se pudo generar el Excel: ' + e.message); }
 }
 cargar(); let ULT = Date.now();
@@ -765,6 +769,13 @@ async function informeClientes(extra) {
 
 // ───────── Informe de clientes: meses a elegir + resumen general por canal + resumen por referencia ─────────
 const API_REFS = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/reporte-ventas-refs';
+async function traerRefs(meses, rango) {
+  const r = await fetch(API_REFS + '?k=' + encodeURIComponent(token()) + (rango ? '&desde=' + rango[0] + '&hasta=' + rango[1] : '&meses=' + meses.join(',')) + '&det=1', { cache: 'no-store' }), R = await r.json();
+  if (!r.ok || R.error) throw new Error(R.error || 'Error');
+  const filtro = DET.ase === 'TODOS' ? null : DET.ase;
+  R.refs = R.refs.filter(x => !filtro || x[1] === filtro); R.clientes = R.clientes.filter(x => !filtro || x[1] === filtro); R.lineas = (R.lineas || []).filter(x => !filtro || x[2] === filtro);
+  return R;
+}
 function infAbrir() {
   const y = (DET.corte || DET.mes).slice(0, 4), tope = +(DET.corte || DET.mes).slice(5, 7), nm = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
   let h = '';
@@ -773,23 +784,23 @@ function infAbrir() {
   ov.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px;max-width:420px;width:100%;box-shadow:0 10px 30px rgba(0,0,0,.3)"><div style="font-weight:800;font-size:16px;margin-bottom:4px">👥 Informe de clientes</div>'
     + '<div style="font-size:12px;color:#64748b;margin-bottom:10px">' + (DET.ase === 'TODOS' ? 'Todo el equipo' : esc(DET.ase)) + ' · elige los meses de ' + y + '</div><div>' + h + '</div>'
     + '<div style="margin:8px 0"><button class="btn" style="background:#e2e8f0" onclick="document.querySelectorAll(\'.infm\').forEach(c=>c.checked=true)">Todo el año</button> <button class="btn" style="background:#e2e8f0" onclick="document.querySelectorAll(\'.infm\').forEach(c=>c.checked=false)">Ninguno</button></div>'
-    + '<div style="font-size:11px;color:#64748b;margin-bottom:12px">Incluye: resumen general por canal, clientes por asesor y resumen por referencia (valores sin IVA).</div>'
+    + '<div style="margin:6px 0;font-size:12px;color:#334155"><label style="display:flex;align-items:center;gap:6px;font-weight:700"><input type="checkbox" id="infDias"> Solo estos días</label> <input type="date" id="infA" value="' + (RANGO === 'cust' && CUST ? CUST[0] : DET.mes + '-01') + '" style="border:1px solid #cbd5e1;border-radius:6px;padding:2px 4px"> a <input type="date" id="infB" value="' + (RANGO === 'cust' && CUST ? CUST[1] : (DET.corte || DET.mes + '-28')) + '" style="border:1px solid #cbd5e1;border-radius:6px;padding:2px 4px"></div>'
+    + '<div style="font-size:11px;color:#64748b;margin-bottom:12px">Incluye: resumen general por canal, clientes por asesor, resumen por referencia y detalle por factura y referencia (valores sin IVA).</div>'
     + '<div id="infEst" style="font-size:12px;color:#b45309;margin-bottom:8px"></div><div style="text-align:right"><button class="btn" style="background:#e2e8f0" onclick="document.getElementById(\'infOv\').remove()">Cancelar</button> <button class="btn" id="infGo" onclick="infGenerar()">📥 Descargar</button></div></div>';
   document.body.appendChild(ov);
 }
 async function infGenerar() {
-  const meses = [...document.querySelectorAll('.infm:checked')].map(c => c.value), est = document.getElementById('infEst'), go = document.getElementById('infGo');
+  let meses = [...document.querySelectorAll('.infm:checked')].map(c => c.value), est = document.getElementById('infEst'), go = document.getElementById('infGo');
+  const dias = document.getElementById('infDias') && document.getElementById('infDias').checked, rg = dias ? [document.getElementById('infA').value, document.getElementById('infB').value].sort() : null;
+  if (dias) { if (!rg[0] || !rg[1]) { est.textContent = 'Elige el día de inicio y el de fin.'; return; } meses = []; for (let d = rg[0].slice(0, 7); d <= rg[1].slice(0, 7); ) { meses.push(d); const x = new Date(d + '-01T12:00:00Z'); x.setUTCMonth(x.getUTCMonth() + 1); d = x.toISOString().slice(0, 7); } }
   if (!meses.length) { est.textContent = 'Elige al menos un mes.'; return; }
   go.disabled = true; est.textContent = 'Preparando el informe…';
   try {
-    const r = await fetch(API_REFS + '?k=' + encodeURIComponent(token()) + '&meses=' + meses.join(','), { cache: 'no-store' }), R = await r.json();
-    if (!r.ok || R.error) throw new Error(R.error || 'Error');
-    const filtro = DET.ase === 'TODOS' ? null : DET.ase;
-    R.refs = R.refs.filter(x => !filtro || x[1] === filtro); R.clientes = R.clientes.filter(x => !filtro || x[1] === filtro);
+    const R = await traerRefs(meses, rg);
     const sin = meses.filter(m => !(R.disponibles || []).includes(m));
     if (sin.length === meses.length) { est.textContent = 'Todavía no hay detalle por referencia cargado para esos meses.'; go.disabled = false; return; }
     const extra = async (wb, HD) => infHojas(wb, HD, R, meses.filter(m => !sin.includes(m)));
-    if (meses.length === 1 && meses[0] === DET.mes) await informeClientes(extra);
+    if (!dias && meses.length === 1 && meses[0] === DET.mes) await informeClientes(extra);
     else await infMultiples(R, meses.filter(m => !sin.includes(m)), extra);
     document.getElementById('infOv').remove();
     if (sin.length) alert('Sin detalle por referencia para: ' + sin.map(mesLbl).join(', '));
@@ -798,7 +809,7 @@ async function infGenerar() {
 function infHojas(wb, HD, R, meses) {
   const money = '"$" #,##0', num0 = '#,##0', mm = meses.slice().sort(), ml = mm.map(mesLbl), ini = (ws, t, sub) => { ws.addRow([t]); ws.getRow(1).font = { bold: true, size: 14 }; ws.addRow([sub]); ws.addRow([]); };
   const hd = (ws, arr) => { const r = ws.addRow(arr); r.eachCell(c => Object.assign(c, HD)); r.height = 26; return r; };
-  const quien = DET.ase === 'TODOS' ? 'Todo el equipo' : DET.ase, sub = quien + ' · ' + ml.join(', ') + ' · valores sin IVA (facturas de venta, antes de notas crédito)';
+  const quien = DET.ase === 'TODOS' ? 'Todo el equipo' : DET.ase, sub = quien + ' · ' + (R.desde ? 'del ' + dmy(R.desde) + ' al ' + dmy(R.hasta) : ml.join(', ')) + ' · valores sin IVA (facturas de venta, antes de notas crédito)';
   // Resumen general por canal
   const wg = wb.addWorksheet('Resumen general', { properties: { tabColor: { argb: 'FF2563EB' } } }); ini(wg, 'Resumen general de ventas por canal', sub);
   const canal = {}, ase = {}, cli = {}; let tot = 0;
@@ -830,6 +841,14 @@ function infHojas(wb, HD, R, meses) {
   const fil = Object.values(cx).sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]) || b[6] - a[6]); fil.forEach(f => wx.addRow(f));
   wx.getColumn(6).numFmt = num0; wx.getColumn(7).numFmt = money; [28, 40, 14, 14, 44, 11, 16].forEach((w, i) => wx.getColumn(i + 1).width = w);
   wx.views = [{ state: 'frozen', ySplit: 4 }]; wx.autoFilter = `A4:G${4 + fil.length}`;
+  // Detalle por factura y referencia (línea a línea)
+  if (R.lineas && R.lineas.length) {
+    const wl = wb.addWorksheet('Detalle por factura', { properties: { tabColor: { argb: 'FF7C3AED' } } }); ini(wl, 'Detalle línea a línea: factura y referencia', sub);
+    hd(wl, ['Fecha', 'Factura', 'Asesor', 'NIT', 'Cliente', 'Canal', 'Referencia', 'Descripción', 'Unidades', 'Valor (sin IVA)']);
+    R.lineas.slice().sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1])).forEach(l => wl.addRow([new Date(l[0] + 'T12:00:00Z'), l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9]]));
+    wl.getColumn(1).numFmt = 'dd/mm/yyyy'; wl.getColumn(9).numFmt = num0; wl.getColumn(10).numFmt = money; [12, 14, 28, 14, 38, 18, 14, 44, 11, 16].forEach((w, i) => wl.getColumn(i + 1).width = w);
+    wl.views = [{ state: 'frozen', ySplit: 4 }]; wl.autoFilter = `A4:J${4 + R.lineas.length}`;
+  }
 }
 async function infMultiples(R, meses, extra) {
   await cargarScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
