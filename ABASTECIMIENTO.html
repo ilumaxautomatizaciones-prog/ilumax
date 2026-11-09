@@ -19047,7 +19047,7 @@ async function renderInvAbast() {
 }
 function ivsBar() {
   const b = document.getElementById('ivs-bar'); if (!b) return;
-  b.innerHTML = [['seg', '📊 Seguimiento'], ['proy', '📅 Proyección por mes'], ['det', '📦 Detalle del inventario']].map(t => '<button class="btn ' + (IVS.tab === t[0] ? 'btn-bl' : 'btn-g') + '" onclick="IVS.tab=\'' + t[0] + '\';ivsBar();ivsVista()">' + t[1] + '</button>').join('');
+  b.innerHTML = [['seg', '📊 Seguimiento'], ['proy', '📅 Proyección por mes'], ['det', '📦 Detalle del inventario']].map(t => '<button class="btn ' + (IVS.tab === t[0] ? 'btn-bl' : 'btn-g') + '" onclick="IVS.tab=\'' + t[0] + '\';ivsBar();ivsVista()">' + t[1] + '</button>').join('') + '<button class="btn btn-p" style="margin-left:auto;" onclick="ivsAbasExcel()" title="Stock, PY, PY-10%, tránsito, órdenes y meses de inventario por mes (6 meses), con fórmulas">📑 Informe de abastecimiento (Excel)</button>';
 }
 function ivsVista() { const s = document.getElementById('inv-seg'), d = document.getElementById('inv-content'), y = document.getElementById('inv-proy'); if (s) s.style.display = IVS.tab === 'seg' ? '' : 'none'; if (d) d.style.display = IVS.tab === 'det' ? '' : 'none'; if (y) { y.style.display = IVS.tab === 'proy' ? '' : 'none'; if (IVS.tab === 'proy') ivsProyPintar(); } }
 function ivsCalc() {
@@ -19305,6 +19305,103 @@ function ivsProyExcel() {
   const r1 = x => x === Infinity ? 'Sin ventas' : Math.round(x * 10) / 10;
   const ws = XLSX.utils.aoa_to_sheet([h].concat(filas.map(f => [f.p.ref, f.p.desc, r1(f.cob0)].concat(f.cob.map(r1))))); ws['!cols'] = [{ wch: 12 }, { wch: 38 }].concat(h.slice(2).map(() => ({ wch: 14 }))); XLSX.utils.book_append_sheet(wb, ws, 'Meses de inventario');
   XLSX.writeFile(wb, 'Proyeccion_inventario_transito_' + hoy + '.xlsx');
+}
+
+/* ===== Informe de abastecimiento (Excel con fórmulas y tablas): stock, PY, PY-10%, tránsito, órdenes y meses de inventario con lo que llega mes a mes ===== */
+function ivsAbasBuild(ExJS, D) {   // D: { refs:[{ref,desc,stock,py,ocs}], det:[{ref,desc,cat,oc,prov,fecha(Date|null),per,qty,cbm,fob,etapa}], inicio:Date, n:6, desc:0.1 }
+  const wb = new ExJS.Workbook(); wb.creator = 'ILUMAX'; wb.calcProperties = { fullCalcOnLoad: true };
+  const N = D.n, ini = new Date(Date.UTC(D.inicio.getUTCFullYear(), D.inicio.getUTCMonth(), 1, 12)), nR = D.refs.length;
+  const ms = []; for (let i = 0; i < N; i++) { const s = new Date(Date.UTC(ini.getUTCFullYear(), ini.getUTCMonth() + i, 1, 12)); ms.push({ s, e: new Date(Date.UTC(s.getUTCFullYear(), s.getUTCMonth() + 1, 0, 12)) }); }
+  const HD = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } }, WH = { color: { argb: 'FFFFFFFF' }, bold: true };
+  const wsR = wb.addWorksheet('Resumen'), wsA = wb.addWorksheet('Abastecimiento', { views: [{ state: 'frozen', xSplit: 2, ySplit: 5 }] }), wsD = wb.addWorksheet('Detalle por ítem', { views: [{ state: 'frozen', ySplit: 1 }] });
+  // ---- Detalle por ítem (tabla tblDet)
+  const dRows = D.det.map(x => [x.ref, x.desc, x.cat, x.oc, x.prov, x.fecha || null, x.per, x.qty, Math.round(x.cbm * 100) / 100, Math.round(x.fob * 100) / 100, x.etapa || '']);
+  wsD.addTable({ name: 'tblDet', ref: 'A1', headerRow: true, style: { theme: 'TableStyleMedium2', showRowStripes: true },
+    columns: ['Referencia', 'Descripción', 'Categoría', 'OC', 'Proveedor', 'Llegada', 'Periodo', 'Cantidad', 'CBM (m³)', 'FOB US$', 'Etapa'].map(n => ({ name: n, filterButton: true })), rows: dRows.length ? dRows : [['', '', '', '', '', null, '', 0, 0, 0, '']] });
+  [14, 40, 20, 12, 32, 12, 10, 11, 10, 12, 34].forEach((w, i) => wsD.getColumn(i + 1).width = w);
+  wsD.getColumn(1).numFmt = '@'; wsD.getColumn(6).numFmt = 'yyyy-mm-dd'; wsD.getColumn(8).numFmt = '#,##0'; wsD.getColumn(9).numFmt = '#,##0.00'; wsD.getColumn(10).numFmt = '#,##0.00';
+  // ---- Resumen: parámetros
+  wsR.getCell('A1').value = 'Informe de abastecimiento'; wsR.getCell('A1').font = { bold: true, size: 16 };
+  wsR.getCell('A2').value = 'Descuento al PY (PY-10%)'; wsR.getCell('B2').value = D.desc; wsR.getCell('B2').numFmt = '0%';
+  wsR.getCell('A3').value = 'Primer mes del informe'; wsR.getCell('B3').value = ini; wsR.getCell('B3').numFmt = 'mmm yyyy';
+  ['B2', 'B3'].forEach(a => { wsR.getCell(a).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } }; wsR.getCell(a).font = { bold: true, color: { argb: 'FF1D4ED8' } }; wsR.getCell(a).border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } }; });
+  wsR.getCell('C2').value = '← cambia el % y todo se recalcula'; wsR.getCell('C3').value = '← cambia el mes (usa el día 1) y se mueven las columnas de llegadas'; ['C2', 'C3'].forEach(a => wsR.getCell(a).font = { italic: true, color: { argb: 'FF64748B' } });
+  wsR.getColumn(1).width = 30; wsR.getColumn(2).width = 16;
+  // ---- Abastecimiento (tabla tblAbas, encabezado en la fila 5; fila 3 = fecha del mes)
+  const cA = ['Referencia', 'Nombre', 'Stock', 'PY', 'PY-10%', 'Meses inv. hoy', 'Tránsito', 'Órdenes en tránsito'];
+  for (let i = 0; i < N; i++) { cA.push('Llegada M' + (i + 1)); cA.push('Meses inv. M' + (i + 1)); }
+  cA.push('Llega después / sin fecha');
+  const colL = i => wsA.getColumn(i).letter, f0 = 6, fN = 5 + nR, pyD = 1 - D.desc;
+  const rowsA = D.refs.map((r, k) => {
+    const rw = f0 + k, py10 = r.py * pyD, tr = D.det.filter(x => x.ref === r.ref).reduce((s, x) => s + x.qty, 0);
+    const row = [r.ref, r.desc, r.stock, r.py, { formula: 'D' + rw + '*(1-Resumen!$B$2)', result: py10 }, { formula: 'IF(E' + rw + '>0,C' + rw + '/E' + rw + ',"Sin PY")', result: py10 > 0 ? r.stock / py10 : 'Sin PY' }, { formula: 'SUMIFS(tblDet[Cantidad],tblDet[Referencia],$A' + rw + ')', result: tr }, r.ocs];
+    let acum = 0, tot = 0;
+    for (let i = 0; i < N; i++) {
+      const q = D.det.filter(x => x.ref === r.ref && x.fecha && x.fecha <= ms[i].e && (i === 0 || x.fecha >= ms[i].s)).reduce((s, x) => s + x.qty, 0); acum += q; tot += q;
+      const cL = 9 + i * 2, L = colL(cL), dt = L + '$3';
+      row.push({ formula: 'SUMIFS(tblDet[Cantidad],tblDet[Referencia],$A' + rw + ',tblDet[Llegada],"<="&EOMONTH(' + dt + ',0)' + (i === 0 ? '' : ',tblDet[Llegada],">="&' + dt) + ')', result: q });
+      const sm = Array.from({ length: i + 1 }, (_, j) => colL(9 + j * 2) + rw).join(',');
+      row.push({ formula: 'IF($E' + rw + '>0,($C' + rw + '+SUM(' + sm + '))/$E' + rw + ',"Sin PY")', result: py10 > 0 ? (r.stock + acum) / py10 : 'Sin PY' });
+    }
+    const sl = Array.from({ length: N }, (_, j) => colL(9 + j * 2) + rw).join(',');
+    row.push({ formula: 'G' + rw + '-SUM(' + sl + ')', result: tr - tot }); return row;
+  });
+  const sumC = (c, res) => ({ name: c, totalsRowFunction: 'sum', totalsRowResult: res });
+  const tot = i => rowsA.reduce((s, r) => s + (typeof r[i] === 'object' && r[i] ? (Number(r[i].result) || 0) : (Number(r[i]) || 0)), 0);
+  const colsA = cA.map((n, i) => { const o = { name: n, filterButton: true }; if (i === 0) { o.totalsRowLabel = 'TOTAL'; } else if ([2, 3, 6].includes(i) || (i >= 8 && (i - 8) % 2 === 0 && i < 8 + N * 2) || i === cA.length - 1) { o.totalsRowFunction = 'sum'; o.totalsRowResult = tot(i); } else o.totalsRowFunction = 'none'; return o; });
+  wsA.getCell('A1').value = 'Abastecimiento: stock + llegadas por mes ÷ PY-10%'; wsA.getCell('A1').font = { bold: true, size: 14 };
+  wsA.getCell('A2').value = 'Meses de inventario = (stock + llegadas acumuladas hasta ese mes) ÷ PY-10%. El PY y el stock vienen del portal; las llegadas se suman de la hoja "Detalle por ítem" (las atrasadas cuentan en el primer mes).'; wsA.getCell('A2').font = { italic: true, color: { argb: 'FF64748B' } };
+  wsA.addTable({ name: 'tblAbas', ref: 'A5', headerRow: true, totalsRow: true, style: { theme: 'TableStyleMedium2', showRowStripes: true }, columns: colsA, rows: rowsA.length ? rowsA : [new Array(cA.length).fill(null)] });
+  const bands = ['FFDBEAFE', 'FFDCFCE7'];
+  for (let i = 0; i < N; i++) {
+    const cL = 9 + i * 2, c = wsA.getCell(3, cL); c.value = { formula: i === 0 ? 'Resumen!$B$3' : 'EDATE(' + colL(cL - 2) + '3,1)', result: ms[i].s }; c.numFmt = 'mmm yyyy'; c.font = { bold: true, color: { argb: 'FF1E3A8A' } }; c.alignment = { horizontal: 'center' };
+    wsA.mergeCells(3, cL, 3, cL + 1); wsA.getCell(3, cL).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bands[i % 2] } };
+  }
+  wsA.getCell(3, 8).value = 'Mes →'; wsA.getCell(3, 8).alignment = { horizontal: 'right' }; wsA.getCell(3, 8).font = { bold: true };
+  [14, 38, 10, 10, 10, 11, 11, 30].forEach((w, i) => wsA.getColumn(i + 1).width = w);
+  for (let i = 0; i < N * 2 + 1; i++) wsA.getColumn(9 + i).width = i % 2 === 0 && i < N * 2 ? 11 : 12; wsA.getColumn(9 + N * 2).width = 16;
+  wsA.getRow(5).height = 32; wsA.getRow(5).alignment = { wrapText: true, vertical: 'middle' };
+  wsA.getColumn(1).numFmt = '@'; [3, 4, 5, 7].forEach(c => wsA.getColumn(c).numFmt = '#,##0'); wsA.getColumn(6).numFmt = '0.0';
+  for (let i = 0; i < N; i++) { wsA.getColumn(9 + i * 2).numFmt = '#,##0;-#,##0;'; wsA.getColumn(10 + i * 2).numFmt = '0.0'; } wsA.getColumn(9 + N * 2).numFmt = '#,##0;-#,##0;';
+  const rule = (rng) => { wsA.addConditionalFormatting({ ref: rng, rules: [
+    { type: 'cellIs', operator: 'lessThan', formulae: [1], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFEE2E2' } }, font: { color: { argb: 'FF991B1B' } } }, priority: 1 },
+    { type: 'cellIs', operator: 'between', formulae: [1, 2.999], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFEF3C7' } }, font: { color: { argb: 'FF92400E' } } }, priority: 2 },
+    { type: 'cellIs', operator: 'between', formulae: [3, 8], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFDCFCE7' } }, font: { color: { argb: 'FF166534' } } }, priority: 3 },
+    { type: 'cellIs', operator: 'greaterThan', formulae: [8], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFFEDD5' } }, font: { color: { argb: 'FF9A3412' } } }, priority: 4 }] }); };
+  if (nR) { rule('F' + f0 + ':F' + fN); for (let i = 0; i < N; i++) { const L = colL(10 + i * 2); rule(L + f0 + ':' + L + fN); } }
+  // ---- Resumen por mes (fórmulas sobre la tabla)
+  const rr = 6; wsR.getCell('A5').value = 'Por mes'; wsR.getCell('A5').font = { bold: true, size: 12 };
+  const hdr = ['Mes', 'Llega (und)', 'Stock + llegadas acum.', 'Refs < 1 mes', 'Refs 1 a 3', 'Refs 3 a 8', 'Refs > 8', 'Refs sin PY'];
+  hdr.forEach((h, i) => { const c = wsR.getCell(rr, i + 1); c.value = h; c.fill = HD; c.font = WH; c.alignment = { horizontal: i ? 'center' : 'left', wrapText: true }; });
+  const rg = c => 'Abastecimiento!$' + c + '$' + f0 + ':$' + c + '$' + Math.max(fN, f0);
+  let ac = 0; const stock0 = D.refs.reduce((s, r) => s + r.stock, 0);
+  for (let i = 0; i < N; i++) {
+    const r = rr + 1 + i, L = colL(9 + i * 2), M = colL(10 + i * 2), cnt = (a, b) => D.refs.reduce((s, x, k) => { const v = rowsA[k][9 + i * 2].result; return s + (typeof v === 'number' && v >= a && v < b ? 1 : 0); }, 0);
+    const llega = rowsA.reduce((s, x) => s + x[8 + i * 2].result, 0); ac += llega;
+    const cells = [{ formula: 'Abastecimiento!' + L + '$3', result: ms[i].s }, { formula: 'SUM(' + rg(L) + ')', result: llega }, { formula: 'SUM(' + rg('C') + ')+SUM(' + rg(L).replace('$' + L + '$', '$I$') .replace(':$' + L + '$', ':$I$') + ')', result: 0 }];
+    // stock + llegadas acumuladas: suma de las columnas de llegada hasta el mes i
+    const sums = Array.from({ length: i + 1 }, (_, j) => 'SUM(' + rg(colL(9 + j * 2)) + ')').join('+'); cells[2] = { formula: 'SUM(' + rg('C') + ')+' + sums, result: stock0 + ac };
+    cells.push({ formula: 'COUNTIF(' + rg(M) + ',"<1")', result: cnt(0, 1) }, { formula: 'COUNTIFS(' + rg(M) + ',">=1",' + rg(M) + ',"<3")', result: cnt(1, 3) }, { formula: 'COUNTIFS(' + rg(M) + ',">=3",' + rg(M) + ',"<=8")', result: cnt(3, 8.0000001) }, { formula: 'COUNTIF(' + rg(M) + ',">8")', result: cnt(8.0000001, 1e9) }, { formula: 'COUNTIF(' + rg(M) + ',"Sin PY")', result: rowsA.filter(x => x[9 + i * 2].result === 'Sin PY').length });
+    cells.forEach((v, j) => { const c = wsR.getCell(r, j + 1); c.value = v; if (j === 0) c.numFmt = 'mmm yyyy'; else if (j < 3) c.numFmt = '#,##0'; });
+  }
+  for (let j = 3; j <= 8; j++) wsR.getColumn(j).width = 15; wsR.getColumn(3).width = 22;
+  return wb;
+}
+async function ivsAbasExcel() {
+  try { await comprasCargarExcelJS(); } catch (e) { if (typeof toast === 'function') toast('No pude cargar el generador de Excel', 'er'); return; }
+  const C = IVS._C || (typeof INV_DATA !== 'undefined' && INV_DATA.length ? ivsCalc() : null); if (!C) { toast('Espera a que cargue el inventario y las órdenes', 'wa'); return; }
+  if (typeof INV_VPROM !== 'undefined' && !INV_VPROM && !INV_VFALLO) { try { await invVentasCargar(); } catch (e) { } }
+  let det = []; try { det = infItemsFilas(infDatos()); } catch (e) { }
+  det = det.map(x => ({ ref: String(x.ref).trim(), desc: x.desc, cat: x.cat, oc: x.oc, prov: x.prov, fecha: x.iso && /^\d{4}-\d\d-\d\d/.test(x.iso) ? new Date(x.iso.slice(0, 10) + 'T12:00:00Z') : null, per: x.per === 'sin' ? 'sin fecha' : x.per, qty: x.qty, cbm: x.cbm || 0, fob: x.fob || 0, etapa: x.etapa || '' }));
+  if (!det.length) Object.values(C.pendRef).forEach(a => a.forEach(x => { const d = x.fecha ? new Date(x.fecha) : null; det.push({ ref: String(x.ref).trim(), desc: x.desc, cat: '', oc: x.oc, prov: '', fecha: d && !isNaN(d) ? new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), 12)) : null, per: d && !isNaN(d) ? d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') : 'sin fecha', qty: Math.round(x.pend), cbm: 0, fob: 0, etapa: '' }); }));
+  const py = (typeof INV_PY_REF !== 'undefined' && INV_PY_REF) || {}, M = {};
+  C.refs.forEach(p => { if (p.desc_ && !IVS.py.desc) return; M[pvClaveRef(p.ref)] = { ref: String(p.ref).trim(), desc: p.desc || '', stock: p.disp || 0 }; });
+  det.forEach(x => { const k = pvClaveRef(x.ref); if (!M[k]) { if (IVS.clasif && Array.isArray(IVS.clasif.act) && typeof ivsFuera === 'function' && ivsFuera(x.ref)) return; M[k] = { ref: x.ref, desc: x.desc, stock: 0 }; } else M[k].ref = M[k].ref || x.ref; });
+  const refs = Object.keys(M).map(k => { const r = M[k]; r.py = Number(py[k]) || 0; r.ocs = [...new Set(det.filter(x => pvClaveRef(x.ref) === k).map(x => x.oc))].join(', '); return r; }).filter(r => r.stock > 0 || r.ocs).sort((a, b) => String(a.ref).localeCompare(String(b.ref), 'es', { numeric: true }));
+  det.forEach(x => { const k = pvClaveRef(x.ref); if (M[k]) x.ref = M[k].ref; }); const dd = det.filter(x => M[pvClaveRef(x.ref)]);
+  const h = new Date(); const wb = ivsAbasBuild(ExcelJS, { refs, det: dd, inicio: new Date(Date.UTC(h.getFullYear(), h.getMonth(), 1, 12)), n: 6, desc: 0.1 });
+  const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'Informe_abastecimiento_' + h.toISOString().slice(0, 10) + '.xlsx'; document.body.appendChild(a); a.click(); a.remove();
+  toast('✅ Informe de abastecimiento generado (' + refs.length + ' referencias)', 'ok');
 }
 
 /* ===== Gráfica histórica (One Page operaciones 2026) y bodegas desplegables ===== */
