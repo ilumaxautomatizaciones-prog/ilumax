@@ -423,11 +423,14 @@ async function conExcel() {
 }
 
 let REC = null;
+// Ejecutivos que ya no están: sus pagos se pasan al ejecutivo que quedó con la cartera (nombre como sale en Siesa)
+const VEND_ALIAS = { 'SANTOFIMIO YENY PAHOLA': 'LOZADA ACOSTA LUIS FELIPE' };
+async function recApi(b) { const r = await conApi(b); if (r && r.ok) (r.filas || []).forEach(f => { const a = VEND_ALIAS[nz(f.vendedor)]; if (a) f.vendedor = a; }); return r; }
 async function recMes() {
   const hy = new Date((D.hoy || new Date().toISOString().slice(0, 10)) + 'T12:00:00Z'), d = prompt('Recaudo (RC) desde (AAAA-MM-DD):', new Date(Date.UTC(hy.getUTCFullYear(), hy.getUTCMonth() - 1, 1)).toISOString().slice(0, 10)); if (!d) return;
   const h = prompt('Hasta (AAAA-MM-DD):', new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 0)).toISOString().slice(0, 10)); if (!h) return;
   const cd = prompt('Una factura es de CONTADO si su plazo (vencimiento − fecha) es de hasta cuántos días:', '1'); if (cd === null) return;
-  const r = await conApi({ accion: 'recaudo', desde: d, hasta: h, contadoDias: cd });
+  const r = await recApi({ accion: 'recaudo', desde: d, hasta: h, contadoDias: cd });
   if (!r || !r.ok) { alert((r && r.error) || 'No se pudo generar'); return; }
   r.filas = r.filas.filter(f => (f.vendedor || '').trim()); r.otros = [];  // solo RC con ejecutivo: sin incapacidades, nómina ni otros conceptos
   REC = { r, i: 0 }; TAB = 'rec'; recPintar();
@@ -1123,11 +1126,24 @@ async function extCruzar() {
   const [d0, d1] = extRango(m), ini = new Date(Date.parse(d0 + 'T12:00:00Z') - 10 * 864e5).toISOString().slice(0, 10), hoy = (D && D.hoy) || new Date().toISOString().slice(0, 10);
   const fin = new Date(Math.min(Date.parse(d1 + 'T12:00:00Z') + 15 * 864e5, Date.parse(hoy + 'T12:00:00Z'))).toISOString().slice(0, 10);
   const b = $('xcruce'); b.innerHTML = '<div class="err">Consultando los RC de Siesa del ' + ini + ' al ' + fin + ' y cruzando con el extracto… puede tardar hasta 1–2 minutos.</div>';
-  const [r, e] = await Promise.all([conApi({ accion: 'recaudo', desde: ini, hasta: fin, contadoDias: 1 }), extApi({ accion: 'listar', desde: ini, hasta: fin })]);
+  const [r, e] = await Promise.all([recApi({ accion: 'recaudo', desde: ini, hasta: fin, contadoDias: 1 }), extApi({ accion: 'listar', desde: ini, hasta: fin })]);
   if (!r || !r.ok) { b.innerHTML = '<div class="err">' + esc((r && r.error) || 'No se pudo consultar Siesa') + '</div>'; return; }
   if (!e || !e.ok) { b.innerHTML = '<div class="err">' + esc((e && e.error) || 'No se pudo leer el extracto') + '</div>'; return; }
-  const sies = cruSies(r), L = cruCalc(e.filas, sies, m);
+  const sies = cruSies(r), L = cruCalc(e.filas, sies, m); await cruOtroMes(L);
   EXT.cruAb = new Set(); EXT.cruce = { mes: m, L, sies, ini, fin, solo: true }; EXT.vista = 'cru'; extPintar();
+}
+// RC de Siesa del mes que el extracto trae en otra fecha (p. ej. pago de septiembre registrado el 01/10): se busca su movimiento y se cuenta como del mes
+async function cruOtroMes(L) {
+  const T = L.filter(x => x.est === 'En Siesa sin extracto'); if (!T.length) return;
+  const j = await extApi({ accion: 'listar', rcs: T.map(x => x.rc) }); if (!j || !j.ok) return;
+  const by = {}; (j.filas || []).forEach(f => (by[String(f.rc)] = by[String(f.rc)] || []).push(f));
+  T.forEach(x => {
+    const A = by[String(x.rc)]; if (!A || !A.length) return;
+    const monto = Math.round(A.reduce((s, f) => s + Number(f.monto), 0) * 100) / 100, ejs = [...new Set(A.map(f => f.ejecutivo).filter(Boolean))], mp = ejs.map(ejNom).filter(Boolean), sn = (x.ejSies ? x.ejSies.split(' / ') : []).map(nz);
+    const dif = Math.round((monto - x.sie) * 100) / 100, vd = Math.abs(dif) > 5, ed = mp.length && sn.length && !mp.some(e => sn.includes(e));
+    x.ext = monto; x.dif = dif; x.ejExt = ejs.join(' / '); x.fil = A; x.n = A.length; x.otroMes = MESES[+A[0].fecha.slice(5, 7) - 1].toLowerCase();
+    x.est = vd && ed ? 'Valor y ejecutivo distintos' : vd ? 'Valor distinto' : ed ? 'Ejecutivo distinto' : 'OK';
+  });
 }
 function cruCalc(filas, sies, m) {
   const [d0, d1] = extRango(m), X = {};
@@ -1147,7 +1163,7 @@ function cruCalc(filas, sies, m) {
 const CRU_COLS = [
   { k: 'rc', t: 'RC', num: 1, al: 1, v: r => Number(r.rc), h: r => '<b>' + esc(r.rc) + '</b>' },
   { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha, h: r => esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7)) },
-  { k: 'cli', t: 'Cliente', wrap: 1, v: r => r.cliente },
+  { k: 'cli', t: 'Cliente', wrap: 1, v: r => r.cliente, h: r => esc(r.cliente || '') + (r.otroMes ? ' <span class="pill p-bl" title="El extracto trae este pago en otro mes">pago de ' + r.otroMes + '</span>' : '') },
   { k: 'ejx', t: 'Ejecutivo extracto', v: r => r.ejExt },
   { k: 'ejs', t: 'Ejecutivo Siesa', wrap: 1, v: r => r.ejSies },
   { k: 'ext', t: 'Extracto', num: 1, sum: 1, v: r => r.ext == null ? '' : r.ext, h: r => r.ext == null ? '–' : fm(r.ext) },
