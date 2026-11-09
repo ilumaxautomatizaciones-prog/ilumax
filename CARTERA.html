@@ -137,7 +137,7 @@ function pintar() {
   $('out').style.display = '';
   const pos = sumB(D.cls), venc = D.cls.reduce((s, c) => s + c.b[1] + c.b[2] + c.b[3] + c.b[4], 0), v90 = D.cls.reduce((s, c) => s + c.b[4], 0), fav = D.cls.reduce((s, c) => s + c.fav, 0);
   const rec30 = D.recs.filter(r => Date.parse(hoy) - Date.parse(r.fecha) < 30 * 864e5).reduce((s, r) => s + r.valor, 0);
-  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ext', '🏦 Extracto bancario']];
+  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ppe', '📊 Ppto vs Ejecución'], ['ext', '🏦 Extracto bancario']];
   $('app').innerHTML = '<div class="kpis">'
     + kpi('Cartera por cobrar', fmc(pos), D.cls.filter(c => c.tot > 0).length + ' clientes con saldo')
     + kpi('Vencida', fmc(venc), pos ? Math.round(venc / pos * 100) + '% de la cartera' : '')
@@ -213,6 +213,8 @@ function vista(soloTabla) {
     const tv = t[1] + t[2] + t[3] + t[4];
     c.innerHTML = barra('') + '<div class="card"><h2>Facturas vencidas por vendedor (' + L.length + ')</h2><div class="tw"><table><thead><tr><th>Vendedor</th><th>1-30 d</th><th>31-60 d</th><th>61-90 d</th><th>+90 d</th><th>Total vencido</th><th>% de su cartera</th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Sin vencidas</td></tr>') + '<tr class="tot"><td>TOTAL</td><td>' + fm(t[1]) + '</td><td>' + fm(t[2]) + '</td><td>' + fm(t[3]) + '</td><td>' + fm(t[4]) + '</td><td>' + fm(tv) + '</td><td></td></tr></tbody></table></div></div>';
     keepFocus();
+  } else if (TAB === 'ppe') {
+    ppeVista();
   } else if (TAB === 'ext') {
     extVista();
   } else {
@@ -423,6 +425,42 @@ async function conExcel() {
 }
 
 let REC = null;
+// ── Presupuesto vs ejecución de recaudo por ejecutivo y semana ──
+// Semanas 1 y 2: valores del Excel de Cartera (tal cual). Semana 3: recaudo de Siesa (RC) tal cual.
+// Semana 4: cuadre = recaudo total del mes en Siesa − semanas 1, 2 y 3 (lo que faltaba por reflejar).
+const PPE_DATA = {
+  '2026-10': { titulo: 'OCT / 2026', desde: '2026-10-01', hasta: '2026-10-31', sem: [['2026-10-01', '2026-10-12'], ['2026-10-13', '2026-10-18'], ['2026-10-19', '2026-10-25'], ['2026-10-26', '2026-10-31']],
+    f: { 'CHAVES ZULUAGA GERSSON ANDRES': [114682771.7, 25852350, 21520746], 'FERREIRA TORRES JAIME': [157259161, 25130243, 11342318], 'FERRO BAQUERO MAURICIO': [121027715, 47545683, 7151017], 'FLOREZ PELAEZ CARMELINA': [174650245, 56426931, 7140713], 'GARCIA NOGUERA CLAUDIA LORENA': [4782163, 0, 2061292], 'LOZADA ACOSTA LUIS FELIPE': [53737392.56, 7195041, 4270634], 'PADILLA MORALES ROSA ANGELICA': [44406722, 22205889.36, 9924159.24], 'PARRA ZAPATA SERGIO ANDRES': [61301668, 10445869, 4759482], 'SANCHEZ LEON LIZ KATHERINE': [150451382.07, 18156498.66, 3120614], 'TAYLOR RAMOS CAMILO GUSTAVO': [108619821, 39123180, 22322690.41] } }
+};
+const PPE = { mes: '2026-10', r: null, cargando: false };
+async function ppeCargar() {
+  const M = PPE_DATA[PPE.mes]; if (!M || PPE.cargando) return; PPE.cargando = true; PPE.r = null; ppeVista();
+  const r = await recApi({ accion: 'recaudo', desde: M.desde, hasta: M.hasta, contadoDias: '1' });
+  PPE.cargando = false; PPE.r = (r && r.ok) ? r : { error: (r && r.error) || 'No se pudo traer el recaudo de Siesa' }; ppeVista();
+}
+function ppeVista() {
+  const c = $('cont'); if (!c) return; const M = PPE_DATA[PPE.mes];
+  const bar = '<div class="bar"><b style="font-size:12px">' + esc(M.titulo) + ' · recaudo por ejecutivo y semana</b><button class="btn" onclick="ppeCargar()">🔄 Traer recaudo de Siesa</button></div>';
+  if (PPE.cargando) { c.innerHTML = bar + '<div class="card">Trayendo el recaudo de Siesa…</div>'; return; }
+  if (!PPE.r) { c.innerHTML = bar + '<div class="card">Pulsa «Traer recaudo de Siesa» para calcular la semana 3 y el cuadre de la semana 4.</div>'; ppeCargar(); return; }
+  if (PPE.r.error) { c.innerHTML = bar + '<div class="card" style="color:#b91c1c">' + esc(PPE.r.error) + '</div>'; return; }
+  const filas = (PPE.r.filas || []).filter(f => (f.vendedor || '').trim());
+  const nombres = Object.keys(M.f), idx = {}; nombres.forEach(n => idx[nz(n)] = n);
+  const T = {}; nombres.forEach(n => T[n] = { mes: 0, w: [0, 0, 0, 0] }); const otros = {};
+  filas.forEach(f => { const n = idx[nz(f.vendedor)]; if (!n) { otros[f.vendedor] = (otros[f.vendedor] || 0) + f.asignado; return; } T[n].mes += f.asignado; M.sem.forEach((w, k) => { if (f.fecha >= w[0] && f.fecha <= w[1]) T[n].w[k] += f.asignado; }); });
+  const tot = Array(10).fill(0);
+  const rows = nombres.map(n => { const [pp, s1, s2] = M.f[n], t = T[n], s3 = t.w[2], s4 = t.mes - s1 - s2 - s3, ac = s1 + s2 + s3 + s4, pc = pp ? ac / pp : 0;
+    [pp, s1, s2, s3, s4, ac, pp - ac, t.w[3], t.mes].forEach((v, i) => tot[i] += v);
+    const col = pc >= 1 ? '#16a34a' : pc >= .7 ? '#ea580c' : '#dc2626';
+    return '<tr><td class="n" style="text-align:left">' + esc(n) + '</td><td>' + fm(pp) + '</td><td>' + fm(s1) + '</td><td>' + fm(s2) + '</td><td>' + fm(s3) + '</td><td title="Siesa del 26 al 31: ' + fm(t.w[3]) + '" style="background:#fef9c3' + (s4 < 0 ? ';color:#b91c1c' : '') + '">' + fm(s4) + '</td><td><b>' + fm(ac) + '</b></td><td style="color:' + col + '"><b>' + (pc * 100).toFixed(1) + '%</b></td><td>' + fm(Math.max(pp - ac, 0)) + '</td></tr>'; }).join('');
+  const pT = tot[0] ? tot[5] / tot[0] : 0;
+  const ot = Object.keys(otros).length ? '<div class="card" style="font-size:11.5px;color:#92400e;background:#fef3c7">Recaudo de Siesa con ejecutivo que no está en el presupuesto: ' + Object.keys(otros).map(k => esc(k) + ' ' + fm(otros[k])).join(' · ') + '</div>' : '';
+  const sin = M.sem.map(w => w[0].slice(8) + '–' + w[1].slice(8));
+  c.innerHTML = bar + '<div class="card"><h2>Presupuesto vs ejecución · recaudo ' + esc(M.titulo) + '</h2><div class="tw"><table><thead><tr><th style="text-align:left">Ejecutivo</th><th>Ppto</th><th>Sem 1 (' + sin[0] + ')</th><th>Sem 2 (' + sin[1] + ')</th><th>Sem 3 (' + sin[2] + ')</th><th>Sem 4 (' + sin[3] + ') cuadre</th><th>Acumulado</th><th>% vs ppto</th><th>Faltante</th></tr></thead><tbody>' + rows
+    + '<tr><td class="n" style="text-align:left"><b>TOTAL</b></td>' + [0, 1, 2, 3, 4, 5].map(i => '<td><b>' + fm(tot[i]) + '</b></td>').join('') + '<td><b>' + (pT * 100).toFixed(1) + '%</b></td><td><b>' + fm(Math.max(tot[0] - tot[5], 0)) + '</b></td></tr></tbody></table></div>'
+    + '<div style="font-size:11px;color:#64748b;margin-top:8px">Sem 1 y 2: valores del Excel de Cartera. Sem 3: recaudo (RC) tal cual en Siesa. Sem 4: cuadre = recaudo total del mes en Siesa (' + fm(tot[8]) + ') − semanas 1, 2 y 3; pasa el mouse para ver lo que Siesa registra del 26 al 31 (' + fm(tot[7]) + ').</div></div>' + ot;
+}
+
 // Ejecutivos que ya no están: sus pagos se pasan al ejecutivo que quedó con la cartera (nombre como sale en Siesa)
 const VEND_ALIAS = { 'SANTOFIMIO YENY PAHOLA': 'LOZADA ACOSTA LUIS FELIPE' };
 // RC que no cuentan en el recaudo (se causan por otra parte) y RC cuyo ejecutivo se fija a mano
