@@ -27740,9 +27740,10 @@ function filtrarTiEntregas() {
       <td style="padding:9px 12px;font-weight:600;font-size:11px;">${tiEsc(e.colaborador_nombre||'')}${e.colaborador_cargo?'<div style="font-size:10px;color:var(--mu);font-weight:400;">'+tiEsc(e.colaborador_cargo)+'</div>':''}</td>
       <td style="padding:9px 12px;font-size:11px;">${tiFechaCO(e.fecha)}</td>
       <td style="padding:9px 12px;font-size:11px;">${items_.length} equipo(s)<div style="font-size:10px;color:var(--mu);">${tiEsc(items_.map(i=>i.descripcion).join(', ').substring(0,60))}</div></td>
-      <td style="padding:9px 12px;"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:${badgeCol[e.estado]||'#64748b'}22;color:${badgeCol[e.estado]||'#64748b'};">${tiEsc(e.estado||'')}</span></td>
+      <td style="padding:9px 12px;"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:${badgeCol[e.estado]||'#64748b'}22;color:${badgeCol[e.estado]||'#64748b'};">${tiEsc(e.estado||'')}</span>${e.acta_firmada_url?`<div style="margin-top:4px;"><a href="${e.acta_firmada_url}" target="_blank" style="font-size:10px;font-weight:700;color:#16a34a;text-decoration:none;" title="Firmada el ${tiEsc(String(e.acta_firmada_en||'').slice(0,10))} · ${tiEsc(e.acta_firmada_por||'')}">✅ Firmada · ver</a></div>`:'<div style="margin-top:4px;font-size:10px;color:#d97706;font-weight:700;">⏳ Sin firma</div>'}</td>
       <td style="padding:9px 12px;text-align:right;white-space:nowrap;">
         <button class="btn btn-bl btn-sm" style="padding:4px 8px;" onclick="tiAbrirActa('${e.id}')" title="Ver / Imprimir PDF">📄</button>
+        <button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiSubirFirmada('${e.id}')" title="Subir foto o PDF del acta firmada">${e.acta_firmada_url?'🔁':'📎'} ${e.acta_firmada_url?'Cambiar firmada':'Subir firmada'}</button>
         ${e.estado==='Vigente' ? `<button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiMarcarDevuelto('${e.id}')" title="Recibir equipo (devolución) y sacar el acta de recepción">📥 Recibir equipo</button>` : ''}
         ${e.estado==='Devuelto' ? `<button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiAbrirActa('${e.id}','recepcion')" title="Ver / Imprimir acta de recepción">📥 Acta de recepción</button>` : ''}
       </td>
@@ -28181,6 +28182,32 @@ async function tiMarcarDevuelto(id) {
   } catch(e) {
     toast('❌ Error: ' + e.message, 'er');
   }
+}
+
+
+// ── Acta firmada: subir foto o PDF del acta ya firmada (queda como respaldo y marca "Firmada") ──
+function tiSubirFirmada(entregaId) {
+  const e = TI.entregas.find(x => x.id === entregaId); if(!e) return;
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*,application/pdf';
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0]; if(!f) return;
+    if(f.size > 15*1024*1024) { toast('El archivo pesa más de 15 MB', 'wa'); return; }
+    try {
+      toast('Subiendo acta firmada…', 'inf');
+      const ext = (f.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+      const path = 'ti-actas/' + String(e.folio || e.id).replace(/[^A-Za-z0-9_-]/g, '') + '_firmada_' + Date.now() + '.' + ext;
+      const fd = new FormData(); fd.append('', f, path.split('/').pop());
+      const r = await fetch(SB_URL + '/storage/v1/object/soportes/' + path, { method:'POST', headers:{ 'apikey':SB_KEY, 'Authorization':'Bearer ' + SB_KEY }, body: fd });
+      if(!r.ok) throw new Error('subida ' + r.status);
+      const url = SB_URL + '/storage/v1/object/public/soportes/' + path;
+      const cambios = { acta_firmada_url:url, acta_firmada_en:new Date().toISOString(), acta_firmada_por:(CU && CU.nombre) || 'TI', actualizado:new Date().toISOString() };
+      await sb.patch('ti_entregas', 'id=eq.' + entregaId, cambios);
+      Object.assign(e, cambios);
+      toast('✅ Acta firmada guardada en ' + (e.folio || 'la entrega'), 'ok');
+      filtrarTiEntregas();
+    } catch(err) { toast('No se pudo subir: ' + err.message, 'er'); }
+  };
+  inp.click();
 }
 
 // ── GENERADOR DE ACTA EN HTML/PDF (formato RHU-FOR-006) ──
