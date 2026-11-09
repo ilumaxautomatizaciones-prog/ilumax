@@ -429,16 +429,11 @@ let REC = null;
 // Semanas 1 y 2: valores del Excel de Cartera (tal cual). Semana 3: recaudo de Siesa (RC) tal cual.
 // Semana 4: cuadre = recaudo total del mes en Siesa − semanas 1, 2 y 3 (lo que faltaba por reflejar).
 const PPE_DATA = {
-  '2026-10': { titulo: 'OCT / 2026', desde: '2026-10-01', hasta: '2026-10-31', sem: [['2026-10-01', '2026-10-12'], ['2026-10-13', '2026-10-18'], ['2026-10-19', '2026-10-25'], ['2026-10-26', '2026-10-31']],
-    f: { 'CHAVES ZULUAGA GERSSON ANDRES': [114682771.7, 25852350, 21520746], 'FERREIRA TORRES JAIME': [157259161, 25130243, 11342318], 'FERRO BAQUERO MAURICIO': [121027715, 47545683, 7151017], 'FLOREZ PELAEZ CARMELINA': [174650245, 56426931, 7140713], 'GARCIA NOGUERA CLAUDIA LORENA': [4782163, 0, 2061292], 'LOZADA ACOSTA LUIS FELIPE': [53737392.56, 7195041, 4270634], 'PADILLA MORALES ROSA ANGELICA': [44406722, 22205889.36, 9924159.24], 'PARRA ZAPATA SERGIO ANDRES': [61301668, 10445869, 4759482], 'SANCHEZ LEON LIZ KATHERINE': [150451382.07, 18156498.66, 3120614], 'TAYLOR RAMOS CAMILO GUSTAVO': [108619821, 39123180, 22322690.41] } }
+  '2026-10': { manual: true, titulo: 'OCT / 2026', desde: '2026-10-01', hasta: '2026-10-31', sem: [['2026-10-01', '2026-10-12'], ['2026-10-13', '2026-10-18'], ['2026-10-19', '2026-10-25'], ['2026-10-26', '2026-10-31']],
+    f: { 'CHAVES ZULUAGA GERSSON ANDRES': [114682771.7, 25852350, 21520746, 20567308, 8398785], 'FERREIRA TORRES JAIME': [157259161, 25130243, 11342318, 41643785, 46366108], 'FERRO BAQUERO MAURICIO': [121027715, 47545683, 7151017, 21685008, 24453541], 'FLOREZ PELAEZ CARMELINA': [174650245, 56426931, 7140713, 28719302, 50018700], 'GARCIA NOGUERA CLAUDIA LORENA': [4782163, 0, 2061292, 0, 1832419], 'LOZADA ACOSTA LUIS FELIPE': [53737392.56, 7195041, 4270634, 7052570, 23317450], 'PADILLA MORALES ROSA ANGELICA': [44406722, 22205889.36, 9924159.24, 13063385, 3319258], 'PARRA ZAPATA SERGIO ANDRES': [61301668, 10445869, 4759482, 5997898, 29725594], 'SANCHEZ LEON LIZ KATHERINE': [150451382.07, 18156498.66, 3120614, 31792262, 38722602], 'TAYLOR RAMOS CAMILO GUSTAVO': [108619821, 39123180, 22322690.41, 17022570, 19627450] } }
 };
-const PPE = { mes: '2026-10', r: null, cargando: false };
-async function ppeCargar() {
-  const M = PPE_DATA[PPE.mes]; if (!M || PPE.cargando) return; PPE.cargando = true; PPE.r = null; ppeVista();
-  const r = await recApi({ accion: 'recaudo', desde: M.desde, hasta: M.hasta, contadoDias: '1' });
-  PPE.cargando = false; PPE.r = (r && r.ok) ? r : { error: (r && r.error) || 'No se pudo traer el recaudo de Siesa' }; ppeVista();
-}
-
+const PPE = { mes: '2026-10', r: null, cargando: false, fb: {}, pend: {} };
+const ppeEsNH = f => /^NH/i.test(String(f.doc || '').trim());   // nota NH que cruza una factura: se suma al final al recaudo del mes
 // ── Excel avanzado de Ppto vs Ejecución: hoja principal (como la plantilla) + gráficos + tablero con selector + detalle por cliente + RC como tabla ──
 const PPE_COD = { 'CHAVES ZULUAGA GERSSON ANDRES': 103, 'FERREIRA TORRES JAIME': 107, 'FERRO BAQUERO MAURICIO': 120, 'FLOREZ PELAEZ CARMELINA': 149, 'GARCIA NOGUERA CLAUDIA LORENA': 177, 'LOZADA ACOSTA LUIS FELIPE': 198, 'PADILLA MORALES ROSA ANGELICA': 202, 'PARRA ZAPATA SERGIO ANDRES': 201, 'SANCHEZ LEON LIZ KATHERINE': 532, 'TAYLOR RAMOS CAMILO GUSTAVO': 178 };
 const xe = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -487,7 +482,7 @@ async function ppeExcel() {
   if (typeof ExcelJS === 'undefined') await loadJs('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
   if (typeof JSZip === 'undefined') await loadJs('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
   const nombres = Object.keys(M.f), idx = {}; nombres.forEach(n => idx[nz(n)] = n);
-  const filas = r.filas.filter(f => (f.vendedor || '').trim()).map(f => ({ ...f, ej: idx[nz(f.vendedor)] || f.vendedor.trim() })).sort((a, b) => a.fecha.localeCompare(b.fecha) || a.rc - b.rc);
+  const filas = ppeFilas(M).map(f => ({ ...f, ej: idx[nz(f.vendedor)] || f.vendedor.trim() })).sort((a, b) => a.fe.localeCompare(b.fe) || a.rc - b.rc);
   const D_ = s => new Date(s + 'T12:00:00Z'), money = '"$" #,##0', pct = '0.0%', AZ = 'FF1E293B', AM = 'FFF5C518';
   const wb = new ExcelJS.Workbook(); wb.calcProperties = { fullCalcOnLoad: true };
   const ws = wb.addWorksheet('PPTO VS EJECUCION', { properties: { tabColor: { argb: AM } } }), wg = wb.addWorksheet('Gráficos', { properties: { tabColor: { argb: 'FF2563EB' } } }), wt = wb.addWorksheet('Tablero', { properties: { tabColor: { argb: 'FF16A34A' } } }), wc = wb.addWorksheet('Por cliente'), wd = wb.addWorksheet('RC SIESA');
@@ -497,51 +492,52 @@ async function ppeExcel() {
   wd.addRow(['RC SIESA · recibos de caja de ' + M.titulo + ' (fuente de las fórmulas; puedes insertar una tabla dinámica sobre esta tabla)']); wd.getRow(1).font = { bold: true, size: 13 }; wd.addRow([]); wd.addRow([]);
   const nd = filas.length, d0 = 5, dN = d0 + Math.max(nd, 1) - 1;
   wd.addTable({ name: 'tblRC', ref: 'A4', headerRow: true, totalsRow: false, style: { theme: 'TableStyleMedium2', showRowStripes: true },
-    columns: ['Fecha', 'RC', 'NIT', 'Ejecutivo', 'Cliente', 'Tipo', 'Asignado', 'Documento'].map(n => ({ name: n, filterButton: true })),
-    rows: nd ? filas.map(f => [D_(f.fecha), f.rc, f.nit, f.ej, f.cliente || '', f.tipoPago || '', f.asignado, f.doc || '']) : [['', '', '', '', '', '', 0, '']] });
-  wd.getColumn(1).numFmt = 'dd/mm/yyyy'; wd.getColumn(7).numFmt = money; [12, 10, 14, 34, 40, 10, 16, 16].forEach((w, i) => wd.getColumn(i + 1).width = w); wd.views = [{ state: 'frozen', ySplit: 4 }];
-  const RF = "'RC SIESA'!$A$" + d0 + ":$A$" + dN, RE = "'RC SIESA'!$D$" + d0 + ":$D$" + dN, RN = "'RC SIESA'!$C$" + d0 + ":$C$" + dN, RV = "'RC SIESA'!$G$" + d0 + ":$G$" + dN;
+    columns: ['Fecha', 'RC', 'NIT', 'Ejecutivo', 'Cliente', 'Tipo', 'Asignado', 'Documento', 'Fecha RC Siesa'].map(n => ({ name: n, filterButton: true })),
+    rows: nd ? filas.map(f => [D_(f.fe), f.rc, f.nit, f.ej, f.cliente || '', f.tipoPago || '', f.asignado, f.doc || '', D_(f.fecha)]) : [['', '', '', '', '', '', 0, '', '']] });
+  wd.getColumn(1).numFmt = 'dd/mm/yyyy'; wd.getColumn(9).numFmt = 'dd/mm/yyyy'; wd.getColumn(7).numFmt = money; [12, 10, 14, 34, 40, 10, 16, 16, 14].forEach((w, i) => wd.getColumn(i + 1).width = w); wd.views = [{ state: 'frozen', ySplit: 4 }];
+  const RF = "'RC SIESA'!$A$" + d0 + ":$A$" + dN, RE = "'RC SIESA'!$D$" + d0 + ":$D$" + dN, RN = "'RC SIESA'!$C$" + d0 + ":$C$" + dN, RV = "'RC SIESA'!$G$" + d0 + ":$G$" + dN, RD = "'RC SIESA'!$H$" + d0 + ":$H$" + dN, NHC = ',' + RD + ',"<>NH*"';
   // ── Hoja principal (formato de la plantilla de Cartera) ──
   ws.getRow(1).height = 8;
   ws.getCell('C2').value = M.titulo; ws.getCell('C2').font = { bold: true, size: 16 }; ws.getCell('D2').value = 'RECAUDO POR SEMANAS'; ws.mergeCells('D2:G2'); ws.getCell('D2').font = { bold: true, size: 12 }; ws.getCell('D2').alignment = { horizontal: 'center' };
-  head(ws.addRow(['COD', 'EJECUTIVO', 'PPTO ' + M.titulo.replace(' / ', ' '), 'SEMANA 1', 'SEMANA 2', 'SEMANA 3 (Siesa)', 'SEMANA 4 (cuadre)', 'CUMPLIMIENTO ACUMULADO', '% CUMPLTO VS PPTO', '$ FALTANTE', '% DEL FALTANTE', 'TOTAL MES SIESA', 'SIESA SEM 4 (registrado)', 'DIF. CUADRE vs SIESA SEM 4', 'ESTADO'])); ws.getRow(3).height = 36;
-  const T = {}; nombres.forEach(n => T[n] = { mes: 0, w: [0, 0, 0, 0] });
-  filas.forEach(f => { const t = T[f.ej]; if (!t) return; t.mes += f.asignado; M.sem.forEach((w, k) => { if (f.fecha >= w[0] && f.fecha <= w[1]) t.w[k] += f.asignado; }); });
+  head(ws.addRow(['COD', 'EJECUTIVO', 'PPTO ' + M.titulo.replace(' / ', ' '), 'SEMANA 1', 'SEMANA 2', 'SEMANA 3', 'SEMANA 4 (cuadre)', 'CUMPLIMIENTO ACUMULADO', '% CUMPLTO VS PPTO', '$ FALTANTE', '% DEL FALTANTE', 'TOTAL MES SIESA (+ NH)', 'SIESA SEM 4 (registrado)', 'DIF. CUADRE vs SIESA SEM 4', 'ESTADO', 'NH SUMADAS', 'SIESA SEM 3 (registrado)'])); ws.getRow(3).height = 36;
+  const T = {}; nombres.forEach(n => T[n] = { mes: 0, nh: 0, w: [0, 0, 0, 0] });
+  filas.forEach(f => { const t = T[f.ej]; if (!t) return; if (ppeEsNH(f)) { t.nh += -f.asignado; return; } t.mes += f.asignado; M.sem.forEach((w, k) => { if (f.fe >= w[0] && f.fe <= w[1]) t.w[k] += f.asignado; }); });
   const P = 4, PN = P + nombres.length - 1, PT = PN + 1, PD = PT + 4, PH = PD + 1;   // filas: datos, total, "desde", "hasta"
-  const sif = (col, k) => 'SUMIFS(' + RV + ',' + RE + ',$B' + k + ',' + RF + ',">="&' + col + '$' + PD + ',' + RF + ',"<="&' + col + '$' + PH + ')';
-  const tot = { pp: 0, ac: 0, fa: 0 }; nombres.forEach(n => { const [pp, s1, s2] = M.f[n], t = T[n], ac = s1 + s2 + t.w[2] + (t.mes - s1 - s2 - t.w[2]); tot.pp += pp; tot.ac += ac; tot.fa += Math.max(pp - ac, 0); });
-  nombres.forEach((n, i) => { const k = P + i, [pp, s1, s2] = M.f[n], t = T[n], s4 = t.mes - s1 - s2 - t.w[2], ac = s1 + s2 + t.w[2] + s4;
-    ws.addRow([PPE_COD[n] || '', n, pp, s1, s2, { formula: sif('F', k), result: t.w[2] }, { formula: 'L' + k + '-D' + k + '-E' + k + '-F' + k, result: s4 }, { formula: 'SUM(D' + k + ':G' + k + ')', result: ac }, { formula: 'IF(C' + k + '=0,0,H' + k + '/C' + k + ')', result: pp ? ac / pp : 0 }, { formula: 'MAX(C' + k + '-H' + k + ',0)', result: Math.max(pp - ac, 0) }, { formula: 'IF($J$' + PT + '=0,0,J' + k + '/$J$' + PT + ')', result: tot.fa ? Math.max(pp - ac, 0) / tot.fa : 0 }, { formula: 'SUMIFS(' + RV + ',' + RE + ',$B' + k + ')', result: t.mes }, { formula: sif('G', k), result: t.w[3] }, { formula: 'G' + k + '-M' + k, result: s4 - t.w[3] }, { formula: 'IF(I' + k + '>=1,"Cumplido",IF(I' + k + '>=0.7,"En ruta","Atrasado"))', result: pp && ac / pp >= 1 ? 'Cumplido' : pp && ac / pp >= .7 ? 'En ruta' : 'Atrasado' }]);
+  const sif = (col, k) => 'SUMIFS(' + RV + ',' + RE + ',$B' + k + ',' + RF + ',">="&' + col + '$' + PD + ',' + RF + ',"<="&' + col + '$' + PH + NHC + ')';
+  const SF = (col, k, v) => M.manual ? v : { formula: sif(col, k), result: v };
+  const tot = { pp: 0, ac: 0, fa: 0 }; nombres.forEach(n => { const t = T[n], { pp, s1, s2, s3 } = ppeSem(M, n, t), ac = s1 + s2 + s3 + (t.mes - s1 - s2 - s3); tot.pp += pp; tot.ac += ac; tot.fa += Math.max(pp - ac, 0); });
+  nombres.forEach((n, i) => { const k = P + i, t = T[n], { pp, s1, s2, s3, s4 } = ppeSem(M, n, t), ac = s1 + s2 + s3 + s4;
+    ws.addRow([PPE_COD[n] || (M.cod || {})[n] || '', n, pp, SF('D', k, s1), SF('E', k, s2), SF('F', k, s3), { formula: 'L' + k + '-D' + k + '-E' + k + '-F' + k, result: s4 }, { formula: 'SUM(D' + k + ':G' + k + ')', result: ac }, { formula: 'IF(C' + k + '=0,0,H' + k + '/C' + k + ')', result: pp ? ac / pp : 0 }, { formula: 'MAX(C' + k + '-H' + k + ',0)', result: Math.max(pp - ac, 0) }, { formula: 'IF($J$' + PT + '=0,0,J' + k + '/$J$' + PT + ')', result: tot.fa ? Math.max(pp - ac, 0) / tot.fa : 0 }, { formula: 'SUMIFS(' + RV + ',' + RE + ',$B' + k + NHC + ')', result: t.mes }, { formula: sif('G', k), result: t.w[3] }, { formula: 'G' + k + '-M' + k, result: s4 - t.w[3] }, { formula: 'IF(I' + k + '>=1,"Cumplido",IF(I' + k + '>=0.7,"En ruta","Atrasado"))', result: pp && ac / pp >= 1 ? 'Cumplido' : pp && ac / pp >= .7 ? 'En ruta' : 'Atrasado' }, { formula: '-SUMIFS(' + RV + ',' + RE + ',$B' + k + ',' + RD + ',"NH*")', result: t.nh }, { formula: sif('F', k), result: t.w[2] }]);
     ws.getRow(k).eachCell(c => c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }); });
-  const tr = ws.addRow(['', 'TOTAL']); 'CDEFGHJKLMN'.split('').forEach(c => tr.getCell(c).value = { formula: 'SUM(' + c + P + ':' + c + PN + ')' }); tr.getCell('I').value = { formula: 'IF(C' + PT + '=0,0,H' + PT + '/C' + PT + ')' };
+  const tr = ws.addRow(['', 'TOTAL']); 'CDEFGHJKLMNPQ'.split('').forEach(c => tr.getCell(c).value = { formula: 'SUM(' + c + P + ':' + c + PN + ')' }); tr.getCell('I').value = { formula: 'IF(C' + PT + '=0,0,H' + PT + '/C' + PT + ')' };
   tr.font = { bold: true }; tr.eachCell({ includeEmpty: true }, c => { fondo(c, 'FFFDE68A'); c.border = { top: { style: 'medium' }, bottom: { style: 'medium' } }; });
   ws.addRow([]); ws.addRow([]);
   const rp = ws.addRow(['', 'Semanas (editables → recalculan todo)']); rp.font = { bold: true, color: { argb: 'FF64748B' } };
   ws.addRow(['', 'Desde', '', ...M.sem.map(w => D_(w[0]))]); ws.addRow(['', 'Hasta', '', ...M.sem.map(w => D_(w[1]))]);
   [PD, PH].forEach(k => { for (let c = 4; c <= 7; c++) { const x = ws.getCell(k, c); x.numFmt = 'dd/mm/yyyy'; x.alignment = { horizontal: 'center' }; fondo(x, 'FFFEF9C3'); } });
-  ws.getRow(PH + 2).getCell(2).value = 'Sem 1 y 2: valores del Excel de Cartera · Sem 3: recibos de Siesa · Sem 4: cuadre = total del mes en Siesa − semanas 1, 2 y 3'; ws.getRow(PH + 2).getCell(2).font = { italic: true, color: { argb: 'FF64748B' } };
-  for (let c = 3; c <= 14; c++) ws.getColumn(c).numFmt = money; ws.getColumn(9).numFmt = pct; ws.getColumn(11).numFmt = pct;
+  ws.getRow(PH + 2).getCell(2).value = (M.manual ? 'Sem 1, 2 y 3 (azul): valores de tu Excel (fecha del banco)' : 'Sem 1 a 3: recibos de Siesa por la fecha del banco registrada en el portal') + ' · Sem 4: cuadre = total del mes en Siesa + NH sumadas − semanas 1, 2 y 3 · las NH se suman al final'; ws.getRow(PH + 2).getCell(2).font = { italic: true, color: { argb: 'FF64748B' } };
+  for (let c = 3; c <= 14; c++) ws.getColumn(c).numFmt = money; ws.getColumn(16).numFmt = money; ws.getColumn(17).numFmt = money; ws.getColumn(9).numFmt = pct; ws.getColumn(11).numFmt = pct;
   [PD, PH].forEach(k => { for (let c = 4; c <= 7; c++) ws.getCell(k, c).numFmt = 'dd/mm/yyyy'; });
-  ws.getColumn(1).width = 7; ws.getColumn(2).width = 34; for (let c = 3; c <= 14; c++) ws.getColumn(c).width = 17; ws.getColumn(15).width = 12;
+  ws.getColumn(1).width = 7; ws.getColumn(2).width = 34; for (let c = 3; c <= 14; c++) ws.getColumn(c).width = 17; ws.getColumn(15).width = 12; ws.getColumn(16).width = 17; ws.getColumn(17).width = 17;
   ws.addConditionalFormatting({ ref: 'I' + P + ':I' + PT, rules: [{ type: 'expression', formulae: ['I' + P + '>=1'], style: { font: { color: { argb: 'FF16A34A' }, bold: true } } }, { type: 'expression', formulae: ['AND(I' + P + '>=0.7,I' + P + '<1)'], style: { font: { color: { argb: 'FFEA580C' }, bold: true } } }, { type: 'expression', formulae: ['I' + P + '<0.7'], style: { font: { color: { argb: 'FFDC2626' }, bold: true } } }] });
   ws.addConditionalFormatting({ ref: 'O' + P + ':O' + PN, rules: [{ type: 'cellIs', operator: 'equal', formulae: ['"Cumplido"'], style: { font: { color: { argb: 'FF16A34A' }, bold: true } } }, { type: 'cellIs', operator: 'equal', formulae: ['"Atrasado"'], style: { font: { color: { argb: 'FFDC2626' }, bold: true } } }, { type: 'cellIs', operator: 'equal', formulae: ['"En ruta"'], style: { font: { color: { argb: 'FFEA580C' }, bold: true } } }] });
-  for (let k = P; k <= PN; k++) fondo(ws.getCell('G' + k), 'FFFEF9C3');
+  for (let k = P; k <= PN; k++) { fondo(ws.getCell('G' + k), 'FFFEF9C3'); if (M.manual) ['D', 'E', 'F'].forEach(c => ws.getCell(c + k).font = { color: { argb: 'FF1D4ED8' } }); }
   ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 3 }];
   // ── Tablero con selector ──
   const MS = "'PPTO VS EJECUCION'!", rg = c => MS + '$' + c + '$' + P + ':$' + c + '$' + PN, sel = col => 'IF($C$3="TODOS",' + MS + col + '$' + PT + ',SUMIF(' + rg('B') + ',$C$3,' + rg(col) + '))';
   wt.getCell('B1').value = 'TABLERO · ' + M.titulo; wt.getCell('B1').font = { bold: true, size: 16 };
   wt.getCell('B3').value = 'Ejecutivo (elige):'; wt.getCell('B3').font = { bold: true }; wt.getCell('C3').value = 'TODOS'; fondo(wt.getCell('C3'), 'FFFEF9C3'); wt.getCell('C3').font = { bold: true, size: 12 };
   wt.getCell('C3').dataValidation = { type: 'list', allowBlank: false, formulae: ['"TODOS,' + nombres.join(',') + '"'] };
-  const kp = [['Presupuesto', sel('C'), money], ['Recaudado acumulado', sel('H'), money], ['Cumplimiento', 'IF(C5=0,0,C6/C5)', pct], ['Faltante', sel('J'), money], ['Semana 1', sel('D'), money], ['Semana 2', sel('E'), money], ['Semana 3 (Siesa)', sel('F'), money], ['Semana 4 (cuadre)', sel('G'), money], ['Mejor semana', 'INDEX({"Semana 1","Semana 2","Semana 3","Semana 4"},MATCH(MAX(C9:C12),C9:C12,0))', '@']];
+  const kp = [['Presupuesto', sel('C'), money], ['Recaudado acumulado', sel('H'), money], ['Cumplimiento', 'IF(C5=0,0,C6/C5)', pct], ['Faltante', sel('J'), money], ['Semana 1', sel('D'), money], ['Semana 2', sel('E'), money], ['Semana 3', sel('F'), money], ['Semana 4 (cuadre)', sel('G'), money], ['Mejor semana', 'INDEX({"Semana 1","Semana 2","Semana 3","Semana 4"},MATCH(MAX(C9:C12),C9:C12,0))', '@']];
   kp.forEach((k, i) => { const x = wt.getCell(5 + i, 2), y = wt.getCell(5 + i, 3); x.value = k[0]; x.font = { bold: true }; y.value = { formula: k[1] }; y.numFmt = k[2]; y.font = { bold: true, size: 12 }; y.alignment = { horizontal: 'right' }; x.border = y.border = { bottom: { style: 'hair' } }; });
   wt.getColumn(1).width = 3; wt.getColumn(2).width = 24; wt.getColumn(3).width = 36; wt.addRow([]);
   wt.getCell('B15').value = 'Cambia el ejecutivo en la celda amarilla (C3) y todo el tablero se recalcula.'; wt.getCell('B15').font = { italic: true, color: { argb: 'FF64748B' } };
   // ── Por cliente (Siesa, por fecha de recibo) ──
-  wc.addRow(['Recaudo por cliente y semana · según la fecha del recibo de caja en Siesa (el total puede diferir de la tabla principal en las semanas 1 y 2, que vienen del Excel de Cartera)']); wc.getRow(1).font = { bold: true, size: 12 }; wc.addRow([]);
+  wc.addRow(['Recaudo por cliente y semana · según la fecha del recibo de caja en Siesa (sin las NH, que se suman al final; las semanas 1, 2 y 3 de la tabla principal vienen de tu Excel, por fecha del banco, así que pueden diferir)']); wc.getRow(1).font = { bold: true, size: 12 }; wc.addRow([]);
   head(wc.addRow(['Ejecutivo', 'NIT', 'Cliente', 'Semana 1', 'Semana 2', 'Semana 3', 'Semana 4', 'Total mes', '# RC'])); 
-  const cm = {}; filas.forEach(f => { const k = f.ej + '|' + f.nit, o = cm[k] || (cm[k] = { ej: f.ej, nit: f.nit, cli: f.cliente || f.nit, w: [0, 0, 0, 0], rcs: new Set() }); o.rcs.add(f.rc); M.sem.forEach((w, i) => { if (f.fecha >= w[0] && f.fecha <= w[1]) o.w[i] += f.asignado; }); });
+  const cm = {}; filas.forEach(f => { if (ppeEsNH(f)) return; const k = f.ej + '|' + f.nit, o = cm[k] || (cm[k] = { ej: f.ej, nit: f.nit, cli: f.cliente || f.nit, w: [0, 0, 0, 0], rcs: new Set() }); o.rcs.add(f.rc); M.sem.forEach((w, i) => { if (f.fe >= w[0] && f.fe <= w[1]) o.w[i] += f.asignado; }); });
   const cl = Object.values(cm).sort((a, b) => a.ej.localeCompare(b.ej) || b.w.reduce((x, y) => x + y, 0) - a.w.reduce((x, y) => x + y, 0));
-  cl.forEach((o, i) => { const k = 4 + i, sc = (col, wk) => ({ formula: 'SUMIFS(' + RV + ',' + RE + ',$A' + k + ',' + RN + ',$B' + k + ',' + RF + ',">="&' + MS + wk + '$' + PD + ',' + RF + ',"<="&' + MS + wk + '$' + PH + ')', result: o.w['DEFG'.indexOf(wk)] });
+  cl.forEach((o, i) => { const k = 4 + i, sc = (col, wk) => ({ formula: 'SUMIFS(' + RV + ',' + RE + ',$A' + k + ',' + RN + ',$B' + k + ',' + RF + ',">="&' + MS + wk + '$' + PD + ',' + RF + ',"<="&' + MS + wk + '$' + PH + NHC + ')', result: o.w['DEFG'.indexOf(wk)] });
     wc.addRow([o.ej, o.nit, o.cli, sc('D', 'D'), sc('E', 'E'), sc('F', 'F'), sc('G', 'G'), { formula: 'SUM(D' + k + ':G' + k + ')', result: o.w.reduce((x, y) => x + y, 0) }, o.rcs.size]); });
   const cN = 3 + cl.length; if (cl.length) { const t = wc.addRow(['TOTAL', '', '', ...'DEFGH'.split('').map(c => ({ formula: 'SUBTOTAL(9,' + c + '4:' + c + cN + ')' })), { formula: 'SUBTOTAL(9,I4:I' + cN + ')' }]); t.font = { bold: true }; t.eachCell({ includeEmpty: true }, c => fondo(c, 'FFFDE68A')); wc.autoFilter = 'A3:I' + cN; }
   for (let c = 4; c <= 8; c++) wc.getColumn(c).numFmt = money; [30, 14, 44, 16, 16, 16, 16, 18, 8].forEach((w, i) => wc.getColumn(i + 1).width = w); wc.views = [{ state: 'frozen', ySplit: 3 }];
@@ -556,27 +552,138 @@ async function ppeExcel() {
   const out = await ppeInyectarGraficos(await wb.xlsx.writeBuffer(), wg.id, charts), a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'PPTO_VS_EJECUCION_RECAUDO_' + PPE.mes + '.xlsx'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
+const FN2 = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-rc-fechas';
+async function fnApi(b) { try { const r = await fetch(FN2 + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } }
+const ppeDias = (iso, n) => { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+async function ppeCfgCargar() {
+  if (PPE.cfgOk) return;
+  const r = await fnApi({ accion: 'ppe_get' });
+  if (r && r.ok) { PPE.cfgData = r.data || {}; Object.keys(PPE.cfgData).forEach(k => { PPE_DATA[k] = Object.assign({}, PPE_DATA[k] || {}, PPE.cfgData[k]); }); PPE.cfgOk = true; }
+}
+async function ppeCargar() {
+  if (PPE.cargando) return; PPE.cargando = true; PPE.r = null; ppeVista();
+  await ppeCfgCargar();
+  const M = PPE_DATA[PPE.mes];
+  if (!M) { PPE.cargando = false; PPE.r = { error: 'Ese mes no está configurado. Usa «Presupuesto y semanas».' }; ppeVista(); return; }
+  // el recaudo se pide hasta 10 días después del cierre: un RC contabilizado en noviembre puede ser de una consignación de octubre
+  const [r, fb] = await Promise.all([recApi({ accion: 'recaudo', desde: M.desde, hasta: ppeDias(M.hasta, 10), contadoDias: '1' }), fnApi({ accion: 'listar', desde: ppeDias(M.desde, -45) })]);
+  PPE.fb = {}; ((fb && fb.rows) || []).forEach(x => { PPE.fb[String(x.consec)] = String(x.fecha_banco).slice(0, 10); }); PPE.pend = {};
+  PPE.cargando = false; PPE.r = (r && r.ok) ? r : { error: (r && r.error) || 'No se pudo traer el recaudo de Siesa' }; ppeVista();
+}
+// Recibos del mes con su fecha efectiva: la del banco si Cartera la registró; si no, la contable de Siesa
+function ppeFilas(M) {
+  const r = PPE.r; if (!r || !r.filas) return [];
+  return r.filas.filter(f => (f.vendedor || '').trim()).map(f => { const b = (PPE.fb || {})[String(f.rc)]; return Object.assign({}, f, { fe: b || f.fecha, conBanco: !!b }); }).filter(f => f.fe >= M.desde && f.fe <= M.hasta);
+}
+function ppeSemIdx(M, fe) { for (let k = 0; k < M.sem.length; k++) if (fe >= M.sem[k][0] && fe <= M.sem[k][1]) return k; return -1; }
+function ppeSem(M, n, t) {
+  const a = M.f[n] || [0], man = !!M.manual && a.length >= 4, s1 = man ? a[1] : t.w[0], s2 = man ? a[2] : t.w[1], s3 = man ? a[3] : t.w[2];
+  return { pp: a[0] || 0, s1, s2, s3, s4: t.mes - s1 - s2 - s3, x4: a.length >= 5 ? a[4] : null, man };
+}
 function ppeVista() {
-  const c = $('cont'); if (!c) return; const M = PPE_DATA[PPE.mes];
-  const bar = '<div class="bar"><b style="font-size:12px">' + esc(M.titulo) + ' · recaudo por ejecutivo y semana</b><button class="btn" onclick="ppeCargar()">🔄 Traer recaudo de Siesa</button>' + (PPE.r && PPE.r.filas ? '<button class="btn" onclick="ppeExcel()">⬇ Excel (con fórmulas)</button>' : '') + '</div>';
+  const c = $('cont'); if (!c) return; const M = PPE_DATA[PPE.mes] || PPE_DATA['2026-10'], meses = Object.keys(PPE_DATA).sort();
+  const bar = '<div class="bar"><select onchange="PPE.mes=this.value;PPE.r=null;ppeCargar()" style="padding:5px 8px;border-radius:7px;border:1px solid #cbd5e1;font-weight:700">' + meses.map(k => '<option value="' + k + '"' + (k === PPE.mes ? ' selected' : '') + '>' + esc((PPE_DATA[k] || {}).titulo || k) + '</option>').join('') + '</select><b style="font-size:12px">recaudo por ejecutivo y semana</b><button class="btn" onclick="ppeCargar()">🔄 Traer recaudo de Siesa</button><button class="btn" onclick="ppeCfgAbrir()">⚙ Presupuesto y semanas</button>' + (PPE.r && PPE.r.filas ? '<button class="btn" onclick="PPE.fbAb=!PPE.fbAb;ppeVista()">📅 Fechas del banco</button><button class="btn" onclick="ppeExcel()">⬇ Excel (con fórmulas)</button>' : '') + '</div>';
   if (PPE.cargando) { c.innerHTML = bar + '<div class="card">Trayendo el recaudo de Siesa…</div>'; return; }
-  if (!PPE.r) { c.innerHTML = bar + '<div class="card">Pulsa «Traer recaudo de Siesa» para calcular la semana 3 y el cuadre de la semana 4.</div>'; ppeCargar(); return; }
+  if (!PPE.r) { c.innerHTML = bar + '<div class="card">Pulsa «Traer recaudo de Siesa» para calcular las semanas.</div>'; ppeCargar(); return; }
   if (PPE.r.error) { c.innerHTML = bar + '<div class="card" style="color:#b91c1c">' + esc(PPE.r.error) + '</div>'; return; }
-  const filas = (PPE.r.filas || []).filter(f => (f.vendedor || '').trim());
-  const nombres = Object.keys(M.f), idx = {}; nombres.forEach(n => idx[nz(n)] = n);
-  const T = {}; nombres.forEach(n => T[n] = { mes: 0, w: [0, 0, 0, 0] }); const otros = {};
-  filas.forEach(f => { const n = idx[nz(f.vendedor)]; if (!n) { otros[f.vendedor] = (otros[f.vendedor] || 0) + f.asignado; return; } T[n].mes += f.asignado; M.sem.forEach((w, k) => { if (f.fecha >= w[0] && f.fecha <= w[1]) T[n].w[k] += f.asignado; }); });
-  const tot = Array(10).fill(0);
-  const rows = nombres.map(n => { const [pp, s1, s2] = M.f[n], t = T[n], s3 = t.w[2], s4 = t.mes - s1 - s2 - s3, ac = s1 + s2 + s3 + s4, pc = pp ? ac / pp : 0;
-    [pp, s1, s2, s3, s4, ac, pp - ac, t.w[3], t.mes].forEach((v, i) => tot[i] += v);
+  const filas = ppeFilas(M), nombres = Object.keys(M.f), idx = {}; nombres.forEach(n => idx[nz(n)] = n);
+  const T = {}; nombres.forEach(n => T[n] = { mes: 0, nh: 0, w: [0, 0, 0, 0] }); const otros = {};
+  filas.forEach(f => { const n = idx[nz(f.vendedor)]; if (!n) { otros[f.vendedor] = (otros[f.vendedor] || 0) + f.asignado; return; } if (ppeEsNH(f)) { T[n].nh += -f.asignado; return; } T[n].mes += f.asignado; const k = ppeSemIdx(M, f.fe); if (k >= 0) T[n].w[k] += f.asignado; });
+  const tot = Array(12).fill(0);
+  const rows = nombres.map(n => { const t = T[n], { pp, s1, s2, s3, s4, x4 } = ppeSem(M, n, t), ac = s1 + s2 + s3 + s4, pc = pp ? ac / pp : 0, dx = x4 == null ? 0 : s4 - x4;
+    [pp, s1, s2, s3, s4, ac, pp - ac, t.w[3], t.mes, t.nh, x4 || 0, dx].forEach((v, i) => tot[i] += v);
     const col = pc >= 1 ? '#16a34a' : pc >= .7 ? '#ea580c' : '#dc2626';
-    return '<tr><td class="n" style="text-align:left">' + esc(n) + '</td><td>' + fm(pp) + '</td><td>' + fm(s1) + '</td><td>' + fm(s2) + '</td><td>' + fm(s3) + '</td><td title="Siesa del 26 al 31: ' + fm(t.w[3]) + '" style="background:#fef9c3' + (s4 < 0 ? ';color:#b91c1c' : '') + '">' + fm(s4) + '</td><td><b>' + fm(ac) + '</b></td><td style="color:' + col + '"><b>' + (pc * 100).toFixed(1) + '%</b></td><td>' + fm(Math.max(pp - ac, 0)) + '</td></tr>'; }).join('');
+    return '<tr><td class="n" style="text-align:left">' + esc(n) + '</td><td>' + fm(pp) + '</td><td>' + fm(s1) + '</td><td>' + fm(s2) + '</td><td>' + fm(s3) + '</td><td title="Siesa del ' + M.sem[3][0].slice(8) + ' al ' + M.sem[3][1].slice(8) + ': ' + fm(t.w[3]) + '" style="background:#fef9c3' + (s4 < 0 ? ';color:#b91c1c' : '') + '">' + fm(s4) + '</td><td style="color:#64748b">' + fm(t.nh) + '</td><td' + (x4 == null ? '' : ' style="color:' + (Math.abs(dx) < 1000 ? '#16a34a' : '#b91c1c') + '" title="Sem 4 de tu Excel: ' + fm(x4) + '"') + '>' + (x4 == null ? '—' : fm(dx)) + '</td><td><b>' + fm(ac) + '</b></td><td style="color:' + col + '"><b>' + (pc * 100).toFixed(1) + '%</b></td><td>' + fm(Math.max(pp - ac, 0)) + '</td></tr>'; }).join('');
   const pT = tot[0] ? tot[5] / tot[0] : 0;
   const ot = Object.keys(otros).length ? '<div class="card" style="font-size:11.5px;color:#92400e;background:#fef3c7">Recaudo de Siesa con ejecutivo que no está en el presupuesto: ' + Object.keys(otros).map(k => esc(k) + ' ' + fm(otros[k])).join(' · ') + '</div>' : '';
-  const sin = M.sem.map(w => w[0].slice(8) + '–' + w[1].slice(8));
-  c.innerHTML = bar + '<div class="card"><h2>Presupuesto vs ejecución · recaudo ' + esc(M.titulo) + '</h2><div class="tw"><table><thead><tr><th style="text-align:left">Ejecutivo</th><th>Ppto</th><th>Sem 1 (' + sin[0] + ')</th><th>Sem 2 (' + sin[1] + ')</th><th>Sem 3 (' + sin[2] + ')</th><th>Sem 4 (' + sin[3] + ') cuadre</th><th>Acumulado</th><th>% vs ppto</th><th>Faltante</th></tr></thead><tbody>' + rows
-    + '<tr><td class="n" style="text-align:left"><b>TOTAL</b></td>' + [0, 1, 2, 3, 4, 5].map(i => '<td><b>' + fm(tot[i]) + '</b></td>').join('') + '<td><b>' + (pT * 100).toFixed(1) + '%</b></td><td><b>' + fm(Math.max(tot[0] - tot[5], 0)) + '</b></td></tr></tbody></table></div>'
-    + '<div style="font-size:11px;color:#64748b;margin-top:8px">Sem 1 y 2: valores del Excel de Cartera. Sem 3: recaudo (RC) tal cual en Siesa. Sem 4: cuadre = recaudo total del mes en Siesa (' + fm(tot[8]) + ') − semanas 1, 2 y 3; pasa el mouse para ver lo que Siesa registra del 26 al 31 (' + fm(tot[7]) + ').</div></div>' + ot;
+  const sin = M.sem.map(w => w[0].slice(8) + '–' + w[1].slice(8)), nBanco = filas.filter(f => f.conBanco).length, nRC = new Set(filas.map(f => f.rc)).size;
+  const nota = M.manual ? 'Sem 1, 2 y 3: valores de tu Excel (fecha del banco). ' : 'Sem 1 a 3: recibos de Siesa por la fecha del banco que registró Cartera (si un RC no tiene fecha del banco, cuenta con la fecha contable de Siesa). ';
+  c.innerHTML = bar + '<div class="card"><h2>Presupuesto vs ejecución · recaudo ' + esc(M.titulo) + '</h2><div class="tw"><table><thead><tr><th style="text-align:left">Ejecutivo</th><th>Ppto</th><th>Sem 1 (' + sin[0] + ')</th><th>Sem 2 (' + sin[1] + ')</th><th>Sem 3 (' + sin[2] + ')</th><th>Sem 4 (' + sin[3] + ') cuadre</th><th title="Notas NH que cruzan facturas: se suman al recaudo del mes">NH sumadas</th><th title="Sem 4 calculada − Sem 4 de tu Excel">Dif. vs Excel sem 4</th><th>Acumulado</th><th>% vs ppto</th><th>Faltante</th></tr></thead><tbody>' + rows
+    + '<tr><td class="n" style="text-align:left"><b>TOTAL</b></td>' + [0, 1, 2, 3, 4].map(i => '<td><b>' + fm(tot[i]) + '</b></td>').join('') + '<td><b>' + fm(tot[9]) + '</b></td><td><b>' + (M.manual ? fm(tot[11]) : '—') + '</b></td><td><b>' + fm(tot[5]) + '</b></td><td><b>' + (pT * 100).toFixed(1) + '%</b></td><td><b>' + fm(Math.max(tot[0] - tot[5], 0)) + '</b></td></tr></tbody></table></div>'
+    + '<div style="font-size:11px;color:#64748b;margin-top:8px">' + nota + 'Sem 4: cuadre = recaudo total del mes en Siesa (' + fm(tot[8]) + ') + NH sumadas (' + fm(tot[9]) + ') − semanas 1, 2 y 3. Recibos del mes: ' + nRC + ' · con fecha del banco: ' + new Set(filas.filter(f => f.conBanco).map(f => f.rc)).size + '.</div></div>' + ot + (PPE.fbAb ? ppeFbHtml(M) : '');
+}
+// ── Fecha del banco por recibo (RC): Siesa solo trae la fecha contable ──
+function ppeFbHtml(M) {
+  const G = {}; (PPE.r.filas || []).filter(f => (f.vendedor || '').trim()).forEach(f => { const g = G[f.rc] || (G[f.rc] = { rc: f.rc, fecha: f.fecha, cli: f.cliente || '', vend: f.vendedor, val: 0 }); g.val += f.asignado; });
+  const q = nz(PPE.fbQ || ''), pend = PPE.pend || {}; let L = Object.values(G).sort((a, b) => b.rc - a.rc);
+  if (q) L = L.filter(g => nz(g.cli + ' ' + g.vend + ' ' + g.rc).includes(q));
+  if (PPE.fbSolo) L = L.filter(g => !(PPE.fb || {})[String(g.rc)] && !pend[g.rc]);
+  const nPend = Object.keys(pend).length, ver = L.slice(0, 150);
+  const fila = g => { const v = pend[g.rc] !== undefined ? pend[g.rc] : ((PPE.fb || {})[String(g.rc)] || ''), fe = v || g.fecha, k = ppeSemIdx(M, fe);
+    return '<tr><td>' + g.rc + '</td><td>' + g.fecha + '</td><td style="text-align:left;font-size:11px">' + esc(g.cli) + '</td><td style="text-align:left;font-size:11px">' + esc(g.vend) + '</td><td>' + fm(g.val) + '</td><td><input type="date" value="' + v + '" onchange="ppeFbPend(' + g.rc + ',this.value)" style="padding:3px;border:1px solid ' + (pend[g.rc] !== undefined ? '#f59e0b' : '#cbd5e1') + ';border-radius:6px"></td><td style="color:#64748b">' + (k >= 0 ? 'Sem ' + (k + 1) : 'fuera del mes') + '</td></tr>'; };
+  return '<div class="card"><h2>📅 Fecha del banco de cada recibo (RC)</h2><div style="font-size:11.5px;color:#64748b;margin-bottom:8px">Siesa solo trae la fecha en que se contabilizó el RC. Pon aquí la fecha en que entró la plata al banco (la del extracto): con ella se arman las semanas. Si no la pones, cuenta la fecha de Siesa.</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><input placeholder="Buscar RC, cliente o ejecutivo…" value="' + esc(PPE.fbQ || '') + '" oninput="PPE.fbQ=this.value;clearTimeout(PPE._t);PPE._t=setTimeout(ppeVista,350)" style="padding:6px 9px;border:1px solid #cbd5e1;border-radius:7px;min-width:220px"><label style="font-size:12px;cursor:pointer"><input type="checkbox" ' + (PPE.fbSolo ? 'checked ' : '') + 'onchange="PPE.fbSolo=this.checked;ppeVista()"> solo los que no tienen fecha del banco</label>'
+    + '<label class="btn" style="cursor:pointer">📎 Subir extracto (Excel)<input type="file" accept=".xlsx,.xls" style="display:none" onchange="ppeFbExtracto(this)"></label><button class="btn" onclick="ppeFbGuardar()"' + (nPend ? '' : ' disabled') + '>💾 Guardar ' + (nPend ? '(' + nPend + ')' : '') + '</button></div>'
+    + (PPE.fbMsg ? '<div style="font-size:12px;color:#1d4ed8;margin-bottom:6px">' + PPE.fbMsg + '</div>' : '')
+    + '<div class="tw" style="max-height:480px;overflow:auto"><table><thead><tr><th>RC</th><th>Fecha Siesa</th><th style="text-align:left">Cliente</th><th style="text-align:left">Ejecutivo</th><th>Valor</th><th>Fecha del banco</th><th>Semana</th></tr></thead><tbody>' + ver.map(fila).join('') + '</tbody></table></div>' + (L.length > 150 ? '<div style="font-size:11px;color:#64748b;margin-top:4px">Se muestran 150 de ' + L.length + '; usa el buscador.</div>' : '') + '</div>';
+}
+function ppeFbPend(rc, v) { PPE.pend = PPE.pend || {}; PPE.pend[rc] = v || ''; const m = PPE_DATA[PPE.mes]; PPE.fbMsg = ''; ppeVistaSuave(); }
+function ppeVistaSuave() { const y = window.scrollY; ppeVista(); window.scrollTo(0, y); }
+async function ppeFbGuardar() {
+  const p = PPE.pend || {}, filas = Object.keys(p).map(k => ({ consec: Number(k), fecha_banco: p[k] || null })); if (!filas.length) return;
+  const r = await fnApi({ accion: 'guardar', filas });
+  if (!r || !r.ok) { alert((r && r.error) || 'No se pudo guardar'); return; }
+  filas.forEach(f => { if (f.fecha_banco) PPE.fb[String(f.consec)] = f.fecha_banco; else delete PPE.fb[String(f.consec)]; }); PPE.pend = {}; PPE.fbMsg = '✅ Guardado: ' + r.guardados + ' fecha(s)' + (r.borrados ? ', ' + r.borrados + ' quitada(s)' : ''); ppeVista();
+}
+function ppeIso(v) {
+  if (v == null || v === '') return '';
+  if (v instanceof Date) return isNaN(v) ? '' : new Date(v.getTime() + 12 * 3600e3).toISOString().slice(0, 10);
+  if (typeof v === 'number') return v > 20000 && v < 80000 ? new Date(Math.round((v - 25569) * 86400000) + 12 * 3600e3).toISOString().slice(0, 10) : '';
+  const s = String(v).trim(); let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/); if (m) { const y = m[3].length === 2 ? '20' + m[3] : m[3]; return y + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0'); }
+  return '';
+}
+async function ppeFbExtracto(inp) {
+  const file = inp.files && inp.files[0]; if (!file) return; inp.value = '';
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true }), out = {}; let leidas = 0, hojas = 0;
+    wb.SheetNames.forEach(sn => {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: null }); let hi = -1, cf = -1, cr = -1;
+      for (let i = 0; i < Math.min(rows.length, 15) && hi < 0; i++) { const h = (rows[i] || []).map(x => nz(x)), a = h.findIndex(x => x === 'FECHA' || x.startsWith('FECHA')), b = h.findIndex(x => x === 'RC' || x === 'N RC' || x === 'NO RC' || x === 'N° RC' || x === 'RECIBO'); if (a >= 0 && b >= 0) { hi = i; cf = a; cr = b; } }
+      if (hi < 0) return; hojas++;
+      for (let i = hi + 1; i < rows.length; i++) { const r = rows[i] || [], rc = Number(String(r[cr] == null ? '' : r[cr]).replace(/\D/g, '')), iso = ppeIso(r[cf]); if (!rc || !iso) continue; leidas++; if (!out[rc] || iso < out[rc]) out[rc] = iso; }
+    });
+    const cargados = new Set((PPE.r.filas || []).map(f => String(f.rc))), ok = Object.keys(out).filter(k => cargados.has(k));
+    ok.forEach(k => { if (PPE.fb[k] !== out[k]) PPE.pend[k] = out[k]; });
+    PPE.fbMsg = hojas ? 'Extracto leído: ' + leidas + ' filas con RC en ' + hojas + ' hoja(s). ' + ok.length + ' coinciden con los recibos de Siesa; ' + Object.keys(PPE.pend).length + ' cambian. Revisa y pulsa «Guardar».' : 'No encontré hojas con columnas «Fecha» y «RC».';
+  } catch (e) { PPE.fbMsg = 'No pude leer el archivo: ' + e.message; }
+  ppeVista();
+}
+// ── Presupuesto y semanas de cada mes ──
+const ppeNum = t => { let s = String(t == null ? '' : t).replace(/[$\s]/g, ''); if (/,\d{1,2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.'); else s = s.replace(/[.,](?=\d{3}(\D|$))/g, ''); const n = Number(s); return isFinite(n) ? n : 0; };
+const PPE_MES3 = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
+function ppeCfgBase(mes) {
+  const M = PPE_DATA[mes] || PPE_DATA[PPE.mes] || {}, y = +mes.slice(0, 4), m = +mes.slice(5, 7), ult = new Date(Date.UTC(y, m, 0)).getUTCDate(), p = n => mes + '-' + String(n).padStart(2, '0');
+  const sem = PPE_DATA[mes] ? M.sem : [[p(1), p(7)], [p(8), p(15)], [p(16), p(22)], [p(23), p(ult)]];
+  const f = {}, cod = {}; Object.keys((PPE_DATA[mes] || PPE_DATA[PPE.mes] || { f: {} }).f).forEach(n => { f[n] = PPE_DATA[mes] ? (M.f[n] || [0]).slice() : [0]; cod[n] = ((PPE_DATA[mes] || PPE_DATA[PPE.mes] || {}).cod || {})[n] || PPE_COD[n] || ''; });
+  return { mes, titulo: PPE_MES3[m - 1] + ' / ' + y, sem, f, cod, manual: !!(PPE_DATA[mes] && M.manual) };
+}
+function ppeCfgAbrir() { PPE.ed = ppeCfgBase(PPE.mes); ppeCfgPintar(); }
+function ppeCfgPintar() {
+  const E = PPE.ed; let m = $('ppe-cfg'); if (!m) { m = document.createElement('div'); m.id = 'ppe-cfg'; m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:3vh 12px;overflow:auto'; document.body.appendChild(m); }
+  const inp = 'padding:5px;border:1px solid #cbd5e1;border-radius:6px';
+  m.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:760px;width:100%;padding:16px 18px"><div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:15px">⚙ Presupuesto y semanas del mes</b><button class="btn" onclick="$(\'ppe-cfg\').remove()">✕</button></div>'
+    + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0"><label style="font-size:12px">Mes<br><input type="month" value="' + E.mes + '" onchange="ppeCfgMes(this.value)" style="' + inp + '"></label><label style="font-size:12px">Título<br><input value="' + esc(E.titulo) + '" oninput="PPE.ed.titulo=this.value" style="' + inp + '"></label></div>'
+    + '<div style="font-size:12px;font-weight:700;margin-bottom:4px">Semanas (desde – hasta)</div><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:10px">' + E.sem.map((w, i) => '<div style="font-size:12px">Sem ' + (i + 1) + ' <input type="date" value="' + w[0] + '" onchange="PPE.ed.sem[' + i + '][0]=this.value" style="' + inp + '"> – <input type="date" value="' + w[1] + '" onchange="PPE.ed.sem[' + i + '][1]=this.value" style="' + inp + '"></div>').join('') + '</div>'
+    + '<div style="font-size:12px;font-weight:700;margin-bottom:4px">Presupuesto por ejecutivo <span style="font-weight:400;color:#64748b">(el nombre debe ser como sale en Siesa)</span></div><table style="width:100%;font-size:12px"><thead><tr><th>COD</th><th style="text-align:left">Ejecutivo</th><th>Presupuesto</th><th></th></tr></thead><tbody>'
+    + Object.keys(E.f).map((n, i) => '<tr><td><input value="' + esc(E.cod[n] || '') + '" oninput="PPE.ed.cod[PPE.ed.k[' + i + ']]=this.value" style="width:60px;' + inp + '"></td><td style="text-align:left">' + esc(n) + '</td><td><input value="' + E.f[n][0] + '" oninput="PPE.ed.f[PPE.ed.k[' + i + ']][0]=ppeNum(this.value)" style="width:140px;text-align:right;' + inp + '"></td><td><button class="btn" onclick="ppeCfgQuitar(' + i + ')">✕</button></td></tr>').join('') + '</tbody></table>'
+    + '<div style="margin:8px 0"><b style="font-size:12px">Pegar desde Excel</b> <span style="font-size:11px;color:#64748b">(columnas: COD, EJECUTIVO, PPTO · o solo EJECUTIVO, PPTO)</span><textarea id="ppe-pega" rows="4" style="width:100%;' + inp + '" placeholder="103&#9;CHAVES ZULUAGA GERSSON ANDRES&#9;114.682.771"></textarea><button class="btn" onclick="ppeCfgPegar()">Cargar lo pegado</button></div>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" onclick="$(\'ppe-cfg\').remove()">Cancelar</button><button class="btn" style="background:#f5c518;font-weight:800" onclick="ppeCfgGuardar()">💾 Guardar</button></div></div>';
+  E.k = Object.keys(E.f);
+}
+function ppeCfgMes(mes) { if (!mes) return; PPE.ed = ppeCfgBase(mes); ppeCfgPintar(); }
+function ppeCfgQuitar(i) { const n = PPE.ed.k[i]; delete PPE.ed.f[n]; delete PPE.ed.cod[n]; ppeCfgPintar(); }
+function ppeCfgPegar() {
+  const E = PPE.ed; ($('ppe-pega').value || '').split(/\r?\n/).forEach(l => { const c = l.split('\t').map(x => x.trim()).filter(x => x !== ''); if (c.length < 2) return; let cod = '', n, v; if (c.length >= 3 && /^\d+$/.test(c[0])) { cod = c[0]; n = c[1]; v = c[2]; } else { n = c[0]; v = c[1]; } n = n.toUpperCase(); E.f[n] = [ppeNum(v)]; if (cod) E.cod[n] = cod; }); ppeCfgPintar();
+}
+async function ppeCfgGuardar() {
+  const E = PPE.ed; if (!/^\d{4}-\d{2}$/.test(E.mes)) { alert('Elige el mes'); return; }
+  if (E.sem.some(w => !w[0] || !w[1] || w[0] > w[1])) { alert('Revisa las fechas de las semanas'); return; }
+  const y = +E.mes.slice(0, 4), m = +E.mes.slice(5, 7), M = { titulo: E.titulo, desde: E.mes + '-01', hasta: E.mes + '-' + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0'), sem: E.sem, f: E.f, cod: E.cod };
+  if (E.manual) M.manual = true;
+  const cfg = Object.assign({}, PPE.cfgData || {}); cfg[E.mes] = M;
+  const r = await fnApi({ accion: 'ppe_set', data: cfg }); if (!r || !r.ok) { alert((r && r.error) || 'No se pudo guardar'); return; }
+  PPE.cfgData = cfg; PPE_DATA[E.mes] = Object.assign({}, PPE_DATA[E.mes] || {}, M); PPE.mes = E.mes; $('ppe-cfg').remove(); PPE.r = null; ppeCargar();
 }
 
 // Ejecutivos que ya no están: sus pagos se pasan al ejecutivo que quedó con la cartera (nombre como sale en Siesa)
