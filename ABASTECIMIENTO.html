@@ -2784,7 +2784,7 @@ async function invVentasCargar(){
   }catch(e){ console.warn('Ventas promedio:', e); INV_VPROM = null; INV_VFALLO = true; }
   INV_VCARGANDO = false;
   if(INV_VPROM && document.getElementById('tbody-inv-mod') && typeof filtrarInvMod==='function') filtrarInvMod();
-  if(INV_VPROM && document.getElementById('inv-seg') && typeof ivsPintar==='function') ivsPintar(); try{ if(IVS.tab==='proy' && typeof ivsProyPintar==='function') ivsProyPintar(); }catch(e){}
+  if(INV_VPROM && document.getElementById('inv-seg') && typeof ivsPintar==='function') ivsPintar(); try{ if(IVS.tab==='proy' && typeof ivsProyPintar==='function') ivsProyPintar(); }catch(e){} try{ if(IVS.tab==='jue' && typeof ivsJuegoPintar==='function') ivsJuegoPintar(); }catch(e){}
 }
 var INV_CAM_DIAS = 30, INV_FILTRO_CAM = '';
 function invDescRef(){ const m = {}; (typeof INV_DATA!=='undefined'?INV_DATA:[]).forEach(r => { const k = pvClaveRef(r.referencia); if(!m[k] || (!m[k].d && r.descripcion)) m[k] = {d:r.descripcion||'', ex:(m[k]?m[k].ex:0)}; if(invBodegaCuenta(r.bodega)) m[k].ex += parseFloat(r.existencia||0)||0; }); return m; }
@@ -19091,7 +19091,7 @@ function ivsForzarAdd() { const i = document.getElementById('ivs-forz'); const k
 function ivsForzarQuitar(k) { IVS.forzarAct = (IVS.forzarAct || []).filter(x => x !== k); ivsForzarGuardar('Quitada de la lista. Vuelve a su estado de la base al cargar la BASE DE PRODUCTO otra vez.'); }
 async function renderInvAbast() {
   const pg = document.getElementById('pg-inv'); if (!pg) return;
-  if (!document.getElementById('ivs-bar')) pg.insertAdjacentHTML('afterbegin', '<div id="ivs-bar" style="display:flex;gap:6px;margin:0 0 12px;flex-wrap:wrap;"></div><div id="inv-seg"></div><div id="inv-proy" style="display:none;"></div>');
+  if (!document.getElementById('ivs-bar')) pg.insertAdjacentHTML('afterbegin', '<div id="ivs-bar" style="display:flex;gap:6px;margin:0 0 12px;flex-wrap:wrap;"></div><div id="inv-seg"></div><div id="inv-proy" style="display:none;"></div><div id="inv-jue" style="display:none;"></div>');
   ivsBar();
   const seg = document.getElementById('inv-seg'); seg.innerHTML = cargaHtml('Cargando inventario y órdenes de compra');
   ivsVista();
@@ -19102,9 +19102,9 @@ async function renderInvAbast() {
 }
 function ivsBar() {
   const b = document.getElementById('ivs-bar'); if (!b) return;
-  b.innerHTML = [['seg', '📊 Seguimiento'], ['proy', '📅 Proyección por mes'], ['det', '📦 Detalle del inventario']].map(t => '<button class="btn ' + (IVS.tab === t[0] ? 'btn-bl' : 'btn-g') + '" onclick="IVS.tab=\'' + t[0] + '\';ivsBar();ivsVista()">' + t[1] + '</button>').join('') + '<button class="btn btn-p" style="margin-left:auto;" onclick="ivsAbasExcel()" title="Stock, PY, PY-10%, tránsito, órdenes y meses de inventario por mes (6 meses), con fórmulas">📑 Informe de abastecimiento (Excel)</button>';
+  b.innerHTML = [['seg', '📊 Seguimiento'], ['proy', '📅 Proyección por mes'], ['jue', '📒 Proyección de inventarios (juego)'], ['det', '📦 Detalle del inventario']].map(t => '<button class="btn ' + (IVS.tab === t[0] ? 'btn-bl' : 'btn-g') + '" onclick="IVS.tab=\'' + t[0] + '\';ivsBar();ivsVista()">' + t[1] + '</button>').join('') + '<button class="btn btn-p" style="margin-left:auto;" onclick="ivsAbasExcel()" title="Stock, PY, PY-10%, tránsito, órdenes y meses de inventario por mes (6 meses), con fórmulas">📑 Informe de abastecimiento (Excel)</button>';
 }
-function ivsVista() { const s = document.getElementById('inv-seg'), d = document.getElementById('inv-content'), y = document.getElementById('inv-proy'); if (s) s.style.display = IVS.tab === 'seg' ? '' : 'none'; if (d) d.style.display = IVS.tab === 'det' ? '' : 'none'; if (y) { y.style.display = IVS.tab === 'proy' ? '' : 'none'; if (IVS.tab === 'proy') ivsProyPintar(); } }
+function ivsVista() { { const j = document.getElementById('inv-jue'); if (j) { j.style.display = IVS.tab === 'jue' ? '' : 'none'; if (IVS.tab === 'jue') ivsJuegoPintar(); } } const s = document.getElementById('inv-seg'), d = document.getElementById('inv-content'), y = document.getElementById('inv-proy'); if (s) s.style.display = IVS.tab === 'seg' ? '' : 'none'; if (d) d.style.display = IVS.tab === 'det' ? '' : 'none'; if (y) { y.style.display = IVS.tab === 'proy' ? '' : 'none'; if (IVS.tab === 'proy') ivsProyPintar(); } }
 function ivsCalc() {
   const set = new Set(IVS.bodegas), por = {}, bod = {}, cl = new Set((IVS.clasif && IVS.clasif.d) || []);
   const actB = IVS.clasif && Array.isArray(IVS.clasif.act) ? new Set(IVS.clasif.act) : null; // referencias que no están en la BASE DE PRODUCTO se excluyen del análisis
@@ -19360,6 +19360,59 @@ function ivsProyExcel() {
   const r1 = x => x === Infinity ? 'Sin ventas' : Math.round(x * 10) / 10;
   const ws = XLSX.utils.aoa_to_sheet([h].concat(filas.map(f => [f.p.ref, f.p.desc, r1(f.cob0)].concat(f.cob.map(r1))))); ws['!cols'] = [{ wch: 12 }, { wch: 38 }].concat(h.slice(2).map(() => ({ wch: 14 }))); XLSX.utils.book_append_sheet(wb, ws, 'Meses de inventario');
   XLSX.writeFile(wb, 'Proyeccion_inventario_transito_' + hoy + '.xlsx');
+}
+
+/* ===== Proyección de inventarios (juego de inventarios): inicial + importaciones − costo de venta = final disponible, y tránsito que queda ===== */
+function ivsJuegoCalc(C) {
+  const P = IVS.py, d0 = P.desc; P.desc = 1; let D; try { D = ivsProyDatos(C); } finally { P.desc = d0; }
+  const n = D.meses.length, vp = (typeof INV_VPROM !== 'undefined' && INV_VPROM) || {}, vv = (typeof INV_VPROM_V !== 'undefined' && INV_VPROM_V) || {};
+  const R = D.meses.map(m => ({ lbl: m.lbl, ini: 0, ing: 0, cv: 0, fin: 0, venta: 0 }));
+  let invIni = 0; const trTot = (C.tr || []).reduce((a, t) => a + t.cop, 0);
+  D.filas.forEach(f => {
+    let inv = f.disp, V = f.valor; invIni += f.valor; const pu = vp[pvClaveRef(f.p.ref)] > 0 ? (vv[pvClaveRef(f.p.ref)] || 0) / vp[pvClaveRef(f.p.ref)] : 0;
+    for (let i = 0; i < n; i++) {
+      const avail = inv + f.arr[i], vAv = V + f.arrC[i], sold = Math.min(avail, f.vpr), cu = avail > 0 ? vAv / avail : 0, cv = sold * cu;
+      R[i].ini += V; R[i].ing += f.arrC[i]; R[i].cv += cv; R[i].venta += sold * pu; V = vAv - cv; inv = avail - sold; R[i].fin += V;
+    }
+  });
+  let cum = 0; R.forEach(r => { cum += r.ing; r.tr = Math.max(0, trTot - cum); r.mg = r.venta - r.cv; r.mi = r.cv > 0 ? r.fin / r.cv : null; });
+  return { R, invIni, trTot, sinF: D.filas.reduce((a, f) => a + f.sinFC, 0), desp: D.filas.reduce((a, f) => a + f.despC, 0) };
+}
+function ivsJuegoPintar() {
+  const el = document.getElementById('inv-jue'); if (!el) return;
+  if (typeof INV_VPROM !== 'undefined' && !INV_VPROM && !INV_VFALLO) invVentasCargar();
+  const C = IVS._C || (typeof INV_DATA !== 'undefined' && INV_DATA.length ? ivsCalc() : null);
+  if (!C) { el.innerHTML = cargaHtml('Cargando inventario y órdenes de compra'); return; }
+  const J = ivsJuegoCalc(C), R = J.R, P = IVS.py, M = v => '$ ' + ivsN(v / 1e6) + ' M';
+  const row = (t, fn, st, tip) => '<tr style="' + (st || '') + '"><td style="position:sticky;left:0;background:inherit;font-weight:700;white-space:nowrap;"' + (tip ? ' title="' + tip + '"' : '') + '>' + t + '</td>' + R.map(fn).join('') + '</tr>';
+  const td = (v, s2) => '<td style="text-align:right;white-space:nowrap;' + (s2 || '') + '">' + v + '</td>';
+  const mx = Math.max(1, ...R.map(r => r.fin));
+  const body = row('Inventario inicial', r => td(M(r.ini)), 'background:#f8fafc;', 'Mes 1 = inventario disponible de hoy (bodegas configuradas)')
+    + row('(+) Ingresos de importaciones', r => td(M(r.ing), 'color:#166534;'), '', 'Lo que llega de tránsito ese mes: US$ × factor de importación × TRM')
+    + row('(−) Costo de venta proyectado', r => td(M(r.cv), 'color:#b91c1c;'), '', 'Rotación proyectada × costo (sin vender más de lo que hay disponible)')
+    + row('(=) Inventario final disponible', r => td('<b>' + M(r.fin) + '</b>', 'background:#eff6ff;'), 'background:#eff6ff;')
+    + row('Mes(es) de inventario al cierre', r => td(r.mi == null ? '—' : r.mi.toFixed(1).replace('.', ','), 'color:#64748b;'), '', 'Inventario final ÷ costo de venta del mes')
+    + row('Tránsito que queda por llegar', r => td('<b>' + M(r.tr) + '</b>', 'color:#b45309;'), 'background:#fffbeb;', 'Tránsito de hoy − lo que ya llegó. No incluye órdenes nuevas que aún no existen')
+    + row('Inventario + tránsito', r => td(M(r.fin + r.tr)), '', '')
+    + row('Venta proyectada', r => td(M(r.venta)), 'border-top:2px solid var(--b1);', 'Unidades que salen × precio promedio de venta de cada referencia')
+    + row('Margen bruto proyectado', r => td(M(r.mg) + ' <span class="arte-mu">(' + (r.venta > 0 ? (r.mg / r.venta * 100).toFixed(0) : 0) + '%)</span>'), '');
+  const bars = '<div style="display:flex;align-items:flex-end;gap:8px;height:90px;margin:8px 0 4px;">' + R.map(r => '<div style="flex:1;text-align:center;font-size:10px;"><div style="height:' + Math.max(3, Math.round(r.fin / mx * 66)) + 'px;background:#3b82f6;border-radius:4px 4px 0 0;" title="' + r.lbl + ': ' + M(r.fin) + '"></div>' + r.lbl + '</div>').join('') + '</div>';
+  el.innerHTML = '<div class="card" style="margin-bottom:12px;"><div class="ch"><div class="ct">📒 Proyección de inventarios · inventario inicial + importaciones − costo de venta</div></div><div class="cb">'
+    + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
+    + '<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;"><div class="sv" style="font-size:20px;color:var(--bl);">' + M(J.invIni) + '</div><div class="sl">Inventario disponible hoy</div></div>'
+    + '<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;"><div class="sv" style="font-size:20px;color:#b45309;">' + M(J.trTot) + '</div><div class="sl">En tránsito hoy (igual al módulo de tránsito)</div></div>'
+    + '<label style="font-size:12px;align-self:center;">Meses <select class="inp" style="width:auto;font-size:12px;" onchange="IVS.py.n=+this.value;ivsJuegoPintar()">' + [4, 6, 8, 10, 12].map(k => '<option ' + (Number(P.n) === k ? 'selected' : '') + '>' + k + '</option>').join('') + '</select></label>'
+    + '<label style="font-size:12px;align-self:center;" title="Rotación proyectada = rotación real × (1 + ajuste)">Ajuste de ventas <input type="number" step="5" class="inp" style="width:70px;font-size:12px;" value="' + (Number(P.adj) || 0) + '" onchange="IVS.py.adj=+this.value||0;ivsJuegoPintar()"> %</label>'
+    + '<button class="btn btn-g btn-sm" onclick="ivsJuegoExcel()">⬇ Excel</button></div>'
+    + ((typeof INV_VPROM !== 'undefined' && INV_VPROM) ? '' : '<div class="alert" style="margin-bottom:8px;">' + (INV_VFALLO ? 'No pude cargar las ventas: la venta proyectada sale en cero.' : '⏳ Cargando ventas promedio…') + '</div>')
+    + '<div class="tw"><table class="cbl-t" style="font-size:12.5px;"><thead><tr><th style="position:sticky;left:0;background:#f8fafc;"></th>' + R.map(r => '<th style="text-align:right;">' + r.lbl + '</th>').join('') + '</tr></thead><tbody>' + body + '</tbody></table></div>'
+    + '<div style="font-size:11px;font-weight:700;margin-top:10px;">Inventario final disponible por mes</div>' + bars
+    + '<div class="arte-mu" style="font-size:11px;margin-top:6px;">Cómo se calcula: cada referencia arranca con su inventario de hoy; cada mes entran las importaciones según su fecha de llegada (a costo de tránsito: US$ × factor ' + ivsFac() + ' × TRM) y salen las ventas promedio de los últimos meses completos (con el ajuste), sin vender más de lo disponible. Costo de venta al costo promedio de lo disponible. El tránsito que queda es lo de hoy menos lo que llega; no incluye órdenes futuras ni lo que llega sin fecha o después del último mes (' + M(J.sinF + J.desp) + ' hoy). El primer mes se proyecta completo, no solo lo que falta del mes.</div></div></div>';
+}
+function ivsJuegoExcel() {
+  const C = IVS._C || ivsCalc(), J = ivsJuegoCalc(C), R = J.R; const rr = Math.round;
+  const a = [['Concepto (COP)'].concat(R.map(r => r.lbl)), ['Inventario inicial'].concat(R.map(r => rr(r.ini))), ['(+) Ingresos de importaciones'].concat(R.map(r => rr(r.ing))), ['(−) Costo de venta proyectado'].concat(R.map(r => rr(r.cv))), ['(=) Inventario final disponible'].concat(R.map(r => rr(r.fin))), ['Tránsito que queda por llegar'].concat(R.map(r => rr(r.tr))), ['Venta proyectada'].concat(R.map(r => rr(r.venta))), ['Margen bruto proyectado'].concat(R.map(r => rr(r.mg)))];
+  const ws = XLSX.utils.aoa_to_sheet(a); ws['!cols'] = [{ wch: 34 }].concat(R.map(() => ({ wch: 16 }))); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Juego de inventarios'); XLSX.writeFile(wb, 'Proyeccion_inventarios_' + new Date().toISOString().slice(0, 10) + '.xlsx');
 }
 
 /* ===== Informe de abastecimiento (Excel con fórmulas y tablas): stock, PY, PY-10%, tránsito, órdenes y meses de inventario con lo que llega mes a mes ===== */
