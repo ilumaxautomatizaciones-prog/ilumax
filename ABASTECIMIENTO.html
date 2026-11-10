@@ -19387,51 +19387,76 @@ function ivsProyExcel() {
 }
 
 /* ===== Proyección de inventarios (juego de inventarios): inicial + importaciones − costo de venta = final disponible, y tránsito que queda ===== */
+async function ivsJuegoPpto() {   // presupuesto comercial: 2027 por referencia (presupuesto_detalle) y 2026-27 por vendedor (presupuesto_vendedor)
+  if (IVS._ppto || IVS._pptoCarg) return; IVS._pptoCarg = true;
+  try {
+    const pv = await sb.get('presupuesto_ventas', 'select=id,anio&anio=gte.2026&limit=200'), ids = (pv || []).map(p => p.id), anio = {}; (pv || []).forEach(p => anio[p.id] = p.anio);
+    const U = {}, L = {}, M = {}, pad = n => String(n).padStart(2, '0');   // U[mes][refKey] = {u, precio}; L[mes] = valor libre; M[mes] = presupuesto por vendedor
+    if (ids.length) {
+      let off = 0; for (;;) {
+        const r = await sb.get('presupuesto_detalle', 'select=presupuesto_id,referencia,precio_lista,u01,u02,u03,u04,u05,u06,u07,u08,u09,u10,u11,u12&presupuesto_id=in.(' + ids.join(',') + ')&order=id.asc&limit=1000&offset=' + off);
+        (r || []).forEach(d => { const y = anio[d.presupuesto_id]; for (let m = 1; m <= 12; m++) { const u = Number(d['u' + pad(m)]) || 0; if (!u) continue; const k = y + '-' + pad(m);
+          if (/^LIBRE/i.test(d.referencia || '')) L[k] = (L[k] || 0) + u * (Number(d.precio_lista) || 1);
+          else { const rk = pvClaveRef(d.referencia); U[k] = U[k] || {}; const x = U[k][rk] = U[k][rk] || { u: 0, v: 0 }; x.u += u; x.v += u * (Number(d.precio_lista) || 0); } } });
+        if (!r || r.length < 1000) break; off += 1000;
+      }
+    }
+    const vend = await sb.get('presupuesto_vendedor', 'select=anio,mes,presupuesto&anio=gte.2026&limit=2000'); (vend || []).forEach(v => { const k = v.anio + '-' + pad(v.mes); M[k] = (M[k] || 0) + (Number(v.presupuesto) || 0); });
+    IVS._ppto = { U, L, M };
+  } catch (e) { console.warn('ivsJuegoPpto', e); IVS._ppto = { U: {}, L: {}, M: {}, err: 1 }; }
+  IVS._pptoCarg = false; if (IVS.tab === 'jue') ivsJuegoPintar();
+}
 function ivsJuegoCalc(C) {
   const P = IVS.py, d0 = P.desc; P.desc = 1; let D; try { D = ivsProyDatos(C); } finally { P.desc = d0; }
-  const n = D.meses.length, vp = (typeof INV_VPROM !== 'undefined' && INV_VPROM) || {}, vv = (typeof INV_VPROM_V !== 'undefined' && INV_VPROM_V) || {};
-  const R = D.meses.map(m => ({ lbl: m.lbl, ini: 0, ing: 0, cv: 0, fin: 0, venta: 0 }));
-  let invIni = 0; const trTot = (C.tr || []).reduce((a, t) => a + t.cop, 0);
-  D.filas.forEach(f => {
-    let inv = f.disp, V = f.valor; invIni += f.valor; const pu = vp[pvClaveRef(f.p.ref)] > 0 ? (vv[pvClaveRef(f.p.ref)] || 0) / vp[pvClaveRef(f.p.ref)] : 0;
-    for (let i = 0; i < n; i++) {
-      const avail = inv + f.arr[i], vAv = V + f.arrC[i], sold = Math.min(avail, f.vpr), cu = avail > 0 ? vAv / avail : 0, cv = sold * cu;
-      R[i].ini += V; R[i].ing += f.arrC[i]; R[i].cv += cv; R[i].venta += sold * pu; V = vAv - cv; inv = avail - sold; R[i].fin += V;
-    }
+  const n = D.meses.length, B = IVS._ppto || { U: {}, L: {}, M: {} }, adj = 1 + (Number(P.adj) || 0) / 100;
+  const R = D.meses.map(m => ({ k: m.k, lbl: m.lbl, ini: 0, ing: 0, cv: 0, fin: 0, venta: 0, fuente: '' }));
+  const cuRef = {}; D.filas.forEach(f => { const c = f.cu || f.cuTr || 0; if (c > 0) cuRef[pvClaveRef(f.p.ref)] = c; });
+  // Relación costo/venta: la sale de las referencias del presupuesto 2027 que tienen costo conocido (para lo que viene solo en pesos)
+  let sv = 0, sc = 0; Object.keys(B.U).forEach(k => Object.keys(B.U[k]).forEach(rk => { const x = B.U[k][rk], c = cuRef[rk]; if (c > 0 && x.v > 0) { sv += x.v; sc += x.u * c; } }));
+  const r0 = sv > 0 ? Math.min(0.95, sc / sv) : 0.52;
+  R.forEach(r => {
+    const u = B.U[r.k], libre = B.L[r.k] || 0;
+    if (u && Object.keys(u).length) {   // 2027: unidades por referencia × precio de lista; costo = unidades × costo de la referencia
+      let v = 0, c = 0; Object.keys(u).forEach(rk => { v += u[rk].v; c += cuRef[rk] > 0 ? u[rk].u * cuRef[rk] : u[rk].v * r0; });
+      r.venta = (v + libre) * adj; r.cv = (c + libre * r0) * adj; r.fuente = 'Ppto por referencia';
+    } else if (B.M[r.k]) { r.venta = B.M[r.k] * adj; r.cv = r.venta * r0; r.fuente = 'Ppto por vendedor'; }   // 2026: solo hay valor por vendedor
   });
-  let cum = 0; R.forEach(r => { cum += r.ing; r.tr = Math.max(0, trTot - cum); r.mg = r.venta - r.cv; r.mi = r.cv > 0 ? r.fin / r.cv : null; });
-  return { R, invIni, trTot, sinF: D.filas.reduce((a, f) => a + f.sinFC, 0), desp: D.filas.reduce((a, f) => a + f.despC, 0) };
+  let inv = D.filas.reduce((a, f) => a + f.valor, 0); const invIni = inv, trTot = (C.tr || []).reduce((a, t) => a + t.cop, 0); let cum = 0;
+  R.forEach((r, i) => { r.ini = inv; r.ing = D.filas.reduce((a, f) => a + f.arrC[i], 0); r.fin = r.ini + r.ing - r.cv; inv = r.fin; cum += r.ing; r.tr = Math.max(0, trTot - cum); r.mg = r.venta - r.cv; r.mi = r.cv > 0 ? r.fin / r.cv : null; });
+  return { R, invIni, trTot, r0, sinF: D.filas.reduce((a, f) => a + f.sinFC, 0), desp: D.filas.reduce((a, f) => a + f.despC, 0), sinPpto: R.filter(r => !r.fuente).map(r => r.lbl) };
 }
 function ivsJuegoPintar() {
   const el = document.getElementById('inv-jue'); if (!el) return;
   if (typeof INV_VPROM !== 'undefined' && !INV_VPROM && !INV_VFALLO) invVentasCargar();
   const C = IVS._C || (typeof INV_DATA !== 'undefined' && INV_DATA.length ? ivsCalc() : null);
   if (!C) { el.innerHTML = cargaHtml('Cargando inventario y órdenes de compra'); return; }
+  if (!IVS._ppto) { ivsJuegoPpto(); el.innerHTML = cargaHtml('Cargando el presupuesto comercial'); return; }
   const J = ivsJuegoCalc(C), R = J.R, P = IVS.py, M = v => '$ ' + ivsN(v / 1e6) + ' M';
   const row = (t, fn, st, tip) => '<tr style="' + (st || '') + '"><td style="position:sticky;left:0;background:inherit;font-weight:700;white-space:nowrap;"' + (tip ? ' title="' + tip + '"' : '') + '>' + t + '</td>' + R.map(fn).join('') + '</tr>';
   const td = (v, s2) => '<td style="text-align:right;white-space:nowrap;' + (s2 || '') + '">' + v + '</td>';
   const mx = Math.max(1, ...R.map(r => r.fin));
   const body = row('Inventario inicial', r => td(M(r.ini)), 'background:#f8fafc;', 'Mes 1 = inventario disponible de hoy (bodegas configuradas)')
     + row('(+) Ingresos de importaciones', r => td(M(r.ing), 'color:#166534;'), '', 'Lo que llega de tránsito ese mes: US$ × factor de importación × TRM')
-    + row('(−) Costo de venta proyectado', r => td(M(r.cv), 'color:#b91c1c;'), '', 'Rotación proyectada × costo (sin vender más de lo que hay disponible)')
+    + row('(−) Costo de venta (según presupuesto)', r => td(M(r.cv), 'color:#b91c1c;'), '', 'Unidades presupuestadas × costo de cada referencia')
     + row('(=) Inventario final disponible', r => td('<b>' + M(r.fin) + '</b>', 'background:#eff6ff;'), 'background:#eff6ff;')
     + row('Mes(es) de inventario al cierre', r => td(r.mi == null ? '—' : r.mi.toFixed(1).replace('.', ','), 'color:#64748b;'), '', 'Inventario final ÷ costo de venta del mes')
     + row('Tránsito que queda por llegar', r => td('<b>' + M(r.tr) + '</b>', 'color:#b45309;'), 'background:#fffbeb;', 'Tránsito de hoy − lo que ya llegó. No incluye órdenes nuevas que aún no existen')
     + row('Inventario + tránsito', r => td(M(r.fin + r.tr)), '', '')
-    + row('Venta proyectada', r => td(M(r.venta)), 'border-top:2px solid var(--b1);', 'Unidades que salen × precio promedio de venta de cada referencia')
-    + row('Margen bruto proyectado', r => td(M(r.mg) + ' <span class="arte-mu">(' + (r.venta > 0 ? (r.mg / r.venta * 100).toFixed(0) : 0) + '%)</span>'), '');
+    + row('Venta presupuestada', r => td(M(r.venta)), 'border-top:2px solid var(--b1);', 'Presupuesto comercial: unidades × precio de lista por referencia (2027) o presupuesto por vendedor (2026)')
+    + row('Fuente del presupuesto', r => td(r.fuente || '<span style="color:#b91c1c;">sin presupuesto</span>', 'font-size:10.5px;color:#64748b;'), '')
+    + row('Margen bruto presupuestado', r => td(M(r.mg) + ' <span class="arte-mu">(' + (r.venta > 0 ? (r.mg / r.venta * 100).toFixed(0) : 0) + '%)</span>'), '');
   const bars = '<div style="display:flex;align-items:flex-end;gap:8px;height:90px;margin:8px 0 4px;">' + R.map(r => '<div style="flex:1;text-align:center;font-size:10px;"><div style="height:' + Math.max(3, Math.round(r.fin / mx * 66)) + 'px;background:#3b82f6;border-radius:4px 4px 0 0;" title="' + r.lbl + ': ' + M(r.fin) + '"></div>' + r.lbl + '</div>').join('') + '</div>';
   el.innerHTML = '<div class="card" style="margin-bottom:12px;"><div class="ch"><div class="ct">📒 Proyección de inventarios · inventario inicial + importaciones − costo de venta</div></div><div class="cb">'
     + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
     + '<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;"><div class="sv" style="font-size:20px;color:var(--bl);">' + M(J.invIni) + '</div><div class="sl">Inventario disponible hoy</div></div>'
     + '<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;"><div class="sv" style="font-size:20px;color:#b45309;">' + M(J.trTot) + '</div><div class="sl">En tránsito hoy (igual al módulo de tránsito)</div></div>'
     + '<label style="font-size:12px;align-self:center;">Meses <select class="inp" style="width:auto;font-size:12px;" onchange="IVS.py.n=+this.value;ivsJuegoPintar()">' + [4, 6, 8, 10, 12].map(k => '<option ' + (Number(P.n) === k ? 'selected' : '') + '>' + k + '</option>').join('') + '</select></label>'
-    + '<label style="font-size:12px;align-self:center;" title="Rotación proyectada = rotación real × (1 + ajuste)">Ajuste de ventas <input type="number" step="5" class="inp" style="width:70px;font-size:12px;" value="' + (Number(P.adj) || 0) + '" onchange="IVS.py.adj=+this.value||0;ivsJuegoPintar()"> %</label>'
+    + '<label style="font-size:12px;align-self:center;" title="Rotación proyectada = rotación real × (1 + ajuste)">Ajuste al presupuesto <input type="number" step="5" class="inp" style="width:70px;font-size:12px;" value="' + (Number(P.adj) || 0) + '" onchange="IVS.py.adj=+this.value||0;ivsJuegoPintar()"> %</label>'
     + '<button class="btn btn-g btn-sm" onclick="ivsJuegoExcel()">⬇ Excel</button></div>'
     + ((typeof INV_VPROM !== 'undefined' && INV_VPROM) ? '' : '<div class="alert" style="margin-bottom:8px;">' + (INV_VFALLO ? 'No pude cargar las ventas: la venta proyectada sale en cero.' : '⏳ Cargando ventas promedio…') + '</div>')
     + '<div class="tw"><table class="cbl-t" style="font-size:12.5px;"><thead><tr><th style="position:sticky;left:0;background:#f8fafc;"></th>' + R.map(r => '<th style="text-align:right;">' + r.lbl + '</th>').join('') + '</tr></thead><tbody>' + body + '</tbody></table></div>'
     + '<div style="font-size:11px;font-weight:700;margin-top:10px;">Inventario final disponible por mes</div>' + bars
-    + '<div class="arte-mu" style="font-size:11px;margin-top:6px;">Cómo se calcula: cada referencia arranca con su inventario de hoy; cada mes entran las importaciones según su fecha de llegada (a costo de tránsito: US$ × factor ' + ivsFac() + ' × TRM) y salen las ventas promedio de los últimos meses completos (con el ajuste), sin vender más de lo disponible. Costo de venta al costo promedio de lo disponible. El tránsito que queda es lo de hoy menos lo que llega; no incluye órdenes futuras ni lo que llega sin fecha o después del último mes (' + M(J.sinF + J.desp) + ' hoy). El primer mes se proyecta completo, no solo lo que falta del mes.</div></div></div>';
+    + '<div class="arte-mu" style="font-size:11px;margin-top:6px;">Cómo se calcula: la venta y el costo de venta salen del <b>presupuesto comercial</b>. 2027: unidades por referencia × precio de lista (más las líneas libres en pesos); el costo es unidades × costo de cada referencia (costo promedio del inventario o costo de tránsito) y, para lo que viene solo en pesos, se usa una relación costo/venta de ' + (J.r0 * 100).toFixed(0) + '%. 2026: presupuesto por vendedor × esa misma relación. Las importaciones entran según su fecha de llegada (US$ × factor ' + ivsFac() + ' × TRM). Inventario final = inicial + importaciones − costo de venta (si el presupuesto vende más de lo que hay, el inventario baja: señal de que falta comprar). El tránsito que queda es lo de hoy menos lo que llega; no incluye órdenes futuras ni lo que llega sin fecha o después del último mes (' + M(J.sinF + J.desp) + ' hoy).' + (J.sinPpto.length ? ' <b>Sin presupuesto cargado en: ' + J.sinPpto.join(', ') + ' (queda en 0).</b>' : '') + '</div></div></div>';
 }
 function ivsJuegoExcel() {
   const C = IVS._C || ivsCalc(), J = ivsJuegoCalc(C), R = J.R; const rr = Math.round;
