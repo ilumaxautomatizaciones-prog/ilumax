@@ -34399,6 +34399,7 @@ function cmPintar(){
       <button class="btn btn-g btn-sm" onclick="cmPersAdd()">+ Colaborador</button>
       <button class="btn btn-g btn-sm" onclick="cmExcel()">⬇ Excel</button>
       <button class="btn btn-g btn-sm" onclick="document.getElementById('cm-imp-file').click()">📥 Subir puntos del mes</button><input type="file" id="cm-imp-file" accept=".xlsx,.xls" style="display:none" onchange="cmImportarPuntos(this)">
+      <button class="btn btn-g btn-sm" onclick="document.getElementById('cm-rec-file').click()">📥 Subir recaudo (ppto vs ejecución)</button><input type="file" id="cm-rec-file" accept=".xlsx,.xls" style="display:none" onchange="cmImportarRecaudo(this)">
       <span class="arte-mu" style="font-size:11px;">${E(CM.fuente)} · ppto: ${E(CM.pptoFuente||'Mi equipo')}</span>
       <button class="btn btn-p btn-sm" onclick="cmPtsVer()">🎯 Ver puntos extras${cmExig()?'':' (sin exigir %)'}</button></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px;">
@@ -34553,6 +34554,59 @@ async function cmImpAplicar(){
   const o = document.getElementById('cm-imp-ov'); let n = 0;
   o.querySelectorAll('input[data-p]').forEach(i=>{ if(i.value==='') return; const m = CM.man[i.dataset.p] = CM.man[i.dataset.p]||{}; m.pts = m.pts||{}; m.pts[i.dataset.c] = parseFloat(i.value)||0; n++; });
   if(await cmSave('com_manual_'+CM.mes, CM.man)){ o.classList.remove('on'); toast('✅ '+n+' datos de puntos cargados en '+CM.mes,'ok'); cmPintar(); }
+}
+// ── Recaudo del mes desde el Excel «PPTO VS EJECUCIÓN X EJECUTIVO» ──
+function cmRecParse(wb){
+  const MN = ['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'], mesN = MN[(+String(CM.mes).slice(5,7))-1]||'';
+  const hid = {}; ((wb.Workbook||{}).Sheets||[]).forEach(s=>{ hid[s.name] = s.Hidden; });
+  let best = null;
+  wb.SheetNames.forEach(sn=>{
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, defval:null, raw:true});
+    const hi = rows.findIndex(r=>r && r.some(c=>cmNorm(c)==='EJECUTIVO')); if(hi<0) return;
+    const hdr = rows[hi], ci = hdr.findIndex(c=>cmNorm(c)==='EJECUTIVO'), pj = hdr.findIndex(c=>/^PPTO/.test(cmNorm(c))), rj = hdr.findIndex(c=>/CUMPLIMIENTO ACUMULADO/.test(cmNorm(c)));
+    if(pj<0 || rj<0) return;
+    const sc = (cmNorm(hdr[pj]).includes(mesN)?4:0) + (!hid[sn]?2:0) + (rows.slice(0,hi).some(r=>r&&r.some(c=>cmNorm(c).includes(mesN)))?1:0);
+    if(!best || sc>best.sc) best = {sn, sc, rows, hi, ci, pj, rj, ph:String(hdr[pj]).trim()};
+  });
+  if(!best) return null;
+  const out = {}, sin = [];
+  best.rows.slice(best.hi+1).forEach(r=>{ const nom = r && r[best.ci]; if(!nom) return; if(/^TOTAL|^PPTO/.test(cmNorm(nom))) return;
+    const pp = Number(r[best.pj]), rr = Number(r[best.rj]); if(isNaN(pp) && isNaN(rr)) return;
+    const p = cmPersDe(nom); if(!p){ sin.push(String(nom).trim()); return; }
+    out[p.id] = {p:(out[p.id]||{p:0}).p+(pp||0), r:(out[p.id]||{r:0}).r+(rr||0)}; });
+  return {out, sin, hoja:best.sn, ph:best.ph};
+}
+async function cmImportarRecaudo(inp){
+  const f = inp.files && inp.files[0]; inp.value = ''; if(!f) return;
+  try{
+    if(typeof XLSX==='undefined') throw new Error('No cargó la librería de Excel; revisa la conexión');
+    const res = cmRecParse(XLSX.read(await f.arrayBuffer(), {type:'array'}));
+    if(!res || !Object.keys(res.out).length) return toast('No encontré la tabla (busco las columnas EJECUTIVO, PPTO y CUMPLIMIENTO ACUMULADO).','er');
+    const E = reabastEsc, idxRec = p=>(p.items||[]).findIndex(it=>/^RECAUDO/.test(cmNorm(it.n)) && it.f==='manual');
+    const cur = CM.man||{}, sinRec = [];
+    const filas = (CM.personas||[]).filter(p=>res.out[p.id]).map(p=>{ const i = idxRec(p), o = res.out[p.id]; if(i<0){ sinRec.push(p.nombre); return ''; }
+      const mi = ((cur[p.id]||{}).it||{})[i]||{}, hay = (mi.p!=null && mi.p!=='') || (mi.r!=null && mi.r!=='');
+      return `<tr><td><b>${E(p.nombre)}</b>${hay?` <span class="arte-mu" title="Ya tenía ppto ${cmMoney(mi.p)} / real ${cmMoney(mi.r)}">(reemplaza)</span>`:''}</td>
+        <td style="text-align:right;"><input class="inp" type="number" step="any" data-p="${p.id}" data-i="${i}" data-c="p" value="${Math.round(o.p)}" oninput="cmRecPct(this)" style="width:120px;padding:3px 5px;font-size:12px;text-align:right;"></td>
+        <td style="text-align:right;"><input class="inp" type="number" step="any" data-p="${p.id}" data-i="${i}" data-c="r" value="${Math.round(o.r)}" oninput="cmRecPct(this)" style="width:120px;padding:3px 5px;font-size:12px;text-align:right;"></td>
+        <td style="text-align:right;font-weight:700;" data-pc="${p.id}">${o.p>0?cmPct(o.r/o.p):'—'}</td></tr>`; }).join('');
+    if(!filas.replace(/\s/g,'')) return toast('Ningún ejecutivo del Excel tiene el ítem «Recaudo» manual en su matriz.','er');
+    const o = document.getElementById('cm-rec-ov') || document.body.appendChild(Object.assign(document.createElement('div'), {id:'cm-rec-ov', className:'ov'}));
+    o.innerHTML = `<div class="mo" style="max-width:820px;"><div class="mh"><div class="mt">📥 Recaudo del mes desde Excel</div><button class="mx" onclick="document.getElementById('cm-rec-ov').classList.remove('on')">✕</button></div>
+      <div class="mb"><div style="font-size:12px;margin-bottom:8px;">Hoja leída: <b>${E(res.hoja)}</b> (${E(res.ph)}). Se aplicará al mes <b>${E(CM.mes)}</b> (cambia el mes arriba si es otro): <b>Ppto recaudo</b> = columna PPTO y <b>Recaudado</b> = CUMPLIMIENTO ACUMULADO. Puedes corregir cualquier número antes de aplicar.</div>
+      <div class="tw"><table style="font-size:12px;"><thead><tr><th>Ejecutivo</th><th style="text-align:right;">Ppto recaudo</th><th style="text-align:right;">Recaudado</th><th style="text-align:right;">% cumpl.</th></tr></thead><tbody>${filas}</tbody></table></div>
+      ${res.sin.length?`<div class="alert" style="font-size:12px;margin-top:8px;">Sin coincidir con la lista de colaboradores (no se cargan): <b>${E(res.sin.join(', '))}</b>. Si es el mismo ejecutivo con otro nombre, agrégalo en «Nombre(s) en Siesa».</div>`:''}
+      ${sinRec.length?`<div class="alert" style="font-size:12px;margin-top:8px;">Sin ítem «Recaudo» manual en su matriz (no se cargan): <b>${E(sinRec.join(', '))}</b>.</div>`:''}
+      <div class="arte-mu" style="font-size:11px;margin-top:8px;">Se guarda como ppto y real del ítem Recaudo de cada persona; el cumplimiento y el pago se recalculan con la matriz. Lo que no venga en el Excel no se toca.</div></div>
+      <div class="mf"><button class="btn btn-g" onclick="document.getElementById('cm-rec-ov').classList.remove('on')">Cancelar</button><button class="btn btn-p" onclick="cmRecAplicar()">Aplicar a ${E(CM.mes)}</button></div></div>`;
+    o.classList.add('on');
+  }catch(e){ toast('No se pudo leer el Excel: '+e.message,'er'); }
+}
+function cmRecPct(inp){ const o = document.getElementById('cm-rec-ov'), id = inp.dataset.p, g = c=>parseFloat((o.querySelector(`input[data-p="${id}"][data-c="${c}"]`)||{}).value)||0, t = o.querySelector(`[data-pc="${id}"]`); if(t) t.textContent = g('p')>0 ? cmPct(g('r')/g('p')) : '—'; }
+async function cmRecAplicar(){
+  const o = document.getElementById('cm-rec-ov'); let n = 0;
+  o.querySelectorAll('input[data-p]').forEach(i=>{ if(i.value==='') return; const m = CM.man[i.dataset.p] = CM.man[i.dataset.p]||{}; m.it = m.it||{}; const x = m.it[i.dataset.i] = m.it[i.dataset.i]||{}; x[i.dataset.c] = parseFloat(i.value)||0; if(i.dataset.c==='p') n++; });
+  if(await cmSave('com_manual_'+CM.mes, CM.man)){ o.classList.remove('on'); toast('✅ Recaudo de '+n+' ejecutivos cargado en '+CM.mes,'ok'); cmPintar(); }
 }
 function cmNuevosAct(){ const ex = ((CM.man||{})._noNuevo)||{}, o = {}; Object.keys(CM.nuevos||{}).forEach(k=>{ if(!ex[k]) o[k] = CM.nuevos[k]; }); return o; }
 async function cmNoNuevo(cli, quitar){
