@@ -4374,27 +4374,48 @@ function cblFinHtml(b, puede){
       <button class="btn btn-bl btn-sm" onclick="cblFinAgregar('${b.id}')">+ Agregar factura</button></div>` : ''}
   </div>`;
 }
-// Lee una factura PDF (texto) y rellena el formulario de facturas del BL; el usuario revisa y pulsa «Agregar factura»
+// Lee una factura PDF (texto) y rellena el formulario de facturas del BL; el usuario revisa y pulsa «Agregar factura».
+// Reconoce 3 modelos: factura del proveedor (ILUMAX Trading), flete internacional (Soul Green) y agencia de aduanas (Siaco).
 async function cblFinPdf(inp){
   const f = inp.files && inp.files[0]; inp.value = ''; if(!f) return;
   const set = (id, v) => { const e = document.getElementById(id); if(e && v != null && v !== '') e.value = v; };
+  const co = x => { const n = parseFloat(String(x||'').replace(/\./g,'').replace(',','.')); return isNaN(n) ? null : n; };   // 1.234,56 → 1234.56
+  const us = x => { const n = parseFloat(String(x||'').replace(/,/g,'')); return isNaN(n) ? null : n; };                     // 1,234.56 → 1234.56
+  const fm = n => Math.round(n).toLocaleString('es-CO');
   try{
     toast('Leyendo la factura…','inf');
     const lib = await ocpPdfjs(), pdf = await lib.getDocument({data: await f.arrayBuffer()}).promise; let items = [];
     for(let p = 1; p <= Math.min(pdf.numPages, 3); p++){ const c = await (await pdf.getPage(p)).getTextContent(); c.items.forEach(i=>{ if(String(i.str).trim()) items.push(String(i.str).trim()); }); }
-    const T = items.join(' '); if(T.length < 20) throw new Error('El PDF no tiene texto legible (¿es una imagen escaneada?)');
-    const prov = items[0] || '';
-    let num = ''; { const m = [...T.matchAll(/INVOICE\s*(?:#|NO\.?|N[°º]\.?)?\s*[:\-]?\s*(\d{3,})\b/gi)].map(x=>x[1])[0]; num = m || ((f.name.match(/FAC[_\-\s]*(\d+)/i)||[])[1]) || ''; }
-    let fec = ''; { const m = T.match(/(?:^|[^A-Z])DATE\s*:?\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/i); const mm = [...T.matchAll(/(?<!DUE )DATE\s*:?\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/gi)][0]; let g = mm || m; if(!g){ const ds = [...T.matchAll(/(\d{1,2})\/(\d{1,2})\/(\d{4})/g)].sort((x,y)=>(x[3]+x[1].padStart(2,'0')+x[2].padStart(2,'0')).localeCompare(y[3]+y[1].padStart(2,'0')+y[2].padStart(2,'0'))); g = ds[0]; } if(g){ const a = +g[1], b = +g[2]; const mes = a > 12 ? b : a, dia = a > 12 ? a : b; fec = g[3]+'-'+String(mes).padStart(2,'0')+'-'+String(dia).padStart(2,'0'); } }
-    let tot = null; { const m = T.match(/(?:BALANCE DUE|TOTAL(?: DUE)?|AMOUNT DUE)\s*:?\s*(?:US)?\$?\s*([\d,]+\.\d{2})/i); if(m) tot = parseFloat(m[1].replace(/,/g,'')); }
-    if(tot == null){ const all = [...T.matchAll(/\b\d{1,3}(?:,\d{3})*\.\d{2}\b/g)].map(x=>parseFloat(x[0].replace(/,/g,''))); if(all.length) tot = Math.max(...all); }
-    const oi = (f.name.match(/\b(O[CI]I?\d+(?:-\d+)?)/i)||[])[1] || (T.match(/\b(OI\d{3,5})\b/)||[])[1] || '';
-    const venc = (T.match(/DUE DATE\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{4})/i)||[])[1] || '';
-    const mon = /\bCOP\b/.test(T) && !/\bUSD\b/.test(T) ? 'COP' : 'USD';
-    const tipo = document.getElementById('cblf-tipo'); if(tipo){ tipo.value = 'proveedor'; cblFinTipo(); }
-    set('cblf-num', num); set('cblf-prov', prov); set('cblf-fec', fec); set('cblf-mon', mon); cblFinMon(); if(tot != null) set('cblf-val', tot);
-    set('cblf-nota', [oi, venc ? 'vence '+venc : ''].filter(Boolean).join(' · '));
-    toast('Factura leída: revisa los datos y pulsa «Agregar factura»','ok');
+    const T = items.join(' ').replace(/\s+/g,' '); if(T.length < 20) throw new Error('El PDF no tiene texto legible (¿es una imagen escaneada?)');
+    const oi = (T.match(/\b(OCI\d{2,4}(?:-\d+)?|OI\d{3,5})\b/)||[])[1] || (f.name.match(/\b(OCI?\d+(?:-\d+)?|OI\d+)/i)||[])[1] || '';
+    let d = { tipo:'proveedor', prov:'', num:'', fec:'', mon:'USD', val:null, trm:null, nota:'' };
+    if(/SOUL GREEN|FLETE INTERNACIONAL|FREIGHT FORWARD/i.test(T) && /Neto/i.test(T)){
+      // ── Flete internacional (USD): se toma el Neto (sin IVA; el IVA no entra al factor)
+      const mes = {ene:1,feb:2,mar:3,abr:4,may:5,jun:6,jul:7,ago:8,sep:9,oct:10,nov:11,dic:12}, m = T.match(/(\d{1,2})\/([a-záéíóú]{3})\.?\/(\d{4})/i);
+      d = { tipo:'flete_int', prov:'SOUL GREEN LOGISTICS', mon:'USD', num:((T.match(/\b(SGL\s?\d{4,6})\b/)||[])[1]||'').replace(/\s?(\d)/,' $1'), fec: m ? m[3]+'-'+String(mes[m[2].toLowerCase()]||1).padStart(2,'0')+'-'+String(m[1]).padStart(2,'0') : '',
+        val: co((T.match(/\bNeto\s+Iva\s+Total\s+([\d.]+,\d{2})/i)||T.match(/\bNeto\s+([\d.]+,\d{2})/i)||[])[1]) ?? ((co((T.match(/SubTotal INGRESOS PARA TERCEROS\s*([\d.]+,\d{2})/i)||T.match(/([\d.]+,\d{2})\s+SubTotal INGRESOS PARA TERCEROS/i)||[])[1])||0) + (co((T.match(/SubTotal INGRESOS PROPIOS\s*([\d.]+,\d{2})/i)||T.match(/([\d.]+,\d{2})\s+SubTotal INGRESOS PROPIOS/i)||[])[1])||0) || null), trm: co((T.match(/([\d.]+,\d{2})\s+TRM\b/i)||T.match(/\bTRM\s+([\d.]+,\d{2})/i)||[])[1]),
+        nota: [oi, (T.match(/\b(IML[A-Z]{0,3}\d{5,})\b/)||[])[1] ? 'DO '+T.match(/\b(IML[A-Z]{0,3}\d{5,})\b/)[1] : '', (T.match(/Neto\s+Iva\s+Total\s+[\d.]+,\d{2}\s+([\d.]+,\d{2})/i)||[])[1] ? 'IVA US$ '+T.match(/Neto\s+Iva\s+Total\s+[\d.]+,\d{2}\s+([\d.]+,\d{2})/i)[1]+' aparte' : ''].filter(Boolean).join(' · ') };
+    } else if(/AGENCIA DE ADUANAS|REINTEGROS DE CAPITAL/i.test(T)){
+      // ── Agencia de aduanas (COP): reintegros (costos de puerto) + ingresos propios (honorarios), sin IVA
+      const rei = co((T.match(/TOTAL REINTEGROS DE CAPITAL\s*(\d{1,3}(?:\.\d{3})+)/i)||[])[1]) || 0, prop = co((T.match(/TOTAL INGRESOS PROPIOS\s*(\d{1,3}(?:\.\d{3})+)/i)||[])[1]);
+      const sub = co((T.match(/SUBTOTAL:?\s*([\d.]+)/i)||[])[1]), iva = co((T.match(/IVA\s*\d*%?:?\s*([\d.]+)/i)||[])[1]);
+      const g = (T.match(/GENERACI[ÓO]N:?[^0-9]{0,60}(\d{4}-\d{2}-\d{2})/i)||[])[1] || (T.match(/\b(\d{4}-\d{2}-\d{2})\b/)||[])[1] || '';
+      const venc = (T.match(/VENCIMIENTO:?[^0-9]{0,30}(\d{4}-\d{2}-\d{2})/i)||[])[1] || '';
+      const base = (prop != null ? prop : (sub||0)) + rei;
+      d = { tipo:'aduana', prov:'AGENCIA DE ADUANAS SIACO', mon:'COP', num:((T.match(/VENTA\s+No\.?\s*([A-Z]{2,4}\s?\d{3,})/i)||[])[1]||'').replace(/\s/g,''), fec:g, val:base||null,
+        nota:[oi, (T.match(/D\.?O\.? No:?\s*(\d{6,})/i)||[])[1] ? 'DO '+T.match(/D\.?O\.? No:?\s*(\d{6,})/i)[1] : '', rei ? 'reintegros '+fm(rei)+' + honorarios '+fm(prop||0) : '', iva ? 'IVA '+fm(iva)+' aparte' : '', venc ? 'vence '+venc : ''].filter(Boolean).join(' · ') };
+    } else {
+      // ── Factura del proveedor (USD)
+      let num = ([...T.matchAll(/INVOICE\s*(?:#|NO\.?|N[°º]\.?)?\s*[:\-]?\s*(\d{3,})\b/gi)].map(x=>x[1])[0]) || ((f.name.match(/FAC[_\-\s]*(\d+)/i)||[])[1]) || '';
+      let fec = ''; { const mm = [...T.matchAll(/(?<!DUE )DATE\s*:?\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/gi)][0]; let g = mm; if(!g){ const ds = [...T.matchAll(/(\d{1,2})\/(\d{1,2})\/(\d{4})/g)].sort((x,y)=>(x[3]+x[1].padStart(2,'0')+x[2].padStart(2,'0')).localeCompare(y[3]+y[1].padStart(2,'0')+y[2].padStart(2,'0'))); g = ds[0]; } if(g){ const a = +g[1], b = +g[2], mes = a > 12 ? b : a, dia = a > 12 ? a : b; fec = g[3]+'-'+String(mes).padStart(2,'0')+'-'+String(dia).padStart(2,'0'); } }
+      let tot = us((T.match(/(?:BALANCE DUE|TOTAL(?: DUE)?|AMOUNT DUE)\s*:?\s*(?:US)?\$?\s*([\d,]+\.\d{2})/i)||[])[1]);
+      if(tot == null){ const all = [...T.matchAll(/\b\d{1,3}(?:,\d{3})*\.\d{2}\b/g)].map(x=>us(x[0])); if(all.length) tot = Math.max(...all); }
+      const venc = (T.match(/DUE DATE\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{4})/i)||[])[1] || '';
+      d = { tipo:'proveedor', prov:(T.match(/\b(ILUMAX TRADING CORP)\b/i)||[])[1] || items.find(x=>!/^page\s*\d/i.test(x)) || '', num, fec, mon: /\bCOP\b/.test(T) && !/\bUSD\b/.test(T) ? 'COP' : 'USD', val:tot, nota:[oi, venc ? 'vence '+venc : ''].filter(Boolean).join(' · ') };
+    }
+    const tipo = document.getElementById('cblf-tipo'); if(tipo){ tipo.value = d.tipo; cblFinTipo(); }
+    set('cblf-num', d.num); set('cblf-prov', d.prov); set('cblf-fec', d.fec); set('cblf-mon', d.mon); cblFinMon(); if(d.val != null) set('cblf-val', d.val); if(d.mon==='USD' && d.trm) set('cblf-trm', d.trm); set('cblf-nota', d.nota);
+    toast('Factura leída ('+(CBL_FIN_TIPOS[d.tipo]||d.tipo)+'): revisa los datos y pulsa «Agregar factura»','ok');
   }catch(e){ console.warn('cblFinPdf', e); toast('No pude leer la factura: '+(e.message||e),'er'); }
 }
 function cblFinTipo(){
