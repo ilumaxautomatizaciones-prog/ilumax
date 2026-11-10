@@ -189,7 +189,9 @@ function pinOk() {
   cargar();
 }
 function pinSalir() { try { localStorage.removeItem('rv_pin'); } catch (e) {} location.reload(); }
-let LAST = null, RANGO = 'mes', ACC = null, CUST = null;
+let LAST = null, RANGO = 'mes', ACC = null, CUST = null, MESEL = '';
+const qMes = () => MESEL ? '&mes=' + MESEL : '';
+async function setMes(v) { MESEL = v; RANGO = 'mes'; CUST = null; DET.cargado = false; DET.mes = v; MIX.d = null; MIX.mes = v; try { PER.d = null; PER.mes = v; } catch (e) {} document.getElementById('app').innerHTML = '<div class="err">Cargando ' + (v ? mesLbl(v) : 'mes actual') + '…</div>'; await cargar(); try { verTab(TAB); } catch (e) {} }
 const dr = f => ' data-f="' + encodeURIComponent(JSON.stringify(f)) + '"';
 const iso = d => d.toISOString().slice(0, 10);
 const lunesDe = s => { const d = new Date(s + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7); return iso(d); };
@@ -254,7 +256,7 @@ function pintar(d0) {
   const k = d.kpis, cum = k.ppto > 0 ? k.acum / k.ppto : 0;
   const rg = d._rango || [d.corte.slice(0, 8) + '01', d.corte], F = o => Object.assign({ a: rg[0], b: rg[1] }, o);
   const wk = l => F({ a: l < rg[0] ? rg[0] : l, b: sumDias(l, 6) > rg[1] ? rg[1] : sumDias(l, 6) });
-  document.getElementById('sub').innerHTML = 'Corte al <b>' + dmy(d.corte) + '</b> · Actualizado ' + (d.fuente ? fh(d.fuente) : fh(d.generado)) + ' · ' + k.facturas + ' facturas del mes';
+  document.getElementById('sub').innerHTML = 'Corte al <b>' + dmy(d.corte) + '</b> · Actualizado ' + (d.fuente ? fh(d.fuente) : fh(d.generado)) + ' · ' + k.facturas + ' facturas del mes' + (d.mesesDisp && d.mesesDisp.length > 1 ? ' · Mes: <select onchange="setMes(this.value)" style="font:inherit;font-weight:700;border-radius:6px;padding:2px 6px">' + d.mesesDisp.map(m => '<option value="' + (m === d.mesesDisp[0] ? '' : m) + '"' + (m === d.mes ? ' selected' : '') + '>' + mesLbl(m) + (d.cerrado && m === d.mes ? ' (cerrado)' : '') + '</option>').join('') + '</select>' : '');
   const kp = (l, v, s, c, f) => '<div class="kpi"' + (f ? dr(f) : '') + '><div class="l">' + l + '</div><div class="v ' + (c || '') + '">' + v + '</div>' + (s ? '<div class="s">' + s + '</div>' : '') + '</div>';
   let h = filtro + nota + '<div class="kpis">'
     + kp('Venta del último día', $(k.dia), dmy(d.corte), 'ok', F({ a: rg[1] }))
@@ -295,12 +297,12 @@ function pintar(d0) {
 async function cargar() {
   const k = token();
   if (!k) { pinForm(''); return; }
-  const uC = API + '?k=' + encodeURIComponent(k);
+  const uC = API + '?k=' + encodeURIComponent(k) + qMes();
   try {
     const cC = RVC.get(uC);
     let pintoCache = false;
     if (cC && !LAST) { try { ACC = cC.acceso || null; if (cC.sinHC) { const i = GR.findIndex(g => g[0] === 'HOM'); if (i >= 0) GR.splice(i, 1); } pintar(cC); if (TAB === 'cum') pintarCum(); pintoCache = true; } catch (e) { pintoCache = false; } }
-    const r = await fetch(API + '?k=' + encodeURIComponent(k), { cache: 'no-store' });
+    const r = await fetch(API + '?k=' + encodeURIComponent(k) + qMes(), { cache: 'no-store' });
     const d = await r.json();
     if (r.status === 401 || r.status === 429) { RVC.del(uC);
       const url = new URLSearchParams(location.hash.replace(/^#/, '')).get('k') || new URLSearchParams(location.search).get('k');
@@ -324,7 +326,7 @@ function habiles(desde, hasta) { let n = 0; for (let x = desde; x <= hasta; x = 
 function pintarCum() {
   const el = document.getElementById('cum'); if (!LAST) { el.innerHTML = '<div class="err">Cargando…</div>'; return; }
   const d = LAST, c = d.corte, ini = c.slice(0, 8) + '01', fin = iso(new Date(Date.UTC(+c.slice(0, 4), +c.slice(5, 7), 0)));
-  const hT = habiles(ini, fin), hP = habiles(ini, c), hR = Math.max(0, hT - hP);
+  const hT = habiles(ini, fin), hP = d.cerrado ? hT : habiles(ini, c), hR = Math.max(0, hT - hP);
   const filas = d.ejecutivos.map(e => { const p = ['ESP', 'MIX', 'PRO', 'ONL', 'HOM'].reduce((a, g) => a + (e.p[g] || 0), 0); return { n: e.nombre, p, v: e.v.total }; }).filter(x => x.p > 0).sort((a, b) => b.v / b.p - a.v / a.p);
   const tp = filas.reduce((a, x) => a + x.p, 0), tv = filas.reduce((a, x) => a + x.v, 0);
   const fila = (n, p, v, tot) => { const pr = hP ? v / hP * hT : 0, r = v / p, falta = Math.max(0, p - v), req = hR ? falta / hR : falta, st = pr >= p ? ['En ritmo', 'ok'] : pr >= p * .8 ? ['Cerca', 'mid'] : ['Atrasado', 'bad'];
