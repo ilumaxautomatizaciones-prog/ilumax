@@ -668,7 +668,8 @@ body:not(.sync-manual) [data-sync-manual]{display:none!important;}
 <!-- LOADER -->
 <div class="loader-ov" id="loader">
   <div class="loader-spin"></div>
-  <div class="loader-msg" id="loader-msg">Cargando...</div>
+  <div class="loader-msg" id="loader-msg" style="display:none">Cargando...</div>
+  <div class="ld-pb" id="loader-pb" data-t0="0" data-txt="Cargando" style="width:min(380px,80vw);text-align:center;"><div class="ld-t" style="font-size:12px;color:var(--mu);margin-bottom:6px;"></div><div style="height:12px;background:#fff;border:1px solid var(--b2);border-radius:8px;overflow:hidden;"><div class="ld-b" style="width:0%;height:100%;background:var(--bl);"></div></div></div>
 </div>
 
 <!-- LOGIN -->
@@ -1338,6 +1339,7 @@ const fmt = v => '$'+Math.round(v||0).toLocaleString('es-CO');
 function showLoader(msg='Cargando...'){
   qs('#loader').classList.add('on');
   qs('#loader-msg').textContent=msg;
+  const pb = qs('#loader-pb'); if(pb){ pb.dataset.t0 = Date.now(); pb.dataset.txt = String(msg||'Cargando').replace(/[….]+\s*$/,''); }
 }
 function hideLoader(){ qs('#loader').classList.remove('on'); }
 function toast(msg,t='ok'){
@@ -4336,12 +4338,12 @@ function cblEditarFecha(id, campo){
 function cblAbrir(id){ CBL.det = id; cblPintarDetalle(); }
 function cblCerrarDetalle(){ CBL.det = null; const m = document.getElementById('cbl-det'); if(m) m.remove(); reabastPintar(); }
 /* ===== Módulo financiero por BL: facturas (proveedor, flete internacional, agencia de aduanas, flete terrestre) → factor de importación ===== */
-const CBL_FIN_TIPOS = { proveedor:'Factura proveedor', flete_int:'Flete internacional', aduana:'Agencia de aduanas', flete_terr:'Flete terrestre' };
+const CBL_FIN_TIPOS = { proveedor:'Factura proveedor', flete_int:'Flete internacional', aduana:'Agencia de aduanas', flete_terr:'Flete terrestre', otros:'Otros conceptos' };
 function cblFinCop(f){ return f.moneda==='USD' ? (Number(f.valor)||0)*(Number(f.trm)||0) : (Number(f.valor)||0); }
 function cblFinCalc(b){
-  const L = (b.fin && b.fin.facturas) || [], s = {proveedor:0, flete_int:0, aduana:0, flete_terr:0}, usdProv = {v:0};
+  const L = (b.fin && b.fin.facturas) || [], s = {proveedor:0, flete_int:0, aduana:0, flete_terr:0, otros:0}, usdProv = {v:0};
   L.forEach(f=>{ if(s[f.tipo]!=null) s[f.tipo] += cblFinCop(f); if(f.tipo==='proveedor') usdProv.v += f.moneda==='USD' ? (Number(f.valor)||0) : 0; });
-  const extra = s.flete_int + s.aduana + s.flete_terr, total = s.proveedor + extra;
+  const extra = s.flete_int + s.aduana + s.flete_terr + s.otros, total = s.proveedor + extra;
   const cbm = Number(b.cbmc)>0 ? Number(b.cbmc) : (b.items||[]).reduce((a,it)=>a+(it.cbm>0?it.cant*it.cbm:0),0);
   return {s, extra, total, usdProv:usdProv.v, factor: s.proveedor>0 ? total/s.proveedor : null, cbm, porCbm: cbm>0 && extra>0 ? extra/cbm : null, n:L.length};
 }
@@ -4352,7 +4354,7 @@ function cblFinHtml(b, puede){
   const trmDef = (L.length ? L[L.length-1].trm : '') || (typeof OC_TRM_APROX!=='undefined' ? OC_TRM_APROX : '');
   return `<div id="cbl-fin" style="margin-top:14px;border-top:2px solid var(--b1);padding-top:10px;">
     <div style="font-weight:800;font-size:13px;margin-bottom:6px;">💲 Costos de importación y factor <span class="arte-mu" style="font-weight:500;font-size:11px;">· carga las facturas de este BL; el factor = (proveedor + fletes + aduana) ÷ proveedor</span></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">${tile('Factura proveedor', m(F.s.proveedor))}${tile('Flete internacional', m(F.s.flete_int))}${tile('Agencia de aduanas', m(F.s.aduana))}${tile('Flete terrestre', m(F.s.flete_terr))}${tile('Costo total puesto en bodega', m(F.total))}${tile('FACTOR DE IMPORTACIÓN', F.factor!=null ? F.factor.toFixed(4).replace('.',',') : '—', F.factor!=null?'#1d4ed8':'#94a3b8')}${F.porCbm!=null?tile('Gastos por CBM ('+F.cbm.toLocaleString('es-CO',{maximumFractionDigits:2})+' m³)', m(F.porCbm)):''}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">${tile('Factura proveedor', m(F.s.proveedor))}${tile('Flete internacional', m(F.s.flete_int))}${tile('Agencia de aduanas', m(F.s.aduana))}${tile('Flete terrestre', m(F.s.flete_terr))}${F.s.otros?tile('Otros conceptos', m(F.s.otros)):''}${tile('Costo total puesto en bodega', m(F.total))}${tile('FACTOR DE IMPORTACIÓN', F.factor!=null ? F.factor.toFixed(4).replace('.',',') : '—', F.factor!=null?'#1d4ed8':'#94a3b8')}${F.porCbm!=null?tile('Gastos por CBM ('+F.cbm.toLocaleString('es-CO',{maximumFractionDigits:2})+' m³)', m(F.porCbm)):''}</div>
     ${falta.length && L.length ? `<div class="arte-mu" style="font-size:11px;margin-bottom:6px;color:#b45309;">⚠ Aún falta: ${falta.join(', ')} (el factor es parcial).</div>`:''}
     ${L.length ? `<div class="tw"><table class="cbl-t" style="font-size:11.5px;"><thead><tr><th>Tipo</th><th>N.º factura</th><th>Proveedor / agencia</th><th>Fecha</th><th>Moneda</th><th style="text-align:right;">Valor</th><th style="text-align:right;">TRM</th><th style="text-align:right;">Valor COP</th><th>Nota</th><th></th></tr></thead><tbody>
       ${L.map(f=>`<tr><td>${reabastEsc(CBL_FIN_TIPOS[f.tipo]||f.tipo)}</td><td style="font-family:monospace;">${reabastEsc(f.num||'')}</td><td>${reabastEsc(f.prov||'')}</td><td>${f.fecha?cblFd(f.fecha):''}</td><td>${reabastEsc(f.moneda)}</td><td style="text-align:right;">${(Number(f.valor)||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td><td style="text-align:right;">${f.moneda==='USD'?(Number(f.trm)||0).toLocaleString('es-CO'):'—'}</td><td style="text-align:right;font-weight:700;">${m(cblFinCop(f))}</td><td style="font-size:10.5px;">${reabastEsc(f.nota||'')}</td><td>${puede?`<button class="btn btn-g btn-xs" onclick="cblFinQuitar('${b.id}','${f.id}')">✕</button>`:''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="arte-mu" style="font-size:11.5px;margin-bottom:6px;">Sin facturas cargadas.</div>'}
@@ -4958,7 +4960,7 @@ function cargaHtml(txt){
   const t = String(txt||'Cargando').replace(/[<>"]/g,'');
   return '<div class="ld-pb" data-t0="'+Date.now()+'" data-txt="'+t+'" style="max-width:460px;margin:30px auto;text-align:center;"><div class="ld-t" style="font-size:13px;color:var(--mu);margin-bottom:8px;">'+t+'… 0%</div><div style="height:14px;background:var(--s1);border:1px solid var(--b1);border-radius:8px;overflow:hidden;"><div class="ld-b" style="width:0%;height:100%;background:var(--bl);"></div></div></div>';
 }
-setInterval(function(){ try{ document.querySelectorAll('.ld-pb').forEach(function(e){ const p = Math.round(Math.min(95, 95*(1-Math.exp(-(Date.now()-Number(e.dataset.t0))/3500)))); const b = e.querySelector('.ld-b'), t = e.querySelector('.ld-t'); if(b) b.style.width = p+'%'; if(t) t.textContent = e.dataset.txt+'… '+p+'%'; }); }catch(x){} }, 150);
+setInterval(function(){ try{ document.querySelectorAll('.ld-pb').forEach(function(e){ const p = Math.round(Math.min(97, 97*(1-Math.exp(-(Date.now()-Number(e.dataset.t0))/7000)))); const b = e.querySelector('.ld-b'), t = e.querySelector('.ld-t'); if(b) b.style.width = p+'%'; if(t){ const sg = Math.floor((Date.now()-Number(e.dataset.t0))/1000); t.textContent = e.dataset.txt+'… '+p+'%'+(sg>=3?' · '+sg+' s':''); } }); }catch(x){} }, 150);
 function infIngRecientes(b){
   INF.ingDias = INF.ingDias || 45;
   if(!INF_ING.cargado && !INF_ING.cargando) infIngCargar(infDatos());
@@ -18872,7 +18874,7 @@ async function opPintar() {
     '<div id="op-modal"></div>';
   window.scrollTo(0, sy);
 }
-async function renderOnePageMod() { const el = document.getElementById('onepage-mod'); if (el && !OP.d) el.innerHTML = '<div class="empty">Cargando One Page…</div>'; await opPintar(); }
+async function renderOnePageMod() { const el = document.getElementById('onepage-mod'); if (el && !OP.d) el.innerHTML = cargaHtml('Cargando One Page'); await opPintar(); }
 // ---- Traer del portal / Siesa para el mes elegido ----
 async function opAuto() {
   const i = OP.mes, y = 2026, mm = String(i + 1).padStart(2, '0'), nx = i === 11 ? (y + 1) + '-01-01' : y + '-' + String(i + 2).padStart(2, '0') + '-01', ch = [];
@@ -19038,7 +19040,7 @@ async function renderInvAbast() {
   const pg = document.getElementById('pg-inv'); if (!pg) return;
   if (!document.getElementById('ivs-bar')) pg.insertAdjacentHTML('afterbegin', '<div id="ivs-bar" style="display:flex;gap:6px;margin:0 0 12px;flex-wrap:wrap;"></div><div id="inv-seg"></div><div id="inv-proy" style="display:none;"></div>');
   ivsBar();
-  const seg = document.getElementById('inv-seg'); seg.innerHTML = '<div class="empty">Cargando inventario y órdenes de compra…</div>';
+  const seg = document.getElementById('inv-seg'); seg.innerHTML = cargaHtml('Cargando inventario y órdenes de compra');
   ivsVista();
   const oc = (async () => { try { if (!REABAST.ordenesCompra) await cargarOC(); } catch (e) { } try { await cblCargar(); } catch (e) { } try { await invCanalesCargar(); } catch (e) { } })();
   await ivsCfg(); if (IVS.bodegas && IVS.bodegas.length) INV_BODEGAS_CUENTAN = IVS.bodegas.slice();   // el Detalle usa las mismas bodegas y la misma base que el Seguimiento
@@ -19250,7 +19252,7 @@ function ivsProyPintar() {
   const el = document.getElementById('inv-proy'); if (!el) return;
   if (typeof INV_VPROM !== 'undefined' && !INV_VPROM && !INV_VFALLO) invVentasCargar();
   const C = IVS._C || (typeof INV_DATA !== 'undefined' && INV_DATA.length ? ivsCalc() : null);
-  if (!C) { el.innerHTML = '<div class="empty">Cargando inventario y órdenes de compra…</div>'; return; }
+  if (!C) { el.innerHTML = cargaHtml('Cargando inventario y órdenes de compra'); return; }
   const P = IVS.py, m = P.m, D = ivsProyDatos(C); IVS._proy = D;
   const q = String(P.q || '').toLowerCase().trim();
   let L = D.filas.filter(f => (!P.solo || f.disp > 0 || f.trQ > 0) && (!q || String(f.p.ref).toLowerCase().includes(q) || String(f.p.desc).toLowerCase().includes(q)));
@@ -20072,7 +20074,7 @@ async function autGuardar(msg) {
   try { await sb.upsert('configuracion', { clave: 'auto_tecnica_calidad', valor: JSON.stringify(AUT.d), tipo: 'json' }, 'clave'); if (typeof toast === 'function') toast(msg || 'Guardado', 'ok'); }
   catch (e) { if (typeof toast === 'function') toast('No se pudo guardar: ' + e.message, 'er'); }
 }
-async function renderAutomMod() { const el = document.getElementById('autom-mod'); if (!el) return; if (!AUT.d) { el.innerHTML = '<div class="empty">Cargando…</div>'; await autCargar(); } autPintar(); }
+async function renderAutomMod() { const el = document.getElementById('autom-mod'); if (!el) return; if (!AUT.d) { el.innerHTML = cargaHtml('Cargando'); await autCargar(); } autPintar(); }
 function autSet(id, campo, v) {
   if (!autPuede()) return; const it = autIt(id);
   if (campo === 'avance') { v = Math.max(0, Math.min(100, Math.round(Number(v) || 0))); if (v === 100 && it.estado !== 'Entregada' && it.estado !== 'Pausada') { it.estado = 'Entregada'; } }
@@ -20190,7 +20192,7 @@ async function calGuardar(msg) {
 }
 async function renderCalidadMod() {
   const el = document.getElementById('calidad-mod'); if (!el) return;
-  if (!CAL.d) { el.innerHTML = '<div class="empty">Cargando…</div>'; await calCargar(); }
+  if (!CAL.d) { el.innerHTML = cargaHtml('Cargando'); await calCargar(); }
   try { if (typeof cargarOC === 'function' && !(REABAST.ordenesCompra || []).length) await cargarOC(); } catch (e) { }
   calPintar();
 }
@@ -20650,7 +20652,7 @@ async function ftmSync() {
 }
 if (!FTM._poll) FTM._poll = setInterval(ftmSync, 15000);
 async function renderFichasMod() {
-  const el = document.getElementById('fichas-mod'); if (!el) return; el.innerHTML = '<div class="empty">Cargando fichas…</div>';
+  const el = document.getElementById('fichas-mod'); if (!el) return; el.innerHTML = cargaHtml('Cargando fichas');
   try { if (typeof cargarOC === 'function' && !(REABAST.ordenesCompra || []).length) await cargarOC(); await ftmCargar(); } catch (e) { el.innerHTML = '<div class="alert">No se pudo cargar la matriz: ' + ftmE(e.message) + '. ¿Existe la tabla ficha_matriz?</div>'; return; }
   ftmPintar();
 }
