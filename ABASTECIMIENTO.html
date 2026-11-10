@@ -6205,6 +6205,24 @@ function reabastRepintarOC(){
   if(!filas.length){ wrap.innerHTML = (REABAST.ordenesCompra||[]).length ? '<div class="empty"><div class="empty-t">No hay órdenes de compra con este filtro</div></div>' : '<div class="empty"><div class="empty-t">Aún no hay órdenes de compra</div>Crea la primera con "+ Nueva OC" o cárgalas con "📥 Cargar OC del Panel de compras".</div>'; return; }
   wrap.innerHTML = ocHtmlInventarioRefs(refsQ) + filas.map(o => reabastOcCardHtml(o, refsSet)).join('');
 }
+
+async function ocSuspender(id){
+  const o = (REABAST.ordenesCompra||[]).find(x=>x.id===id); if(!o) return;
+  if(!(reabastPuedeAprobar() || reabastEsAdmin())){ toast('Solo quien aprueba o un administrador puede suspender órdenes','wa'); return; }
+  const m = prompt('Suspender la OC '+o.numero_oc+'.\nQuedará fuera de reportes, proyecciones de inventario, llegadas y calendario de pagos (se puede reactivar).\n\nMotivo:', o.suspendida_motivo||'');
+  if(m===null) return;
+  const d = {estado_general:'suspendida', suspendida_motivo:m.trim(), suspendida_en:new Date().toISOString(), suspendida_por:(typeof CU!=='undefined' && CU && (CU.nombre||CU.email))||''};
+  try{ await sbReabast.patch('ordenes_compra','id=eq.'+id,d); Object.assign(o,d); toast('OC '+o.numero_oc+' suspendida','ok'); reabastPintar(); }
+  catch(e){ toast('No se pudo suspender: '+e.message,'er'); }
+}
+async function ocReactivar(id){
+  const o = (REABAST.ordenesCompra||[]).find(x=>x.id===id); if(!o) return;
+  if(!(reabastPuedeAprobar() || reabastEsAdmin())){ toast('Solo quien aprueba o un administrador puede reactivar órdenes','wa'); return; }
+  if(!confirm('¿Reactivar la OC '+o.numero_oc+'? Volverá a contar en reportes, proyecciones y pagos.')) return;
+  const d = {estado_general:'activa', suspendida_motivo:null, suspendida_en:null, suspendida_por:null};
+  try{ await sbReabast.patch('ordenes_compra','id=eq.'+id,d); Object.assign(o,d); toast('OC '+o.numero_oc+' reactivada','ok'); reabastPintar(); }
+  catch(e){ toast('No se pudo reactivar: '+e.message,'er'); }
+}
 function reabastOcCardHtml(o, refsSet){
   const etapas = (REABAST.ocEtapas[o.id]||[]).slice().sort((a,b)=>a.orden-b.orden);
   const items = REABAST.ocItems[o.id]||[];
@@ -6225,6 +6243,7 @@ function reabastOcCardHtml(o, refsSet){
       <div style="display:flex;gap:6px;align-items:center;">
         <button class="btn btn-g btn-sm" style="padding:3px 9px;font-size:10.5px;" onclick="event.stopPropagation();reabastVerDocumentoOC('${o.id}')">📄 Descargar</button>
         <button class="btn btn-g btn-sm" style="padding:3px 9px;font-size:10.5px;" onclick="event.stopPropagation();reabastDescargarExcelOC('${o.id}')">📊 Excel</button>
+        ${o.estado_general==='suspendida' ? `<button class="btn btn-gr btn-sm" style="padding:3px 9px;font-size:10.5px;" onclick="event.stopPropagation();ocReactivar('${o.id}')">▶️ Reactivar</button><span class="bdg bp" title="${reabastEsc(o.suspendida_motivo||'')}">⏸ Suspendida</span>` : (['cancelada','completada'].includes(o.estado_general) ? '' : `<button class="btn btn-g btn-sm" style="padding:3px 9px;font-size:10.5px;" title="Sacar esta orden de reportes, proyecciones y pagos sin borrarla" onclick="event.stopPropagation();ocSuspender('${o.id}')">⏸ Suspender</button>`)}
         <span class="bdg ${sem.cls}">${actual?actual.nombre:'—'} · ${sem.lbl}</span>
       </div>
     </div>
@@ -7472,7 +7491,7 @@ const _prodfIso = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'
 function prodfAlarma(o){
   try{
     if(typeof ocIngresada==='function' && ocIngresada(o)) return null;
-    if(['cancelada','completada'].includes(o.estado_general)) return null;
+    if(['cancelada','suspendida','completada'].includes(o.estado_general)) return null;
     const es = REABAST.ocEtapas[o.id]||[], prod = es.find(e=>e.etapa_id==='produccion');
     if(prod && prod.estado==='completada') return null;
     const r = typeof ceDe==='function' ? ceDe(o.numero_oc) : null;
