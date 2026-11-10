@@ -4680,7 +4680,22 @@ function infValorOc(o){
   const trm = (typeof IVS!=='undefined' ? (IVS.trmFijo||Number(o.trm)||IVS.trm||0) : Number(o.trm)||0), fac = (typeof IVS!=='undefined' && Number(IVS.factor))||1.15;
   return {usd, cop: usd*fac*trm};
 }
-function infDatosPlan(){
+// Reparte el valor del TRÁNSITO de Inventarios (mismo cálculo: ivsCalc → unidades pendientes × FOB × factor × TRM) entre los meses de llegada.
+// Una OC que cae en varias filas (grupos del correo / resto) se divide proporcional al CBM, así el total coincide con el tránsito.
+function infAsignarValor(rows){
+  let C = null; try{ C = ivsCalc(); }catch(e){ return rows; }
+  const T = {}; (C.tr||[]).forEach(t=>{ T[ceNum(t.oc)] = {usd:t.usd, cop:t.cop}; });
+  const keys = x => x.ocs ? x.ocs.map(n=>{ const o = infOcPorNombre(n); return o ? ceNum(o.numero_oc) : ceNum(n); }) : [ceNum(x.o.numero_oc)];
+  const peso = {}, filas = rows.map(x=>{ const ks = Array.from(new Set(keys(x))), w = (Number(x.cbm)||0)/(ks.length||1); ks.forEach(k=>{ (peso[k] = peso[k] || []).push({x, w}); }); return {x, ks}; });
+  rows.forEach(x=>{ x.val = {usd:0, cop:0}; });
+  let asig = 0;
+  Object.keys(peso).forEach(k=>{ const t = T[k]; if(!t) return; const L = peso[k], sw = L.reduce((a,p)=>a+p.w,0);
+    L.forEach(p=>{ const fr = sw>0 ? p.w/sw : 1/L.length; p.x.val.usd += t.usd*fr; p.x.val.cop += t.cop*fr; }); asig += t.cop; });
+  INF._reconc = {tot: (C.tr||[]).reduce((a,t)=>a+t.cop,0), asig, usdTot:(C.tr||[]).reduce((a,t)=>a+t.usd,0)};
+  return rows;
+}
+function infDatosPlan(){ return infAsignarValor(infDatosPlan0()); }
+function infDatosPlan0(){
   const d = infDatos(), f = INF;
   if(f.prov || f.q) return d;
   const base = x => String(x||'').replace(/\s*-\s*\d+\s*$/,'').trim();
@@ -4902,6 +4917,7 @@ function infPintar(){
   if(INF.modo==='ing'){ infIngRecientes(b); return; }
   if(INF.modo==='siesa'){ infIngSiesa(b, d); return; }
   if(INF.modo==='ref'){ infRefShell(b, d); return; }
+  if(typeof IVS!=='undefined' && !IVS._cfgInf){ IVS._cfgInf = true; ivsCfg().then(()=>{ try{ infPintar(); }catch(e){} }); }
   const cap = (typeof CBM_CAPAS!=='undefined' ? CBM_CAPAS[2].cap : 68);
   const tot = d.reduce((a,x)=>a+x.cbm,0), sin = d.reduce((a,x)=>a+x.sin,0);
   const meses = {}; d.forEach(x=>{ (meses[x.mes] = meses[x.mes] || []).push(x); });
@@ -4924,7 +4940,7 @@ function infPintar(){
   const kPer = INF.vista==='semana' ? 'semana' : 'mes';
   h += `<div class="card" style="margin-bottom:14px;"><div class="cb"><div style="font-weight:800;font-size:14px;margin-bottom:8px;">🗓️ Resumen: cuántas OC llegan por ${kPer}</div><div class="tw"><table style="font-size:12.5px;"><thead><tr><th>${kPer==='mes'?'Mes':'Semana'}</th><th style="text-align:center;"># OC que llegan</th><th>Órdenes</th><th style="text-align:right;">CBM</th><th style="text-align:right;">≈ 40' HC</th><th style="text-align:right;">Valor US$ (FOB)</th><th style="text-align:right;" title="FOB × factor de importación × TRM, igual que el tránsito de Inventarios">Valor COP</th></tr></thead><tbody>${claves.map(k=>{
     const L = meses[k], cbm = L.reduce((a,x)=>a+x.cbm,0), vU = L.reduce((a,x)=>a+((x.val||{}).usd||0),0), vC = L.reduce((a,x)=>a+((x.val||{}).cop||0),0), hoyK = (kPer==='mes' ? hoyMes : semK)===k;
-    return `<tr style="${hoyK?'background:#f0fdf4;':''}"><td style="white-space:nowrap;font-weight:700;">${nm(k)}${hoyK&&kPer==='mes'?' <span class="arte-mu">(este mes)</span>':''}</td><td style="text-align:center;font-size:16px;font-weight:800;color:var(--bl);">${L.length}</td><td style="font-size:11px;">${L.map(x=>reabastEsc(x.o.numero_oc)).join(', ')}</td><td style="text-align:right;font-weight:700;">${infFmt(cbm)} m³</td><td style="text-align:right;">${k==='sin'?'—':'≈ '+infFmt(cbm/cap,1)}</td><td style="text-align:right;font-weight:700;">US$ ${Math.round(vU).toLocaleString('es-CO')}</td><td style="text-align:right;font-weight:700;">$${infFmt(vC/1e6,0)} M</td></tr>`; }).join('')}<tr style="border-top:2px solid var(--b1);font-weight:800;"><td>Total</td><td style="text-align:center;font-size:16px;">${d.length}</td><td></td><td style="text-align:right;">${infFmt(tot)} m³</td><td style="text-align:right;">≈ ${infFmt(tot/cap,1)}</td><td style="text-align:right;">US$ ${Math.round(d.reduce((a,x)=>a+((x.val||{}).usd||0),0)).toLocaleString('es-CO')}</td><td style="text-align:right;">$${infFmt(d.reduce((a,x)=>a+((x.val||{}).cop||0),0)/1e6,0)} M</td></tr></tbody></table></div><div class="arte-mu" style="font-size:11px;margin-top:6px;">Valor = unidades pendientes × FOB × factor de importación × TRM (${typeof IVS!=='undefined'&&IVS.trmFijo?'TRM $'+Math.round(IVS.trmFijo).toLocaleString('es-CO'):'TRM de cada orden o la última registrada'}, factor ${(typeof IVS!=='undefined'&&Number(IVS.factor))||1.15}), igual que el tránsito de Inventarios. En noviembre, las órdenes del correo de Logística se valoran con lo que el sistema tiene pendiente de cada OC.</div></div></div>`;
+    return `<tr style="${hoyK?'background:#f0fdf4;':''}"><td style="white-space:nowrap;font-weight:700;">${nm(k)}${hoyK&&kPer==='mes'?' <span class="arte-mu">(este mes)</span>':''}</td><td style="text-align:center;font-size:16px;font-weight:800;color:var(--bl);">${L.length}</td><td style="font-size:11px;">${L.map(x=>reabastEsc(x.o.numero_oc)).join(', ')}</td><td style="text-align:right;font-weight:700;">${infFmt(cbm)} m³</td><td style="text-align:right;">${k==='sin'?'—':'≈ '+infFmt(cbm/cap,1)}</td><td style="text-align:right;font-weight:700;">US$ ${Math.round(vU).toLocaleString('es-CO')}</td><td style="text-align:right;font-weight:700;">$${infFmt(vC/1e6,0)} M</td></tr>`; }).join('')}<tr style="border-top:2px solid var(--b1);font-weight:800;"><td>Total</td><td style="text-align:center;font-size:16px;">${d.length}</td><td></td><td style="text-align:right;">${infFmt(tot)} m³</td><td style="text-align:right;">≈ ${infFmt(tot/cap,1)}</td><td style="text-align:right;">US$ ${Math.round(d.reduce((a,x)=>a+((x.val||{}).usd||0),0)).toLocaleString('es-CO')}</td><td style="text-align:right;">$${infFmt(d.reduce((a,x)=>a+((x.val||{}).cop||0),0)/1e6,0)} M</td></tr></tbody></table></div><div class="arte-mu" style="font-size:11px;margin-top:6px;">Valor = unidades pendientes × FOB × factor de importación × TRM (${typeof IVS!=='undefined'&&IVS.trmFijo?'TRM $'+Math.round(IVS.trmFijo).toLocaleString('es-CO'):'TRM de cada orden o la última registrada'}, factor ${(typeof IVS!=='undefined'&&Number(IVS.factor))||1.15}), igual que el tránsito de Inventarios. Cada OC trae el valor que tiene en el módulo de tránsito; si una OC llega en varias fechas, se reparte por CBM.${INF._reconc?` <b>Tránsito en Inventarios: $${infFmt(INF._reconc.tot/1e6,0)} M · repartido en esta tabla: $${infFmt(INF._reconc.asig/1e6,0)} M</b>${INF._reconc.tot-INF._reconc.asig>1e6?' (la diferencia son OC en tránsito que no aparecen en esta lista o quedan fuera de los filtros)':''}.`:''}</div></div></div>`;
   h += infEstadoCard(claves, meses, nm);
   h += claves.map(k=>{
     const L = meses[k], cbm = L.reduce((a,x)=>a+x.cbm,0), ab = !!INF.abierto[k] || !!INF.q;
