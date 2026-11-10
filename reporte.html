@@ -901,6 +901,18 @@ function perFilas() {
 function perAgg(rows, key) {
   const m = {}; rows.forEach(f => { const k = key(f), o = m[k] || (m[k] = { k, n: 0, u: 0, v: 0, docs: new Set() }); o.n++; o.u += f[9]; o.v += f[11]; o.docs.add(f[1]); }); return Object.values(m);
 }
+const RETN = { mora: 'mora', cupo: 'cupo', bloqueo: 'bloqueo', margen: 'margen', anticipo: 'anticipo' };
+function perCausa(f, st) {
+  const ret = String(f[15] || '').split(',').filter(Boolean).map(r => RETN[r] || r), ex = st[f[5]] > 0;
+  if (f[12] === 'A') return { c: 'ANU', t: 'Anulado' + (f[14] ? ' por ' + f[14] : '') + (f[13] ? ' el ' + dmy(f[13]) : '') + (ret.length ? ' · con retención por ' + ret.join('/') : '') };
+  if (f[12] === 'P') return { c: 'PEN', t: 'Pendiente' + (ret.length ? ' · retenido por ' + ret.join('/') : '') + (f[17] ? ' · entrega ' + dmy(f[17]) : '') };
+  if (ret.length) return { c: 'RET', t: 'Retenido por ' + ret.join('/') + ' · cerrado' + (f[13] ? ' el ' + dmy(f[13]) : '') + ' sin facturar el faltante' + (f[16] ? ' (cód. ' + f[16] + ')' : '') };
+  return ex ? { c: 'CER', t: 'Cerrado' + (f[13] ? ' el ' + dmy(f[13]) : '') + ' con faltante, sin retención. Hoy hay stock: no se sabe si lo había ese día' + (f[16] ? ' (cód. ' + f[16] + ')' : '') }
+            : { c: 'INV', t: 'Cerrado' + (f[13] ? ' el ' + dmy(f[13]) : '') + ' con faltante · probable falta de inventario' + (f[16] ? ' (cód. ' + f[16] + ')' : '') };
+}
+const CAUSA_L = { ANU: 'anulada', RET: 'retenida', INV: 'sin inventario', CER: 'cerrada con faltante', PEN: 'pendiente' };
+function perResumen(rows, st) { const c = {}; rows.forEach(f => { const k = perCausa(f, st).c; c[k] = (c[k] || 0) + 1; }); return Object.keys(c).map(k => c[k] + ' ' + CAUSA_L[k]).join(' · '); }
+function perRango(rows) { const ds = rows.map(f => f[0]).filter(Boolean).sort(); return ds.length ? (ds[0] === ds[ds.length - 1] ? dmy(ds[0]) : dmy(ds[0]) + ' → ' + dmy(ds[ds.length - 1])) : ''; }
 function pintarPer() {
   const el = document.getElementById('per'), d = PER.d, st = d.stock || {}, { base, vis } = perFilas();
   const opt = (v, l, s) => '<option value="' + esc(v) + '"' + (s ? ' selected' : '') + '>' + esc(l) + '</option>';
@@ -925,18 +937,18 @@ function pintarPer() {
   if (PER.sub === 'sku') {
     const des = {}; d.filas.forEach(f => des[f[5]] = f[6]);
     const rows = ord(perAgg(vis, f => f[5]));
-    h += '<div class="tw"><table class="sticky"><thead><tr>' + Th('k', 'Referencia') + '<th style="text-align:left">Descripción</th>' + Th('n', 'Líneas') + Th('u', 'Und. no facturadas') + Th('v', 'Valor (sin IVA)') + '<th>Existencia hoy (BA)</th></tr></thead><tbody>'
-      + rows.slice(0, 400).map(x => '<tr><td style="font-weight:600">' + esc(x.k) + '</td><td style="text-align:left;white-space:normal;min-width:200px">' + esc(des[x.k] || '') + '</td><td>' + x.n + '</td><td>' + Math.round(x.u).toLocaleString('es-CO') + '</td><td style="font-weight:700">' + $(x.v) + '</td><td>' + stp(x.k) + '</td></tr>').join('') + '</tbody></table></div>';
+    h += '<div class="tw"><table class="sticky"><thead><tr>' + Th('k', 'Referencia') + '<th style="text-align:left">Descripción</th><th>Fechas de pedido</th>' + Th('n', 'Líneas') + Th('u', 'Und. no facturadas') + Th('v', 'Valor (sin IVA)') + '<th>Existencia hoy (BA)</th><th style="text-align:left">Por qué no se facturó</th></tr></thead><tbody>'
+      + rows.slice(0, 400).map(x => { const fl = vis.filter(f => f[5] === x.k); return '<tr><td style="font-weight:600">' + esc(x.k) + '</td><td style="text-align:left;white-space:normal;min-width:200px">' + esc(des[x.k] || '') + '</td><td style="white-space:nowrap">' + perRango(fl) + '</td><td>' + x.n + '</td><td>' + Math.round(x.u).toLocaleString('es-CO') + '</td><td style="font-weight:700">' + $(x.v) + '</td><td>' + stp(x.k) + '</td><td style="text-align:left;white-space:normal;min-width:180px">' + esc(perResumen(fl, st)) + '</td></tr>'; }).join('') + '</tbody></table></div>';
   } else if (PER.sub === 'ase' || PER.sub === 'cli') {
     const rows = ord(perAgg(vis, f => PER.sub === 'ase' ? f[3] : f[2])), lbl = PER.sub === 'ase' ? 'Asesor' : 'Cliente';
     h += '<div class="tw"><table class="sticky"><thead><tr>' + Th('k', lbl) + Th('docs', 'Pedidos') + Th('n', 'Líneas') + Th('u', 'Und. no facturadas') + Th('v', 'Valor (sin IVA)') + '</tr></thead><tbody>'
       + rows.slice(0, 400).map(x => '<tr><td style="font-weight:600;white-space:normal;min-width:180px">' + esc(x.k) + '</td><td>' + x.docs.size + '</td><td>' + x.n + '</td><td>' + Math.round(x.u).toLocaleString('es-CO') + '</td><td style="font-weight:700">' + $(x.v) + '</td></tr>').join('') + '</tbody></table></div>';
   } else {
     const rows = vis.slice().sort((a, b) => b[11] - a[11]);
-    h += '<div class="tw"><table><thead><tr><th>Fecha</th><th>Pedido</th><th>Cliente</th><th>Asesor</th><th>Referencia</th><th style="text-align:left">Descripción</th><th>Pedida</th><th>Facturada</th><th>Faltante</th><th>Valor</th><th>Estado</th><th>Existencia hoy</th></tr></thead><tbody>'
-      + rows.slice(0, 500).map(f => '<tr><td>' + dmy(f[0]) + '</td><td>' + esc(f[1]) + '</td><td style="text-align:left">' + esc(f[2]) + '</td><td style="text-align:left">' + esc(f[3]) + '</td><td>' + esc(f[5]) + '</td><td style="text-align:left;white-space:normal;min-width:180px">' + esc(f[6]) + '</td><td>' + Math.round(f[7]) + '</td><td>' + Math.round(f[8]) + '</td><td style="font-weight:700">' + Math.round(f[9]) + '</td><td style="font-weight:700">' + $(f[11]) + '</td><td><span class="pill2 ' + f[12].toLowerCase() + '">' + PT[f[12]] + '</span></td><td>' + stp(f[5]) + '</td></tr>').join('') + '</tbody></table></div>' + (rows.length > 500 ? '<div class="hint">Se muestran las 500 de mayor valor; el Excel trae todas.</div>' : '');
+    h += '<div class="tw"><table><thead><tr><th>Fecha</th><th>Pedido</th><th>Cliente</th><th>Asesor</th><th>Referencia</th><th style="text-align:left">Descripción</th><th>Pedida</th><th>Facturada</th><th>Faltante</th><th>Valor</th><th>Estado</th><th>Existencia hoy</th><th style="text-align:left">Por qué no se facturó</th></tr></thead><tbody>'
+      + rows.slice(0, 500).map(f => '<tr><td>' + dmy(f[0]) + '</td><td>' + esc(f[1]) + '</td><td style="text-align:left">' + esc(f[2]) + '</td><td style="text-align:left">' + esc(f[3]) + '</td><td>' + esc(f[5]) + '</td><td style="text-align:left;white-space:normal;min-width:180px">' + esc(f[6]) + '</td><td>' + Math.round(f[7]) + '</td><td>' + Math.round(f[8]) + '</td><td style="font-weight:700">' + Math.round(f[9]) + '</td><td style="font-weight:700">' + $(f[11]) + '</td><td><span class="pill2 ' + f[12].toLowerCase() + '">' + PT[f[12]] + '</span></td><td>' + stp(f[5]) + '</td><td style="text-align:left;white-space:normal;min-width:260px">' + esc(perCausa(f, st).t) + '</td></tr>').join('') + '</tbody></table></div>' + (rows.length > 500 ? '<div class="hint">Se muestran las 500 de mayor valor; el Excel trae todas.</div>' : '');
   }
-  h += '<div style="padding:8px 14px;font-size:11px;color:#64748b;line-height:1.5">Faltante = lo pedido menos lo facturado en pedidos de Siesa ya cerrados, más los pedidos anulados. Valor al precio del pedido, sin IVA. Siesa no guarda el motivo: «Sin existencia» compara contra el inventario disponible de hoy, no el de la fecha del pedido. Datos de Siesa con hasta 30 min de retraso (' + fh(d.generado) + ').</div></div>';
+  h += '<div style="padding:8px 14px;font-size:11px;color:#64748b;line-height:1.5">Faltante = lo pedido menos lo facturado en pedidos de Siesa ya cerrados, más los pedidos anulados. Valor al precio del pedido, sin IVA. Siesa no guarda un motivo escrito: se deduce de la anulación (usuario y fecha), de las retenciones del pedido (margen, cupo, mora…) y, si no hay ninguna, de la existencia de hoy, que no es la de la fecha del pedido. Datos de Siesa con hasta 30 min de retraso (' + fh(d.generado) + ').</div></div>';
   el.innerHTML = h;
 }
 async function excelPerdidas() {
@@ -948,10 +960,10 @@ async function excelPerdidas() {
     const hdr = (ws, r) => { ws.getRow(r).eachCell(c => Object.assign(c, HD)); ws.getRow(r).height = 24; };
     const rows = d.filas.filter(f => PER.ase === 'TODOS' || f[3] === PER.ase).sort((a, b) => b[11] - a[11]);
     const wr = wb.addWorksheet('Resumen', { properties: { tabColor: { argb: 'FFF5C518' } } }), wk = wb.addWorksheet('Referencias'), wa = wb.addWorksheet('Asesores'), wc = wb.addWorksheet('Clientes'), wd = wb.addWorksheet('Detalle');
-    wd.addRow(['Fecha', 'Pedido', 'Cliente', 'Asesor', 'Canal', 'Referencia', 'Descripción', 'Pedida', 'Facturada', 'Faltante', 'Precio unitario', 'Valor sin IVA', 'Estado', 'Existencia hoy (BA)']); hdr(wd, 1);
-    rows.forEach((f, i) => wd.addRow([new Date(f[0] + 'T12:00:00Z'), f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], { formula: 'J' + (i + 2) + '*K' + (i + 2) }, PT[f[12]], st[f[5]] || 0]));
-    const N = rows.length + 1; wd.getColumn(1).numFmt = 'dd/mm/yyyy'; [11, 12].forEach(c => wd.getColumn(c).numFmt = money); [8, 9, 10, 14].forEach(c => wd.getColumn(c).numFmt = num0);
-    [11, 12, 36, 32, 18, 11, 42, 9, 10, 9, 14, 15, 20, 14].forEach((w, i) => wd.getColumn(i + 1).width = w); wd.views = [{ state: 'frozen', ySplit: 1 }]; wd.autoFilter = 'A1:N' + N;
+    wd.addRow(['Fecha', 'Pedido', 'Cliente', 'Asesor', 'Canal', 'Referencia', 'Descripción', 'Pedida', 'Facturada', 'Faltante', 'Precio unitario', 'Valor sin IVA', 'Estado', 'Existencia hoy (BA)', 'Fecha cierre/anulación', 'Usuario anuló', 'Por qué no se facturó']); hdr(wd, 1);
+    rows.forEach((f, i) => wd.addRow([new Date(f[0] + 'T12:00:00Z'), f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], { formula: 'J' + (i + 2) + '*K' + (i + 2) }, PT[f[12]], st[f[5]] || 0, f[13] ? new Date(f[13] + 'T12:00:00Z') : '', f[14] || '', perCausa(f, st).t]));
+    const N = rows.length + 1; wd.getColumn(1).numFmt = 'dd/mm/yyyy'; wd.getColumn(15).numFmt = 'dd/mm/yyyy'; [11, 12].forEach(c => wd.getColumn(c).numFmt = money); [8, 9, 10, 14].forEach(c => wd.getColumn(c).numFmt = num0);
+    [11, 12, 36, 32, 18, 11, 42, 9, 10, 9, 14, 15, 20, 14, 14, 18, 70].forEach((w, i) => wd.getColumn(i + 1).width = w); wd.views = [{ state: 'frozen', ySplit: 1 }]; wd.autoFilter = 'A1:Q' + N;
     const R = c => 'Detalle!$' + c + '$2:$' + c + '$' + N, NP = '"<>Pendiente"';
     const agg = (ws, titulo, keyCol, keys, extra) => {
       ws.addRow([titulo, 'Líneas', 'Und. no facturadas', 'Valor sin IVA', '% del total', ...extra.map(e => e[0])]); hdr(ws, 1);
