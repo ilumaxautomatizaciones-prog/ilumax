@@ -21005,7 +21005,7 @@ function ocParcAbrir(ocId){
   m.innerHTML = `<div style="background:var(--w,#fff);color:var(--tx);border-radius:12px;max-width:760px;width:100%;max-height:92vh;overflow:auto;padding:18px;box-shadow:0 20px 50px rgba(0,0,0,.35);">
     <div style="font-weight:800;font-size:15px;">✂️ Parcializar orden · mover cantidades con otra fecha de producción</div>
     <div class="arte-mu" style="margin:2px 0 10px;">${reabastEsc(oc.numero_oc)} · ${reabastEsc(oc.proveedor||'')} · fecha actual de producción: <b>${f0||'—'}</b></div>
-    <div class="arte-mu" style="font-size:11px;margin-bottom:8px;">En cada referencia escribe cuántas unidades se mueven y su nueva fecha de fin de producción. Lo que no muevas se queda en esta orden con su fecha. Lo movido se separa en una orden parcial nueva (${reabastEsc(ocFamiliaNum(oc))}-n), una por cada fecha distinta, con su propia producción, embarque y pagos. Si mueves todas las unidades de una referencia, se pasa completa.</div>
+    <div class="arte-mu" style="font-size:11px;margin-bottom:8px;">En cada referencia escribe cuántas unidades se mueven y su nueva fecha de fin de producción. Lo que no muevas se queda en esta orden con su fecha. Lo movido se separa en una orden parcial nueva (${reabastEsc(ocFamiliaNum(oc))}-n), una por cada fecha distinta (si ya existe una parcial con esa misma fecha, se agrega a ella), con su propia producción, embarque y pagos. Si mueves todas las unidades de una referencia, se pasa completa.</div>
     <div class="tw"><table style="width:100%;font-size:12px;border-collapse:collapse;"><thead><tr style="text-align:left;"><th>Referencia</th><th>Descripción</th><th style="text-align:right">Cant.</th><th style="text-align:center">Mover</th><th>Nueva fecha de fin</th></tr></thead><tbody>
     ${items.map((it,i)=>`<tr style="border-top:1px solid var(--b1);"><td style="padding:5px 4px;"><b>${reabastEsc(it.referencia)}</b></td><td style="max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${reabastEsc(it.descripcion||'')}</td><td style="text-align:right;">${reabastFmtN(it.cantidad)}</td><td style="white-space:nowrap;text-align:center;"><input type="number" min="0" max="${Number(it.cantidad)}" step="any" class="inp parc-q" data-i="${i}" value="" placeholder="0" style="padding:4px 6px;width:84px;text-align:right;"> <a href="#" style="font-size:10.5px;" onclick="var q=this.parentNode.querySelector('.parc-q');q.value=${Number(it.cantidad)};q.dispatchEvent(new Event('input'));return false">todo</a></td><td><input type="date" class="inp parc-f" data-i="${i}" value="" style="padding:4px 6px;"></td></tr>`).join('')}
     </tbody></table></div>
@@ -21015,6 +21015,11 @@ function ocParcAbrir(ocId){
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;"><button class="btn btn-sm" onclick="document.getElementById('parc-modal').remove()">Cancelar</button><button class="btn btn-bl btn-sm" id="parc-ok" onclick="ocParcGuardar('${ocId}')">Parcializar</button></div></div>`;
   document.body.appendChild(m); m._items = items; m._f0 = f0;
   m.querySelectorAll('.parc-q,.parc-f').forEach(x=>x.addEventListener('input', ()=>ocParcResumen(ocId)));
+}
+// ¿ya existe una orden parcial de esta familia (OCI162-n) con la misma fecha de fin de producción? Entonces lo movido se agrega a ese grupo
+function ocParcRamaMisma(oc, f){
+  const fam = ocFamiliaNum(oc);
+  return (REABAST.ordenesCompra||[]).find(x=>x.id!==oc.id && ocFamiliaNum(x)===fam && /-\d+$/.test(String(x.numero_oc||'')) && x.estado_general!=='cancelada' && PRODF.datos[x.id] && String(PRODF.datos[x.id].nueva||'').slice(0,10)===f) || null;
 }
 // lee el formulario: {g:{fecha:[{it,mv}]}, err:'...'}
 function ocParcGrupos(){
@@ -21028,7 +21033,8 @@ function ocParcGrupos(){
 function ocParcResumen(ocId){
   const r = ocParcGrupos(), el = document.getElementById('parc-res'); if(!r || !el) return; const ks = Object.keys(r.g).sort();
   if(r.err){ el.innerHTML = '<span style="color:#b91c1c;">'+reabastEsc(r.err)+'</span>'; return; }
-  el.innerHTML = !ks.length ? 'Escribe las cantidades que vas a mover y su fecha.' : '<b>Resultado:</b> ' + ks.map(k=>'Nueva orden parcial con fin de producción '+k+': '+r.g[k].map(x=>reabastEsc(x.it.referencia)+' ('+reabastFmtN(x.mv)+' u.)').join(', ')).join(' · ') + ' · la original conserva el resto.';
+  const ocR = (REABAST.ordenesCompra||[]).find(o=>o.id===ocId);
+  el.innerHTML = !ks.length ? 'Escribe las cantidades que vas a mover y su fecha.' : '<b>Resultado:</b> ' + ks.map(k=>{ const ex = ocR && ocParcRamaMisma(ocR,k); return (ex ? 'Se agrega a la parcial existente '+reabastEsc(ex.numero_oc)+' (misma fecha de fin '+k+'): ' : 'Nueva orden parcial con fin de producción '+k+': ')+r.g[k].map(x=>reabastEsc(x.it.referencia)+' ('+reabastFmtN(x.mv)+' u.)').join(', '); }).join(' · ') + ' · la original conserva el resto.';
 }
 async function ocParcGuardar(ocId){
   const oc = (REABAST.ordenesCompra||[]).find(o=>o.id===ocId), r = ocParcGrupos(); if(!oc || !r) return;
@@ -21038,13 +21044,23 @@ async function ocParcGuardar(ocId){
     const fam = ocFamiliaNum(oc), hay = (REABAST.ordenesCompra||[]).filter(x=>ocFamiliaNum(x)===fam && /-\d+$/.test(String(x.numero_oc||''))).map(x=>Number(String(x.numero_oc).match(/-(\d+)$/)[1])||0);
     let n = Math.max(0, ...hay), conEspacio = /\s-\d+$/.test(oc.numero_oc||''); const creadas = [], log = [];
     const etapasBase = REABAST.ocEtapas[ocId]||[];
-    for(const f of ks){ n++;
-      const num = fam+(conEspacio?' -':'-')+n, mov = r.g[f];
-      const filas = await sbReabast.post('ordenes_compra', [{ numero_oc:num, proveedor:oc.proveedor, creado_por:quien, creado_en:new Date().toISOString(), etapa_actual_orden:oc.etapa_actual_orden||1, estado_general:'activa', factor_landeo:oc.factor_landeo, incoterm:oc.incoterm, terminos_pago:oc.terminos_pago, deposito_pct:oc.deposito_pct, fecha_orden:oc.fecha_orden, lote:oc.lote||null }]);
-      const rama = filas[0];
-      if(etapasBase.length){ const cp = await sbReabast.post('oc_etapas', etapasBase.map(e=>({ oc_id:rama.id, etapa_id:e.etapa_id, nombre:e.nombre, orden:e.orden, dias_esperado:e.dias_esperado, estado:e.estado, fecha_inicio:e.fecha_inicio, fecha_fin:e.fecha_fin, dias_reales:e.dias_reales, completado_por:e.completado_por, comentario_extra:e.comentario_extra }))); REABAST.ocEtapas[rama.id] = (cp||[]).length ? cp : etapasBase.map(e=>({...e, id:undefined, oc_id:rama.id})); }
-      REABAST.ocItems[rama.id] = [];
+    for(const f of ks){
+      const mov = r.g[f], ex = ocParcRamaMisma(oc, f); let num;
+      if(!ex){ n++; num = fam+(conEspacio?' -':'-')+n; }
+      const filas = ex ? [ex] : await sbReabast.post('ordenes_compra', [{ numero_oc:num, proveedor:oc.proveedor, creado_por:quien, creado_en:new Date().toISOString(), etapa_actual_orden:oc.etapa_actual_orden||1, estado_general:'activa', factor_landeo:oc.factor_landeo, incoterm:oc.incoterm, terminos_pago:oc.terminos_pago, deposito_pct:oc.deposito_pct, fecha_orden:oc.fecha_orden, lote:oc.lote||null }]);
+      const rama = filas[0]; if(ex) num = ex.numero_oc;
+      if(etapasBase.length && !ex){ const cp = await sbReabast.post('oc_etapas', etapasBase.map(e=>({ oc_id:rama.id, etapa_id:e.etapa_id, nombre:e.nombre, orden:e.orden, dias_esperado:e.dias_esperado, estado:e.estado, fecha_inicio:e.fecha_inicio, fecha_fin:e.fecha_fin, dias_reales:e.dias_reales, completado_por:e.completado_por, comentario_extra:e.comentario_extra }))); REABAST.ocEtapas[rama.id] = (cp||[]).length ? cp : etapasBase.map(e=>({...e, id:undefined, oc_id:rama.id})); }
+      if(!ex) REABAST.ocItems[rama.id] = []; else REABAST.ocItems[rama.id] = REABAST.ocItems[rama.id] || [];
       for(const {it, mv} of mov){
+        const c0x = Number(it.cantidad)||0, dupIt = ex ? REABAST.ocItems[rama.id].find(x=>ceRefKey(x.referencia)===ceRefKey(it.referencia)) : null;
+        if(dupIt){   // el grupo ya tiene esa referencia: se suma la cantidad en vez de repetir la fila
+          const o3 = (dupIt.observacion ? dupIt.observacion+' · ' : '')+'+'+reabastFmtN(mv)+' u. parcializadas de '+oc.numero_oc+(nota?' · '+nota:'');
+          await sbReabast.patch('oc_items','id=eq.'+dupIt.id, {cantidad:(Number(dupIt.cantidad)||0)+mv, observacion:o3}); dupIt.cantidad = (Number(dupIt.cantidad)||0)+mv; dupIt.observacion = o3;
+          if(mv>=c0x){ await sbReabast.delete('oc_items','id=eq.'+it.id); REABAST.ocItems[ocId] = (REABAST.ocItems[ocId]||[]).filter(x=>x.id!==it.id); }
+          else{ const oo3 = (it.observacion ? it.observacion+' · ' : '')+'Se movieron '+reabastFmtN(mv)+' u. a '+num+' (fin '+f+')'; await sbReabast.patch('oc_items','id=eq.'+it.id, {cantidad:c0x-mv, observacion:oo3}); it.cantidad = c0x-mv; it.observacion = oo3; }
+          log.push({ oc_origen_id:oc.id, oc_origen:oc.numero_oc, oc_destino_id:rama.id, oc_destino:num, referencia:it.referencia, descripcion:it.descripcion||null, cant_movida:mv, cant_origen_antes:c0x, fecha_fin:f, motivo:nota||null, por:quien });
+          continue;
+        }
         const c0 = Number(it.cantidad)||0, obs = 'Parcializada de '+oc.numero_oc+' ('+reabastFmtN(mv)+' de '+reabastFmtN(c0)+' u.) por fecha de fin de producción distinta ('+f+')'+(nota?' · '+nota:'');
         if(mv>=c0){ const o2 = it.observacion ? it.observacion+' · '+obs : obs; await sbReabast.patch('oc_items','id=eq.'+it.id, {oc_id:rama.id, observacion:o2}); it.oc_id = rama.id; it.observacion = o2; REABAST.ocItems[ocId] = (REABAST.ocItems[ocId]||[]).filter(x=>x.id!==it.id); REABAST.ocItems[rama.id].push(it); }
         else{
@@ -21053,8 +21069,8 @@ async function ocParcGuardar(ocId){
         }
         log.push({ oc_origen_id:oc.id, oc_origen:oc.numero_oc, oc_destino_id:rama.id, oc_destino:num, referencia:it.referencia, descripcion:it.descripcion||null, cant_movida:mv, cant_origen_antes:c0, fecha_fin:f, motivo:nota||null, por:quien });
       }
-      REABAST.ordenesCompra.push(rama); creadas.push(rama.numero_oc);
-      PRODF.datos[rama.id] = {nueva:f, motivo:'Parcialización de la orden', nota, quien, t:new Date().toISOString(), hist:[{de:null, a:f, motivo:'Parcialización de la orden', nota, quien, t:new Date().toISOString()}]};
+      if(!ex) REABAST.ordenesCompra.push(rama); creadas.push(rama.numero_oc+(ex?' (grupo existente)':''));
+      if(!ex) PRODF.datos[rama.id] = {nueva:f, motivo:'Parcialización de la orden', nota, quien, t:new Date().toISOString(), hist:[{de:null, a:f, motivo:'Parcialización de la orden', nota, quien, t:new Date().toISOString()}]};
     }
     try{ const ins = await sbReabast.post('oc_parciales', log); PARC.rows = (ins||[]).concat(PARC.rows||[]); }catch(e){ console.warn('oc_parciales', e); toast('Se separó la orden, pero no se pudo guardar el seguimiento: '+e.message,'wa'); }
     await prodfGuardar();
