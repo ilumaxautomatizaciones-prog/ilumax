@@ -5215,25 +5215,224 @@ function infPivPintar(){
   <div style="font-size:10.5px;color:var(--mu);margin-top:6px;">Clic en un encabezado para ordenar · clic en una fila para ver las OC de esa referencia · las fechas son las del tablero de seguimiento y se recalculan solas cuando cambian.</div>`;
   box.innerHTML = h;
 }
-function infPivExcel(){
-  if(typeof XLSX==='undefined'){ if(typeof toast==='function') toast('SheetJS no está cargado','er'); return; }
-  const rows = infRefFiltrar(infItemsFilas(infDatos()));
-  const per = [...new Set(rows.map(r=>r.per))].sort((a,c)=> a==='sin'?1 : c==='sin'?-1 : a.localeCompare(c));
-  const val = r => INFP.met==='cbm' ? r.cbm : INFP.met==='fob' ? r.fob : r.qty;
-  const keyOf = r => INFP.grp==='prov' ? r.prov : INFP.grp==='cat' ? r.cat : INFP.grp==='oc' ? r.oc : r.ref;
-  const G = {}; rows.forEach(r=>{ const k = keyOf(r); const g = G[k] = G[k] || {[{ref:'Referencia',prov:'Proveedor',cat:'Categoría',oc:'OC'}[INFP.grp]]:k, Total:0}; g[r.per] = Math.round(((g[r.per]||0)+val(r))*100)/100; g.Total = Math.round((g.Total+val(r))*100)/100; });
-  const det = rows.map(r=>({Referencia:r.ref, Descripción:r.desc, Categoría:r.cat, OC:r.oc, Proveedor:r.prov, Llegada:r.iso, Periodo:r.per, Cantidad:r.qty, 'CBM (m³)':Math.round(r.cbm*100)/100, 'FOB US$':Math.round(r.fob*100)/100, Etapa:r.etapa}));
-  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.values(G)), 'Tabla dinámica'); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(det), 'Detalle por ítem');
-  XLSX.writeFile(wb, 'Llegadas_por_referencia_'+new Date().toISOString().slice(0,10)+'.xlsx');
+const XLX = (function(){
+/* ===== Excel avanzado (ExcelJS + gráficos nativos inyectados con JSZip) ===== */
+const XL_PAL = ['2563EB','F59E0B','16A34A','DC2626','7C3AED','0891B2','DB2777','65A30D','EA580C','475569'];
+function xlEsc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function xlChartXml(s){
+  const tipo = s.type, horiz = tipo === 'bar', pie = tipo === 'pie', line = tipo === 'line';
+  const tx = (sz, b, col) => `<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${sz}" b="${b?1:0}"><a:solidFill><a:srgbClr val="${col||'475569'}"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="es-CO"/></a:p></c:txPr>`;
+  const lbl = (fmt, pos) => `<c:dLbls><c:numFmt formatCode="${xlEsc(fmt||'#,##0')}" sourceLinked="0"/><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>${tx(800,false,'334155')}${pos?`<c:dLblPos val="${pos}"/>`:''}<c:showLegendKey val="0"/><c:showVal val="${pie?0:1}"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="${pie?1:0}"/><c:showBubbleSize val="0"/>${pie?'<c:showLeaderLines val="1"/>':''}</c:dLbls>`;
+  const ser = s.series.map((x, i) => {
+    const col = x.color || XL_PAL[i % XL_PAL.length];
+    const name = `<c:tx>${x.nameRef ? `<c:strRef><c:f>${xlEsc(x.nameRef)}</c:f></c:strRef>` : `<c:v>${xlEsc(x.name || 'Serie ' + (i + 1))}</c:v>`}</c:tx>`;
+    const cat = `<c:cat><c:strRef><c:f>${xlEsc(s.cat)}</c:f></c:strRef></c:cat>`, val = `<c:val><c:numRef><c:f>${xlEsc(x.val)}</c:f></c:numRef></c:val>`;
+    if (pie) { const n = s.nPts || 10; const dpt = Array.from({ length: n }, (_, k) => `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="${XL_PAL[k % XL_PAL.length]}"/></a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`).join('');
+      return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${name}${dpt}${s.labels ? lbl(s.fmt, 'bestFit') : ''}${cat}${val}</c:ser>`; }
+    if (line) return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${name}<c:spPr><a:ln w="31750" cap="rnd"><a:solidFill><a:srgbClr val="${col}"/></a:solidFill><a:round/></a:ln></c:spPr><c:marker><c:symbol val="circle"/><c:size val="6"/><c:spPr><a:solidFill><a:srgbClr val="${col}"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:marker>${s.labels ? lbl(s.fmt, 't') : ''}${cat}${val}<c:smooth val="0"/></c:ser>`;
+    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${name}<c:spPr><a:solidFill><a:srgbClr val="${col}"/></a:solidFill></c:spPr><c:invertIfNegative val="0"/>${s.labels ? lbl(s.fmt, 'outEnd') : ''}${cat}${val}</c:ser>`;
+  }).join('');
+  let plot;
+  if (pie) plot = `<c:pieChart><c:varyColors val="1"/>${ser}<c:firstSliceAng val="0"/></c:pieChart>`;
+  else {
+    const grp = line ? `<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>${ser}<c:marker val="1"/><c:axId val="111"/><c:axId val="222"/></c:lineChart>`
+      : `<c:barChart><c:barDir val="${horiz ? 'bar' : 'col'}"/><c:grouping val="${s.stacked ? 'stacked' : 'clustered'}"/><c:varyColors val="0"/>${ser}<c:gapWidth val="${s.gap || 60}"/>${s.stacked ? '<c:overlap val="100"/>' : ''}<c:axId val="111"/><c:axId val="222"/></c:barChart>`;
+    const ln = '<c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="CBD5E1"/></a:solidFill></a:ln></c:spPr>';
+    plot = grp + `<c:catAx><c:axId val="111"/><c:scaling><c:orientation val="${horiz ? 'maxMin' : 'minMax'}"/></c:scaling><c:delete val="0"/><c:axPos val="${horiz ? 'l' : 'b'}"/><c:numFmt formatCode="General" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>${ln}${tx(900,false)}<c:crossAx val="222"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>`
+      + `<c:valAx><c:axId val="222"/><c:scaling><c:orientation val="minMax"/><c:min val="0"/></c:scaling><c:delete val="0"/><c:axPos val="${horiz ? 't' : 'l'}"/><c:majorGridlines><c:spPr><a:ln w="6350"><a:solidFill><a:srgbClr val="E2E8F0"/></a:solidFill></a:ln></c:spPr></c:majorGridlines><c:numFmt formatCode="${xlEsc(s.fmt || '#,##0')}" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr>${tx(900,false)}<c:crossAx val="111"/><c:crosses val="${horiz ? 'max' : 'autoZero'}"/><c:crossBetween val="between"/></c:valAx>`;
+  }
+  const legend = (pie || s.series.length > 1) ? `<c:legend><c:legendPos val="${pie ? 'r' : 'b'}"/><c:overlay val="0"/>${tx(900,false)}</c:legend>` : '';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:roundedCorners val="0"/><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1200" b="1"/></a:pPr><a:r><a:rPr lang="es-CO" sz="1200" b="1"><a:solidFill><a:srgbClr val="1E293B"/></a:solidFill></a:rPr><a:t>${xlEsc(s.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/><c:plotArea><c:layout/>${plot}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="E2E8F0"/></a:solidFill></a:ln></c:spPr></c:chartSpace>`;
 }
-function infExcel(){
-  if(typeof XLSX==='undefined'){ if(typeof toast==='function') toast('SheetJS no está cargado','er'); return; }
-  const rows = infDatosPlan().map(x=>({OC:x.o.numero_oc, Proveedor:x.o.proveedor||'', 'Llegada estimada':x.iso, [INF.vista==='semana'?'Semana (lunes)':'Mes']:x.mes, Etapa:x.etapa, Ítems:x.nItems, 'CBM (m³)':Math.round(x.cbm*100)/100, 'Ítems sin CBM':x.sin, Contenedor:(x.emb&&x.emb.contenedor)||(x.cbm>0?cbmContenedores(x.cbm).txt:'')}));
-  const wb = XLSX.utils.book_new(); const rs = {}; rows.forEach(r=>{ const k = r[INF.vista==='semana'?'Semana (lunes)':'Mes']; const q = rs[k] = rs[k] || {Periodo:k, 'N° OC':0, 'CBM (m³)':0, Órdenes:[]}; q['N° OC']++; q['CBM (m³)'] = Math.round((q['CBM (m³)']+r['CBM (m³)'])*100)/100; q.Órdenes.push(r.OC); });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.values(rs).map(q=>({...q, Órdenes:q.Órdenes.join(', ')}))), 'Resumen');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'CBM por llegar');
-  XLSX.writeFile(wb, 'CBM_por_llegar_'+new Date().toISOString().slice(0,10)+'.xlsx');
+// Inserta gráficos nativos de Excel en un .xlsx ya generado. specs: [{sheet,type,title,cat,series:[{name|nameRef,val,color}],from:{c,r},to:{c,r},fmt,labels,stacked}]
+async function xlInyectarGraficos(JSZ, buf, specs) {
+  const zip = await JSZ.loadAsync(buf), rd = p => zip.file(p).async('string');
+  const wbX = await rd('xl/workbook.xml'), relX = await rd('xl/_rels/workbook.xml.rels'), ct0 = await rd('[Content_Types].xml');
+  const sheetPath = {}; [...wbX.matchAll(/<sheet\b[^>]*?name="([^"]+)"[^>]*?r:id="([^"]+)"[^>]*?\/?>/g)].forEach(m => { const nm = m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'"); const t = (relX.match(new RegExp('<Relationship\\b[^>]*?Id="' + m[2] + '"[^>]*?Target="([^"]+)"')) || relX.match(new RegExp('<Relationship\\b[^>]*?Target="([^"]+)"[^>]*?Id="' + m[2] + '"')) || [])[1]; if (t) sheetPath[nm] = 'xl/' + t.replace(/^\/?(xl\/)?/, ''); });
+  let ct = ct0, nChart = 0, nDraw = 0; const por = {}; specs.forEach(s => (por[s.sheet] = por[s.sheet] || []).push(s));
+  for (const nm of Object.keys(por)) {
+    const sp = sheetPath[nm]; if (!sp) continue; nDraw++; const dn = nDraw; let anchors = '', drel = '';
+    por[nm].forEach((s, k) => {
+      nChart++; zip.file('xl/charts/chart' + nChart + '.xml', xlChartXml(s));
+      ct = ct.replace('</Types>', `<Override PartName="/xl/charts/chart${nChart}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>`);
+      drel += `<Relationship Id="rId${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart${nChart}.xml"/>`;
+      anchors += `<xdr:twoCellAnchor><xdr:from><xdr:col>${s.from.c}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${s.from.r}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>${s.to.c}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${s.to.r}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${k + 2}" name="Gráfico ${k + 1}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId${k + 1}"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>`;
+    });
+    zip.file('xl/drawings/drawing' + dn + '.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${anchors}</xdr:wsDr>`);
+    zip.file('xl/drawings/_rels/drawing' + dn + '.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${drel}</Relationships>`);
+    ct = ct.replace('</Types>', `<Override PartName="/xl/drawings/drawing${dn}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`);
+    const rp = sp.replace('worksheets/', 'worksheets/_rels/') + '.rels', rid = 'rIdDr' + dn; let rx = zip.file(rp) ? await rd(rp) : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+    rx = rx.replace('</Relationships>', `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${dn}.xml"/></Relationships>`); zip.file(rp, rx);
+    let sx = await rd(sp); if (!/xmlns:r=/.test(sx)) sx = sx.replace('<worksheet ', '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ');
+    const tag = `<drawing r:id="${rid}"/>`; sx = /<tableParts/.test(sx) ? sx.replace('<tableParts', tag + '<tableParts') : sx.replace('</worksheet>', tag + '</worksheet>'); zip.file(sp, sx);
+  }
+  zip.file('[Content_Types].xml', ct);
+  return zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
 }
+
+/* ===== Libros: Embarques por referencia / por orden ===== */
+const XL_NAVY='FF1E293B', XL_BLUE='FF2563EB', XL_LINE='FFE2E8F0', XL_INPUT='FFFEF3C7';
+const xlFill = c => ({ type:'pattern', pattern:'solid', fgColor:{ argb:c } });
+const xlBorde = { top:{style:'thin',color:{argb:XL_LINE}}, bottom:{style:'thin',color:{argb:XL_LINE}}, left:{style:'thin',color:{argb:XL_LINE}}, right:{style:'thin',color:{argb:XL_LINE}} };
+function xlCol(n){ let s=''; while(n>0){ const m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26); } return s; }
+function xlBarra(ws,row,c1,c2,txt){ for(let c=c1;c<=c2;c++){ const k=ws.getCell(row,c); k.fill=xlFill(XL_NAVY); k.font={bold:true,color:{argb:'FFFFFFFF'},size:11}; } ws.getCell(row,c1).value=txt; }
+function xlEnc(ws,row,c1,t){ t.forEach((x,i)=>{ const k=ws.getCell(row,c1+i); k.value=x; k.fill=xlFill('FFE2E8F0'); k.font={bold:true,size:10,color:{argb:'FF1E293B'}}; k.alignment={horizontal:i===0?'left':'right',vertical:'middle',wrapText:true}; k.border=xlBorde; }); ws.getRow(row).height=30; }
+function xlTile(ws,row,col,label,f,fmt,res){ const l=ws.getCell(row,col), v=ws.getCell(row+1,col); l.value=label; l.font={size:9,color:{argb:'FF64748B'}}; l.border={top:xlBorde.top,left:xlBorde.left,right:xlBorde.right}; l.alignment={horizontal:'left',indent:1};
+  v.value={formula:f,result:res}; v.numFmt=fmt; v.font={bold:true,size:15,color:{argb:'FF1D4ED8'}}; v.border={bottom:xlBorde.bottom,left:xlBorde.left,right:xlBorde.right}; v.alignment={horizontal:'left',indent:1}; ws.getRow(row+1).height=26; }
+const xlSum=(a,f)=>a.reduce((s,x)=>s+(Number(f(x))||0),0), r2=n=>Math.round(n*100)/100;
+const xlEtapaCol = e => /tr[aá]nsito/i.test(e||'')?'FFEFF6FF':/nacionaliz/i.test(e||'')?'FFFEF3C7':/producci/i.test(e||'')?'FFF0FDF4':null;
+const xlPers = rows => [...new Set(rows.map(r=>r.per))].sort((a,b)=>a==='Sin fecha'?1:b==='Sin fecha'?-1:a.localeCompare(b));
+const xlFmtHoy = d => d.toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'});
+
+function xlRefBuild(ExJS,D){
+  const wb=new ExJS.Workbook(); wb.creator='ILUMAX'; wb.created=new Date(); wb.calcProperties={fullCalcOnLoad:true};
+  const rows=D.rows.map(r=>({...r,cop:r2((r.fob||0)*D.trm*D.fi)})), N=rows.length, pers=xlPers(rows);
+  const wsR=wb.addWorksheet('Resumen',{views:[{showGridLines:false}],properties:{tabColor:{argb:XL_BLUE}}});
+  const wsM=wb.addWorksheet('Matriz por referencia',{views:[{state:'frozen',xSplit:3,ySplit:5,showGridLines:false}]});
+  const wsO=wb.addWorksheet('Matriz por OC',{views:[{state:'frozen',xSplit:2,ySplit:5,showGridLines:false}]});
+  const wsD=wb.addWorksheet('Detalle por ítem',{views:[{state:'frozen',ySplit:1,xSplit:1}]});
+  const cols=['Referencia','Descripción','Categoría','OC','Proveedor','Embarque','Periodo','Etapa','Cantidad','CBM (m³)','FOB US$','Valor COP'];
+  const dRows=rows.map((r,i)=>[r.ref,r.desc,r.cat,r.oc,r.prov,r.fecha||null,r.per,r.etapa||'',r.qty,r2(r.cbm),r2(r.fob),{formula:`K${i+2}*Resumen!$B$5*Resumen!$B$6`,result:r.cop}]);
+  wsD.addTable({name:'tblDet',ref:'A1',headerRow:true,totalsRow:true,style:{theme:'TableStyleLight1',showRowStripes:false},
+    columns:cols.map((n,i)=>i===0?{name:n,totalsRowLabel:'TOTAL',filterButton:true}:i>=8?{name:n,totalsRowFunction:'sum',filterButton:true}:{name:n,filterButton:true}),
+    rows:dRows.length?dRows:[['','','','','',null,'','',0,0,0,0]]});
+  [14,44,20,12,34,12,11,34,11,11,13,16].forEach((w,i)=>wsD.getColumn(i+1).width=w);
+  wsD.getRow(1).height=26; wsD.getRow(1).eachCell(c=>{ c.fill=xlFill(XL_NAVY); c.font={bold:true,color:{argb:'FFFFFFFF'}}; c.alignment={vertical:'middle',horizontal:'center',wrapText:true}; });
+  wsD.getRow(N+2).eachCell(c=>{ c.fill=xlFill('FFE2E8F0'); c.font={bold:true}; });
+  rows.forEach((r,i)=>{ const row=wsD.getRow(i+2); row.getCell(6).numFmt='yyyy-mm-dd'; row.getCell(9).numFmt='#,##0'; row.getCell(10).numFmt='#,##0.00'; row.getCell(11).numFmt='#,##0.00'; row.getCell(12).numFmt='$ #,##0'; row.eachCell(c=>{ c.border=xlBorde; c.font={size:10}; }); const col=xlEtapaCol(r.etapa); if(col) row.getCell(8).fill=xlFill(col); });
+  [9,10,11,12].forEach(c=>wsD.getCell(N+2,c).numFmt=c===9?'#,##0':c===10?'#,##0.00':c===11?'#,##0.00':'$ #,##0');
+  [30,16,16,16,18,12,30,3].forEach((w,i)=>wsR.getColumn(i+1).width=w);
+  wsR.getCell('A1').value='Embarques por referencia'; wsR.getCell('A1').font={bold:true,size:20,color:{argb:'FF1E293B'}};
+  wsR.getCell('A2').value='Generado el '+xlFmtHoy(D.hoy)+' · fecha en que se embarca cada orden. Las celdas amarillas se pueden cambiar y todo se recalcula.'; wsR.getCell('A2').font={italic:true,size:9,color:{argb:'FF64748B'}};
+  xlBarra(wsR,4,1,7,'PARÁMETROS (editables)');
+  [['TRM (COP por US$)',D.trm,'#,##0.00','← valor COP = FOB × factor × TRM'],['Factor de importación',D.fi,'0.00','← el mismo del módulo de tránsito'],['Métrica de las matrices','Unidades',null,'← elige: Unidades, CBM (m³), FOB US$ o Valor COP']].forEach((p,i)=>{ const r=5+i; wsR.getCell(r,1).value=p[0]; wsR.getCell(r,1).font={bold:true}; const k=wsR.getCell(r,2); k.value=p[1]; if(p[2]) k.numFmt=p[2]; k.fill=xlFill(XL_INPUT); k.font={bold:true,color:{argb:'FF1D4ED8'}}; k.border=xlBorde; k.alignment={horizontal:'right'}; wsR.getCell(r,3).value=p[3]; wsR.getCell(r,3).font={italic:true,size:9,color:{argb:'FF64748B'}}; });
+  wsR.getCell('B7').dataValidation={type:'list',allowBlank:false,formulae:['"Unidades,CBM (m³),FOB US$,Valor COP"']};
+  const totQ=xlSum(rows,r=>r.qty);
+  xlTile(wsR,9,1,'Referencias distintas','SUMPRODUCT(1/COUNTIF(tblDet[Referencia],tblDet[Referencia]))','#,##0',new Set(rows.map(r=>r.ref)).size);
+  xlTile(wsR,9,2,'Unidades','SUM(tblDet[Cantidad])','#,##0',totQ);
+  xlTile(wsR,9,3,'CBM (m³)','SUM(tblDet[CBM (m³)])','#,##0.0',xlSum(rows,r=>r.cbm));
+  xlTile(wsR,9,4,'FOB US$','SUM(tblDet[FOB US$])','$ #,##0',xlSum(rows,r=>r.fob));
+  xlTile(wsR,9,5,'Valor COP','SUM(tblDet[Valor COP])','$ #,##0',xlSum(rows,r=>r.cop));
+  xlTile(wsR,9,6,'OC involucradas','SUMPRODUCT(1/COUNTIF(tblDet[OC],tblDet[OC]))','#,##0',new Set(rows.map(r=>r.oc)).size);
+  const FM=[0,'#,##0','#,##0.0','$ #,##0','$ #,##0','#,##0'];
+  const filaGrupo=(ws,r,col,g)=>{ ws.getCell(r,2).value={formula:`SUMIFS(tblDet[Cantidad],tblDet[${col}],$A${r})`,result:xlSum(g,x=>x.qty)}; ws.getCell(r,3).value={formula:`SUMIFS(tblDet[CBM (m³)],tblDet[${col}],$A${r})`,result:xlSum(g,x=>x.cbm)}; ws.getCell(r,4).value={formula:`SUMIFS(tblDet[FOB US$],tblDet[${col}],$A${r})`,result:xlSum(g,x=>x.fob)}; ws.getCell(r,5).value={formula:`SUMIFS(tblDet[Valor COP],tblDet[${col}],$A${r})`,result:xlSum(g,x=>x.cop)};
+    ws.getCell(r,6).value={formula:`SUMPRODUCT((tblDet[${col}]=$A${r})/COUNTIFS(tblDet[OC],tblDet[OC],tblDet[${col}],tblDet[${col}]))`,result:new Set(g.map(x=>x.oc)).size}; for(let c=1;c<=7;c++){ const k=ws.getCell(r,c); k.border=xlBorde; if(c>=2&&c<=6) k.numFmt=FM[c-1]; } ws.getCell(r,1).font={bold:true}; };
+  const r0=13; xlBarra(wsR,r0-1,1,7,'EMBARQUES POR PERIODO'); xlEnc(wsR,r0,1,['Periodo','Unidades','CBM (m³)','FOB US$','Valor COP','# OC','% unidades']);
+  pers.forEach((p,i)=>{ const r=r0+1+i,g=rows.filter(x=>x.per===p); wsR.getCell(r,1).value=p; filaGrupo(wsR,r,'Periodo',g); wsR.getCell(r,7).value={formula:`IF(SUM($B$${r0+1}:$B$${r0+pers.length})=0,0,B${r}/SUM($B$${r0+1}:$B$${r0+pers.length}))`,result:totQ?xlSum(g,x=>x.qty)/totQ:0}; wsR.getCell(r,7).numFmt='0.0%'; });
+  const pe=r0+pers.length, pt=pe+1; wsR.getCell(pt,1).value='TOTAL';
+  [[2,totQ],[3,xlSum(rows,r=>r.cbm)],[4,xlSum(rows,r=>r.fob)],[5,xlSum(rows,r=>r.cop)],[6,pers.reduce((s,p)=>s+new Set(rows.filter(x=>x.per===p).map(x=>x.oc)).size,0)]].forEach(([c,v])=>{ wsR.getCell(pt,c).value={formula:`SUM(${xlCol(c)}${r0+1}:${xlCol(c)}${pe})`,result:v}; });
+  for(let c=1;c<=7;c++){ const k=wsR.getCell(pt,c); k.font={bold:true}; k.fill=xlFill('FFE2E8F0'); k.border=xlBorde; if(c>=2&&c<=6) k.numFmt=FM[c-1]; }
+  wsR.addConditionalFormatting({ref:`B${r0+1}:B${pe}`,rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFBFDBFE'}]}]});
+  const perRef=`'Resumen'!$A$${r0+1}:$A$${pe}`;
+  const por=(campo,fn)=>{ const m={}; rows.forEach(r=>{ m[r[campo]]=(m[r[campo]]||0)+fn(r); }); return Object.keys(m).sort((a,b)=>m[b]-m[a]); };
+  const grupo=(start,titulo,hdr,campo,col,lista,desc)=>{ xlBarra(wsR,start,1,7,titulo); xlEnc(wsR,start+1,1,[hdr,'Unidades','CBM (m³)','FOB US$','Valor COP','# OC',desc?'Descripción':'']);
+    lista.forEach((k,i)=>{ const r=start+2+i,g=rows.filter(x=>x[campo]===k); wsR.getCell(r,1).value=k; filaGrupo(wsR,r,col,g); if(desc){ wsR.getCell(r,7).value=String((g[0]||{}).desc||'').slice(0,40); wsR.getCell(r,7).font={size:9,color:{argb:'FF64748B'}}; } });
+    return {ini:start+2,fin:start+1+lista.length}; };
+  const tR=por('ref',r=>r.qty).slice(0,10), tC=por('cat',r=>r.fob).slice(0,9), tP=por('prov',r=>r.cop).slice(0,10);
+  const gR=grupo(pt+3,'TOP 10 REFERENCIAS POR UNIDADES','Referencia','ref','Referencia',tR,true);
+  const gC=grupo(gR.fin+3,'POR CATEGORÍA','Categoría','cat','Categoría',tC,false);
+  const gP=grupo(gC.fin+3,'POR PROVEEDOR (TOP 10 POR VALOR COP)','Proveedor','prov','Proveedor',tP,false);
+  const idx='MATCH(Resumen!$B$7,{"Unidades","CBM (m³)","FOB US$","Valor COP"},0)';
+  const matriz=(ws,titulo,kf,kc,keys,extra)=>{ ws.getCell('A1').value=titulo; ws.getCell('A1').font={bold:true,size:16}; ws.getCell('A2').value='Métrica:'; ws.getCell('A2').font={bold:true};
+    ws.getCell('B2').value={formula:'Resumen!$B$7',result:'Unidades'}; ws.getCell('B2').font={bold:true,color:{argb:'FF1D4ED8'}}; ws.getCell('C2').value='← se cambia en la hoja Resumen (celda B7)'; ws.getCell('C2').font={italic:true,size:9,color:{argb:'FF64748B'}};
+    ws.getCell('A3').value='índice'; ws.getCell('B3').value={formula:idx,result:1}; ws.getCell('A3').font=ws.getCell('B3').font={size:8,color:{argb:'FF94A3B8'}};
+    const nx=extra.length, c0=nx; xlEnc(ws,5,1,[...extra.map(e=>e.t),...pers,'Total']); const tc=c0+pers.length+1;
+    keys.forEach((k,i)=>{ const r=6+i,g=rows.filter(x=>x[kf]===k); ws.getCell(r,1).value=k; ws.getCell(r,1).font={bold:true}; extra.forEach((e,j)=>{ if(j){ ws.getCell(r,1+j).value=e.f(g); ws.getCell(r,1+j).font={size:9,color:{argb:'FF475569'}}; } });
+      pers.forEach((p,j)=>{ const cl=xlCol(c0+1+j), sg=t=>`SUMIFS(tblDet[${t}],tblDet[${kc}],$A${r},tblDet[Periodo],${cl}$5)`; ws.getCell(r,c0+1+j).value={formula:`CHOOSE($B$3,${sg('Cantidad')},${sg('CBM (m³)')},${sg('FOB US$')},${sg('Valor COP')})`,result:xlSum(g.filter(x=>x.per===p),x=>x.qty)}; ws.getCell(r,c0+1+j).numFmt='#,##0.##;-#,##0.##;;@'; });
+      ws.getCell(r,tc).value={formula:`SUM(${xlCol(c0+1)}${r}:${xlCol(tc-1)}${r})`,result:xlSum(g,x=>x.qty)}; ws.getCell(r,tc).font={bold:true}; ws.getCell(r,tc).numFmt='#,##0.##'; ws.getCell(r,tc).fill=xlFill('FFF1F5F9'); for(let c=1;c<=tc;c++) ws.getCell(r,c).border=xlBorde; });
+    const t2=6+keys.length; ws.getCell(t2,1).value='TOTAL'; for(let c=c0+1;c<=tc;c++){ ws.getCell(t2,c).value={formula:`SUM(${xlCol(c)}6:${xlCol(c)}${t2-1})`,result:c<tc?xlSum(rows.filter(x=>x.per===pers[c-c0-1]),x=>x.qty):totQ}; ws.getCell(t2,c).numFmt='#,##0.##'; }
+    for(let c=1;c<=tc;c++){ const k=ws.getCell(t2,c); k.font={bold:true}; k.fill=xlFill('FFE2E8F0'); k.border=xlBorde; }
+    ws.addConditionalFormatting({ref:`${xlCol(c0+1)}6:${xlCol(tc-1)}${t2-1}`,rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FF60A5FA'}]}]});
+    ws.autoFilter={from:{row:5,column:1},to:{row:5,column:tc}};
+    for(let c=1;c<=nx;c++) ws.getColumn(c).width=nx===3?[14,44,20][c-1]:[14,36][c-1]; for(let c=c0+1;c<=tc;c++) ws.getColumn(c).width=13; };
+  matriz(wsM,'Matriz por referencia · embarques por periodo','ref','Referencia',por('ref',r=>r.qty),[{t:'Referencia'},{t:'Descripción',f:g=>String((g[0]||{}).desc||'')},{t:'Categoría',f:g=>String((g[0]||{}).cat||'')}]);
+  matriz(wsO,'Matriz por OC · embarques por periodo','oc','OC',por('oc',r=>r.qty),[{t:'OC'},{t:'Proveedor',f:g=>String((g[0]||{}).prov||'')}]);
+  const rr=(a,b,c)=>`'Resumen'!$${c}$${a}:$${c}$${b}`;
+  return {wb,charts:[
+    {sheet:'Resumen',type:'col',title:'Unidades que se embarcan por periodo',cat:perRef,series:[{name:'Unidades',val:rr(r0+1,pe,'B'),color:'2563EB'}],from:{c:8,r:1},to:{c:16,r:19},labels:true,fmt:'#,##0'},
+    {sheet:'Resumen',type:'col',title:'Valor COP embarcado por periodo (millones)',cat:perRef,series:[{name:'Valor COP',val:rr(r0+1,pe,'E'),color:'16A34A'}],from:{c:16,r:1},to:{c:24,r:19},labels:true,fmt:'#,##0,,'},
+    {sheet:'Resumen',type:'line',title:'CBM (m³) por periodo',cat:perRef,series:[{name:'CBM',val:rr(r0+1,pe,'C'),color:'F59E0B'}],from:{c:8,r:19},to:{c:16,r:37},labels:true,fmt:'#,##0'},
+    {sheet:'Resumen',type:'pie',title:'Unidades por categoría',cat:rr(gC.ini,gC.fin,'A'),nPts:tC.length,series:[{name:'Unidades',val:rr(gC.ini,gC.fin,'B')}],from:{c:16,r:19},to:{c:24,r:37},labels:true,fmt:'#,##0'},
+    {sheet:'Resumen',type:'bar',title:'Top 10 referencias por unidades',cat:rr(gR.ini,gR.fin,'A'),series:[{name:'Unidades',val:rr(gR.ini,gR.fin,'B'),color:'7C3AED'}],from:{c:8,r:37},to:{c:16,r:56},labels:true,fmt:'#,##0'},
+    {sheet:'Resumen',type:'bar',title:'Valor COP por proveedor (millones)',cat:rr(gP.ini,gP.fin,'A'),series:[{name:'Valor COP',val:rr(gP.ini,gP.fin,'E'),color:'0891B2'}],from:{c:16,r:37},to:{c:24,r:56},labels:true,fmt:'#,##0,,'}]};
+}
+
+function xlOCBuild(ExJS,D){
+  const wb=new ExJS.Workbook(); wb.creator='ILUMAX'; wb.created=new Date(); wb.calcProperties={fullCalcOnLoad:true};
+  const rows=D.rows, N=rows.length, pers=xlPers(rows);
+  const wsR=wb.addWorksheet('Resumen',{views:[{showGridLines:false}],properties:{tabColor:{argb:XL_BLUE}}});
+  const wsM=wb.addWorksheet('Matriz proveedor × periodo',{views:[{state:'frozen',xSplit:1,ySplit:4,showGridLines:false}]});
+  const wsO=wb.addWorksheet('Órdenes',{views:[{state:'frozen',ySplit:1,xSplit:1}]});
+  const cols=['OC','Proveedor','Embarque','Periodo','Etapa','Ítems','CBM (m³)','Ítems sin CBM','Contenedor','≈ 40\' HC','Valor US$ (FOB)','Valor COP'];
+  const oRows=rows.map((r,i)=>[r.oc,r.prov,r.fecha||null,r.per,r.etapa||'',r.nItems||0,r2(r.cbm),r.sin||0,r.cont||'',{formula:`IF(Resumen!$B$5>0,G${i+2}/Resumen!$B$5,0)`,result:D.cap>0?r.cbm/D.cap:0},r2(r.usd||0),Math.round(r.cop||0)]);
+  wsO.addTable({name:'tblOC',ref:'A1',headerRow:true,totalsRow:true,style:{theme:'TableStyleLight1',showRowStripes:false},
+    columns:cols.map((n,i)=>i===0?{name:n,totalsRowLabel:'TOTAL',filterButton:true}:[5,6,7,9,10,11].includes(i)?{name:n,totalsRowFunction:'sum',filterButton:true}:{name:n,filterButton:true}),
+    rows:oRows.length?oRows:[['','',null,'','',0,0,0,'',0,0,0]]});
+  [14,36,14,11,36,8,11,10,24,10,15,17].forEach((w,i)=>wsO.getColumn(i+1).width=w);
+  wsO.getRow(1).height=28; wsO.getRow(1).eachCell(c=>{ c.fill=xlFill(XL_NAVY); c.font={bold:true,color:{argb:'FFFFFFFF'}}; c.alignment={vertical:'middle',horizontal:'center',wrapText:true}; });
+  rows.forEach((r,i)=>{ const row=wsO.getRow(i+2); row.getCell(3).numFmt='yyyy-mm-dd'; row.getCell(7).numFmt='#,##0.00'; row.getCell(10).numFmt='0.0'; row.getCell(11).numFmt='$ #,##0'; row.getCell(12).numFmt='$ #,##0'; row.eachCell(c=>{ c.border=xlBorde; c.font={size:10}; }); const col=xlEtapaCol(r.etapa); if(col) row.getCell(5).fill=xlFill(col); });
+  wsO.getRow(N+2).eachCell(c=>{ c.fill=xlFill('FFE2E8F0'); c.font={bold:true}; }); [7,10,11,12].forEach(c=>wsO.getCell(N+2,c).numFmt=c===10?'0.0':c===7?'#,##0.00':'$ #,##0');
+  wsO.addConditionalFormatting({ref:`G2:G${N+1}`,rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FF93C5FD'}]}]});
+  [38,16,16,16,18,16,12,3].forEach((w,i)=>wsR.getColumn(i+1).width=w);
+  wsR.getCell('A1').value='Embarques por orden de compra'; wsR.getCell('A1').font={bold:true,size:20,color:{argb:'FF1E293B'}};
+  wsR.getCell('A2').value='Generado el '+xlFmtHoy(D.hoy)+' · fecha en que se embarca cada orden. La celda amarilla se puede cambiar.'; wsR.getCell('A2').font={italic:true,size:9,color:{argb:'FF64748B'}};
+  xlBarra(wsR,4,1,7,'PARÁMETROS (editables)'); wsR.getCell('A5').value="Capacidad de un contenedor 40' HC (m³)"; wsR.getCell('A5').font={bold:true};
+  const k=wsR.getCell('B5'); k.value=D.cap; k.numFmt='0.0'; k.fill=xlFill(XL_INPUT); k.font={bold:true,color:{argb:'FF1D4ED8'}}; k.border=xlBorde; wsR.getCell('C5').value='← cambia la capacidad y se recalculan los contenedores'; wsR.getCell('C5').font={italic:true,size:9,color:{argb:'FF64748B'}};
+  const cbmT=xlSum(rows,r=>r.cbm), totC=xlSum(rows,r=>r.cop), totU=xlSum(rows,r=>r.usd);
+  xlTile(wsR,7,1,'Órdenes a embarcar','COUNTA(tblOC[OC])','#,##0',N);
+  xlTile(wsR,7,2,'CBM (m³)','SUM(tblOC[CBM (m³)])','#,##0.0',cbmT);
+  xlTile(wsR,7,3,"≈ Contenedores 40' HC",'IF($B$5>0,SUM(tblOC[CBM (m³)])/$B$5,0)','0.0',D.cap>0?cbmT/D.cap:0);
+  xlTile(wsR,7,4,'Valor US$ (FOB)','SUM(tblOC[Valor US$ (FOB)])','$ #,##0',totU);
+  xlTile(wsR,7,5,'Valor COP','SUM(tblOC[Valor COP])','$ #,##0',totC);
+  xlTile(wsR,7,6,'Ítems sin CBM','SUM(tblOC[Ítems sin CBM])','#,##0',xlSum(rows,r=>r.sin));
+  const FM=[0,'#,##0','#,##0.0','0.0','$ #,##0','$ #,##0','0.0%'];
+  const fila=(r,col,g)=>{ wsR.getCell(r,2).value={formula:`COUNTIFS(tblOC[${col}],$A${r})`,result:g.length}; wsR.getCell(r,3).value={formula:`SUMIFS(tblOC[CBM (m³)],tblOC[${col}],$A${r})`,result:xlSum(g,x=>x.cbm)}; wsR.getCell(r,4).value={formula:`IF($B$5>0,C${r}/$B$5,0)`,result:D.cap>0?xlSum(g,x=>x.cbm)/D.cap:0};
+    wsR.getCell(r,5).value={formula:`SUMIFS(tblOC[Valor US$ (FOB)],tblOC[${col}],$A${r})`,result:xlSum(g,x=>x.usd)}; wsR.getCell(r,6).value={formula:`SUMIFS(tblOC[Valor COP],tblOC[${col}],$A${r})`,result:xlSum(g,x=>x.cop)};
+    wsR.getCell(r,7).value={formula:`IF(SUM(tblOC[Valor COP])=0,0,F${r}/SUM(tblOC[Valor COP]))`,result:totC?xlSum(g,x=>x.cop)/totC:0}; for(let c=1;c<=7;c++){ const q=wsR.getCell(r,c); q.border=xlBorde; if(c>1) q.numFmt=FM[c-1]; } wsR.getCell(r,1).font={bold:true}; };
+  const r0=11; xlBarra(wsR,r0-1,1,7,'EMBARQUES POR PERIODO'); xlEnc(wsR,r0,1,['Periodo','# OC','CBM (m³)',"≈ 40' HC",'Valor US$','Valor COP','% del COP']);
+  pers.forEach((p,i)=>{ const r=r0+1+i; wsR.getCell(r,1).value=p; fila(r,'Periodo',rows.filter(x=>x.per===p)); });
+  const pe=r0+pers.length, pt=pe+1; wsR.getCell(pt,1).value='TOTAL';
+  [[2,N],[3,cbmT],[4,D.cap>0?cbmT/D.cap:0],[5,totU],[6,totC]].forEach(([c,v])=>{ wsR.getCell(pt,c).value={formula:`SUM(${xlCol(c)}${r0+1}:${xlCol(c)}${pe})`,result:v}; });
+  for(let c=1;c<=7;c++){ const q=wsR.getCell(pt,c); q.font={bold:true}; q.fill=xlFill('FFE2E8F0'); q.border=xlBorde; if(c>1) q.numFmt=FM[c-1]; }
+  wsR.addConditionalFormatting({ref:`C${r0+1}:C${pe}`,rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFBFDBFE'}]}]});
+  const m={}; rows.forEach(r=>{ m[r.prov]=(m[r.prov]||0)+r.cop; }); const provs=Object.keys(m).sort((a,b)=>m[b]-m[a]).slice(0,10), s2=pt+3;
+  xlBarra(wsR,s2,1,7,'POR PROVEEDOR (TOP 10 POR VALOR COP)'); xlEnc(wsR,s2+1,1,['Proveedor','# OC','CBM (m³)',"≈ 40' HC",'Valor US$','Valor COP','% del COP']);
+  provs.forEach((p,i)=>{ const r=s2+2+i; wsR.getCell(r,1).value=p; fila(r,'Proveedor',rows.filter(x=>x.prov===p)); });
+  const pf=s2+1+provs.length;
+  const allP=[...new Set(rows.map(r=>r.prov))].sort((a,b)=>(m[b]||0)-(m[a]||0)), tc=2+pers.length;
+  wsM.getCell('A1').value='CBM por proveedor y periodo de embarque'; wsM.getCell('A1').font={bold:true,size:16}; xlEnc(wsM,4,1,['Proveedor',...pers,'Total']);
+  allP.forEach((p,i)=>{ const r=5+i; wsM.getCell(r,1).value=p; wsM.getCell(r,1).font={bold:true};
+    pers.forEach((q,j)=>{ const cl=xlCol(2+j); wsM.getCell(r,2+j).value={formula:`SUMIFS(tblOC[CBM (m³)],tblOC[Proveedor],$A${r},tblOC[Periodo],${cl}$4)`,result:xlSum(rows.filter(x=>x.prov===p&&x.per===q),x=>x.cbm)}; wsM.getCell(r,2+j).numFmt='#,##0.0;-#,##0.0;;@'; });
+    wsM.getCell(r,tc).value={formula:`SUM(B${r}:${xlCol(tc-1)}${r})`,result:xlSum(rows.filter(x=>x.prov===p),x=>x.cbm)}; wsM.getCell(r,tc).numFmt='#,##0.0'; wsM.getCell(r,tc).font={bold:true}; for(let c=1;c<=tc;c++) wsM.getCell(r,c).border=xlBorde; });
+  const mt=5+allP.length; wsM.getCell(mt,1).value='TOTAL'; for(let c=2;c<=tc;c++){ wsM.getCell(mt,c).value={formula:`SUM(${xlCol(c)}5:${xlCol(c)}${mt-1})`,result:c<tc?xlSum(rows.filter(x=>x.per===pers[c-2]),x=>x.cbm):cbmT}; wsM.getCell(mt,c).numFmt='#,##0.0'; }
+  for(let c=1;c<=tc;c++){ const q=wsM.getCell(mt,c); q.font={bold:true}; q.fill=xlFill('FFE2E8F0'); q.border=xlBorde; }
+  wsM.addConditionalFormatting({ref:`B5:${xlCol(tc-1)}${mt-1}`,rules:[{type:'colorScale',cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FF60A5FA'}]}]}); wsM.getColumn(1).width=38; for(let c=2;c<=tc;c++) wsM.getColumn(c).width=12;
+  const rr=(a,b,c)=>`'Resumen'!$${c}$${a}:$${c}$${b}`, perRef=rr(r0+1,pe,'A');
+  return {wb,charts:[
+    {sheet:'Resumen',type:'col',title:'CBM (m³) a embarcar por periodo',cat:perRef,series:[{name:'CBM',val:rr(r0+1,pe,'C'),color:'2563EB'}],from:{c:8,r:1},to:{c:16,r:19},labels:true,fmt:'#,##0'},
+    {sheet:'Resumen',type:'col',title:"Contenedores 40' HC por periodo",cat:perRef,series:[{name:"≈ 40' HC",val:rr(r0+1,pe,'D'),color:'F59E0B'}],from:{c:16,r:1},to:{c:24,r:19},labels:true,fmt:'0.0'},
+    {sheet:'Resumen',type:'col',title:'Valor COP a embarcar por periodo (millones)',cat:perRef,series:[{name:'Valor COP',val:rr(r0+1,pe,'F'),color:'16A34A'}],from:{c:8,r:19},to:{c:16,r:37},labels:true,fmt:'#,##0,,'},
+    {sheet:'Resumen',type:'line',title:'Órdenes a embarcar por periodo',cat:perRef,series:[{name:'# OC',val:rr(r0+1,pe,'B'),color:'7C3AED'}],from:{c:16,r:19},to:{c:24,r:37},labels:true,fmt:'0'},
+    {sheet:'Resumen',type:'bar',title:'Valor COP por proveedor (millones)',cat:rr(s2+2,pf,'A'),series:[{name:'Valor COP',val:rr(s2+2,pf,'F'),color:'0891B2'}],from:{c:8,r:37},to:{c:24,r:56},labels:true,fmt:'#,##0,,'}]};
+}
+
+
+  async function listo(){ await reabastCargarExcelJS(); await ocpCargarScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js','JSZip'); try{ await ivsCfg(); }catch(e){} }
+  async function bajar(b, nombre){ const buf = await xlInyectarGraficos(JSZip, await b.wb.xlsx.writeBuffer(), b.charts); const url = URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})); const el = document.createElement('a'); el.href = url; el.download = nombre; document.body.appendChild(el); el.click(); setTimeout(()=>{ el.remove(); URL.revokeObjectURL(url); }, 1500); }
+  const pn = p => p==='sin' ? 'Sin fecha' : String(p);
+  return { async ref(){
+    await listo();
+    const rows = infRefFiltrar(infItemsFilas(infDatos())).map(r=>({ref:String(r.ref), desc:r.desc||'', cat:r.cat||'', oc:r.oc, prov:r.prov||'', fecha:r.iso?new Date(r.iso+'T12:00:00'):null, per:pn(r.per), etapa:r.etapa||'', qty:Number(r.qty)||0, cbm:Number(r.cbm)||0, fob:Number(r.fob)||0}));
+    const trm = (typeof IVS!=='undefined' && (IVS.trmFijo||IVS.trm)) || 0, fi = (typeof IVS!=='undefined' && Number(IVS.factor)) || 1.15;
+    await bajar(xlRefBuild(ExcelJS,{rows,trm,fi,hoy:new Date()}), 'Embarques_por_referencia_'+new Date().toISOString().slice(0,10)+'.xlsx'); },
+  async oc(){
+    await listo();
+    const rows = infDatosPlan().map(x=>({oc:x.o.numero_oc, prov:x.o.proveedor||'', fecha:x.iso?new Date(x.iso+'T12:00:00'):null, per:pn(x.mes), etapa:x.etapa||'', nItems:x.nItems===''?0:Number(x.nItems)||0, cbm:Number(x.cbm)||0, sin:Number(x.sin)||0, cont:(x.emb&&x.emb.contenedor)||(x.cbm>0?cbmContenedores(x.cbm).txt:''), usd:(x.val&&x.val.usd)||0, cop:(x.val&&x.val.cop)||0}));
+    await bajar(xlOCBuild(ExcelJS,{rows,cap:68,hoy:new Date()}), 'Embarques_por_orden_'+new Date().toISOString().slice(0,10)+'.xlsx'); }
+  };
+})();
+async function infPivExcel(){ try{ toast('Generando Excel…','inf'); await XLX.ref(); }catch(e){ console.error(e); toast('No se pudo generar el Excel: '+e.message,'er'); } }
+async function infExcel(){ try{ toast('Generando Excel…','inf'); await XLX.oc(); }catch(e){ console.error(e); toast('No se pudo generar el Excel: '+e.message,'er'); } }
 function ilxLatCerrado(key){ try{ return localStorage.getItem('ilx_lat_'+key)==='1'; }catch(e){ return false; } }
 function ilxLatBtnHtml(key){ const c = ilxLatCerrado(key); return `<div class="ilx-lat-hw"><button type="button" class="ilx-lat-h" onclick="ilxLatToggle(this,'${key}')" title="${c?'Mostrar menú':'Ocultar menú'}">☰</button></div>`; }
 function ilxLatAjustar(){
