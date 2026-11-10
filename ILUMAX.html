@@ -34286,6 +34286,7 @@ async function cmCargarMes(){
     CM.pptoFuente = CM.pptoRows.length ? 'presupuesto del reporte diario' : 'SIN presupuesto cargado para este mes';
   }
   CM.man = (await cmCfg('com_manual_'+CM.mes)) || {};
+  try{ CM.pptoCanal = ((await cmCfg('rv_ppto_canal')) || {})[CM.mes] || {}; }catch(e){ CM.pptoCanal = {}; }
 }
 async function cmSiesa(){
   const hoy = new Date(), mesAct = hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0');
@@ -34317,12 +34318,14 @@ function cmCalcular(){
   const totV = Object.values(ventas).reduce((a,b)=>a+b,0), totP = Object.values(ppto).reduce((a,b)=>a+b,0), res = {};
   const hacer = p=>{
     const man = CM.man[p.id]||{}, items = (p.items||[]).map((it,i)=>{
-      const mi = (man.it||{})[i]||{}; let ap = 0, ar = 0;
+      const mi = (man.it||{})[i]||{}; let ap = 0, ar = 0, srcP = '';
       if(it.f==='venta'){ ap = ppto[p.id]||0; ar = ventas[p.id]||0; }
       else if(it.f==='total'){ ap = totP; ar = totV; }
-      else if(it.f==='equipo'){ P.filter(q=>q.cargo==='vendedor' && res[q.id]).forEach(q=>{ const x = res[q.id].items.find(y=>y.n===it.n); if(x){ ap += x.ppto; ar += x.real; } }); }
+      else if(it.f==='equipo'){ P.filter(q=>q.cargo==='vendedor' && res[q.id]).forEach(q=>{ const x = res[q.id].items.find(y=>y.n===it.n); if(x){ ap += x.ppto; ar += x.real; } });
+        // La coordinadora se evalúa contra el presupuesto de su canal (Esp + Mixto + Proy. + Online + Distrib.), igual que en septiembre
+        if(p.cargo==='coord' && /^VENTA/.test(cmNorm(it.n))){ const pc = CM_CANAL_COORD.reduce((a,k)=>a+(Number((CM.pptoCanal||{})[k])||0),0); if(pc>0){ ap = pc; srcP = 'canal'; } } }
       const pp = mi.p!=null && mi.p!=='' ? Number(mi.p) : ap, rr = mi.r!=null && mi.r!=='' ? Number(mi.r) : ar, cu = pp>0 ? rr/pp : 0;
-      return {n:it.n, peso:Number(it.peso)||0, f:it.f, autoP:ap, autoR:ar, ppto:pp, real:rr, cump:cu, res:cu*(Number(it.peso)||0)/100, ovP:mi.p!=null&&mi.p!=='', ovR:mi.r!=null&&mi.r!==''};
+      return {n:it.n, peso:Number(it.peso)||0, f:it.f, srcP, autoP:ap, autoR:ar, ppto:pp, real:rr, cump:cu, res:cu*(Number(it.peso)||0)/100, ovP:mi.p!=null&&mi.p!=='', ovR:mi.r!=null&&mi.r!==''};
     });
     const cum = items.reduce((a,x)=>a+x.res,0), prem = cmPremio(cum);
     let pts = 0; const detPts = (R.puntos||[]).map(l=>{ const mv = (man.pts||{})[l.id], auto = !p.sinPts && (mv==null||mv==='') && l.id==='mix' && !!MX[p.id], v = p.sinPts ? 0 : auto ? Math.round(MX[p.id].total*1000)/10 : (Number(mv)||0); let x = 0;
@@ -34370,7 +34373,7 @@ function cmPintar(){
     const mi = (a,b,c,v,ph,w)=>`<input class="inp" type="number" step="any" value="${v}" placeholder="${ph}" style="width:${w||115}px;padding:3px 5px;font-size:12px;text-align:right;" onchange="cmSet(${q},'${a}',${b==null?'null':jq(b)},'${c||''}',this.value)">`;
     const cc = c=>`<span style="font-weight:700;color:${c>=1?'#16a34a':c>=R.minPago/100?'#b45309':'#dc2626'};">${cmPct(c)}</span>`;
     const det = ab ? `<tr><td colspan="10" style="background:var(--s1);padding:8px 14px;">
-      <table style="font-size:12px;width:auto;"><thead><tr><th>Ítem</th><th>Fuente</th><th style="text-align:right;">Peso</th><th style="text-align:right;">Presupuesto</th><th style="text-align:right;">Real</th><th style="text-align:right;">% cumpl.</th><th style="text-align:right;">Resultado</th></tr></thead><tbody>${x.items.map((it,i)=>`<tr><td><b>${E(it.n)}</b></td><td class="arte-mu">${it.f==='venta'?'Siesa (propio)':it.f==='equipo'?'suma del equipo':it.f==='total'?'total compañía':'manual'}</td><td style="text-align:right;">${it.peso}%</td><td style="text-align:right;">${mi('it',i,'p',it.ovP?it.ppto:'',it.autoP?cmNum(it.autoP):'0')}</td><td style="text-align:right;white-space:nowrap;">${it.f==='manual' ? mi('it',i,'r',it.ovR?it.real:'',it.autoR?cmNum(it.autoR):'0') : `<b>${cmMoney(it.real)}</b>${it.f==='venta'?` <button class="btn btn-g btn-xs" title="Ver de dónde sale esta venta" onclick="cmDetFact(1,${q})">🔎 Detalle</button>`:''}${it.ovR?` <span class="bdg bdg-amarillo" title="Editado a mano. Siesa dice ${cmMoney(it.autoR)}">editado (Siesa: ${cmMoney(it.autoR)})</span> <button class="btn btn-g btn-xs" onclick="cmSet(${q},'it',${i},'r','')">↺ Volver a Siesa</button>`:''}`}</td><td style="text-align:right;">${cc(it.cump)}</td><td style="text-align:right;">${cmPct(it.res)}</td></tr>`).join('')}<tr style="font-weight:800;border-top:2px solid var(--b1);"><td colspan="6">Cumplimiento ponderado</td><td style="text-align:right;">${cmPct(x.cum)}</td></tr></tbody></table>
+      <table style="font-size:12px;width:auto;"><thead><tr><th>Ítem</th><th>Fuente</th><th style="text-align:right;">Peso</th><th style="text-align:right;">Presupuesto</th><th style="text-align:right;">Real</th><th style="text-align:right;">% cumpl.</th><th style="text-align:right;">Resultado</th></tr></thead><tbody>${x.items.map((it,i)=>`<tr><td><b>${E(it.n)}</b></td><td class="arte-mu">${it.f==='venta'?'Siesa (propio)':it.f==='equipo'?(it.srcP==='canal'?'real del equipo · ppto del canal':'suma del equipo'):it.f==='total'?'total compañía':'manual'}</td><td style="text-align:right;">${it.peso}%</td><td style="text-align:right;">${mi('it',i,'p',it.ovP?it.ppto:'',it.autoP?cmNum(it.autoP):'0')}</td><td style="text-align:right;white-space:nowrap;">${it.f==='manual' ? mi('it',i,'r',it.ovR?it.real:'',it.autoR?cmNum(it.autoR):'0') : `<b>${cmMoney(it.real)}</b>${it.f==='venta'?` <button class="btn btn-g btn-xs" title="Ver de dónde sale esta venta" onclick="cmDetFact(1,${q})">🔎 Detalle</button>`:''}${it.ovR?` <span class="bdg bdg-amarillo" title="Editado a mano. Siesa dice ${cmMoney(it.autoR)}">editado (Siesa: ${cmMoney(it.autoR)})</span> <button class="btn btn-g btn-xs" onclick="cmSet(${q},'it',${i},'r','')">↺ Volver a Siesa</button>`:''}`}</td><td style="text-align:right;">${cc(it.cump)}</td><td style="text-align:right;">${cmPct(it.res)}</td></tr>`).join('')}<tr style="font-weight:800;border-top:2px solid var(--b1);"><td colspan="6">Cumplimiento ponderado</td><td style="text-align:right;">${cmPct(x.cum)}</td></tr></tbody></table>
       <div class="arte-mu" style="font-size:10.5px;margin:3px 0 8px;">Los campos vacíos usan el valor automático (en gris). Escribe un número para sobrescribirlo; bórralo para volver al automático.</div>
       <div style="margin-bottom:8px;">${p.nota?`<div class="alert" style="font-size:11.5px;margin-bottom:6px;">📝 ${E(p.nota)}</div>`:''}<button class="btn btn-g btn-xs" onclick="cmDetFact(1,${q})">🧾 Ver detalle de facturación</button></div>
       <div style="font-weight:700;margin-bottom:4px;">Puntos adicionales ${p.sinPts?'<span style="color:#b45309;">(no aplica: fuera del canal ferroeléctrico)</span>':''} ${x.ptsAct?'<span style="color:#16a34a;">✔ activos</span>':'<span style="color:#b45309;">(inactivos: se activan desde '+R.umbralPuntos+'% de cumplimiento)</span>'}</div>
@@ -34405,6 +34408,7 @@ function cmPintar(){
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px;">
       ${[['Salario variable base',cmMoney(TB)],['Total a pagar',cmMoney(TP)],['% ejecución real del ppto.',TB?cmPct(TP/TB):'—']].map((a,i)=>`<div style="border:1px solid var(--b2);border-radius:10px;padding:8px 12px;background:#fff;"><div class="arte-mu" style="font-size:10px;text-transform:uppercase;">${a[0]}</div><div style="font-size:17px;font-weight:800;${i===1?'color:var(--bl);':''}">${a[1]}</div></div>`).join('')}</div>
     ${CM.sinMatch.length?`<div class="alert" style="font-size:11.5px;margin-bottom:10px;">⚠️ Facturas de vendedores de Siesa sin colaborador asignado: ${CM.sinMatch.slice(0,6).map(([n,v])=>'<button class="btn btn-g btn-xs" title="Ver el detalle de la facturación" onclick="cmDetFact(0,'+jq(n)+')"><b>'+E(n)+'</b> ('+cmMoney(v)+') 🧾</button>').join(' ')}. Si es el mismo nombre escrito distinto, ponlo en «Nombre(s) en Siesa» del colaborador.</div>`:''}
+    ${cmConcilHtml(F)}
     ${reglas}
     <div class="tw"><table style="font-size:12px;"><thead><tr><th>Colaborador</th><th>Cargo</th><th style="text-align:right;">Salario variable base</th><th>Cumplimiento</th><th>Premio</th><th>Puntos</th><th title="Mix ponderado del mes y puntos que gana (≥80 %)">Mix (ponderado)</th><th>Total matriz</th><th style="text-align:right;" title="Total matriz × salario variable base, aunque no llegue al mínimo">Según % real</th><th style="text-align:right;">A pagar</th><th></th><th></th></tr></thead><tbody>${filas}<tr style="border-top:2px solid var(--b1);font-weight:800;"><td>TOTAL</td><td></td><td style="text-align:right;">${cmMoney(TB)}</td><td colspan="5"></td><td style="text-align:right;color:#475569;">${cmMoney(TT)}</td><td style="text-align:right;color:var(--bl);">${cmMoney(TP)}</td><td></td><td></td></tr></tbody></table></div>
     <div class="arte-mu" style="font-size:11px;margin-top:8px;">«Según % real» = total matriz × salario variable base, sin aplicar el mínimo (referencia de lo que correspondería). Pago = total matriz × salario variable base, solo si el cumplimiento ponderado llega al mínimo; sobre el tope se paga base × (tope + premio). Recaudo y puntos se digitan en el detalle de cada colaborador (luego los cargarán Mayra y Omar).</div>`;
@@ -34607,6 +34611,41 @@ async function cmRecAplicar(){
   const o = document.getElementById('cm-rec-ov'); let n = 0;
   o.querySelectorAll('input[data-p]').forEach(i=>{ if(i.value==='') return; const m = CM.man[i.dataset.p] = CM.man[i.dataset.p]||{}; m.it = m.it||{}; const x = m.it[i.dataset.i] = m.it[i.dataset.i]||{}; x[i.dataset.c] = parseFloat(i.value)||0; if(i.dataset.c==='p') n++; });
   if(await cmSave('com_manual_'+CM.mes, CM.man)){ o.classList.remove('on'); toast('✅ Recaudo de '+n+' ejecutivos cargado en '+CM.mes,'ok'); cmPintar(); }
+}
+// ── Conciliación con el reporte diario: qué entra y qué no entra a la comisión ──
+const CM_CANAL_COORD = ['ESPECIALIZADO','CANAL MIXTO','PROYECTOS','ONLINE','DISTRIBUIDOR'];
+function cmConcilHtml(F){
+  const E = reabastEsc, P = CM.personas||[], D = CM.datos||[], jq = s=>JSON.stringify(s).replace(/"/g,'&quot;');
+  const esLid = v=>P.some(p=>p.cargo==='lider' && cmMatch(p,v));
+  let rep = 0, rein = 0, vmT = 0, sinM = 0, com = 0; const reinF = [], vmF = [];
+  D.forEach(d=>{ if(esLid(d.vend)) return; rep += (d.val||0)+(d.rein||0)+(d.vm||0); rein += d.rein||0; vmT += d.vm||0; if(d.rein) reinF.push(d); if(d.vm) vmF.push(d); if(cmPersDe(d.vend)) com += d.val||0; else sinM += d.val||0; });
+  const sinL = (CM.sinMatch||[]).filter(([n])=>!esLid(n));
+  const pc = CM_CANAL_COORD.reduce((a,k)=>a+(Number((CM.pptoCanal||{})[k])||0),0);
+  const pv = (CM.pptoRows||[]).reduce((a,r)=>{ const p = cmPersDe(r.vendedor_nombre); return a+(p && p.cargo!=='lider' ? (Number(r.presupuesto)||0) : 0); },0);
+  const rc = F.filter(x=>x.p.cargo==='vendedor').map(x=>x.items.find(i=>/^RECAUDO/.test(cmNorm(i.n)))).filter(Boolean), rp = rc.reduce((a,i)=>a+i.ppto,0), rr = rc.reduce((a,i)=>a+i.real,0), rn = rc.filter(i=>i.ovP||i.ovR).length;
+  const tr = (l,v,c,b)=>`<tr${b?' style="font-weight:800;border-top:2px solid var(--b2);"':''}><td>${l}</td><td style="text-align:right;${c?'color:'+c+';':''}">${v}</td></tr>`;
+  const lst = (arr,campo)=>arr.length?`<div class="arte-mu" style="font-size:11px;margin:4px 0 0;">${arr.slice(0,12).map(d=>E(d.doc)+' · '+E(d.vend.split(' ').slice(0,2).join(' '))+' · '+E(d.cli.slice(0,28))+' · '+cmMoney(d[campo])).join('<br>')}${arr.length>12?'<br>… y '+(arr.length-12)+' más':''}</div>`:'';
+  return `<div style="border:1px solid var(--b2);border-radius:10px;margin-bottom:12px;background:#fff;">
+    <div style="padding:9px 12px;cursor:pointer;font-weight:800;font-size:13px;" onclick="CM.conAb=!CM.conAb;cmPintar()">${CM.conAb?'▾':'▸'} 🔎 Conciliación con el reporte diario <span class="arte-mu" style="font-weight:400;font-size:11px;">(venta del reporte ${cmMoney(rep)} → venta que comisiona ${cmMoney(com)})</span></div>
+    ${CM.conAb?`<div style="padding:4px 14px 14px;font-size:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;">
+      <div><div style="font-weight:700;margin-bottom:4px;">Venta del equipo de ${E(CM.mes)}</div>
+        <table style="font-size:12px;width:100%;"><tbody>${tr('Venta del reporte diario (todos menos el líder de canal)',cmMoney(rep))}
+        ${tr('− Reintegro de gastos (no comisiona)','− '+cmMoney(rein),rein?'#b45309':'')}
+        ${tr('− Ventas de empleados «VM» (no comisionan)','− '+cmMoney(vmT),vmT?'#b45309':'')}
+        ${tr('− Vendedores sin colaborador en la liquidación','− '+cmMoney(sinM),sinM?'#b45309':'')}
+        ${tr('= Venta que comisiona (la de la matriz)',cmMoney(com),'',1)}</tbody></table>
+        ${rein?`<div style="font-weight:700;margin-top:8px;">Reintegros de gastos</div>${lst(reinF,'rein')}`:''}
+        ${vmT?`<div style="font-weight:700;margin-top:8px;">Ventas VM</div>${lst(vmF,'vm')}`:''}
+        ${sinL.length?`<div style="font-weight:700;margin-top:8px;">Sin colaborador</div><div class="arte-mu" style="font-size:11px;">${sinL.map(([n,v])=>E(n)+' · '+cmMoney(v)).join('<br>')}</div>`:''}</div>
+      <div><div style="font-weight:700;margin-bottom:4px;">Presupuestos y recaudo</div>
+        <table style="font-size:12px;width:100%;"><tbody>${tr('Ppto de canal (Esp + Mixto + Proy. + Online + Distrib.) — el que evalúa a la coordinadora',pc?cmMoney(pc):'sin cargar',pc?'':'#dc2626')}
+        ${tr('Suma de presupuestos por vendedor («'+E(CM.pptoFuente||'Mi equipo')+'»)',cmMoney(pv))}
+        ${tr('Recaudo del equipo: presupuesto',cmMoney(rp))}
+        ${tr('Recaudo del equipo: recaudado',cmMoney(rr))}
+        ${tr('Recaudo: cumplimiento',rp?cmPct(rr/rp):'—')}
+        ${tr('Ejecutivos con recaudo cargado',rn+' de '+rc.length,rn<rc.length?'#b45309':'#16a34a')}</tbody></table>
+        <div class="arte-mu" style="font-size:11px;margin-top:8px;">El reporte diario suma todo lo facturado. La comisión solo cuenta lo comisionable de quienes están en la liquidación; esta tabla muestra cada diferencia. Si algo cambia (una factura reasignada, un reintegro nuevo, un Excel de recaudo), se actualiza solo.</div></div>
+    </div>`:''}</div>`;
 }
 function cmNuevosAct(){ const ex = ((CM.man||{})._noNuevo)||{}, o = {}; Object.keys(CM.nuevos||{}).forEach(k=>{ if(!ex[k]) o[k] = CM.nuevos[k]; }); return o; }
 async function cmNoNuevo(cli, quitar){
