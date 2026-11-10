@@ -34401,6 +34401,7 @@ function cmPintar(){
       <button class="btn btn-bl btn-sm" onclick="cmSiesa()">🔄 Actualizar desde Siesa</button>
       <button class="btn btn-g btn-sm" onclick="cmPersAdd()">+ Colaborador</button>
       <button class="btn btn-g btn-sm" onclick="cmExcel()">⬇ Excel</button>
+      <button class="btn btn-bl btn-sm" onclick="cmCorreoAbrir()">✉️ Correo del mes</button>
       <button class="btn btn-g btn-sm" onclick="document.getElementById('cm-imp-file').click()">📥 Subir puntos del mes</button><input type="file" id="cm-imp-file" accept=".xlsx,.xls" style="display:none" onchange="cmImportarPuntos(this)">
       <button class="btn btn-g btn-sm" onclick="document.getElementById('cm-rec-file').click()">📥 Subir recaudo (ppto vs ejecución)</button><input type="file" id="cm-rec-file" accept=".xlsx,.xls" style="display:none" onchange="cmImportarRecaudo(this)">
       <span class="arte-mu" style="font-size:11px;">${E(CM.fuente)} · ppto: ${E(CM.pptoFuente||'Mi equipo')}</span>
@@ -34646,6 +34647,50 @@ function cmConcilHtml(F){
         ${tr('Ejecutivos con recaudo cargado',rn+' de '+rc.length,rn<rc.length?'#b45309':'#16a34a')}</tbody></table>
         <div class="arte-mu" style="font-size:11px;margin-top:8px;">El reporte diario suma todo lo facturado. La comisión solo cuenta lo comisionable de quienes están en la liquidación; esta tabla muestra cada diferencia. Si algo cambia (una factura reasignada, un reintegro nuevo, un Excel de recaudo), se actualiza solo.</div></div>
     </div>`:''}</div>`;
+}
+// ── Correo del mes (resumen para copiar y pegar; el Excel se adjunta aparte) ──
+function cmCorreoHtml(nota){
+  const R = CM.reglas, F = cmCalcular(), E = reabastEsc, [a,m] = CM.mes.split('-').map(Number), mesTxt = RV_MESES_L[m-1]+' '+a;
+  const fmt = (c,d)=>cmPct(c,d), td = (v,al,b)=>`<td style="padding:5px 9px;border:1px solid #d1d5db;text-align:${al||'right'};${b?'font-weight:700;':''}">${v}</td>`, th = (v,al)=>`<th style="padding:6px 9px;border:1px solid #d1d5db;background:#1e293b;color:#fff;text-align:${al||'right'};font-size:12px;">${v}</th>`;
+  const it = (x,re)=>x.items.find(i=>re.test(cmNorm(i.n)));
+  const pagan = F.filter(x=>x.pagoFin>0), tot = F.reduce((s,x)=>s+x.pagoFin,0), saludo = new Date().getHours()<12?'Buenos días':'Buenas tardes';
+  const filas = F.map(x=>{ const v = it(x,/^VENTA/), r = it(x,/^RECAUDO/), g = it(x,/^MARGEN/), ex = !!(x.pagoFin>0);
+    return `<tr>${td(E(x.p.nombre),'left',1)}${td(x.p.cargo==='coord'?'Coordinadora':x.p.cargo==='lider'?'Líder de canal':'Vendedor','left')}${td(v?fmt(v.cump):'—')}${td(r?fmt(r.cump):g?'Margen '+fmt(g.cump):'—')}${td(fmt(x.cum),'right',1)}${td(x.prem?fmt(x.prem,0):'—')}${td(x.ptsAp?fmt(x.ptsAp):'—')}${td(fmt(x.tot))}${td(ex?cmMoney(x.pagoFin):'No aplica','right',ex)}</tr>`; }).join('');
+  const resumen = pagan.length ? `Con las condiciones del mes, ${pagan.length} de ${F.length} colaboradores alcanzan el mínimo de ${R.minPago} % para pago de comisión (${pagan.map(x=>E(x.p.nombre)).join(', ')}). El total a pagar es ${cmMoney(tot)}.` : `Con las condiciones del mes, ningún colaborador alcanza el mínimo de ${R.minPago} % para pago de comisión.`;
+  return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#111827;line-height:1.5;">
+<p>${saludo},</p>
+<p>Enviamos el reporte de las comisiones de <b>${E(mesTxt)}</b>. ${E(resumen)}</p>
+${nota?`<p>${E(nota).replace(/\n/g,'<br>')}</p>`:''}
+<table style="border-collapse:collapse;font-size:13px;margin:8px 0 12px;"><thead><tr>${th('Colaborador','left')}${th('Cargo','left')}${th('Venta')}${th('Recaudo')}${th('Cumplimiento')}${th('Premio')}${th('Puntos')}${th('Total matriz')}${th('A pagar')}</tr></thead><tbody>${filas}
+<tr>${td('Total a pagar','left',1)}<td colspan="7" style="border:1px solid #d1d5db;"></td>${td(cmMoney(tot),'right',1)}</tr></tbody></table>
+<p style="margin:10px 0 4px;"><b>Cómo se trabajó</b></p>
+<ul style="margin:0 0 10px 18px;padding:0;">
+<li><b>Venta:</b> facturación de Siesa del mes, sin IVA. No cuentan el reintegro de gastos, las ventas de empleados ni los vendedores que no están en la liquidación. Cada ejecutivo se mide contra su presupuesto de venta; la coordinación, contra el presupuesto de su canal.</li>
+<li><b>Recaudo:</b> del archivo de presupuesto vs ejecución del mes (recaudo acumulado de cada ejecutivo contra su presupuesto).</li>
+<li><b>Cumplimiento:</b> ponderado por la matriz (vendedores: venta ${(CM.personas.find(p=>p.cargo==='vendedor')||{items:[{peso:65},{peso:35}]}).items[0].peso} % y recaudo ${(CM.personas.find(p=>p.cargo==='vendedor')||{items:[{peso:65},{peso:35}]}).items[1].peso} %). Premio por excelencia desde ${R.premios.length?R.premios[0].desde:95} % y tope de ${R.maxPago} %.</li>
+<li><b>Condiciones de pago:</b> no se paga comisión con cumplimiento menor a ${R.minPago} %. Los puntos adicionales aplican desde ${R.umbralPuntos} %.</li>
+<li><b>Detalle:</b> en el Excel adjunto está el cálculo de cada persona.</li></ul>
+<p>Después sacamos un espacio para revisar el nuevo método de generación de comisiones.</p>
+<p>Cordialmente,<br>Duvier Trujillo</p></div>`;
+}
+function cmCorreoAbrir(){
+  const o = document.getElementById('cm-mail-ov') || document.body.appendChild(Object.assign(document.createElement('div'), {id:'cm-mail-ov', className:'ov'})), [a,m] = CM.mes.split('-').map(Number), asunto = 'Comisiones '+RV_MESES_L[m-1]+' '+a;
+  o.innerHTML = `<div class="mo" style="max-width:980px;"><div class="mh"><div class="mt">✉️ Correo de comisiones de ${reabastEsc(RV_MESES_L[m-1])} ${a}</div><button class="mx" onclick="document.getElementById('cm-mail-ov').classList.remove('on')">✕</button></div>
+    <div class="mb"><div style="font-size:12px;margin-bottom:8px;"><b>Para:</b> Sandra · <b>Con copia:</b> Cindy · <b>Asunto:</b> ${reabastEsc(asunto)} <button class="btn btn-g btn-xs" onclick="navigator.clipboard.writeText('${asunto}');toast('Asunto copiado','ok')">Copiar asunto</button></div>
+      <label style="font-size:11.5px;">Nota adicional para el correo (opcional, por ejemplo una novedad de un colaborador)<br><textarea id="cm-mail-nota" class="inp" rows="2" style="width:100%;" oninput="cmCorreoVer()"></textarea></label>
+      <div id="cm-mail-prev" style="border:1px solid var(--b2);border-radius:8px;padding:12px;margin-top:8px;background:#fff;max-height:55vh;overflow:auto;"></div>
+      <div class="arte-mu" style="font-size:11px;margin-top:6px;">Copia el correo, pégalo en Outlook y adjunta el Excel (botón «⬇ Excel»). Los datos son los de la pantalla en este momento.</div></div>
+    <div class="mf"><button class="btn btn-g" onclick="document.getElementById('cm-mail-ov').classList.remove('on')">Cerrar</button><button class="btn btn-p" onclick="cmCorreoCopiar()">📋 Copiar correo</button></div></div>`;
+  o.classList.add('on'); cmCorreoVer();
+}
+function cmCorreoVer(){ const n = (document.getElementById('cm-mail-nota')||{}).value||''; document.getElementById('cm-mail-prev').innerHTML = cmCorreoHtml(n.trim()); }
+async function cmCorreoCopiar(){
+  const el = document.getElementById('cm-mail-prev'), html = el.innerHTML;
+  try{
+    if(window.ClipboardItem && navigator.clipboard && navigator.clipboard.write){ await navigator.clipboard.write([new ClipboardItem({'text/html':new Blob([html],{type:'text/html'}), 'text/plain':new Blob([el.innerText],{type:'text/plain'})})]); }
+    else { const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy'); s.removeAllRanges(); }
+    toast('📋 Correo copiado — pégalo en Outlook (Ctrl+V) y adjunta el Excel','ok');
+  }catch(e){ toast('No pude copiar automáticamente: selecciona el texto y copia con Ctrl+C','wa'); }
 }
 function cmNuevosAct(){ const ex = ((CM.man||{})._noNuevo)||{}, o = {}; Object.keys(CM.nuevos||{}).forEach(k=>{ if(!ex[k]) o[k] = CM.nuevos[k]; }); return o; }
 async function cmNoNuevo(cli, quitar){
