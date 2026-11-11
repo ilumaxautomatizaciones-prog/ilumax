@@ -6511,7 +6511,9 @@ async function ocRamaMoverOk(ramaId){
       }
       n++;
     }
-    ocnAgregar(base.id, [{tipo:'referencia', campo:'Ítems pasados a '+rama.numero_oc, antes:'—', despues:sel.length+' ítem(s)', motivo:'Parcial / envío por lotes', origen:'Pasar ítems a rama'}]).catch(()=>{});
+    { const det = sel.map(({it,q,tot})=>(it.referencia||'')+': '+reabastFmtN(q)+' u.'+(q<tot?' (de '+reabastFmtN(tot)+')':'')).join('\n');
+      ocnAgregar(base.id, [{tipo:'parcial', campo:'Se pasaron ítems a '+rama.numero_oc, antes:base.numero_oc, despues:rama.numero_oc, motivo:'Parcial / envío por lotes', nota:det, origen:'Pasar ítems a rama'}]).catch(()=>{});
+      ocnAgregar(rama.id, [{tipo:'parcial', campo:'Ítems recibidos de '+base.numero_oc, antes:base.numero_oc, despues:rama.numero_oc, motivo:'Parcial / envío por lotes', nota:det, origen:'Pasar ítems a rama'}]).catch(()=>{}); }
     await cargarOC();
     const ov = document.getElementById('rama-mover'); if(ov) ov.remove();
     if(typeof toast==='function') toast('✅ '+sel.length+' ítem(s) pasados a '+rama.numero_oc,'ok');
@@ -8525,7 +8527,24 @@ function comprasTabArtes(L){
       const hechos = ARTEPASOS_DEF.filter(p=>d[p.n]).length, sig = ARTEPASOS_DEF.find(p=>!d[p.n]), puede = hechos===7 ? false : (sig && artepasosPuede(sig));
       const bt = hechos===7||(st.on&&!hechos) ? '<span class="arte-mu">✅</span>' : puede ? `<button class="btn btn-gr btn-xs" style="white-space:nowrap;" onclick="comprasArteItem('${o.id}',${ix},true)">✔ Seleccionar todas</button>` : '';
       return `<tr><td style="font-family:monospace;"><b>${E(it.referencia||'')}</b></td><td>${E(it.descripcion||'')}</td><td style="text-align:right;">${infFmt(it.cantidad)}</td>${cel}<td style="text-align:center;">${bt}</td></tr>`; }).join('');
-    return comprasOCBloque(o, head, `<th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th>${th}<th style="text-align:center;font-size:10px;">Todos los pasos<div class="arte-mu" style="font-size:9px;">de la referencia</div></th>`, rows); }).join('');
+    const elegibles = p => its.filter(it=>{ if(!comprasItemOk(o,it)) return false; const d = artepasosDe(o.id,it), st = refchkEstado(o,it,'arte'); return !d[p.n] && !st.on && !st.todo && (p.n===1 || !!d[p.n-1]); }).length;
+    const th0 = ARTEPASOS_DEF.map(p=>{ const n = artepasosPuede(p) ? elegibles(p) : 0; return `<th style="text-align:center;border-bottom:0;">${n?`<button class="btn btn-gr btn-xs" style="white-space:nowrap;font-size:10px;" title="Marcar el paso ${p.n} en las ${n} referencias que lo tienen disponible" onclick="comprasArtePasoTodas('${o.id}',${p.n})">✔ Seleccionar todas</button>`:''}</th>`; }).join('');
+    return comprasOCBloque(o, head, `<th colspan="3" style="border-bottom:0;"></th>${th0}<th style="border-bottom:0;"></th></tr><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th>${th}<th style="text-align:center;font-size:10px;">Todos los pasos<div class="arte-mu" style="font-size:9px;">de la referencia</div></th>`, rows); }).join('');
+}
+async function comprasArtePasoTodas(ocId, n){
+  const its = REABAST.ocItems[ocId]||[], o = (REABAST.ordenesCompra||[]).find(x=>String(x.id)===String(ocId)), p = ARTEPASOS_DEF.find(x=>x.n===n);
+  if(!p || !o || !artepasosPuede(p)) return;
+  const ixs = []; its.forEach((it,ix)=>{ if(!comprasItemOk(o,it)) return; const d = artepasosDe(ocId,it), st = refchkEstado(o,it,'arte'); if(!d[n] && !st.on && !st.todo && (n===1 || d[n-1])) ixs.push(ix); });
+  if(!ixs.length) return;
+  const quien = (CU && CU.nombre) || '', t = new Date().toISOString();
+  const aplicar = d => { d[ocId] = d[ocId]||{}; ixs.forEach(ix=>{ const k = refchkKey(its[ix]); d[ocId][k] = d[ocId][k]||{}; d[ocId][k][n] = {t, q:quien}; }); };
+  aplicar(ARTEPASOS.datos); reabastPintar();
+  try{
+    let remoto = {}; try{ const r = await sb.get('configuracion','clave=eq.oc_arte_pasos'); if(r && r[0] && r[0].valor) remoto = JSON.parse(r[0].valor)||{}; }catch(e){}
+    aplicar(remoto); ARTEPASOS.datos = remoto;
+    await sb.upsert('configuracion', {clave:'oc_arte_pasos', valor:JSON.stringify(remoto), tipo:'json'}, 'clave');
+  }catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); return; }
+  if(n===7){ for(const ix of ixs){ try{ await refchkToggle(ocId, ix, 'arte', true, null, t); }catch(e){} } }
 }
 async function comprasArteItem(ocId, ix, on){
   const it = (REABAST.ocItems[ocId]||[])[ix]; if(!it) return;
@@ -16623,6 +16642,7 @@ const OCN_TIPOS = {
   especificacion:{i:'⚙️', l:'Cambio de especificación',   c:'#7c3aed'},
   condiciones:   {i:'📄', l:'Cambio de condiciones',      c:'#2563eb'},
   referencia:    {i:'🏷', l:'Referencia agregada/quitada', c:'#2563eb'},
+  parcial:       {i:'✂️', l:'Orden parcializada',          c:'#0891b2'},
   arte:          {i:'🎨', l:'Arte (devoluciones/cambios)', c:'#64748b'},
   otro:          {i:'📝', l:'Otra novedad',               c:'#64748b'}
 };
@@ -21480,6 +21500,14 @@ async function ocParcGuardar(ocId){
       if(!ex) PRODF.datos[rama.id] = {nueva:f, motivo:'Parcialización de la orden', nota, quien, t:new Date().toISOString(), hist:[{de:null, a:f, motivo:'Parcialización de la orden', nota, quien, t:new Date().toISOString()}]};
     }
     try{ const ins = await sbReabast.post('oc_parciales', log); PARC.rows = (ins||[]).concat(PARC.rows||[]); }catch(e){ console.warn('oc_parciales', e); toast('Se separó la orden, pero no se pudo guardar el seguimiento: '+e.message,'wa'); }
+    try{   // queda en el histórico de novedades de la orden original y de cada parcial
+      const porDest = {}; log.forEach(l=>{ (porDest[l.oc_destino_id] = porDest[l.oc_destino_id]||{num:l.oc_destino, l:[]}).l.push(l); });
+      for(const rid of Object.keys(porDest)){
+        const g = porDest[rid], det = g.l.map(l=>l.referencia+': '+reabastFmtN(l.cant_movida)+' u. (de '+reabastFmtN(l.cant_origen_antes)+')').join('\n')+'\nFin de producción de la parcial: '+g.l[0].fecha_fin+(nota?'\n'+nota:'');
+        await ocnAgregar(oc.id, [{tipo:'parcial', campo:'Se parcializó a '+g.num, antes:oc.numero_oc, despues:g.num, motivo:'Fecha de fin de producción distinta', nota:det, origen:'Parcializar orden'}]);
+        await ocnAgregar(rid, [{tipo:'parcial', campo:'Parcial creada desde '+oc.numero_oc, antes:oc.numero_oc, despues:g.num, motivo:'Fecha de fin de producción distinta', nota:det, origen:'Parcializar orden'}]);
+      }
+    }catch(e){ console.warn('novedad parcial', e); }
     await prodfGuardar();
     const mm = document.getElementById('parc-modal'); if(mm) mm.remove();
     toast('Orden parcializada: '+creadas.join(', ')+' · la original conserva '+reabastFmtN((REABAST.ocItems[ocId]||[]).reduce((a,i)=>a+(Number(i.cantidad)||0),0))+' u.','ok'); try{ reabastPintar(); }catch(e){}
