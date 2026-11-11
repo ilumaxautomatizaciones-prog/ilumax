@@ -1313,7 +1313,25 @@ function cliElegir(nit) {
   $('fNit').value = c.nit; $('fCli').value = c.nombre; $('fEj').value = c.ej; $('fCan').value = c.canal; $('fLista').style.display = 'none';
   if (!$('fRef').value) $('fRef').value = c.nit;
 }
-function cliPorRef() { const c = EXT.cidx.get(String($('fRef').value).trim()); if (c && !$('fCli').value) cliElegir(c.nit); }
+const ejCod = v => { const k = nz(v || ''); if (!k) return ''; const h = Object.keys(EJ_MAP).find(c => nz(EJ_MAP[c]) === k); return h || String(v).trim(); };
+async function cliSiesa(nits) {
+  const L = [...new Set(nits.filter(Boolean))]; if (!L.length) return {};
+  const j = await extApi({ accion: 'cliente_siesa', nits: L }); return j && j.ok ? j.clientes || {} : {};
+}
+function cliAplicar(c) { // datos que vienen de Siesa
+  $('fNit').value = c.nit; $('fCli').value = c.nombre; $('fEj').value = c.ejecutivo || ejCod(c.vendedor); $('fCan').value = c.canal || ''; $('fLista').style.display = 'none';
+  if (!$('fRef').value) $('fRef').value = c.nit;
+}
+async function cliPorRef(id) {
+  const el = $(id || 'fRef'), v = String(el.value).trim().replace(/\.0+$/, ''), d = v.replace(/\D/g, ''), c = EXT.cidx.get(v) || EXT.cidx.get(d) || (d.length === 10 ? EXT.cidx.get(d.slice(0, 9)) : null), m = $('fCliMsg');
+  if (m) m.textContent = '';
+  if (c) { if (id === 'fNit' || !$('fCli').value) { cliElegir(c.nit); if (id === 'fNit' && !$('fRef').value) $('fRef').value = c.nit; } return; }
+  if (!d || d.length < 5 || (id !== 'fNit' && $('fCli').value)) return;
+  if (m) m.textContent = 'Buscando en Siesa…';
+  const r = (await cliSiesa([d]))[d];
+  if (r) { cliAplicar(r); if (m) m.textContent = r.canal && (r.ejecutivo || r.vendedor) ? '' : 'Traído de Siesa. Faltan ' + [(r.ejecutivo || r.vendedor) ? '' : 'ejecutivo', r.canal ? '' : 'canal'].filter(Boolean).join(' y ') + ': complétalo a mano o con Guardar cliente.'; }
+  else if (m) m.textContent = 'El NIT ' + d + ' no aparece en Siesa ni en la base de clientes: escribe el nombre en Cliente o créalo.';
+}
 async function cliNuevo() {
   $('fLista').style.display = 'none';
   const nit = prompt('NIT / cédula del cliente nuevo (sin puntos ni dígito de verificación):', $('fRef').value || ''); if (!nit) return;
@@ -1340,7 +1358,7 @@ function extForm(r) {
     + f('', 'Referencia del cliente (NIT que trae el banco)', '<input id="fRef" value="' + esc(r.ref_cliente || '') + '" onchange="cliPorRef()">')
     + f('', 'RC (número o NA-/TES-)', '<input id="fRc" value="' + esc(r.rc || '') + '" onchange="rcInfo()"><div id="fRcInfo" style="font-size:11px;color:#475569"></div>')
     + f('', 'Cliente (escribe nombre o NIT y elige)', '<input id="fCli" autocomplete="off" value="' + esc(r.cliente || '') + '" oninput="cliBuscar(this.value)"><div class="lst" id="fLista" style="display:none"></div>', 1)
-    + f('', 'NIT', '<input id="fNit" value="' + esc(r.nit || '') + '">')
+    + f('', 'NIT', '<input id="fNit" value="' + esc(r.nit || '') + '" onchange="cliPorRef(\'fNit\')"><div id="fCliMsg" style="font-size:11px;color:#b45309"></div>')
     + f('', 'Ejecutivo', '<input id="fEj" list="dlEj" value="' + esc(r.ejecutivo || '') + '"><datalist id="dlEj">' + eje.map(e => '<option value="' + esc(e) + '">').join('') + '</datalist>')
     + f('', 'Canal', '<input id="fCan" list="dlCan" value="' + esc(r.canal || '') + '"><datalist id="dlCan">' + can.map(e => '<option value="' + esc(e) + '">').join('') + '</datalist>')
     + f('', 'Observación', '<input id="fObs" value="' + esc(r.observacion || '') + '">', 1)
@@ -1429,6 +1447,8 @@ function extExcel() {
     const R = [], bad = []; for (const f of i.files) { try { const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true }), r = extExcelLeer(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null })); if (r) { r.archivo = f.name; R.push(r); } else bad.push(f.name); } catch (e) { bad.push(f.name); } }
     if (!R.length) { alert('No reconocí el formato del archivo (Bancolombia, Occidente, Davivienda o Bogotá).'); return; }
     await extClientes(); R.forEach(r => r.filas.forEach(f => { const cl = f.ref_cliente && EXT.cidx.get(f.ref_cliente); if (cl) { f.nit = cl.nit; f.cliente = cl.nombre; f.ejecutivo = cl.ej; f.canal = cl.canal; } }));
+    const faltan = []; R.forEach(r => r.filas.forEach(f => { if (f.ref_cliente && !f.cliente) faltan.push(f.ref_cliente); }));
+    try { const S = await cliSiesa(faltan); R.forEach(r => r.filas.forEach(f => { const c = !f.cliente && S[f.ref_cliente]; if (c) { f.nit = c.nit; f.cliente = c.nombre; f.ejecutivo = c.ejecutivo || ejCod(c.vendedor); f.canal = c.canal || ''; } })); } catch (e) { }
     EXT.subida = R; const d = document.createElement('div'); d.id = 'xwrap';
     d.innerHTML = '<div class="ov on"><div class="mo"><div class="mh"><span>Subir extracto del banco</span><button class="btn g" onclick="extCerrar()">✕</button></div><div style="padding:14px;font-size:13px">'
       + R.map(r => '<div style="margin-bottom:8px"><b>' + esc(r.banco) + '</b> · ' + esc(r.archivo) + '<br>' + r.filas.length + ' entradas por ' + fmc(r.filas.reduce((a, f) => a + f.monto, 0)) + ' · ' + r.omit + ' omitidas (salidas / no cuentan) · ' + r.filas.filter(f => f.cliente).length + ' con cliente identificado</div>').join('')
