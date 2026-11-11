@@ -137,7 +137,7 @@ function pintar() {
   $('out').style.display = '';
   const pos = sumB(D.cls), venc = D.cls.reduce((s, c) => s + c.b[1] + c.b[2] + c.b[3] + c.b[4], 0), v90 = D.cls.reduce((s, c) => s + c.b[4], 0), fav = D.cls.reduce((s, c) => s + c.fav, 0);
   const rec30 = D.recs.filter(r => Date.parse(hoy) - Date.parse(r.fecha) < 30 * 864e5).reduce((s, r) => s + r.valor, 0);
-  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ppe', '📊 Ppto vs Ejecución'], ['ext', '🏦 Extracto bancario']];
+  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ppe', '📊 Ppto vs Ejecución'], ['ext', '🏦 Extracto bancario'], ['ofac', '🛡️ OFAC']];
   $('app').innerHTML = '<div class="kpis">'
     + kpi('Cartera por cobrar', fmc(pos), D.cls.filter(c => c.tot > 0).length + ' clientes con saldo')
     + kpi('Vencida', fmc(venc), pos ? Math.round(venc / pos * 100) + '% de la cartera' : '')
@@ -217,6 +217,8 @@ function vista(soloTabla) {
     ppeVista();
   } else if (TAB === 'ext') {
     extVista();
+  } else if (TAB === 'ofac') {
+    ofacVista();
   } else {
     if (REC) { recPintar(); return; }
     const q = Q.trim().toUpperCase(), L = D.recs.filter(r => !q || (r.cli + ' ' + r.nit + ' ' + r.doc).toUpperCase().includes(q));
@@ -1213,6 +1215,28 @@ function xgExcel(id) {
   XLSX.utils.book_append_sheet(wb, ws, 'VISTA'); XLSX.writeFile(wb, (g.nombre || id) + '.xlsx');
 }
 
+/* ===== Verificación OFAC (lista SDN y consolidada) ===== */
+const OFAC_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-ofac';
+const ofacApi = async b => { try { const r = await fetch(OFAC_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
+function ofacHtml(j, doc, nombre) {
+  if (!j || !j.ok) return '<div class="err">' + esc((j && j.error) || 'No se pudo consultar') + '</div>';
+  const fa = j.actualizado ? String(j.actualizado).slice(0, 10) : '';
+  const que = (j.consulto.doc ? 'documento ' + esc(doc) : '') + (j.consulto.doc && j.consulto.nombre ? ' y ' : '') + (j.consulto.nombre ? 'nombre ' + esc(nombre) : '');
+  if (!j.consulto.doc && !j.consulto.nombre) return '<div class="err">Escribe un documento (mín. 6 dígitos) o un nombre con al menos 2 palabras.</div>';
+  if (!j.coincidencias.length) return '<div style="padding:14px;border-radius:10px;background:#dcfce7;color:#166534"><b>✅ No aparece en la lista OFAC</b><br>Consultado por ' + que + ' · lista del ' + fa + '.' + (j.consulto.doc ? '' : '<br><small>Solo se buscó por nombre; agrega el documento para una verificación más segura.</small>') + '</div>';
+  const doc_ = j.coincidencias.some(c => c.por === 'documento');
+  return '<div style="padding:14px;border-radius:10px;background:#fee2e2;color:#991b1b"><b>⛔ ' + (doc_ ? 'COINCIDE POR DOCUMENTO: NO se puede crear' : 'Posible coincidencia por nombre: revisar') + '</b> (' + j.coincidencias.length + ') · lista del ' + fa + '</div>'
+    + '<div class="tw"><table><thead><tr><th>Coincide por</th><th>Nombre en OFAC</th><th>Tipo</th><th>Programa</th><th>Datos</th></tr></thead><tbody>' + j.coincidencias.map(c => '<tr><td><b>' + esc(c.por) + '</b></td><td>' + esc(c.nombre) + '<br><small>' + esc(c.lista) + ' #' + esc(c.ent_num) + '</small></td><td>' + esc(c.tipo) + '</td><td>' + esc(c.programa) + '</td><td style="white-space:normal;max-width:420px"><small>' + esc(c.remarks) + '</small></td></tr>').join('') + '</tbody></table></div>';
+}
+async function ofacVista() {
+  const c = $('cont'); c.innerHTML = '<div class="err">Cargando…</div>'; const e = await ofacApi({ accion: 'estado' }), m = e && e.ok ? e.meta : null;
+  c.innerHTML = '<div class="card"><h2>🛡️ Verificación OFAC</h2><div class="bar"><input id="ofd" placeholder="Cédula / NIT (sin puntos)" style="max-width:220px" onkeydown="if(event.key===\'Enter\')ofacConsultar()"><input id="ofn" placeholder="Nombre o razón social (opcional)" style="max-width:320px" onkeydown="if(event.key===\'Enter\')ofacConsultar()"><button class="btn" onclick="ofacConsultar()">🔎 Consultar</button></div>'
+    + '<div id="ofr" style="margin-top:10px"></div><div style="font-size:12px;color:#64748b;margin-top:12px">' + (m ? 'Lista OFAC cargada: ' + esc(String(m.actualizado).slice(0, 10)) + ' · ' + m.total + ' registros (SDN + consolidada). Se actualiza sola cada día.' : 'La lista OFAC aún no está cargada.') + ' Una coincidencia por nombre no confirma nada: hay que revisarla.</div></div>';
+}
+async function ofacConsultar() {
+  const d = $('ofd').value.trim(), n = $('ofn').value.trim(), r = $('ofr'); r.innerHTML = '<div class="err">Consultando…</div>';
+  r.innerHTML = ofacHtml(await ofacApi({ accion: 'consulta', doc: d, nombre: n }), d, n);
+}
 /* ===== Extracto bancario (lo que realmente entra a los bancos) ===== */
 const EXT_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-extracto';
 const nz = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
@@ -1339,6 +1363,10 @@ async function cliNuevo() {
   const nombre = prompt('Nombre del cliente:', $('fCli').value || ''); if (!nombre) return;
   const ej = prompt('Código del ejecutivo (ej. CFLOREZ, CTAYLOR, VENTAS DIRECTAS):', $('fEj').value || ''); if (ej === null) return;
   const canal = prompt('Canal (ESPECIALIZADO, MIXTO, ONLINE, PROYECTOS, MODERNO…):', $('fCan').value || 'ESPECIALIZADO'); if (canal === null) return;
+  const of = await ofacApi({ accion: 'consulta', doc: nit.trim(), nombre: nombre.trim() });
+  if (!of || !of.ok) { if (!confirm('No pude verificar la lista OFAC (' + ((of && of.error) || 'error') + ').\n¿Crear el cliente SIN verificar?')) return; }
+  else if (of.coincidencias.some(c => c.por === 'documento')) { alert('⛔ NO SE PUEDE CREAR: el documento ' + nit.trim() + ' aparece en la lista OFAC (' + of.coincidencias.filter(c => c.por === 'documento').map(c => c.nombre).join(', ') + ').'); return; }
+  else if (of.coincidencias.length && !confirm('⚠️ El nombre se parece a ' + of.coincidencias.slice(0, 3).map(c => c.nombre).join(' / ') + ' (lista OFAC).\nRevísalo en la pestaña OFAC. ¿Crear el cliente de todos modos?')) return;
   const j = await extApi({ accion: 'cliente_guardar', cliente: { nit: nit.trim(), nombre: nombre.trim(), ejecutivo: ej.trim(), canal: canal.trim() } });
   if (!j || !j.ok) { alert((j && j.error) || 'No se pudo guardar el cliente'); return; }
   const c = { nit: nit.trim(), nombre: nombre.trim().toUpperCase(), ej: ej.trim().toUpperCase(), canal: canal.trim().toUpperCase(), proy: '', k: nz(nit + ' ' + nombre) };
