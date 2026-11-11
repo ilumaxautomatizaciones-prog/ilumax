@@ -667,9 +667,17 @@ function ppeCfgPintar() {
     + '<div style="font-size:12px;font-weight:700;margin-bottom:4px">Semanas (desde – hasta)</div><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:10px">' + E.sem.map((w, i) => '<div style="font-size:12px">Sem ' + (i + 1) + ' <input type="date" value="' + w[0] + '" onchange="PPE.ed.sem[' + i + '][0]=this.value" style="' + inp + '"> – <input type="date" value="' + w[1] + '" onchange="PPE.ed.sem[' + i + '][1]=this.value" style="' + inp + '"></div>').join('') + '</div>'
     + '<div style="font-size:12px;font-weight:700;margin-bottom:4px">Presupuesto por ejecutivo <span style="font-weight:400;color:#64748b">(el nombre debe ser como sale en Siesa)</span></div><table style="width:100%;font-size:12px"><thead><tr><th>COD</th><th style="text-align:left">Ejecutivo</th><th>Presupuesto</th><th></th></tr></thead><tbody>'
     + Object.keys(E.f).map((n, i) => '<tr><td><input value="' + esc(E.cod[n] || '') + '" oninput="PPE.ed.cod[PPE.ed.k[' + i + ']]=this.value" style="width:60px;' + inp + '"></td><td style="text-align:left">' + esc(n) + '</td><td><input value="' + E.f[n][0] + '" oninput="PPE.ed.f[PPE.ed.k[' + i + ']][0]=ppeNum(this.value)" style="width:140px;text-align:right;' + inp + '"></td><td><button class="btn" onclick="ppeCfgQuitar(' + i + ')">✕</button></td></tr>').join('') + '</tbody></table>'
+    + '<div style="margin:8px 0;padding:8px;background:#f8fafc;border-radius:8px;font-size:12px"><b>Calcular desde cartera</b>: pendiente con vencimiento hasta fin de mes + facturado hasta el día <input id="ppe-dcorte" type="number" value="25" min="1" max="31" style="width:48px;' + inp + '"> <label><input id="ppe-crec" type="checkbox" checked> sumar lo ya recaudado del mes</label> <button class="btn" onclick="ppeCfgCalc()">🧮 Calcular</button></div>'
     + '<div style="margin:8px 0"><b style="font-size:12px">Pegar desde Excel</b> <span style="font-size:11px;color:#64748b">(columnas: COD, EJECUTIVO, PPTO · o solo EJECUTIVO, PPTO)</span><textarea id="ppe-pega" rows="4" style="width:100%;' + inp + '" placeholder="103&#9;CHAVES ZULUAGA GERSSON ANDRES&#9;114.682.771"></textarea><button class="btn" onclick="ppeCfgPegar()">Cargar lo pegado</button></div>'
     + '<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" onclick="$(\'ppe-cfg\').remove()">Cancelar</button><button class="btn" style="background:#f5c518;font-weight:800" onclick="ppeCfgGuardar()">💾 Guardar</button></div></div>';
   E.k = Object.keys(E.f);
+}
+function ppeCfgCalc() {
+  const E = PPE.ed; if (!D || !D.docsL) { alert('Espera a que cargue la cartera'); return; }
+  const dia = +($('ppe-dcorte').value || 25), fin = E.sem[E.sem.length - 1][1], corte = E.mes + '-' + String(dia).padStart(2, '0'), incl = $('ppe-crec').checked;
+  const tot = {}; D.docsL.forEach(x => { if (!(x.saldo > 0) || !x.vcto || x.vcto > fin || (x.fecha && x.fecha > corte)) return; const v = nz(x.vend); tot[v] = (tot[v] || 0) + x.saldo; });
+  const rec = {}; if (incl && PPE.r && PPE.mes === E.mes) (PPE.r.filas || []).forEach(f => { if (ppeEsNH(f) || !f.fecha || f.fecha.slice(0, 7) !== E.mes) return; const v = nz(f.vendedor); rec[v] = (rec[v] || 0) + (f.asignado || 0); });
+  Object.keys(E.f).forEach(n => { E.f[n][0] = Math.round((tot[nz(n)] || 0) + (rec[nz(n)] || 0)); }); ppeCfgPintar(); $('ppe-cfg').scrollTo(0, 0);
 }
 function ppeCfgMes(mes) { if (!mes) return; PPE.ed = ppeCfgBase(mes); ppeCfgPintar(); }
 function ppeCfgQuitar(i) { const n = PPE.ed.k[i]; delete PPE.ed.f[n]; delete PPE.ed.cod[n]; ppeCfgPintar(); }
@@ -1275,7 +1283,7 @@ function extPintar(solo) {
     + '<select onchange="EXT.banco=this.value;extPintar(true)"><option value="">Todos los bancos</option>' + [...new Set(R.map(r => r.banco).filter(Boolean))].sort().map(b => '<option' + (EXT.banco === b ? ' selected' : '') + '>' + esc(b) + '</option>').join('') + '</select>'
     + '<select onchange="EXT.est=this.value;extPintar(true)"><option value="">Todos los estados</option>' + Object.entries(EXT_PILL).map(([k, v]) => '<option value="' + k + '"' + (EXT.est === k ? ' selected' : '') + '>' + v[1] + '</option>').join('') + '</select>'
     + '<select onchange="EXT.ej=this.value;extPintar(true)"><option value="">Todos los ejecutivos</option>' + ejs.map(e => '<option' + (EXT.ej === e ? ' selected' : '') + '>' + esc(e) + '</option>').join('') + '</select></div>'
-    + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
+    + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn" onclick="extExcel()">📤 Subir extracto (Excel)</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
   c.innerHTML = '<div id="xtab">'
     + '<div class="kpis">' + kpi('Entró al banco', fmc(tc), R.length + ' movimientos') + kpi('Con RC', fmc(tot(por('rc'))), por('rc').length + ' mov.') + kpi('Sin RC', fmc(tot(por('sinrc'))), por('sinrc').length + ' con cliente, falta RC') + kpi('Sin identificar', fmc(tot(por('sinid'))), por('sinid').length + ' sin cliente') + kpi('Otros', fmc(tot(por('otro'))), 'tesorería, nómina, NA…') + '</div>'
     + tabs + bar + '<div id="xsub"></div><div id="xcruce"></div><div class="card" id="xcardext"><h2 id="xh2">' + esc(titulo) + '</h2>' + xgBar('ext') + '<div class="tw" id="xg_ext"></div></div></div>';
@@ -1386,6 +1394,53 @@ async function extPegarOk() {
   $('xpbtn').disabled = true; m.textContent = 'Agregando ' + filas.length + '…'; let nu = 0, om = 0;
   for (let i = 0; i < filas.length; i += 400) { const j = await extApi({ accion: 'lote', filas: filas.slice(i, i + 400) }); if (!j || !j.ok) { m.innerHTML = '<span style="color:#b91c1c">' + esc((j && j.error) || 'Error') + '</span>'; $('xpbtn').disabled = false; return; } nu += j.nuevas; om += j.omitidas; }
   alert('Agregados ' + nu + ' movimientos' + (om ? ' · ' + om + ' ya existían' : '') + (malas.length ? ' · ' + malas.length + ' filas ignoradas (fecha o monto no válidos)' : '')); extCerrar(); EXT.cache = {}; await extVista();
+}
+
+/* ---- subir extracto del banco en Excel (automático) ----
+   Reglas por banco (solo entradas): Bancolombia valor > 0 · Occidente Créditos > 0 (sin intereses) · Davivienda Nota Crédito · Bogotá indicador C */
+const xSin = v => (v == null ? '' : String(v)).trim();
+const xRef = v => { let s = xSin(v).replace(/\.0+$/, ''); if (/^(N\/A|0+)$/i.test(s)) return ''; s = s.replace(/\D/g, ''); return s.length === 10 && /^[89]/.test(s) ? s.slice(0, 9) : s; };
+function xFechaD(v) { if (v instanceof Date) return new Date(v.getTime() + 12 * 36e5).toISOString().slice(0, 10); if (typeof v === 'number' && v > 19000000 && v < 21000000) { const s = String(v); return s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8); } return xFecha(v); }
+function extExcelLeer(rows) {
+  const fila = (banco, fecha, descripcion, texto_ref, monto, cheque, ref) => ({ banco, fecha, descripcion, texto_ref, monto, monto_cheque: cheque > 0 ? String(cheque) : '', ref_cliente: ref });
+  const hdr = (re) => rows.findIndex(r => r && r.some(c => re.test(xSin(c)))), out = [], r = { omit: 0 };
+  let h;
+  if ((h = hdr(/^Fecha de Sistema$/i)) >= 0) { r.banco = 'DAVIVIENDA'; const H = rows[h].map(xSin), ix = n => H.findIndex(x => x.toLowerCase().startsWith(n));
+    rows.slice(h + 1).forEach(c => { if (!c || !c[0]) return; const mo = xNum(c[ix('valor total')]); if (!/cr[eé]dito/i.test(xSin(c[ix('transacci')])) || !(mo > 0)) { r.omit++; return; }
+      out.push(fila(r.banco, xFechaD(c[0]), xSin(c[ix('descripci')]), '', mo, xNum(c[ix('valor  cheque')] != null ? c[ix('valor  cheque')] : c[ix('valor')]) || 0, xRef(c[ix('id origen')]))); }); }
+  else if ((h = hdr(/Indicador D[eé]bito/i)) >= 0) { r.banco = 'BANCO DE BOGOTA'; const H = rows[h].map(xSin), ix = n => H.findIndex(x => x.toLowerCase().startsWith(n.toLowerCase()));
+    rows.slice(h + 1).forEach(c => { if (!c || !c[ix('Indicador')]) return; const mo = xNum(c[ix('Valor')]); if (xSin(c[ix('Indicador')]).toUpperCase() !== 'C' || !(mo > 0)) { r.omit++; return; }
+      const tx = xSin(c[ix('Texto de Ref')]); let ref = xRef(c[ix('Referencia del Cliente')]); if (!ref) { const m = tx.match(/Nit\s*(\d{5,12})/i) || tx.match(/comprobante\s+(\d{5,12})/i) || tx.match(/Nit(\d{5,12})/i); ref = m ? xRef(m[1]) : ''; }
+      out.push(fila(r.banco, xFechaD(c[ix('Fecha')]) || xFechaD(c[ix('Fecha de Trans')]), xSin(c[ix('Descripción de')] >= 0 ? c[ix('Descripción de')] : c[9]), tx, mo, xNum(c[ix('Monto en Cheque')]) || 0, ref)); }); }
+  else if ((h = hdr(/^Cr[eé]ditos$/i)) >= 0) { r.banco = 'BDO OCCIDENTE'; const H = rows[h].map(xSin), ix = n => H.findIndex(x => x.toLowerCase() === n.toLowerCase());
+    rows.slice(h + 1).forEach(c => { if (!c || !c[ix('Fecha')]) return; const cr = xNum(c[ix('Créditos')]), tr = xSin(c[ix('Transacción')]); if (!(cr > 0) || /INTERESES/i.test(tr)) { r.omit++; return; }
+      const n = x => { const v = xSin(x); return /^N\/A$/i.test(v) ? '' : v; };
+      out.push(fila(r.banco, xFechaD(c[ix('Fecha')]), tr, n(c[ix('Referencia 2')]), cr, xNum(c[ix('Valor Cheque')]) || 0, xRef(c[ix('Referencia 1')]))); }); }
+  else if (rows.some(c => c && /^\d{3}-\d{6}-\d{2}$/.test(xSin(c[0])))) { r.banco = 'BANCOLOMBIA';
+    rows.forEach(c => { if (!c || !/^\d{3}-\d{6}-\d{2}$/.test(xSin(c[0]))) return; const mo = xNum(c[5]); if (!(mo > 0)) { r.omit++; return; }
+      out.push(fila(r.banco, xFechaD(c[3]), xSin(c[7]), '', mo, 0, '')); }); }
+  else return null;
+  r.filas = out.filter(f => f.fecha && f.monto > 0); return r;
+}
+function extExcel() {
+  if (typeof XLSX === 'undefined') { alert('No cargó la librería de Excel. Revisa la conexión.'); return; }
+  const i = document.createElement('input'); i.type = 'file'; i.accept = '.xlsx,.xls'; i.multiple = true;
+  i.onchange = async () => {
+    const R = [], bad = []; for (const f of i.files) { try { const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true }), r = extExcelLeer(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null })); if (r) { r.archivo = f.name; R.push(r); } else bad.push(f.name); } catch (e) { bad.push(f.name); } }
+    if (!R.length) { alert('No reconocí el formato del archivo (Bancolombia, Occidente, Davivienda o Bogotá).'); return; }
+    await extClientes(); R.forEach(r => r.filas.forEach(f => { const cl = f.ref_cliente && EXT.cidx.get(f.ref_cliente); if (cl) { f.nit = cl.nit; f.cliente = cl.nombre; f.ejecutivo = cl.ej; f.canal = cl.canal; } }));
+    EXT.subida = R; const d = document.createElement('div'); d.id = 'xwrap';
+    d.innerHTML = '<div class="ov on"><div class="mo"><div class="mh"><span>Subir extracto del banco</span><button class="btn g" onclick="extCerrar()">✕</button></div><div style="padding:14px;font-size:13px">'
+      + R.map(r => '<div style="margin-bottom:8px"><b>' + esc(r.banco) + '</b> · ' + esc(r.archivo) + '<br>' + r.filas.length + ' entradas por ' + fmc(r.filas.reduce((a, f) => a + f.monto, 0)) + ' · ' + r.omit + ' omitidas (salidas / no cuentan) · ' + r.filas.filter(f => f.cliente).length + ' con cliente identificado</div>').join('')
+      + (bad.length ? '<div style="color:#b91c1c">Sin reconocer: ' + esc(bad.join(', ')) + '</div>' : '') + '<div style="font-size:12px;color:#475569">Los movimientos que ya estén cargados se omiten solos.</div><div id="xpmsg" style="font-size:12px;margin-top:6px"></div></div><div class="mf"><button class="btn g" onclick="extCerrar()">Cancelar</button><button class="btn" id="xpbtn" onclick="extExcelOk()">Cargar</button></div></div></div>';
+    document.body.appendChild(d);
+  };
+  i.click();
+}
+async function extExcelOk() {
+  const filas = EXT.subida.flatMap(r => r.filas), m = $('xpmsg'); $('xpbtn').disabled = true; m.textContent = 'Cargando ' + filas.length + '…'; let nu = 0, om = 0;
+  for (let i = 0; i < filas.length; i += 400) { const j = await extApi({ accion: 'lote', filas: filas.slice(i, i + 400) }); if (!j || !j.ok) { m.innerHTML = '<span style="color:#b91c1c">' + esc((j && j.error) || 'Error') + '</span>'; $('xpbtn').disabled = false; return; } nu += j.nuevas; om += j.omitidas; }
+  alert('Cargados ' + nu + ' movimientos nuevos' + (om ? ' · ' + om + ' ya existían' : '')); extCerrar(); EXT.cache = {}; await extVista();
 }
 /* ---- cruce con Siesa ---- */
 function cruSies(r) {
