@@ -1473,9 +1473,9 @@ let ATE = { it: [], sin: [], ya: 0 };
 const ateFecha = v => { if (v instanceof Date) return new Date(v.getTime() + 12 * 36e5).toISOString().slice(0, 10); const m = String(v || '').match(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/); return m ? m[3] + '-' + pad2(m[2]) + '-' + pad2(m[1]) : xFecha(v); };
 const ateTok = s => nz(s).replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !/^(SAS|LTDA|S A S|LIMITADA|DISTRIBUCIONES|COMERCIALIZADORA)$/.test(w));
 function ateLeer(rows) {
-  const h = rows.findIndex(r => r && r.some(c => /^Numero recibo/i.test(xSin(c)))); if (h < 0) return null;
-  const H = rows[h].map(xSin), ix = n => H.findIndex(x => x.toLowerCase().startsWith(n.toLowerCase())), o = [];
-  rows.slice(h + 1).forEach(c => { if (!c) return; const num = xSin(c[ix('Numero recibo')]); if (!num) return; if (/ANULAD|RECHAZ/i.test(xSin(c[ix('Estado')]))) return;
+  const N = c => nz(xSin(c)).replace(/\s+/g, ' '), h = rows.findIndex(r => r && r.some(c => /^(NUMERO|NRO\.?|N°) ?(DE )?RECIBO/.test(N(c)))); if (h < 0) return { err: 'No encontré la columna "Número recibo". Primeras filas: ' + rows.slice(0, 3).map(r => (r || []).slice(0, 6).map(xSin).join(' | ')).join(' // ') };
+  const H = rows[h].map(N), ix = n => H.findIndex(x => x.startsWith(nz(n))), o = [];
+  rows.slice(h + 1).forEach(c => { if (!c) return; const num = xSin(c[ix('Numero recibo') >= 0 ? ix('Numero recibo') : ix('Nro recibo')]); if (!num) return; if (/ANULAD|RECHAZ/i.test(xSin(c[ix('Estado')]))) return;
     const val = xNum(c[ix('Valor recibido')]) || xNum(c[ix('Total pagado')]) || 0, fecha = ateFecha(c[ix('Fecha creacion')]); if (!fecha || !(val > 0)) return;
     o.push({ num, fecha, val, forma: xSin(c[ix('Forma pago')]), cliente: xSin(c[ix('Cliente')]), usuario: xSin(c[ix('Nombre Usuario')]) }); });
   return o;
@@ -1485,8 +1485,8 @@ function ateRecibos() {
   const i = document.createElement('input'); i.type = 'file'; i.accept = '.xlsx,.xls';
   i.onchange = async () => {
     const f = i.files[0]; if (!f) return; let R;
-    try { const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true }); R = ateLeer(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null })); } catch (e) { R = null; }
-    if (!R || !R.length) { alert('No reconocí el reporte "Resumen seguimiento de recibos de caja".'); return; }
+    try { const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true }); R = ateLeer(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null })); } catch (e) { alert('Error leyendo el archivo: ' + e.message); return; }
+    if (R && R.err) { alert(R.err); return; } if (!R || !R.length) { alert('No reconocí el reporte "Resumen seguimiento de recibos de caja" (o no tiene recibos válidos).'); return; }
     await extClientes(); const fs = R.map(r => r.fecha).sort(), dd = d => new Date(Date.parse(d + 'T12:00:00Z') + 0).toISOString().slice(0, 10);
     const ini = new Date(Date.parse(fs[0] + 'T12:00:00Z') - 10 * 864e5).toISOString().slice(0, 10), fin = new Date(Date.parse(fs[fs.length - 1] + 'T12:00:00Z') + 3 * 864e5).toISOString().slice(0, 10);
     const j = await extApi({ accion: 'listar', desde: ini, hasta: fin }); if (!j || !j.ok) { alert((j && j.error) || 'No pude leer el extracto'); return; }
