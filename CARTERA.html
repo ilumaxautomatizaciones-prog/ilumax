@@ -1283,7 +1283,7 @@ function extPintar(solo) {
     + '<select onchange="EXT.banco=this.value;extPintar(true)"><option value="">Todos los bancos</option>' + [...new Set(R.map(r => r.banco).filter(Boolean))].sort().map(b => '<option' + (EXT.banco === b ? ' selected' : '') + '>' + esc(b) + '</option>').join('') + '</select>'
     + '<select onchange="EXT.est=this.value;extPintar(true)"><option value="">Todos los estados</option>' + Object.entries(EXT_PILL).map(([k, v]) => '<option value="' + k + '"' + (EXT.est === k ? ' selected' : '') + '>' + v[1] + '</option>').join('') + '</select>'
     + '<select onchange="EXT.ej=this.value;extPintar(true)"><option value="">Todos los ejecutivos</option>' + ejs.map(e => '<option' + (EXT.ej === e ? ' selected' : '') + '>' + esc(e) + '</option>').join('') + '</select></div>'
-    + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn" onclick="extExcel()" title="Versión 11-nov 10:40">📤 Subir extracto (Excel)</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
+    + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn" onclick="extExcel()" title="Versión 11-nov 10:40">📤 Subir extracto (Excel)</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn" onclick="ateRecibos()" title="Reporte Resumen seguimiento de recibos de caja (ATE)">🔵 Recibos ATE</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
   c.innerHTML = '<div id="xtab">'
     + '<div class="kpis">' + kpi('Entró al banco', fmc(tc), R.length + ' movimientos') + kpi('Con RC', fmc(tot(por('rc'))), por('rc').length + ' mov.') + kpi('Sin RC', fmc(tot(por('sinrc'))), por('sinrc').length + ' con cliente, falta RC') + kpi('Sin identificar', fmc(tot(por('sinid'))), por('sinid').length + ' sin cliente') + kpi('Otros', fmc(tot(por('otro'))), 'tesorería, nómina, NA…') + '</div>'
     + tabs + bar + '<div id="xsub"></div><div id="xcruce"></div><div class="card" id="xcardext"><h2 id="xh2">' + esc(titulo) + '</h2>' + xgBar('ext') + '<div class="tw" id="xg_ext"></div></div></div>';
@@ -1467,6 +1467,72 @@ async function extExcelOk() {
   const filas = EXT.subida.flatMap(r => r.nuevas), m = $('xpmsg'); if (!filas.length) { m.textContent = 'No hay movimientos nuevos: todo ya estaba cargado.'; return; } $('xpbtn').disabled = true; m.textContent = 'Cargando ' + filas.length + '…'; let nu = 0, om = 0;
   for (let i = 0; i < filas.length; i += 400) { const j = await extApi({ accion: 'lote', filas: filas.slice(i, i + 400) }); if (!j || !j.ok) { m.innerHTML = '<span style="color:#b91c1c">' + esc((j && j.error) || 'Error') + '</span>'; $('xpbtn').disabled = false; return; } nu += j.nuevas; om += j.omitidas; }
   alert('Cargados ' + nu + ' movimientos nuevos' + (om ? ' · ' + om + ' ya existían' : '')); extCerrar(); EXT.cache = {}; await extVista();
+}
+/* ---- recibos de caja de ATE (ventasremotas): cruce propuesto con el extracto ---- */
+let ATE = { it: [], sin: [], ya: 0 };
+const ateFecha = v => { if (v instanceof Date) return new Date(v.getTime() + 12 * 36e5).toISOString().slice(0, 10); const m = String(v || '').match(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/); return m ? m[3] + '-' + pad2(m[2]) + '-' + pad2(m[1]) : xFecha(v); };
+const ateTok = s => nz(s).replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !/^(SAS|LTDA|S A S|LIMITADA|DISTRIBUCIONES|COMERCIALIZADORA)$/.test(w));
+function ateLeer(rows) {
+  const h = rows.findIndex(r => r && r.some(c => /^Numero recibo/i.test(xSin(c)))); if (h < 0) return null;
+  const H = rows[h].map(xSin), ix = n => H.findIndex(x => x.toLowerCase().startsWith(n.toLowerCase())), o = [];
+  rows.slice(h + 1).forEach(c => { if (!c) return; const num = xSin(c[ix('Numero recibo')]); if (!num) return; if (/ANULAD|RECHAZ/i.test(xSin(c[ix('Estado')]))) return;
+    const val = xNum(c[ix('Valor recibido')]) || xNum(c[ix('Total pagado')]) || 0, fecha = ateFecha(c[ix('Fecha creacion')]); if (!fecha || !(val > 0)) return;
+    o.push({ num, fecha, val, forma: xSin(c[ix('Forma pago')]), cliente: xSin(c[ix('Cliente')]), usuario: xSin(c[ix('Nombre Usuario')]) }); });
+  return o;
+}
+function ateRecibos() {
+  if (typeof XLSX === 'undefined') { alert('No cargó la librería de Excel. Revisa la conexión.'); return; }
+  const i = document.createElement('input'); i.type = 'file'; i.accept = '.xlsx,.xls';
+  i.onchange = async () => {
+    const f = i.files[0]; if (!f) return; let R;
+    try { const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true }); R = ateLeer(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null })); } catch (e) { R = null; }
+    if (!R || !R.length) { alert('No reconocí el reporte "Resumen seguimiento de recibos de caja".'); return; }
+    await extClientes(); const fs = R.map(r => r.fecha).sort(), dd = d => new Date(Date.parse(d + 'T12:00:00Z') + 0).toISOString().slice(0, 10);
+    const ini = new Date(Date.parse(fs[0] + 'T12:00:00Z') - 10 * 864e5).toISOString().slice(0, 10), fin = new Date(Date.parse(fs[fs.length - 1] + 'T12:00:00Z') + 3 * 864e5).toISOString().slice(0, 10);
+    const j = await extApi({ accion: 'listar', desde: ini, hasta: fin }); if (!j || !j.ok) { alert((j && j.error) || 'No pude leer el extracto'); return; }
+    const M = j.filas || [], vistos = new Set(); M.forEach(m => { const o = String(m.observacion || ''), r = o.match(/ATE\s+([\d-]+)/g); if (r) r.forEach(x => vistos.add(x.replace(/ATE\s+/, ''))); });
+    const libres = M.filter(m => !m.rc && !/ATE\s+[\d-]/.test(String(m.observacion || ''))), usados = new Set(); let ya = 0; const pend = [];
+    R.forEach(r => { if (vistos.has(r.num)) ya++; else pend.push(r); });
+    const dias = (a, b) => (Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 864e5;
+    pend.forEach(r => { const tk = ateTok(r.cliente); r.c = libres.filter(m => Math.abs(Number(m.monto) - r.val) <= 5 && dias(r.fecha, m.fecha) >= -3 && dias(r.fecha, m.fecha) <= 10);
+      r.c.forEach(m => { const t = new Set(ateTok([m.cliente, m.descripcion, m.texto_ref].join(' '))); m._s = tk.filter(w => t.has(w)).length; }); });
+    const items = [], sin = []; let cambio = true; pend.forEach(r => r.est = null);
+    while (cambio) { cambio = false; pend.forEach(r => { if (r.est) return; const c = r.c.filter(m => !usados.has(m.id)); if (!c.length) return;
+      let sel = null; if (c.length === 1) sel = c[0]; else { const mx = Math.max(...c.map(m => m._s)); const b = c.filter(m => m._s === mx); if (mx > 0 && b.length === 1) sel = b[0]; }
+      if (sel) { r.est = 'azul'; r.sel = sel.id; r.opc = c; usados.add(sel.id); cambio = true; } }); }
+    pend.forEach(r => { if (r.est) { items.push(r); return; } const c = r.c.filter(m => !usados.has(m.id)); if (c.length) { r.est = 'amarillo'; r.opc = c; r.sel = ''; items.push(r); } else sin.push(r); });
+    ATE = { it: items, sin, ya, M };
+    atePintar();
+  };
+  i.click();
+}
+function atePintar() {
+  const A = ATE, M = new Map((A.M || []).map(m => [m.id, m])), az = A.it.filter(r => r.est === 'azul'), am = A.it.filter(r => r.est === 'amarillo');
+  const mv = m => m ? esc(m.banco) + ' · ' + m.fecha + ' · ' + esc(String(m.descripcion || m.texto_ref || '').slice(0, 40)) + (m.cliente ? ' · ' + esc(m.cliente) : '') : '';
+  const fila = (r, k) => '<tr style="background:' + (r.est === 'azul' ? '#dbeafe' : '#fef9c3') + '"><td><input type="checkbox" id="ate' + k + '"' + (r.est === 'azul' ? ' checked' : '') + (r.sel ? '' : ' disabled') + '></td><td>' + r.fecha + '</td><td>' + esc(r.num) + '</td><td>' + esc(r.cliente) + '</td><td style="text-align:right">' + fm(r.val) + '</td><td>'
+    + (r.opc.length === 1 ? mv(r.opc[0]) : '<select onchange="ateSel(' + k + ',this.value)"><option value="">— elegir movimiento (' + r.opc.length + ') —</option>' + r.opc.map(m => '<option value="' + m.id + '"' + (String(r.sel) === String(m.id) ? ' selected' : '') + '>' + mv(m).replace(/<[^>]+>/g, '') + '</option>').join('') + '</select>') + '</td></tr>';
+  const d = document.createElement('div'); d.id = 'xwrap'; const old = $('xwrap'); if (old) old.remove();
+  d.innerHTML = '<div class="ov on"><div class="mo" style="max-width:1100px"><div class="mh"><span>Recibos de ATE · propuesta de cruce</span><button class="btn g" onclick="extCerrar()">✕</button></div><div style="padding:14px;font-size:13px">'
+    + '<div style="margin-bottom:8px"><span class="pill p-bl">' + az.length + ' propuestos (azul)</span> <span class="pill p-or">' + am.length + ' ambiguos (amarillo)</span> <span class="pill p-rd">' + A.sin.length + ' sin movimiento</span> <span class="pill p-ok">' + A.ya + ' ya aprobados antes</span></div>'
+    + (A.it.length ? '<div class="tw" style="max-height:55vh;overflow:auto"><table><thead><tr><th></th><th>Fecha recibo</th><th>Recibo</th><th>Cliente (ATE)</th><th>Valor</th><th>Movimiento del extracto</th></tr></thead><tbody>' + A.it.map((r, k) => fila(r, k)).join('') + '</tbody></table></div>' : '<div>No hay recibos nuevos con movimiento por proponer.</div>')
+    + (A.sin.length ? '<details style="margin-top:10px"><summary><b>Recibos sin movimiento en el extracto (' + A.sin.length + ')</b></summary><div class="tw" style="max-height:30vh;overflow:auto"><table><thead><tr><th>Fecha</th><th>Recibo</th><th>Cliente</th><th>Valor</th><th>Forma</th><th>Usuario</th></tr></thead><tbody>' + A.sin.map(r => '<tr><td>' + r.fecha + '</td><td>' + esc(r.num) + '</td><td>' + esc(r.cliente) + '</td><td style="text-align:right">' + fm(r.val) + '</td><td>' + esc(r.forma) + '</td><td>' + esc(r.usuario) + '</td></tr>').join('') + '</tbody></table></div></details>' : '')
+    + '<div id="xpmsg" style="font-size:12px;margin-top:8px"></div></div><div class="mf"><button class="btn g" onclick="extCerrar()">Cerrar</button><button class="btn g" onclick="ateAprobar(false)">Aprobar seleccionados</button><button class="btn" id="atebtn" onclick="ateAprobar(true)">Aprobar todos los azules (' + az.length + ')</button></div></div></div>';
+  document.body.appendChild(d);
+}
+function ateSel(k, v) { const r = ATE.it[k]; r.sel = v ? Number(v) : ''; const c = $('ate' + k); if (c) { c.disabled = !v; c.checked = !!v; } }
+async function ateAprobar(soloAzules) {
+  const L = ATE.it.map((r, k) => ({ r, k })).filter(({ r, k }) => r.sel && (soloAzules ? r.est === 'azul' : $('ate' + k) && $('ate' + k).checked));
+  // un movimiento no puede quedar en dos recibos
+  const u = new Set(); for (const { r } of L) { if (u.has(String(r.sel))) { alert('El mismo movimiento está elegido en dos recibos. Corrige antes de aprobar.'); return; } u.add(String(r.sel)); }
+  if (!L.length) { alert('No hay nada seleccionado.'); return; }
+  const m = $('xpmsg'), b = $('atebtn'); b.disabled = true; let ok = 0, mal = 0;
+  const M = new Map(ATE.M.map(x => [x.id, x])), cli = new Map((EXT.clientes || []).map(c => [nz(c.nombre), c]));
+  for (const { r } of L) { m.textContent = 'Aprobando ' + (ok + mal + 1) + ' de ' + L.length + '…';
+    const mo = M.get(r.sel), fila = { id: mo.id }; CAMPOS.forEach(([e, k]) => fila[k] = mo[k] == null ? '' : mo[k]);
+    const c = cli.get(nz(r.cliente)); if (c) { fila.cliente = c.nombre; fila.nit = c.nit; if (!fila.ref_cliente) fila.ref_cliente = c.nit; fila.ejecutivo = fila.ejecutivo || c.ej; fila.canal = fila.canal || c.canal; } else { fila.cliente = fila.cliente || r.cliente; if (!fila.ejecutivo) fila.ejecutivo = ejCod(r.usuario) || ''; }
+    fila.observacion = (String(fila.observacion || '').trim() + ' ATE ' + r.num).trim();
+    const j = await extApi({ accion: 'guardar', fila }); if (j && j.ok) { ok++; r.hecho = true; } else mal++; }
+  alert('Aprobados ' + ok + (mal ? ' · con error ' + mal : '')); extCerrar(); await extRefrescar();
 }
 /* ---- cruce con Siesa ---- */
 function cruSies(r) {
