@@ -79,6 +79,7 @@ const fm = n => (n < 0 ? '-' : '') + '$' + Math.round(Math.abs(n)).toLocaleStrin
 const fmc = n => { const a = Math.abs(n); return (n < 0 ? '-' : '') + '$' + (a >= 1e9 ? (a / 1e9).toFixed(2) + ' MM' : a >= 1e6 ? (a / 1e6).toFixed(1) + ' M' : Math.round(a).toLocaleString('es-CO')); };
 const BK = ['Vigente', '1-30', '31-60', '61-90', '+90'];
 let D = null, TAB = 'cli', Q = '', VEND = '', OPEN = {};
+let GIR = { ok: undefined, fabs: [], lote: [], hist: null };
 function token() {
   const h = new URLSearchParams(location.hash.replace(/^#/, '')), q = new URLSearchParams(location.search);
   const u = h.get('k') || q.get('k') || ''; if (u) return u;
@@ -137,7 +138,8 @@ function pintar() {
   $('out').style.display = '';
   const pos = sumB(D.cls), venc = D.cls.reduce((s, c) => s + c.b[1] + c.b[2] + c.b[3] + c.b[4], 0), v90 = D.cls.reduce((s, c) => s + c.b[4], 0), fav = D.cls.reduce((s, c) => s + c.fav, 0);
   const rec30 = D.recs.filter(r => Date.parse(hoy) - Date.parse(r.fecha) < 30 * 864e5).reduce((s, r) => s + r.valor, 0);
-  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ppe', '📊 Ppto vs Ejecución'], ['ext', '🏦 Extracto bancario'], ['ofac', '🛡️ OFAC']];
+  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ppe', '📊 Ppto vs Ejecución'], ['ext', '🏦 Extracto bancario'], ['ofac', '🛡️ OFAC']].concat(GIR.ok ? [['gir', '🌏 Giros']] : []);
+  if (GIR.ok === undefined) girCheck();
   $('app').innerHTML = '<div class="kpis">'
     + kpi('Cartera por cobrar', fmc(pos), D.cls.filter(c => c.tot > 0).length + ' clientes con saldo')
     + kpi('Vencida', fmc(venc), pos ? Math.round(venc / pos * 100) + '% de la cartera' : '')
@@ -219,6 +221,8 @@ function vista(soloTabla) {
     extVista();
   } else if (TAB === 'ofac') {
     ofacVista();
+  } else if (TAB === 'gir' && GIR.ok) {
+    girVista();
   } else {
     if (REC) { recPintar(); return; }
     const q = Q.trim().toUpperCase(), L = D.recs.filter(r => !q || (r.cli + ' ' + r.nit + ' ' + r.doc).toUpperCase().includes(q));
@@ -1215,6 +1219,98 @@ function xgExcel(id) {
   XLSX.utils.book_append_sheet(wb, ws, 'VISTA'); XLSX.writeFile(wb, (g.nombre || id) + '.xlsx');
 }
 
+/* ===== Giros al exterior (plano del banco HELBAM / Fedlink) · solo PIN con acceso a giros ===== */
+const GIR_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-giros', GIR_CTA = '1040166343';
+const girApi = async b => { try { const r = await fetch(GIR_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
+async function girCheck() { GIR.ok = false; const j = await girApi({ accion: 'acceso' }); if (j && j.ok && j.giros) { GIR.ok = true; try { GIR.lote = JSON.parse(localStorage.getItem('gir_lote') || '[]'); } catch (e) { GIR.lote = []; } pintar(); } }
+const girGuardaLote = () => { try { localStorage.setItem('gir_lote', JSON.stringify(GIR.lote)); } catch (e) { } };
+const girUp = (s, n) => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9 .\/\-&()#:+']/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n || 999);
+const girUsd = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const girMonto = n => { n = Math.round(Number(n) * 100) / 100; return Number.isInteger(n) ? String(n) : n.toFixed(2); };
+// Parte el texto en renglones de hasta 35 caracteres sin cortar palabras
+function girRenglones(t, max) { const w = girUp(t).split(' ').filter(Boolean), L = []; let c = ''; for (const x of w) { if (x.length > max) { if (c) { L.push(c); c = ''; } for (let i = 0; i < x.length; i += max) L.push(x.slice(i, i + max)); continue; } if ((c + ' ' + x).trim().length > max) { L.push(c); c = x; } else c = (c + ' ' + x).trim(); } if (c) L.push(c); return L; }
+// Fila del plano. Observación: va en los renglones "información al beneficiario" que el fabricante no tenga ocupados
+function girFila(f, monto, obs) {
+  const inf = [f.info1, f.info2, f.info3, f.info4].map(x => x || ''), libres = inf.map((x, i) => x ? -1 : i).filter(i => i >= 0), R = girRenglones(obs, 35);
+  if (R.length > libres.length) return { error: 'La observación es muy larga para este fabricante (caben ' + libres.length * 35 + ' caracteres).' };
+  R.forEach((r, k) => inf[libres[k]] = r);
+  const c = [GIR_CTA, girMonto(monto), 'USD', '0', '', 'CTP', '0', '', '0', f.interm_banco || '', f.interm_banco ? 'B' : '', f.interm_swift || '', '', '', '', '', f.interm_pais || '', f.banco, 'B', f.swift, f.dir_banco1 || '', f.dir_banco2 || '', f.dir_banco3 || '', f.pais_banco, f.nombre, 'D', f.cuenta, f.dir_benef1 || '', f.dir_benef2 || '', f.dir_benef3 || '', f.pais_benef, ...inf];
+  let n = c.length; while (n > 0 && c[n - 1] === '') n--; return { linea: c.slice(0, n).join(',') };
+}
+async function girVista() {
+  const c = $('cont'); c.innerHTML = '<div class="err">Cargando fabricantes…</div>';
+  const j = await girApi({ accion: 'listar' }); if (!j || !j.ok) { c.innerHTML = '<div class="err">' + esc((j && j.error) || 'No se pudo cargar') + '</div>'; return; }
+  GIR.fabs = j.fabricantes; girPintar();
+}
+function girPintar() {
+  const c = $('cont'), tot = GIR.lote.reduce((s, p) => s + p.monto, 0), F = new Map(GIR.fabs.map(f => [f.id, f]));
+  c.innerHTML = '<div class="card"><h2>🌏 Giros al exterior · crear pago</h2><div style="padding:0 14px 14px">'
+    + '<div style="font-size:12px;color:#64748b;margin-bottom:8px">1) Elige el fabricante · 2) Escribe el valor en dólares y la observación (facturas) · 3) Agrégalo al plano. Cuando tengas todos, descarga el plano y súbelo al banco.</div>'
+    + '<div class="bar"><input id="gfab" list="gfabl" placeholder="Fabricante (escribe para buscar)…" style="min-width:330px" oninput="girSel()"><datalist id="gfabl">' + GIR.fabs.map(f => '<option value="' + esc(f.nombre) + '"></option>').join('') + '</datalist>'
+    + '<input id="gmon" placeholder="Valor USD" inputmode="decimal" style="max-width:140px" oninput="girMon()" onkeydown="if(event.key===\'Enter\')girAgregar()"><span id="gmonv" style="font-size:12px;color:#166534;min-width:110px"></span></div>'
+    + '<div class="bar"><input id="gobs" placeholder="Observación (ej. número de facturas: OCI152 OCI94)" maxlength="140" style="min-width:420px" oninput="$(\'gcnt\').textContent=this.value.length+\'/140\'" onkeydown="if(event.key===\'Enter\')girAgregar()"><span id="gcnt" style="font-size:11px;color:#64748b">0/140</span><button class="btn" onclick="girAgregar()">➕ Agregar al plano</button></div>'
+    + '<div id="ginfo" style="font-size:12px;color:#475569;margin:6px 0"></div>'
+    + '<div class="bar"><button class="btn g" onclick="girFabModal(0)">🆕 Nuevo fabricante</button><button class="btn g" onclick="girFabLista()">📒 Ver / editar fabricantes (' + GIR.fabs.length + ')</button><button class="btn g" onclick="girHist()">🕘 Historial</button></div></div></div>'
+    + '<div class="card" style="margin-top:12px"><h2>Pagos del plano (' + GIR.lote.length + ') · Total USD ' + girUsd(tot) + '</h2>'
+    + (GIR.lote.length ? '<div class="tw"><table><thead><tr><th>#</th><th>Fabricante</th><th>Banco</th><th>SWIFT</th><th style="text-align:right">Valor USD</th><th>Observación</th><th></th></tr></thead><tbody>'
+      + GIR.lote.map((p, i) => { const f = F.get(p.fid) || {}; return '<tr><td>' + (i + 1) + '</td><td>' + esc(f.nombre || p.nombre) + '</td><td>' + esc(f.banco) + '</td><td>' + esc(f.swift) + '</td><td style="text-align:right"><b>' + girUsd(p.monto) + '</b></td><td>' + esc(p.obs) + '</td><td><button class="btn g" onclick="girQuitar(' + i + ')">✕</button></td></tr>'; }).join('') + '</tbody></table></div>'
+      + '<div class="bar" style="padding:10px 14px"><button class="btn" onclick="girDescargar()">⬇ Descargar plano para el banco</button><button class="btn g" onclick="if(confirm(\'¿Vaciar todos los pagos del plano?\')){GIR.lote=[];girGuardaLote();girPintar()}">🗑 Vaciar</button></div>'
+      : '<div style="padding:14px;color:#64748b">Aún no has agregado pagos.</div>') + '</div><div id="ghist"></div>';
+}
+function girBuscar() { const v = girUp($('gfab').value); return GIR.fabs.find(f => girUp(f.nombre) === v) || null; }
+function girSel() { const f = girBuscar(), i = $('ginfo'); i.innerHTML = f ? '🏦 <b>' + esc(f.banco) + '</b> · SWIFT ' + esc(f.swift) + ' · cuenta ' + esc(f.cuenta) + ' · país ' + esc(f.pais_benef) + (f.interm_banco ? ' · intermediario ' + esc(f.interm_banco) : '') : ''; }
+function girMonParse() { const v = xNum($('gmon').value); return isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : 0; }
+function girMon() { const m = girMonParse(); $('gmonv').textContent = m ? '= USD ' + girUsd(m) : ''; }
+function girAgregar() {
+  const f = girBuscar(), m = girMonParse(), o = girUp($('gobs').value, 140);
+  if (!f) { alert('Elige un fabricante de la lista. Si es nuevo, créalo con "Nuevo fabricante".'); return; }
+  if (!m) { alert('Escribe el valor en dólares (mayor que cero).'); return; }
+  const t = girFila(f, m, o); if (t.error) { alert(t.error); return; }
+  GIR.lote.push({ fid: f.id, nombre: f.nombre, monto: m, obs: o }); girGuardaLote(); girPintar(); $('gfab').focus();
+}
+function girQuitar(i) { GIR.lote.splice(i, 1); girGuardaLote(); girPintar(); }
+async function girDescargar() {
+  const F = new Map(GIR.fabs.map(f => [f.id, f])), L = [];
+  for (const p of GIR.lote) { const f = F.get(p.fid); if (!f) { alert('El fabricante "' + p.nombre + '" ya no está activo.'); return; } const t = girFila(f, p.monto, p.obs); if (t.error) { alert(p.nombre + ': ' + t.error); return; } L.push(t.linea); }
+  if (!L.length) return;
+  const hoy = new Date(), d = pad2(hoy.getDate()) + '-' + pad2(hoy.getMonth() + 1) + '-' + hoy.getFullYear();
+  const r = await girApi({ accion: 'lote', fecha: hoy.getFullYear() + '-' + pad2(hoy.getMonth() + 1) + '-' + pad2(hoy.getDate()), pagos: GIR.lote.map(p => ({ fabricante_id: p.fid, monto: p.monto, observacion: p.obs })) });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([L.join('\r\n') + '\r\n'], { type: 'text/csv' })); a.download = 'PLANO_PAGO_FABRICANTES_' + d + '.csv'; document.body.appendChild(a); a.click(); a.remove();
+  if (!r || !r.ok) alert('El plano se descargó, pero no pude guardar el registro en el historial.');
+  else if (confirm('Plano descargado (' + L.length + ' pagos). ¿Vaciar la lista para empezar otro plano?')) { GIR.lote = []; girGuardaLote(); girPintar(); }
+}
+async function girHist() {
+  const h = $('ghist'); h.innerHTML = '<div class="err">Cargando…</div>'; const j = await girApi({ accion: 'historial' });
+  if (!j || !j.ok) { h.innerHTML = '<div class="err">' + esc((j && j.error) || 'Error') + '</div>'; return; }
+  h.innerHTML = '<div class="card" style="margin-top:12px"><h2>🕘 Historial de planos descargados</h2><div class="tw" style="max-height:50vh;overflow:auto"><table><thead><tr><th>Fecha del plano</th><th>Fabricante</th><th style="text-align:right">Valor USD</th><th>Observación</th><th>Usuario</th></tr></thead><tbody>' + j.pagos.map(p => '<tr><td>' + esc(String(p.lote).slice(0, 16)) + '</td><td>' + esc(p.fabricante) + '</td><td style="text-align:right">' + girUsd(p.monto) + '</td><td>' + esc(p.observacion) + '</td><td>' + esc(p.usuario) + '</td></tr>').join('') + '</tbody></table></div></div>';
+}
+function girFabLista() {
+  const old = $('xwrap'); if (old) old.remove(); const d = document.createElement('div'); d.id = 'xwrap';
+  d.innerHTML = '<div class="ov on"><div class="mo" style="max-width:900px"><div class="mh"><span>📒 Fabricantes (' + GIR.fabs.length + ')</span><button class="btn g" onclick="extCerrar()">✕</button></div><div style="padding:14px"><div class="bar"><input id="gfq" placeholder="Buscar por nombre, banco o SWIFT…" oninput="girFabFiltra()"><button class="btn" onclick="extCerrar();girFabModal(0)">🆕 Nuevo</button></div><div class="tw" style="max-height:60vh;overflow:auto"><table><thead><tr><th>Fabricante</th><th>Banco</th><th>SWIFT</th><th>Cuenta</th><th></th></tr></thead><tbody id="gfb"></tbody></table></div></div></div></div>';
+  document.body.appendChild(d); girFabFiltra();
+}
+function girFabFiltra() { const q = girUp($('gfq').value); $('gfb').innerHTML = GIR.fabs.filter(f => !q || girUp([f.nombre, f.banco, f.swift].join(' ')).includes(q)).map(f => '<tr><td>' + esc(f.nombre) + '</td><td>' + esc(f.banco) + '</td><td>' + esc(f.swift) + '</td><td>' + esc(f.cuenta) + '</td><td><button class="btn g" onclick="extCerrar();girFabModal(' + f.id + ')">✏️ Editar</button></td></tr>').join(''); }
+function girFabModal(id) {
+  const f = GIR.fabs.find(x => x.id === id) || { pais_banco: 'CN', pais_benef: 'CN' }, inp = (k, lbl, ph, w) => '<label style="display:block;font-size:11px;color:#475569;margin-top:8px">' + lbl + '<input id="gf_' + k + '" value="' + esc(f[k] || '') + '" placeholder="' + (ph || '') + '" style="width:100%;' + (w || '') + '"></label>';
+  const old = $('xwrap'); if (old) old.remove(); const d = document.createElement('div'); d.id = 'xwrap';
+  d.innerHTML = '<div class="ov on"><div class="mo" style="max-width:720px"><div class="mh"><span>' + (id ? '✏️ Editar fabricante' : '🆕 Nuevo fabricante') + '</span><button class="btn g" onclick="extCerrar()">✕</button></div><div style="padding:14px;font-size:13px">'
+    + '<b>Beneficiario</b>' + inp('nombre', 'Nombre del beneficiario (máx. 35 letras; si es más largo, el resto va como texto fijo)', 'EJ. NINGBO EJEMPLO LIGHTING CO LTD') + inp('cuenta', 'Número de cuenta del beneficiario', 'Solo números y letras') + inp('dir_benef1', 'Dirección del beneficiario', '') + inp('pais_benef', 'País del beneficiario (2 letras)', 'CN', 'max-width:80px')
+    + '<div style="margin-top:12px"><b>Banco del beneficiario</b></div>' + inp('banco', 'Nombre del banco (máx. 35)', '') + inp('swift', 'SWIFT / BIC (8 u 11 caracteres)', 'EJ. BKCHCNBJ92A', 'max-width:200px') + inp('dir_banco1', 'Dirección del banco', '') + inp('pais_banco', 'País del banco (2 letras)', 'CN', 'max-width:80px')
+    + '<details style="margin-top:12px"' + (f.interm_banco ? ' open' : '') + '><summary><b>¿Lleva banco intermediario?</b> (opcional)</summary>' + inp('interm_banco', 'Banco intermediario', 'EJ. JP MORGAN CHASE BANK NA NEW YORK') + inp('interm_swift', 'SWIFT del intermediario', 'EJ. CHASUS33XXX', 'max-width:200px') + inp('interm_pais', 'País del intermediario (2 letras)', 'US', 'max-width:80px') + '</details>'
+    + '<details style="margin-top:8px"' + (f.info1 || f.info2 || f.info3 || f.info4 ? ' open' : '') + '><summary><b>Texto fijo para el beneficiario</b> (opcional, hasta 4 renglones de 35)</summary>' + inp('info1', 'Renglón 1', '') + inp('info2', 'Renglón 2', '') + inp('info3', 'Renglón 3', '') + inp('info4', 'Renglón 4', '') + '</details>'
+    + '<div id="gfmsg" style="font-size:12px;margin-top:8px;color:#b91c1c"></div></div><div class="mf"><button class="btn g" onclick="extCerrar()">Cancelar</button><button class="btn" id="gfbtn" onclick="girFabOk(' + id + ')">💾 Guardar</button></div></div></div>';
+  document.body.appendChild(d);
+}
+async function girFabOk(id) {
+  const K = ['nombre', 'cuenta', 'dir_benef1', 'pais_benef', 'banco', 'swift', 'dir_banco1', 'pais_banco', 'interm_banco', 'interm_swift', 'interm_pais', 'info1', 'info2', 'info3', 'info4'], fab = { id }, prev = GIR.fabs.find(x => x.id === id) || {};
+  K.forEach(k => fab[k] = $('gf_' + k).value.trim()); ['dir_banco2', 'dir_banco3', 'dir_benef2', 'dir_benef3'].forEach(k => fab[k] = prev[k] || '');
+  // nombre largo: el resto pasa al primer renglón de texto fijo libre (como en la base original)
+  const R = girRenglones(fab.nombre, 35); if (R.length > 1) { fab.nombre = R[0]; const rest = R.slice(1).join(' '); const sl = ['info1', 'info2', 'info3', 'info4'].find(k => !fab[k]); if (sl) fab[sl] = girUp(rest, 35); }
+  fab.banco = girUp(fab.banco, 35);
+  $('gfbtn').disabled = true; const j = await girApi({ accion: 'guardar_fab', fab });
+  if (!j || !j.ok) { $('gfbtn').disabled = false; $('gfmsg').textContent = /duplicate|23505|409/.test((j && j.error) || '') ? 'Ya existe un fabricante con ese nombre.' : ((j && j.error) || 'No se pudo guardar'); return; }
+  extCerrar(); await girVista();
+}
 /* ===== Verificación OFAC (lista SDN y consolidada) ===== */
 const OFAC_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-ofac';
 const ofacApi = async b => { try { const r = await fetch(OFAC_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
