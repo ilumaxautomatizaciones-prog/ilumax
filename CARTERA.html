@@ -1258,7 +1258,7 @@ async function extVista(forzar) {
 }
 function extFiltrar(R) {
   const q = nz(EXT.q);
-  return R.filter(r => (!EXT.banco || r.banco === EXT.banco) && (!EXT.est || extEst(r) === EXT.est) && (!EXT.ej || r.ejecutivo === EXT.ej) && (!q || nz([r.banco, r.descripcion, r.texto_ref, r.ref_cliente, r.cliente, r.rc, r.ejecutivo, r.observacion, r.monto, r.nit].join(' ')).includes(q)));
+  return R.filter(r => (!EXT.banco || r.banco === EXT.banco) && (!EXT.est || (EXT.est === 'ate' ? ateRev(r) : extEst(r) === EXT.est)) && (!EXT.ej || r.ejecutivo === EXT.ej) && (!q || nz([r.banco, r.descripcion, r.texto_ref, r.ref_cliente, r.cliente, r.rc, r.ejecutivo, r.observacion, r.monto, r.nit].join(' ')).includes(q)));
 }
 const EXT_COLS = [
   { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha, h: r => esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7) + '/' + r.fecha.slice(2, 4)) },
@@ -1281,13 +1281,13 @@ function extPintar(solo) {
   const ejs = [...new Set(R.map(r => r.ejecutivo).filter(Boolean))].sort();
   const bar = '<div class="bar"><input id="xq" placeholder="Buscar banco, cliente, RC, valor, referencia, ejecutivo…" value="' + esc(EXT.q) + '" oninput="EXT.q=this.value;extPintar(true)">'
     + '<select onchange="EXT.banco=this.value;extPintar(true)"><option value="">Todos los bancos</option>' + [...new Set(R.map(r => r.banco).filter(Boolean))].sort().map(b => '<option' + (EXT.banco === b ? ' selected' : '') + '>' + esc(b) + '</option>').join('') + '</select>'
-    + '<select onchange="EXT.est=this.value;extPintar(true)"><option value="">Todos los estados</option>' + Object.entries(EXT_PILL).map(([k, v]) => '<option value="' + k + '"' + (EXT.est === k ? ' selected' : '') + '>' + v[1] + '</option>').join('') + '</select>'
+    + '<select onchange="EXT.est=this.value;extPintar(true)"><option value="">Todos los estados</option>' + Object.entries(EXT_PILL).map(([k, v]) => '<option value="' + k + '"' + (EXT.est === k ? ' selected' : '') + '>' + v[1] + '</option>').join('') + '<option value="ate"' + (EXT.est === 'ate' ? ' selected' : '') + '>🔵 ATE por revisar</option></select>'
     + '<select onchange="EXT.ej=this.value;extPintar(true)"><option value="">Todos los ejecutivos</option>' + ejs.map(e => '<option' + (EXT.ej === e ? ' selected' : '') + '>' + esc(e) + '</option>').join('') + '</select></div>'
-    + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn" onclick="extExcel()" title="Versión 11-nov 10:40">📤 Subir extracto (Excel)</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn" onclick="ateRecibos()" title="Reporte Resumen seguimiento de recibos de caja (ATE)">🔵 Recibos ATE</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
+    + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn" onclick="extExcel()" title="Versión 11-nov 10:40">📤 Subir extracto (Excel)</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn g" onclick="ateRevisar()" title="Movimientos identificados con ATE pendientes de aprobar">🔵 Revisar ATE</button><button class="btn" onclick="ateRecibos()" title="Reporte Resumen seguimiento de recibos de caja (ATE)">🔵 Recibos ATE</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
   c.innerHTML = '<div id="xtab">'
     + '<div class="kpis">' + kpi('Entró al banco', fmc(tc), R.length + ' movimientos') + kpi('Con RC', fmc(tot(por('rc'))), por('rc').length + ' mov.') + kpi('Sin RC', fmc(tot(por('sinrc'))), por('sinrc').length + ' con cliente, falta RC') + kpi('Sin identificar', fmc(tot(por('sinid'))), por('sinid').length + ' sin cliente') + kpi('Otros', fmc(tot(por('otro'))), 'tesorería, nómina, NA…') + '</div>'
     + tabs + bar + '<div id="xsub"></div><div id="xcruce"></div><div class="card" id="xcardext"><h2 id="xh2">' + esc(titulo) + '</h2>' + xgBar('ext') + '<div class="tw" id="xg_ext"></div></div></div>';
-  xgInit('ext', EXT_COLS, { rows: F, limit: 600, nombre: 'Extracto_' + EXT.mes, attr: r => ' class="c" onclick="extEditar(' + r.id + ')"' }); xgPaint('ext');
+  xgInit('ext', EXT_COLS, { rows: F, limit: 600, nombre: 'Extracto_' + EXT.mes, attr: r => ' class="c"' + (ateRev(r) ? ' style="background:#dbeafe" title="Identificado con recibo de ATE · por revisar"' : '') + ' onclick="extEditar(' + r.id + ')"' }); xgPaint('ext');
   if (EXT.cruce && EXT.cruce.mes === EXT.mes) cruPintar(); else EXT.vista = 'ext';
   extSubPintar();
 }
@@ -1533,6 +1533,25 @@ async function ateAprobar(soloAzules) {
     fila.observacion = (String(fila.observacion || '').trim() + ' ATE ' + r.num).trim();
     const j = await extApi({ accion: 'guardar', fila }); if (j && j.ok) { ok++; r.hecho = true; } else mal++; }
   alert('Aprobados ' + ok + (mal ? ' · con error ' + mal : '')); extCerrar(); await extRefrescar();
+}
+const ateRev = r => /ATE\s+[\d-]+/.test(String(r.observacion || '')) && !/✔REV/.test(String(r.observacion || ''));
+async function ateRevisar() {
+  const hoy = (D && D.hoy) || new Date().toISOString().slice(0, 10), ini = new Date(Date.parse(hoy + 'T12:00:00Z') - 120 * 864e5).toISOString().slice(0, 10);
+  const j = await extApi({ accion: 'listar', desde: ini, hasta: hoy }); if (!j || !j.ok) { alert((j && j.error) || 'No pude leer el extracto'); return; }
+  const L = (j.filas || []).filter(ateRev); ATE.rev = L;
+  const old = $('xwrap'); if (old) old.remove(); const d = document.createElement('div'); d.id = 'xwrap';
+  d.innerHTML = '<div class="ov on"><div class="mo" style="max-width:1100px"><div class="mh"><span>🔵 Movimientos identificados con ATE · por revisar (' + L.length + ')</span><button class="btn g" onclick="extCerrar()">✕</button></div><div style="padding:14px;font-size:13px">'
+    + (L.length ? '<div class="tw" style="max-height:60vh;overflow:auto"><table><thead><tr><th><input type="checkbox" checked onclick="document.querySelectorAll(\'.arv\').forEach(c=>c.checked=this.checked)"></th><th>Fecha</th><th>Banco</th><th>Valor</th><th>Cliente</th><th>NIT</th><th>Ejecutivo</th><th>Observación</th></tr></thead><tbody>'
+      + L.map((r, k) => '<tr style="background:#dbeafe"><td><input type="checkbox" class="arv" data-k="' + k + '" checked></td><td>' + r.fecha + '</td><td>' + esc(r.banco) + '</td><td style="text-align:right">' + fm(Number(r.monto)) + '</td><td>' + esc(r.cliente) + '</td><td>' + esc(r.nit) + '</td><td>' + esc(r.ejecutivo) + '</td><td>' + esc(r.observacion) + '</td></tr>').join('') + '</tbody></table></div>' : '<div>No hay movimientos por revisar.</div>')
+    + '<div id="xpmsg" style="font-size:12px;margin-top:8px">Si algo está mal, ábrelo desde el extracto y corrígelo antes de aprobar.</div></div><div class="mf"><button class="btn g" onclick="extCerrar()">Cerrar</button>' + (L.length ? '<button class="btn" id="arvbtn" onclick="ateRevOk()">✔ Aprobar seleccionados</button>' : '') + '</div></div></div>';
+  document.body.appendChild(d);
+}
+async function ateRevOk() {
+  const L = [...document.querySelectorAll('.arv')].filter(c => c.checked).map(c => ATE.rev[+c.dataset.k]); if (!L.length) { alert('No hay nada seleccionado.'); return; }
+  $('arvbtn').disabled = true; let ok = 0;
+  for (const mo of L) { const fila = { id: mo.id }; CAMPOS.forEach(([e, k]) => fila[k] = mo[k] == null ? '' : mo[k]); fila.observacion = String(fila.observacion).trim() + ' ✔REV';
+    $('xpmsg').textContent = 'Aprobando ' + (ok + 1) + ' de ' + L.length + '…'; const j = await extApi({ accion: 'guardar', fila }); if (j && j.ok) ok++; }
+  alert('Aprobados ' + ok + ' de ' + L.length); extCerrar(); await extRefrescar();
 }
 /* ---- cruce con Siesa ---- */
 function cruSies(r) {
