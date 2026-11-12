@@ -296,52 +296,59 @@ async function apiB(body){
  if(r.status===401||r.status===429){if(r.status===401)ls('wp_pin','');pedirPin(j.error);throw new Error(j.error||'PIN requerido')}
  return j}
 function fTitulo(t){return String(t||'').toLowerCase().replace(/(^|[\s\/\-(])([a-záéíóúñ])/g,function(m,a,b){return a+b.toUpperCase()}).replace(/\b(Led|Rgb|Usb|Ip\d+|Ac|Dc|Pir|Smd|Cob|Gu10|E27|E14|Mr16|Bia)\b/gi,function(x){return x.toUpperCase()}).trim()}
-function fParse(name){var m=/^([0-9A-Za-z]+?)[-_ ]+PRODUCTO\s*[-_ ]*(\d*)\.(jpe?g|png|webp)$/i.exec(name.trim());return m?{sku:nz(m[1]),n:m[2]?parseInt(m[2],10):0}:null}
+function fParse(name){
+ var nm=name.trim(),E='\\.(jpe?g|png|webp)$',m=new RegExp('^([0-9A-Za-z]+?)[-_ ]+PRODUCTO\\s*[-_ ]*(\\d*)(?:\\.(\\d+))?'+E,'i').exec(nm);
+ if(m)return{sku:nz(m[1]),k:(m[2]?parseInt(m[2],10):0)+(m[3]?parseInt(m[3],10)/10:0),t:'p'};
+ m=new RegExp('^([0-9A-Za-z]+?)\\s*[-_ +]+\\s*AMBIENTACI[OÓ]N\\s*(\\d*)'+E,'i').exec(nm);if(m)return{sku:nz(m[1]),k:100+(+m[2]||0),t:'a'};
+ m=new RegExp('^([0-9A-Za-z]+?)\\s*[-_ +]+\\s*COLOR\\s*BOX\\s*(\\d*)'+E,'i').exec(nm);if(m)return{sku:nz(m[1]),k:200+(+m[2]||0),t:'c'};
+ m=new RegExp('^([0-9A-Za-z]+)'+E,'i').exec(nm);if(m)return{sku:nz(m[1]),k:300,t:'s'};
+ return null}
 function fClasif(files){
- var g={},bad=[];Array.prototype.forEach.call(files,function(f){var p=fParse(f.name);if(!p||!p.sku){bad.push(f.name);return}(g[p.sku]=g[p.sku]||[]).push({n:p.n,f:f})});
+ var g={},bad=[];Array.prototype.forEach.call(files,function(f){var p=fParse(f.name);if(!p||!p.sku){bad.push(f.name);return}(g[p.sku]=g[p.sku]||[]).push({k:p.k,t:p.t,f:f})});
  var web={};(S.wp||[]).forEach(function(p){if(p.sku&&!web[nz(p.sku)])web[nz(p.sku)]=p});
  var out=[];
  Object.keys(g).sort(function(a,b){return(+a||0)-(+b||0)||(a<b?-1:1)}).forEach(function(k){
-  var ph=g[k].sort(function(a,b){return a.n-b.n}),w=web[k],o=siIdx()[k],ba=o&&o.b?(o.b.BA||0):0,it={sku:k,fotos:ph,ok:true};
+  var ph=g[k];if(!ph.some(function(z){return z.t==='p'})){bad.push(k+': solo tiene fotos extra (sin PRODUCTO)');return}var seen={};ph=ph.filter(function(z){var q=z.t==='p'?'p'+z.k:z.t+Math.floor(z.k);if(seen[q])return false;seen[q]=1;return true}).sort(function(a,b){return a.k-b.k}).slice(0,10);ph.forEach(function(z,ix){z.n=ix});var w=web[k];var o=siIdx()[k],ba=o&&o.b?(o.b.BA||0):0,it={sku:k,fotos:ph,ok:true};
   if(w){var f=FOT[k];var tiene=!!(f&&f.i);it.modo='existente';it.skuTienda=String(w.sku);it.nombre=w.nombre||'';it.tiene=tiene;
    if(w.estado==='draft'){it.acc='Borrador existente: poner fotos';it.fotos=ph}
    else if(tiene){it.acc='Ya tiene foto: agregar '+(ph.length>1?'galería':'(nada nuevo)');it.fotos=ph.filter(function(x){return x.n>0});if(!it.fotos.length){it.ok=false;it.skip='Ya tiene foto y no hay fotos extra'}}
    else it.acc='Sin foto: poner foto'+(ph.length>1?' + galería':'')}
   else if(o&&ba>0){it.modo='nuevo';it.nombre=fTitulo(o.d||'');it.stock=Math.max(1,Math.min(S.gt,Math.floor(ba*S.gp/100)));it.acc='Crear BORRADOR (sin precio), stock '+it.stock+' · BA '+ba}
   else{it.ok=false;it.modo='omitir';it.nombre=o?fTitulo(o.d||''):'';it.skip=o?'Sin inventario en BA: no se crea':'No existe en la tienda ni en Siesa'}
-  it.sel=it.ok;out.push(it)});
+  it.pri=!it.ok?9:it.modo==='existente'&&!it.tiene?1:it.modo==='nuevo'?2:3;it.ba=ba;it.sel=it.pri<=2;out.push(it)});
+ out.sort(function(a,b){return a.pri-b.pri||b.ba-a.ba});
  return{items:out,bad:bad}}
 function renderF(){
  var v=$('vF');
  if(!v.dataset.ok){v.dataset.ok='1';
-  v.innerHTML='<div class="card"><div class="cb"><p class="mini" style="margin:0 0 8px">Selecciona las fotos (o arrástralas) de la carpeta <b>+FOTOS 2000X2000</b>. Nombres válidos: <code>1021-PRODUCTO.jpg</code> (principal), <code>1021-PRODUCTO1.jpg</code>, <code>1021-PRODUCTO2.jpg</code> (galería). Se reducen a 1200 px antes de subir. Los productos nuevos se crean como <b>BORRADOR sin precio</b> y solo si tienen inventario en BA. Nada se cambia hasta que pulses «Aplicar».</p><div id="fdz" style="border:2px dashed var(--b1);border-radius:10px;padding:18px;text-align:center;cursor:pointer">📷 Arrastra aquí las fotos o toca para elegirlas</div><input type="file" id="ffi" accept="image/jpeg,image/png,image/webp" multiple style="display:none"></div></div><div id="fres"></div>';
+  v.innerHTML='<div class="card"><div class="cb"><p class="mini" style="margin:0 0 8px">Selecciona las fotos (o arrástralas) de la carpeta <b>+FOTOS 2000X2000</b>. Nombres válidos: <code>1021-PRODUCTO.jpg</code> (principal), <code>1021-PRODUCTO1.jpg</code>, <code>1021-PRODUCTO2.jpg</code> (galería); también <code>-AMBIENTACIÓN</code>, <code>+ COLOR BOX</code> y <code>1021.jpg</code> entran a la galería (si la referencia tiene foto PRODUCTO). Se reducen a 1200 px antes de subir. Los productos nuevos se crean como <b>BORRADOR sin precio</b> y solo si tienen inventario en BA. Nada se cambia hasta que pulses «Aplicar».</p><div class="bar" style="margin-bottom:8px"><button class="btn btn-p" id="ffo">📁 Elegir la carpeta completa</button><span class="mini">La página separa sola: <b>1)</b> sin foto en la tienda, <b>2)</b> nuevas con inventario en BA, <b>3)</b> galerías de las que ya tienen foto. Solo marca 1 y 2; la 3 la marcas tú.</span></div><input type="file" id="ffd" webkitdirectory multiple style="display:none"><div id="fdz" style="border:2px dashed var(--b1);border-radius:10px;padding:18px;text-align:center;cursor:pointer">📷 Arrastra aquí las fotos o toca para elegirlas</div><input type="file" id="ffi" accept="image/jpeg,image/png,image/webp" multiple style="display:none"></div></div><div id="fres"></div>';
   var dz=$('fdz'),fi=$('ffi');dz.onclick=function(){fi.click()};
   dz.ondragover=function(e){e.preventDefault()};dz.ondrop=function(e){e.preventDefault();fCarga(e.dataTransfer.files)};
-  fi.onchange=function(){fCarga(fi.files)}}
+  fi.onchange=function(){fCarga(fi.files)};$('ffo').onclick=function(){$('ffd').click()};$('ffd').onchange=function(){fCarga($('ffd').files)}}
  if(!S.si||!S.wp){$('fres').innerHTML='<div class="alert">Cargando datos… pulsa ↻ Actualizar si no aparecen.</div>'}
 }
 function fCarga(files){
  if(!S.si||!S.wp){msg('Primero deja cargar el inventario (↻ Actualizar).','');return}
  var r=fClasif(files);F.items=r.items;F.bad=r.bad;fPinta()}
 function fPinta(){
- var I=F.items,ap=I.filter(function(x){return x.sel&&x.ok}),nf2=ap.reduce(function(a,x){return a+x.fotos.length},0);
+ var I=F.items,ap=I.filter(function(x){return x.sel&&x.ok}).slice(0,F.max||50),nf2=ap.reduce(function(a,x){return a+x.fotos.length},0);
  var cnt=function(m){return I.filter(function(x){return x.modo===m&&x.ok}).length};
  var h='<div class="sg">'+[['Referencias',I.length],['Poner/agregar fotos',cnt('existente')],['Crear borrador',cnt('nuevo')],['Omitidas',I.filter(function(x){return!x.ok}).length],['Fotos a subir',nf2]].map(function(x){return'<div class="sc"><div class="sv">'+nf(x[1])+'</div><div class="sl">'+x[0]+'</div></div>'}).join('')+'</div>';
  if(F.bad&&F.bad.length)h+='<div class="alert">'+F.bad.length+' archivo(s) con nombre no reconocido (se ignoran): '+esc(F.bad.slice(0,8).join(', '))+(F.bad.length>8?'…':'')+'</div>';
- h+='<div class="card"><div class="cb"><div class="bar"><button class="btn btn-p" id="fgo"'+(ap.length?'':' disabled')+'>✔ Aplicar ('+ap.length+' referencias, '+nf2+' fotos)</button><button class="btn" id="fall">Marcar todo</button><button class="btn" id="fnone">Desmarcar</button><span class="mini" id="fprog"></span></div></div></div>';
- h+='<div class="tw"><table><thead><tr><th></th><th>SKU</th><th>Producto</th><th>Acción</th><th class="n">Fotos</th><th>Resultado</th></tr></thead><tbody>'+I.map(function(x,i){return'<tr><td><input type="checkbox" data-fi="'+i+'"'+(x.sel?' checked':'')+(x.ok?'':' disabled')+'></td><td class="nm"><b>'+esc(x.sku)+'</b></td><td>'+esc(x.nombre)+'</td><td>'+esc(x.ok?x.acc:x.skip)+'</td><td class="n">'+x.fotos.length+'</td><td id="fr'+i+'" class="mini">'+esc(x.res||'')+'</td></tr>'}).join('')+'</tbody></table></div>';
+ h+='<div class="card"><div class="cb"><div class="bar"><button class="btn btn-p" id="fgo"'+(ap.length?'':' disabled')+'>✔ Aplicar ('+ap.length+' referencias, '+nf2+' fotos)</button><span class="mini">Máx. por tanda <input class="inp pc" id="fmax" type="number" min="1" value="'+(F.max||50)+'"></span><button class="btn" id="fp1">Solo 1) sin foto</button><button class="btn" id="fp2">Solo 2) nuevas</button><button class="btn" id="fp3">Solo 3) galerías</button><button class="btn" id="fnone">Desmarcar</button><span class="mini" id="fprog"></span></div></div></div>';
+ h+='<div class="tw"><table><thead><tr><th></th><th>Grupo</th><th>SKU</th><th>Producto</th><th>Acción</th><th class="n">Fotos</th><th>Resultado</th></tr></thead><tbody>'+I.map(function(x,i){return'<tr><td><input type="checkbox" data-fi="'+i+'"'+(x.sel?' checked':'')+(x.ok?'':' disabled')+'></td><td class="mini">'+(x.pri===1?'1 · Sin foto':x.pri===2?'2 · Nueva':x.pri===3?'3 · Galería':'—')+'</td><td class="nm"><b>'+esc(x.sku)+'</b></td><td>'+esc(x.nombre)+'</td><td>'+esc(x.ok?x.acc:x.skip)+'</td><td class="n">'+x.fotos.length+'</td><td id="fr'+i+'" class="mini">'+esc(x.res||'')+'</td></tr>'}).join('')+'</tbody></table></div>';
  $('fres').innerHTML=h;
  $('fres').onchange=function(e){var i=e.target.dataset&&e.target.dataset.fi;if(i!==undefined){F.items[+i].sel=e.target.checked;fResumen()}};
- $('fall').onclick=function(){F.items.forEach(function(x){if(x.ok)x.sel=true});fPinta()};$('fnone').onclick=function(){F.items.forEach(function(x){x.sel=false});fPinta()};
+ function solo(p){F.items.forEach(function(x){x.sel=x.ok&&x.pri===p&&!x.res});fPinta()}$('fp1').onclick=function(){solo(1)};$('fp2').onclick=function(){solo(2)};$('fp3').onclick=function(){solo(3)};$('fmax').onchange=function(){F.max=Math.max(1,+this.value||50);fResumen()};$('fnone').onclick=function(){F.items.forEach(function(x){x.sel=false});fPinta()};
  $('fgo').onclick=fAplicar}
-function fResumen(){var ap=F.items.filter(function(x){return x.sel&&x.ok}),n=ap.reduce(function(a,x){return a+x.fotos.length},0);var b=$('fgo');if(b){b.textContent='✔ Aplicar ('+ap.length+' referencias, '+n+' fotos)';b.disabled=!ap.length}}
+function fResumen(){var ap=F.items.filter(function(x){return x.sel&&x.ok}).slice(0,F.max||50),n=ap.reduce(function(a,x){return a+x.fotos.length},0);var b=$('fgo');if(b){b.textContent='✔ Aplicar ('+ap.length+' referencias, '+n+' fotos)';b.disabled=!ap.length}}
 function fReduce(file){return new Promise(function(res,rej){
  var url=URL.createObjectURL(file),im=new Image();
  im.onload=function(){var M=1200,w=im.naturalWidth,h=im.naturalHeight,k=Math.min(1,M/Math.max(w,h)),c=document.createElement('canvas');c.width=Math.round(w*k);c.height=Math.round(h*k);var x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(url);
   c.toBlob(function(b){if(!b)return rej(new Error('No se pudo reducir'));var fr=new FileReader();fr.onload=function(){res(String(fr.result).split(',')[1])};fr.onerror=function(){rej(new Error('Lectura falló'))};fr.readAsDataURL(b)},'image/jpeg',0.85)};
  im.onerror=function(){URL.revokeObjectURL(url);rej(new Error('Imagen ilegible'))};im.src=url})}
 async function fAplicar(){
- if(F.run)return;var ap=F.items.map(function(x,i){return[x,i]}).filter(function(p){return p[0].sel&&p[0].ok});if(!ap.length)return;
+ if(F.run)return;var ap=F.items.map(function(x,i){return[x,i]}).filter(function(p){return p[0].sel&&p[0].ok}).slice(0,F.max||50);if(!ap.length)return;
  if(!confirm('Se subirán fotos de '+ap.length+' referencias a la tienda. ¿Continuar?'))return;
  F.run=true;$('fgo').disabled=true;var ok=0,er=0;
  for(var q=0;q<ap.length;q++){var x=ap[q][0],i=ap[q][1],cell=$('fr'+i);$('fprog').textContent='Procesando '+(q+1)+' de '+ap.length+'…';
