@@ -1980,7 +1980,7 @@ async function extImportar() {
 
 /* ===== Contados pendientes de despacho (facturas VE a 1 día de plazo) ===== */
 const CT_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-contados';
-let CT = { filas: null, est: 'pend', mes: '', q: '', cargando: false };
+let CT = { filas: null, est: 'todos', mes: '', q: '', cargando: false };
 const ctApi = async b => { try { const r = await fetch(CT_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
 const ctHoy = () => (D && D.hoy) || new Date().toISOString().slice(0, 10);
 const ctDias = r => r.fecha ? Math.max(0, Math.round((Date.parse(ctHoy() + 'T00:00:00Z') - Date.parse(r.fecha + 'T00:00:00Z')) / 86400000)) : '';
@@ -1996,9 +1996,9 @@ const CT_COLS = [
   { k: 'ej', t: 'Ejecutivo', v: r => (r.ejecutivo || '').trim() },
   { k: 'canal', t: 'Canal', v: r => (r.canal || '').trim() },
   { k: 'valor', t: 'Valor', num: 1, sum: 1, dec: 1, v: r => r.valor == null ? '' : r.valor, h: r => r.valor == null ? '–' : '<b>' + fm2(r.valor) + '</b>' },
-  { k: 'fdes', t: 'Despachado el', date: 1, v: r => r.fecha_despacho || '', h: r => esc(ctFd(r.fecha_despacho)) + (r.usuario && r.despachado && r.usuario !== 'importación' ? '<div style="font-size:9px;color:#64748b">' + esc(r.usuario) + '</div>' : '') },
+  { k: 'fdes', t: 'Fecha de despacho', date: 1, v: r => r.fecha_despacho || '', h: r => r.anulada ? '' : '<input type="date" value="' + esc(r.fecha_despacho || '') + '" max="' + ctHoy() + '" onchange="ctFecha(' + r.id + ',this.value)" style="padding:3px 6px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;' + (r.despachado ? 'background:#fff;font-weight:700' : '') + '">' + (r.despachado && r.usuario && r.usuario !== 'importación' ? '<div style="font-size:9px;color:#64748b">' + esc(r.usuario) + '</div>' : '') },
   { k: 'nota', t: 'Nota', wrap: 1, v: r => r.nota || '', h: r => esc(r.nota || '') },
-  { k: 'acc', t: 'Acción', v: r => '', h: r => (r.anulada ? '' : r.despachado ? '<button class="btn g" style="padding:3px 8px;font-size:11px" onclick="ctMarcar(' + r.id + ',false)">↩ Desmarcar</button>' : '<button class="btn" style="padding:3px 10px;font-size:11px" onclick="ctMarcar(' + r.id + ',true)">✔ Despachar</button>') + ' <button class="btn g" style="padding:3px 8px;font-size:11px" title="Agregar o editar nota" onclick="ctNota(' + r.id + ')">📝</button>' },
+  { k: 'acc', t: 'Nota', v: r => '', h: r => '<button class="btn g" style="padding:3px 8px;font-size:11px" title="Agregar o editar nota" onclick="ctNota(' + r.id + ')">📝</button>' },
 ];
 async function ctVista(forzar) {
   const c = $('cont'); if (!c) return;
@@ -2047,10 +2047,9 @@ function ctKpis(n, v, vieja, dh) {
     + '<div class="kpi"><div class="l">Despachados hoy</div><div class="v" style="color:#16a34a">' + dh + '</div></div></div>';
 }
 function ctEstado(e) { CT.est = e; ctPintar(); }
-async function ctMarcar(id, des) {
+async function ctFecha(id, f) {
   const r = CT.filas.find(x => x.id === id); if (!r) return;
-  if (!des && !confirm('¿Desmarcar el despacho de ' + r.tipo + ' ' + r.consec + '?')) return;
-  const j = await ctApi({ accion: 'marcar', id, despachado: des });
+  const j = await ctApi({ accion: 'marcar', id, despachado: !!f, fecha: f || undefined });
   if (!j || !j.ok) { alert((j && j.error) || 'No se pudo guardar'); return; }
   Object.assign(r, j.fila, { canal: r.canal }); ctPintar(true);
 }
