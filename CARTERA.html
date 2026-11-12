@@ -1401,6 +1401,13 @@ async function extCargarMes(m, forzar) {
   if (!forzar && EXT.cache[m]) return EXT.cache[m];
   const j = m === 'pend' ? await extApi({ accion: 'listar', pendientes: true }) : await extApi({ accion: 'listar', desde: extRango(m)[0], hasta: extRango(m)[1] });
   if (!j || !j.ok) throw new Error((j && j.error) || 'No se pudo cargar');
+  // Lo que se identificó en un mes posterior cuenta en ESE mes: sale del mes de su fecha del banco y entra (con su fecha original) al mes en que se identificó
+  if (/^\d{4}-\d{2}$/.test(m)) {
+    const [ini, fin] = extRango(m);
+    j.filas = j.filas.filter(r => !(r.fecha_ident && String(r.fecha_ident).slice(0, 10) > fin));
+    const q = await extApi({ accion: 'listar', identDesde: ini, identHasta: fin });
+    if (q && q.ok) j.filas = j.filas.concat(q.filas.map(r => Object.assign(r, { _ident: true })));
+  }
   // Mes actual: se agregan (con su misma fecha) los movimientos SIN IDENTIFICAR de los meses anteriores del año, para que no se pierdan de vista
   const hoy = (D && D.hoy) || new Date().toISOString().slice(0, 10);
   if (/^\d{4}-\d{2}$/.test(m) && m === hoy.slice(0, 7)) {
@@ -1423,7 +1430,7 @@ function extFiltrar(R) {
   return R.filter(r => (!EXT.banco || r.banco === EXT.banco) && (!EXT.est || (EXT.est === 'ate' ? ateRev(r) : extEst(r) === EXT.est)) && (!EXT.ej || r.ejecutivo === EXT.ej) && (!q || nz([r.banco, r.descripcion, r.texto_ref, r.ref_cliente, r.cliente, r.rc, r.ejecutivo, r.observacion, r.monto, r.nit].join(' ')).includes(q)));
 }
 const EXT_COLS = [
-  { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha, h: r => esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7) + '/' + r.fecha.slice(2, 4)) + (r._arr ? '<div style="font-size:9px;color:#b45309" title="Sin identificar de un mes anterior: se muestra aquí con su fecha original">↩ ' + esc(MESES[+r.fecha.slice(5, 7) - 1].toLowerCase()) + '</div>' : '') },
+  { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha, h: r => esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7) + '/' + r.fecha.slice(2, 4)) + (r._ident ? '<div style="font-size:9px;color:#0f766e" title="Movimiento de un mes anterior que se identificó este mes: cuenta en este mes">✔ ident. ' + esc(r.fecha_ident.slice(8, 10) + '/' + r.fecha_ident.slice(5, 7)) + '</div>' : '') + (r._arr ? '<div style="font-size:9px;color:#b45309" title="Sin identificar de un mes anterior: se muestra aquí con su fecha original">↩ ' + esc(MESES[+r.fecha.slice(5, 7) - 1].toLowerCase()) + '</div>' : '') },
   { k: 'banco', t: 'Banco', v: r => r.banco },
   { k: 'desc', t: 'Descripción', wrap: 1, v: r => r.descripcion, h: r => esc(r.descripcion) + (r.texto_ref ? '<div style="font-size:10px;color:#64748b">' + esc(String(r.texto_ref).slice(0, 90)) + '</div>' : '') },
   { k: 'monto', t: 'Monto', num: 1, sum: 1, v: r => Number(r.monto), h: r => '<b>' + fm(Number(r.monto)) + '</b>' },
