@@ -12096,6 +12096,53 @@ const TABLA_REF_COLUMNAS = [
   {campo:'observaciones',           th:'Observaciones',             ancho:true},
 ];
 const TABLA_REF_COLUMNAS_COMPACTA = TABLA_REF_COLUMNAS.filter(c=>c.compacta);
+async function refDescargarExcel(){
+  try{
+    await reabastCargarExcelJS();
+    const cols = TABLA_REF_COLUMNAS.slice();
+    const f = reabastFiltro('referencias', {q:'', col:{}});
+    let filas = Object.values(REABAST.referenciasMaestro||{}).filter(r=>r && r.referencia);
+    filas.sort((x,y)=>String(x.referencia).localeCompare(String(y.referencia),'es',{numeric:true}));
+    const wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('Referencias',{views:[{state:'frozen',xSplit:1,ySplit:1}]});
+    const enc = cols.map(c=>c.th.replace(/\s*\*$/,''));
+    enc.push('CBM unitario (m³)');
+    ws.addRow(enc);
+    const cbmIdx = cols.findIndex(c=>c.campo==='cbm');
+    filas.forEach(r=>{
+      const v = cols.map(c=>{
+        let x = r[c.campo]; if(x==null||x==='') return null;
+        if(c.fecha){ const d = new Date(x); return isNaN(d)?String(x):d; }
+        if(c.num){ const n = Number(x); return isNaN(n)?String(x):n; }
+        return String(x);
+      });
+      v.push(cbmRefInfo(r.referencia).cbm);
+      ws.addRow(v);
+    });
+    const hr = ws.getRow(1); hr.height = 30;
+    hr.eachCell(c=>{ c.font={bold:true,color:{argb:'FFFFFFFF'}}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1F3864'}}; c.alignment={vertical:'middle',horizontal:'center',wrapText:true}; });
+    const last = cols.length+1;
+    ws.getColumn(last).eachCell((c,i)=>{ if(i>1){ c.numFmt='0.0000'; c.font={bold:true}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFE2EFDA'}}; } });
+    hr.getCell(last).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF548235'}};
+    cols.forEach((c,i)=>{
+      const col = ws.getColumn(i+1);
+      let w = c.th.length+2;
+      filas.slice(0,300).forEach(r=>{ const t = String(r[c.campo]==null?'':r[c.campo]); if(t.length>w) w=t.length; });
+      col.width = Math.min(Math.max(w,10), c.ancho?60:40);
+      if(c.fecha) col.numFmt='dd/mm/yyyy';
+      else if(c.campo==='fob_usd'||c.campo==='amount') col.numFmt='#,##0.00';
+      else if(c.campo==='cbm') col.numFmt='0.0000';
+      if(c.ancho||c.campo==='descripcion_en'||c.campo==='nombre_comercial') col.alignment={wrapText:false,vertical:'top'};
+    });
+    ws.getColumn(last).width = 18;
+    hr.getCell(1).alignment={vertical:'middle',horizontal:'center',wrapText:true};
+    ws.autoFilter = {from:{row:1,column:1},to:{row:1,column:last}};
+    ws.eachRow((row,i)=>{ if(i>1) row.eachCell(c=>{ c.border={bottom:{style:'hair',color:{argb:'FFBFBFBF'}}}; }); });
+    const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download = 'Referencias_con_CBM_'+new Date().toISOString().slice(0,10)+'.xlsx';
+    document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
+  }catch(e){ alert('No se pudo generar el Excel: '+(e&&e.message||e)); }
+}
 function reabastHtmlReferenciasShell(){
   try{ document.body.classList.toggle('solo-lectura', reabastSoloLectura()); }catch(e){}
   const f = reabastFiltro('referencias', {q:'', col:{}});
@@ -12106,6 +12153,7 @@ function reabastHtmlReferenciasShell(){
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
         ${reabastSoloLectura()?'':`<label class="btn btn-g btn-sm" style="cursor:pointer;margin:0;">📤 Importar desde Excel<input type="file" accept=".xlsx,.xls,.csv" style="display:none;" onchange="refImportarExcel(this)"></label>`}
         ${reabastEsAdmin()?`<button class="btn btn-g btn-sm" onclick="refCompletarDesdePanelCompras()" title="Refresca el FOB US$ de TODAS las referencias con el precio de la última compra real (Panel de compras), y completa el Proveedor solo donde esté vacío">🔄 Actualizar precios/proveedor</button>`:''}
+        <button class="btn btn-g btn-sm" onclick="refDescargarExcel()" title="Descarga todas las referencias con todas sus columnas y su CBM unitario">⬇ Descargar Excel</button>
         ${reabastEsAdmin()?`<button class="btn btn-g btn-sm" onclick="cbmAplicarArchivoIncluido()" title="Fuerza el CBM por unidad de las ${Object.keys(CBM_ARCHIVO).length} referencias del archivo CBM_2.xlsx">📦 Reaplicar CBM (CBM_2.xlsx)</button><label class="btn btn-g btn-sm" style="cursor:pointer;margin:0;" title="Excel con columnas referencia y CBM">📦 CBM desde Excel<input type="file" accept=".xlsx,.xls" style="display:none;" onchange="cbmAplicarExcel(this)"></label>`:''}
         ${reabastEsAdmin()?`<button class="btn btn-g btn-sm" onclick="reabastMigrarFotos()" title="Mueve las fotos guardadas dentro de la base al almacenamiento (más rápido y gasta mucho menos tráfico)">🗜️ Mover fotos al almacenamiento</button>`:''}
         ${reabastSoloLectura()?'':`<button class="btn btn-bl btn-sm" onclick="abrirModalReferencia()">+ Nueva referencia</button>`}
