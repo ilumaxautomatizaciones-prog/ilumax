@@ -4050,6 +4050,7 @@ function cblOverlay(){
 let _repImpHash = '', _repImpT = null;
 function repImpPublicar(setPortal){
   clearTimeout(_repImpT); _repImpT = setTimeout(async ()=>{
+    try{ hcPublicar(); }catch(e){}
     try{
       if(!CE.resumen || !(CE._blsBase||[]).length && !(REABAST.ordenesCompra||[]).length) return;
       const ETQ = {3:'Producción',5:'Embarque',6:'Tránsito',7:'Nacionalización'}, filas = [], iso = x => x ? String(x).slice(0,10) : '';
@@ -5474,6 +5475,7 @@ function reabastPintar(){
     {id:'calendario', lbl:'📅 Calendario de llegadas'},
     {id:'novedades', lbl:'📋 Novedades'},
     {id:'agotados', lbl:'📦 Agotados ('+REABAST._agotados.length+')'},
+    {id:'homecenter', lbl:'🏬 Homecenter'},
     {id:'sobrestock', lbl:'📈 Sobrestock ('+REABAST._sobrestock.length+')'},
     {id:'vendidos', lbl:'🏆 Más vendidos'},
     {id:'abc', lbl:'🔤 Clasificación ABC'},
@@ -5523,6 +5525,7 @@ function reabastPintar(){
   else if(REABAST.tab==='pagos'){ body.innerHTML = '<div id="pp-root"></div>'; ppAbrirEn('pp-root'); }
   else if(REABAST.tab==='tesoreria'){ arteInjectCss(); tesoInjectCss(); body.innerHTML = reabastHtmlTesoreriaShell(); tesoPintar(true); }
   else if(REABAST.tab==='novedades'){ arteInjectCss(); ocnInjectCss(); body.innerHTML = reabastHtmlNovedadesShell(); ocnPintarGlobal(); }
+  else if(REABAST.tab==='homecenter'){ hcRender(body); }
   else if(REABAST.tab==='agotados'){ body.innerHTML = reabastHtmlAgotadosShell(); reabastRepintarAgotados(); }
   else if(REABAST.tab==='sobrestock'){ body.innerHTML = reabastHtmlSobrestockShell(); reabastRepintarSobrestock(); }
   else if(REABAST.tab==='vendidos'){ body.innerHTML = reabastHtmlVendidosShell(); reabastRepintarVendidos(); }
@@ -5733,6 +5736,137 @@ function reabastHtmlDetalleVentaReferencia(referencia, mensualRows){
 
   return `<div class="hist-inline">${transitoHtml}${mensualHtml}${clientesHtml}</div>`;
 }
+/* ───────── Homecenter (Sodimac): seguimiento del portafolio — agotados / próximos a agotarse con semáforo por fecha de llegada ───────── */
+const HC = { cfg:null, vista:'resumen', q:'', est:'', filas:null, cargando:false };
+const HC_VISTAS = [['resumen','📊 Resumen'],['agotados','🔴 Agotados PULL'],['proximos','🟠 Próximos a agotarse PULL'],['pushio','📦 PUSH e IN/OUT'],['completo','📋 Portafolio completo']];
+const hcGrupo = s => { const t = String(s||'').toLowerCase(); return /negoc/.test(t) ? 'Negociación' : /descontin|migran/.test(t) ? 'Descontinuar' : 'Activo'; };
+const hcRep = s => { const t = String(s||'').toUpperCase().replace(/\s+/g,''); return /PULL/.test(t) ? 'PULL' : /PUSH/.test(t) ? 'PUSH' : /IN.*OUT/.test(t) ? 'IN/OUT' : t; };
+async function hcCargar(forzar){
+  if(HC.cfg && !forzar) return;
+  try{ const r = await sb.get('configuracion','clave=eq.hc_portafolio'); const v = r && r[0] ? r[0].valor : null; HC.cfg = (typeof v==='string' ? JSON.parse(v) : v) || {items:[]}; }
+  catch(e){ HC.cfg = HC.cfg || {items:[]}; }
+}
+function hcIso(d){ if(!d) return ''; if(typeof d==='string') return d.slice(0,10); try{ return d.toISOString().slice(0,10); }catch(e){ return ''; } }
+// llegadas por referencia: BL en camino (Embarque/Tránsito/Nacionalización, con su fecha a planta/ETA) + lo que sigue en producción en cada OC activa
+function hcLlegadas(){
+  const L = {}, add = (ref, x)=>{ const k = ceRefKey(ref); (L[k] = L[k] || []).push(x); };
+  (CBL.bls||[]).forEach(b=>(b.items||[]).forEach(it=>{ const f = ceFaseLinea(it.estado||'','').fase; if(f===9 || f===-1) return;
+    add(it.ref, {estado:(CBL_FASE_TXT[f]||it.estado||'Embarque').toUpperCase().replace('INGRESO A BODEGA','INGRESADA'), fecha:hcIso(it.planta||b.planta||b.eta), unds:Number(it.cant)||0, oc:it.oc, bl:b.bl}); }));
+  (REABAST.ordenesCompra||[]).filter(o=>(o.estado_general||'activa')==='activa').forEach(o=>{
+    let pend = []; try{ pend = cblPendientes(o).filter(p=>p.pend>0); }catch(e){}
+    if(!pend.length) return; let lg = null; try{ lg = ceLlegada(o); }catch(e){}
+    pend.forEach(p=>add(p.ref, {estado:'PRODUCCIÓN', fecha:hcIso(lg && lg.fecha), unds:p.pend, oc:o.numero_oc, bl:''})); });
+  return L;
+}
+function hcCalcular(){
+  const items = (HC.cfg && HC.cfg.items) || [], inv = {}; (reabastInventarioPorReferencia()||[]).forEach(g=>{ inv[ceRefKey(g.referencia)] = (inv[ceRefKey(g.referencia)]||0) + (Number(g.existencia)||0); });
+  const LL = hcLlegadas(), hoy = new Date(); hoy.setHours(12,0,0,0);
+  return items.map(p=>{ const k = ceRefKey(p.ref), tot = inv[k]||0, ll = (LL[k]||[]).slice().sort((a,b)=>(a.fecha||'9999').localeCompare(b.fecha||'9999')), prox = ll[0] || null;
+    const dias = prox && prox.fecha ? Math.round((new Date(prox.fecha+'T12:00:00')-hoy)/86400000) : null;
+    const sem = !prox || !prox.fecha ? 'gris' : dias<=7 ? 'verde' : dias<=21 ? 'amarillo' : dias<=45 ? 'naranja' : 'rojo';
+    return {...p, grupo:hcGrupo(p.estado), rep:hcRep(p.rep), total:tot, prox, dias, sem, camino:ll.reduce((a,x)=>a+x.unds,0), nLL:ll.length,
+      stock: tot<=0 ? 'agotada' : tot<=50 ? 'proxima' : 'ok'}; });
+}
+const HC_SEM = {verde:['#16a34a','0-7 días'], amarillo:['#eab308','8-21 días'], naranja:['#f97316','22-45 días'], rojo:['#dc2626','Más de 45 días'], gris:['#94a3b8','Sin fecha']};
+const hcDot = s => `<span title="${HC_SEM[s][1]}" style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${HC_SEM[s][0]};vertical-align:middle;margin-right:5px;"></span>`;
+function hcFiltrar(F){ const q = (HC.q||'').toLowerCase().trim(); return F.filter(r=>(!HC.est || r.grupo===HC.est) && (!q || [r.cod,r.ref,r.ean,r.desc].join(' ').toLowerCase().includes(q))); }
+function hcTabla(F, conStock){
+  if(!F.length) return '<div class="empty"><div class="empty-t">Sin referencias en esta vista</div></div>';
+  return `<div class="tw"><table><thead><tr><th>Código</th><th>Ref.</th><th>Descripción</th><th>Estado</th><th>Modalidad</th><th style="text-align:right;">UE</th><th style="text-align:right;">Inventario</th><th>Estado llegada</th><th>Fecha llegada</th><th style="text-align:right;">Días</th><th style="text-align:right;">Unds</th><th>OC / BL</th></tr></thead><tbody>${F.map(r=>`<tr>
+    <td style="font-family:monospace;">${reabastEsc(r.cod)}</td><td style="font-family:monospace;">${reabastEsc(r.ref)}</td><td>${reabastEsc(String(r.desc||'').slice(0,52))}</td><td>${r.grupo}</td><td>${reabastEsc(r.rep)}</td><td style="text-align:right;">${reabastEsc(r.ue||'')}</td>
+    <td style="text-align:right;font-weight:700;color:${r.total<=0?'#dc2626':r.total<=50?'#ea580c':'inherit'};">${cblN(r.total)}</td>
+    <td>${r.prox ? reabastEsc(r.prox.estado) : '<span style="color:var(--mu);">NO REGISTRA INFORMACIÓN</span>'}</td>
+    <td>${hcDot(r.sem)}${r.prox && r.prox.fecha ? cblFd(r.prox.fecha) : '—'}</td><td style="text-align:right;">${r.dias==null?'—':r.dias}</td>
+    <td style="text-align:right;">${r.prox ? cblN(r.prox.unds) : '—'}${r.nLL>1?` <span title="Hay ${r.nLL} llegadas; en camino en total ${cblN(r.camino)} unds" style="color:var(--mu);">(+${r.nLL-1})</span>`:''}</td>
+    <td style="font-size:10.5px;color:var(--mu);">${r.prox ? reabastEsc([r.prox.oc, r.prox.bl].filter(Boolean).join(' · ')) : ''}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function hcResumenHtml(R){
+  const pull = R.filter(r=>r.rep==='PULL'), ag = pull.filter(r=>r.stock==='agotada'), act = pull.filter(r=>r.grupo==='Activo'), agAct = ag.filter(r=>r.grupo==='Activo'), prox = pull.filter(r=>r.stock==='proxima');
+  const pc = (a,b)=>b?Math.round(a/b*1000)/10+'%':'—', sum = a=>a.reduce((s,r)=>s+(r.camino||0),0);
+  const kp = (v,l,c)=>`<div style="background:var(--w,#fff);border:1px solid var(--b1);border-radius:10px;padding:10px 14px;min-width:150px;"><div style="font-size:22px;font-weight:800;color:${c||'inherit'};">${v}</div><div style="font-size:11px;color:var(--mu);">${l}</div></div>`;
+  const por = (g,f)=>pull.filter(r=>r.grupo===g && f(r)).length;
+  const modal = ['PULL','PUSH','IN/OUT'].map(m=>{ const a = R.filter(r=>r.rep===m), b = a.filter(r=>r.stock==='agotada'); return `<tr><td><b>${m}</b></td><td style="text-align:right;">${a.length}</td><td style="text-align:right;">${b.length}</td><td style="text-align:right;">${pc(b.length,a.length)}</td><td style="text-align:right;">${a.filter(r=>r.stock==='proxima').length}</td><td style="text-align:right;">${cblN(sum(b))}</td></tr>`; }).join('');
+  const ven = ['verde','amarillo','naranja','rojo','gris'];
+  const tv = ven.map(s=>`<tr><td>${hcDot(s)}${HC_SEM[s][1]}</td>${['Activo','Negociación','Descontinuar'].map(g=>`<td style="text-align:right;">${ag.filter(r=>r.grupo===g && r.sem===s).length}</td>`).join('')}<td style="text-align:right;font-weight:700;">${ag.filter(r=>r.sem===s).length}</td></tr>`).join('');
+  const lg = {}; ag.forEach(r=>{ const e = r.prox ? r.prox.estado : 'NO REGISTRA INFORMACIÓN'; (lg[e] = lg[e] || {}); lg[e][r.grupo] = (lg[e][r.grupo]||0)+1; });
+  const tl = Object.keys(lg).sort().map(e=>`<tr><td>${reabastEsc(e)}</td>${['Activo','Negociación','Descontinuar'].map(g=>`<td style="text-align:right;">${lg[e][g]||0}</td>`).join('')}<td style="text-align:right;font-weight:700;">${Object.values(lg[e]).reduce((a,b)=>a+b,0)}</td></tr>`).join('');
+  const est = ['Activo','Negociación','Descontinuar'].map(g=>{ const a = pull.filter(r=>r.grupo===g), b = a.filter(r=>r.stock==='agotada'); return `<tr><td><b>${g}</b></td><td style="text-align:right;">${a.length}</td><td style="text-align:right;">${b.length}</td><td style="text-align:right;">${pc(b.length,a.length)}</td><td style="text-align:right;">${b.filter(r=>r.prox&&r.prox.fecha).length}</td><td style="text-align:right;">${b.filter(r=>!(r.prox&&r.prox.fecha)).length}</td><td style="text-align:right;">${cblN(sum(b))}</td></tr>`; }).join('');
+  const th = (...c)=>`<thead><tr>${c.map((x,i)=>`<th${i?' style="text-align:right;"':''}>${x}</th>`).join('')}</tr></thead>`, card = (t,b)=>`<div style="flex:1;min-width:340px;"><div style="font-weight:800;font-size:12.5px;margin:12px 0 6px;">${t}</div><div class="tw"><table>${b}</table></div></div>`;
+  return `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;">${kp(pull.length,'Referencias PULL')}${kp(ag.length,'Agotadas (inventario 0)','#dc2626')}${kp(pc(ag.length,pull.length),'% agotadas sobre PULL')}${kp(agAct.length+' de '+act.length,'Activas agotadas','#ea580c')}${kp(cblN(sum(ag)),'Unds en camino de las agotadas','#16a34a')}${kp(prox.length,'PULL con 1 a 50 unds','#ea580c')}${kp(ag.filter(r=>!(r.prox&&r.prox.fecha)).length,'Agotadas sin fecha de llegada','#64748b')}</div>
+  <div style="display:flex;gap:14px;flex-wrap:wrap;">${card('Por modalidad', th('Modalidad','Ref.','Agotadas','% agotado','1 a 50 unds','Unds en camino (agotadas)')+'<tbody>'+modal+'</tbody>')}${card('Agotados PULL por estado', th('Estado','Ref.','Agotadas','% agotado','Con fecha','Sin fecha','Unds en camino')+'<tbody>'+est+'</tbody>')}</div>
+  <div style="display:flex;gap:14px;flex-wrap:wrap;">${card('Cuándo llegan los agotados PULL (semáforo)', th('Ventana de llegada','Activo','Negociación','Descontinuar','Total')+'<tbody>'+tv+'</tbody>')}${card('Estado logístico de los agotados PULL', th('Estado logístico','Activo','Negociación','Descontinuar','Total')+'<tbody>'+(tl||'<tr><td colspan="5" style="color:var(--mu);">Sin agotados</td></tr>')+'</tbody>')}</div>
+  <div style="font-size:11px;color:var(--mu);margin-top:12px;">Inventario = existencia que cuenta el portal (bodegas marcadas). Llegada = la más cercana entre los BL en camino y lo que sigue en producción en las OC activas; Unds = lo que llega en esa fecha. Portafolio cargado: ${reabastEsc((HC.cfg.archivo||'—'))} · ${HC.cfg.fecha?cblFd(HC.cfg.fecha):''}.</div>`;
+}
+function hcPintar(){
+  const box = document.getElementById('hc-wrap'); if(!box) return;
+  if(!HC.cfg || !(HC.cfg.items||[]).length){ box.innerHTML = `<div class="empty"><div class="empty-t">Aún no hay portafolio Homecenter cargado</div><div style="font-size:12px;color:var(--mu);margin:6px 0 10px;">Sube el Excel de Johanna (hoja «Portafolio completo»: Código, Ref. Proveedor, EAN, Descripción, Estado, Reposición, UE, IVA, Cadena Vigente). Los inventarios y las fechas de llegada los toma el portal solo.</div>${hcBtnCargar()}</div>`; return; }
+  const R = HC.filas = hcCalcular(); let F, tit = ''; hcPublicar();
+  const ord = (a,b)=>(a.prox&&a.prox.fecha||'9999').localeCompare(b.prox&&b.prox.fecha||'9999') || String(a.ref).localeCompare(String(b.ref),'es',{numeric:true});
+  if(HC.vista==='resumen'){ box.innerHTML = hcResumenHtml(R); return; }
+  if(HC.vista==='agotados') F = R.filter(r=>r.rep==='PULL' && r.stock==='agotada').sort(ord);
+  else if(HC.vista==='proximos') F = R.filter(r=>r.rep==='PULL' && r.stock==='proxima').sort((a,b)=>a.total-b.total);
+  else if(HC.vista==='pushio') F = R.filter(r=>r.rep!=='PULL').sort((a,b)=>a.rep.localeCompare(b.rep) || ord(a,b));
+  else F = R.slice().sort((a,b)=>a.rep.localeCompare(b.rep) || ord(a,b));
+  F = hcFiltrar(F); box.innerHTML = `<div style="font-size:11px;color:var(--mu);margin-bottom:6px;">${F.length} referencia(s) · ${Object.keys(HC_SEM).map(s=>hcDot(s)+HC_SEM[s][1]).join(' &nbsp; ')}</div>` + hcTabla(F);
+}
+let _hcHash = '';
+// Publica para reporte.html (pestaña Homecenter de Johanna) el portafolio con inventario y próxima llegada, tal como lo ve Abastecimiento
+async function hcPublicar(forzar){
+  try{
+    await hcCargar(); if(!((HC.cfg && HC.cfg.items)||[]).length) return;
+    if(!(typeof INV_ABAST!=='undefined' && INV_ABAST) && !(INV_DATA||[]).length) return;
+    if(!CBL.cargado) await cblCargar();
+    const R = hcCalcular(), filas = R.map(r=>[r.cod, r.ref, r.ean, r.desc, r.grupo, r.rep, r.ue, r.total, r.prox?r.prox.estado:'', r.prox?r.prox.fecha:'', r.prox?r.prox.unds:0, r.prox?r.prox.oc:'', r.prox?r.prox.bl:'', r.camino, r.nLL]);
+    const js = JSON.stringify(filas); if(js===_hcHash && !forzar) return; _hcHash = js;
+    await sb.upsert('configuracion', {clave:'hc_reporte', valor:JSON.stringify({fecha:new Date().toISOString(), archivo:HC.cfg.archivo||'', portafolio:HC.cfg.fecha||'', filas}), tipo:'json'}, 'clave');
+  }catch(e){ console.warn('hc publicar', e); }
+}
+function hcBtnCargar(){ return `<label class="btn btn-bl btn-sm" style="cursor:pointer;">📤 Cargar portafolio (Excel)<input type="file" accept=".xlsx,.xls" style="display:none;" onchange="hcSubir(this)"></label>`; }
+function hcHtmlShell(){
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+    ${HC_VISTAS.map(v=>`<button class="btn btn-sm ${HC.vista===v[0]?'btn-bl':'btn-g'}" onclick="HC.vista='${v[0]}';hcPintar();hcBarra()">${v[1]}</button>`).join('')}
+    <span id="hc-barra"></span></div><div id="hc-wrap"><div style="padding:14px;color:var(--mu);">Cargando…</div></div>`;
+}
+function hcBarra(){
+  const b = document.getElementById('hc-barra'); if(!b) return; const lista = HC.vista!=='resumen';
+  b.innerHTML = (lista?`<input class="inp" style="width:210px;" placeholder="Buscar código, ref., EAN…" value="${reabastEsc(HC.q)}" oninput="HC.q=this.value;clearTimeout(window.__hcT);window.__hcT=setTimeout(hcPintar,200)"> <select class="inp" style="width:auto;" onchange="HC.est=this.value;hcPintar()"><option value="">Todos los estados</option>${['Activo','Negociación','Descontinuar'].map(g=>`<option ${HC.est===g?'selected':''}>${g}</option>`).join('')}</select> `:'')
+    + (HC.cfg && (HC.cfg.items||[]).length ? `<button class="btn btn-g btn-sm" onclick="hcExcel()">⬇ Excel</button> ` : '') + (reabastEsAdmin() || cblPuede() ? hcBtnCargar() : '');
+}
+async function hcRender(body){
+  body.innerHTML = hcHtmlShell(); hcBarra();
+  try{ await Promise.all([hcCargar(), cblCargar()]); }catch(e){ console.warn(e); }
+  if(REABAST.tab!=='homecenter') return; hcBarra(); hcPintar();
+}
+async function hcSubir(inp){
+  const f = inp.files && inp.files[0]; if(!f) return;
+  try{
+    const wb = XLSX.read(await f.arrayBuffer(), {type:'array'}); let filas = null;
+    for(const n of (wb.SheetNames.includes('Portafolio completo') ? ['Portafolio completo'] : wb.SheetNames)){
+      const m = XLSX.utils.sheet_to_json(wb.Sheets[n], {header:1, defval:null, raw:false}); const hi = m.findIndex(r=>r && r.some(c=>/^ref\.?\s*proveedor$/i.test(String(c||'').trim())));
+      if(hi>=0){ filas = {h:m[hi].map(c=>String(c||'').trim().toLowerCase()), d:m.slice(hi+1)}; break; } }
+    if(!filas){ toast('No encuentro la columna «Ref. Proveedor» en el Excel','er'); return; }
+    const ix = re => filas.h.findIndex(h=>re.test(h)), c = {cod:ix(/^c[oó]digo$/), ref:ix(/^ref\.?\s*proveedor$/), ean:ix(/^ean$/), desc:ix(/^descripci/), est:ix(/^estado$/), rep:ix(/^reposici/), ue:ix(/^ue$/), iva:ix(/^iva$/), cad:ix(/^cadena/)};
+    const items = filas.d.filter(r=>r && r[c.ref]!=null && String(r[c.ref]).trim()!=='').map(r=>({cod:String(r[c.cod]??'').trim(), ref:String(r[c.ref]).trim(), ean:String(r[c.ean]??'').trim(), desc:String(r[c.desc]??'').trim(), estado:String(r[c.est]??'').trim(), rep:String(r[c.rep]??'').trim(), ue:r[c.ue]??'', iva:r[c.iva]??'', cadena:r[c.cad]??''}));
+    if(!items.length){ toast('El Excel no trae referencias','er'); return; }
+    HC.cfg = {items, archivo:f.name, fecha:new Date().toISOString().slice(0,10), quien:(CU&&CU.nombre)||''};
+    await sb.upsert('configuracion', {clave:'hc_portafolio', valor:JSON.stringify(HC.cfg), tipo:'json'}, 'clave');
+    toast('Portafolio Homecenter cargado: '+items.length+' referencias','ok'); hcBarra(); hcPintar(); hcPublicar(true);
+  }catch(e){ console.warn(e); toast('No se pudo leer el Excel: '+e.message,'er'); } finally { inp.value = ''; }
+}
+async function hcExcel(){
+  try{
+    const R = HC.filas || hcCalcular(), wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX';
+    const cols = ['Código','Ref. Proveedor','EAN','Descripción','Estado','Reposición','UE','IVA','Cadena Vigente','Inventario','Estado llegada','Fecha llegada','Días','Unds','OC','BL','En camino total','Semáforo'];
+    const fila = r=>[r.cod,r.ref,r.ean,r.desc,r.estado,r.rep,r.ue,r.iva,r.cadena,r.total,r.prox?r.prox.estado:'NO REGISTRA INFORMACIÓN',r.prox&&r.prox.fecha?r.prox.fecha:'',r.dias==null?'':r.dias,r.prox?r.prox.unds:'',r.prox?r.prox.oc:'',r.prox?r.prox.bl:'',r.camino,HC_SEM[r.sem][1]];
+    const ord = (a,b)=>(a.prox&&a.prox.fecha||'9999').localeCompare(b.prox&&b.prox.fecha||'9999');
+    [['Agotados PULL',R.filter(r=>r.rep==='PULL'&&r.stock==='agotada').sort(ord)],['Próximos a agotarse PULL',R.filter(r=>r.rep==='PULL'&&r.stock==='proxima')],['PUSH e IN-OUT',R.filter(r=>r.rep!=='PULL').sort(ord)],['Portafolio completo',R]].forEach(([n,a])=>{
+      const ws = wb.addWorksheet(n); ws.addRow(cols).font = {bold:true,color:{argb:'FFFFFFFF'}}; ws.getRow(1).fill = {type:'pattern',pattern:'solid',fgColor:{argb:'FF000000'}};
+      a.forEach(r=>{ const x = ws.addRow(fila(r)); const c = {verde:'FF16A34A',amarillo:'FFEAB308',naranja:'FFF97316',rojo:'FFDC2626',gris:'FF94A3B8'}[r.sem]; x.getCell(12).fill = {type:'pattern',pattern:'solid',fgColor:{argb:c}}; });
+      ws.columns.forEach((c,i)=>{ c.width = [10,12,15,40,24,11,6,6,12,10,22,13,7,9,12,22,12,14][i]||12; }); ws.views = [{state:'frozen',ySplit:1}]; });
+    const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})); a.download = 'Homecenter_portafolio_'+new Date().toISOString().slice(0,10)+'.xlsx'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  }catch(e){ console.warn(e); toast('No se pudo generar el Excel: '+e.message,'er'); }
+}
+
 function reabastHtmlAgotadosShell(){
   const f = reabastFiltro('agotados', {q:''});
   return `<div class="toolbar" style="margin-bottom:8px;">
