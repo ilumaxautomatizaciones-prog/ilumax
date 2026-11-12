@@ -564,7 +564,28 @@ const ppeDias = (iso, n) => { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDa
 async function ppeCfgCargar() {
   if (PPE.cfgOk) return;
   const r = await fnApi({ accion: 'ppe_get' });
-  if (r && r.ok) { PPE.cfgData = r.data || {}; Object.keys(PPE.cfgData).forEach(k => { PPE_DATA[k] = Object.assign({}, PPE_DATA[k] || {}, PPE.cfgData[k]); }); PPE.cfgOk = true; }
+  if (r && r.ok) { PPE.cfgData = r.data || {}; Object.keys(PPE.cfgData).forEach(k => { PPE_DATA[k] = Object.assign({}, PPE_DATA[k] || {}, PPE.cfgData[k]); }); PPE.cfgOk = true; ppeAutoMes(); }
+}
+// Mes en curso automático: si no está configurado se crea solo (ejecutivos del último mes, semanas 1-7/8-15/16-22/23-fin) y su ppto se calcula de la cartera
+function ppeAutoMes() {
+  const mes = new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 7);
+  if (PPE_DATA[mes]) { if (PPE.mes < mes && !PPE.mesElegido) PPE.mes = mes; return; }
+  const prev = Object.keys(PPE_DATA).filter(k => k < mes).sort().pop(); if (!prev) return;
+  const y = +mes.slice(0, 4), m = +mes.slice(5, 7), ult = new Date(Date.UTC(y, m, 0)).getUTCDate(), p = n => mes + '-' + String(n).padStart(2, '0'), P = PPE_DATA[prev], f = {}, cod = {};
+  Object.keys(P.f).forEach(n => { f[n] = [0]; cod[n] = (P.cod || {})[n] || PPE_COD[n] || ''; });
+  if (PPE.mes < mes) PPE.mes = mes;
+  PPE_DATA[mes] = { auto: true, titulo: PPE_MES3[m - 1] + ' / ' + y, desde: p(1), hasta: p(ult), sem: [[p(1), p(7)], [p(8), p(15)], [p(16), p(22)], [p(23), p(ult)]], f, cod };
+}
+// Ppto del mes = pendiente con vcto hasta fin de mes + facturado hasta el 25 + lo ya recaudado del mes; se guarda una sola vez
+async function ppeAutoPpto(M) {
+  if (!M || !M.auto || M.fijado || !D || !D.docsL || !PPE.r || !PPE.r.filas) return;
+  const mes = M.desde.slice(0, 7), corte = mes + '-25', tot = {}, rec = {};
+  D.docsL.forEach(x => { if (!(x.saldo > 0) || !x.vcto || x.vcto > M.hasta || (x.fecha && x.fecha > corte)) return; const v = nz(x.vend); tot[v] = (tot[v] || 0) + x.saldo; });
+  PPE.r.filas.forEach(f => { if (ppeEsNH(f) || !f.fecha || f.fecha.slice(0, 7) !== mes) return; const v = nz(f.vendedor); rec[v] = (rec[v] || 0) + (f.asignado || 0); });
+  Object.keys(M.f).forEach(n => { M.f[n][0] = Math.round((tot[nz(n)] || 0) + (rec[nz(n)] || 0)); });
+  M.fijado = true;
+  const cfg = Object.assign({}, PPE.cfgData || {}); cfg[mes] = { titulo: M.titulo, desde: M.desde, hasta: M.hasta, sem: M.sem, f: M.f, cod: M.cod, auto: true, fijado: true };
+  const r = await fnApi({ accion: 'ppe_set', data: cfg }); if (r && r.ok) PPE.cfgData = cfg;
 }
 async function ppeCargar() {
   if (PPE.cargando) return; PPE.cargando = true; PPE.r = null; ppeVista();
@@ -574,7 +595,7 @@ async function ppeCargar() {
   // el recaudo se pide hasta 10 días después del cierre: un RC contabilizado en noviembre puede ser de una consignación de octubre
   const [r, fb] = await Promise.all([recApi({ accion: 'recaudo', desde: M.desde, hasta: ppeDias(M.hasta, 10), contadoDias: '1' }), fnApi({ accion: 'listar', desde: ppeDias(M.desde, -45) })]);
   PPE.fb = {}; ((fb && fb.rows) || []).forEach(x => { PPE.fb[String(x.consec)] = String(x.fecha_banco).slice(0, 10); }); PPE.pend = {};
-  PPE.cargando = false; PPE.r = (r && r.ok) ? r : { error: (r && r.error) || 'No se pudo traer el recaudo de Siesa' }; ppeVista();
+  PPE.cargando = false; PPE.r = (r && r.ok) ? r : { error: (r && r.error) || 'No se pudo traer el recaudo de Siesa' }; await ppeAutoPpto(M); ppeVista();
 }
 // Recibos del mes con su fecha efectiva: la del banco si Cartera la registró; si no, la contable de Siesa
 function ppeFilas(M) {
