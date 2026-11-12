@@ -139,7 +139,7 @@ function pintar() {
   $('out').style.display = '';
   const pos = sumB(D.cls), venc = D.cls.reduce((s, c) => s + c.b[1] + c.b[2] + c.b[3] + c.b[4], 0), v90 = D.cls.reduce((s, c) => s + c.b[4], 0), fav = D.cls.reduce((s, c) => s + c.fav, 0);
   const rec30 = D.recs.filter(r => Date.parse(hoy) - Date.parse(r.fecha) < 30 * 864e5).reduce((s, r) => s + r.valor, 0);
-  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ppe', '📊 Ppto vs Ejecución'], ['ext', '🏦 Extracto bancario'], ['ofac', '🛡️ OFAC']].concat(GIR.ok ? [['gir', '🌏 Giros']] : []);
+  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ppe', '📊 Ppto vs Ejecución'], ['ext', '🏦 Extracto bancario'], ['ct', '📦 Contados por despachar'], ['ofac', '🛡️ OFAC']].concat(GIR.ok ? [['gir', '🌏 Giros']] : []);
   if (GIR.ok === undefined) girCheck();
   $('app').innerHTML = '<div class="kpis">'
     + kpi('Cartera por cobrar', fmc(pos), D.cls.filter(c => c.tot > 0).length + ' clientes con saldo')
@@ -218,6 +218,8 @@ function vista(soloTabla) {
     keepFocus();
   } else if (TAB === 'ppe') {
     ppeVista();
+  } else if (TAB === 'ct') {
+    ctVista();
   } else if (TAB === 'ext') {
     extVista();
   } else if (TAB === 'ofac') {
@@ -1405,9 +1407,12 @@ async function extCargarMes(m, forzar) {
   // Lo que se identificó en un mes posterior cuenta en ESE mes: sale del mes de su fecha del banco y entra (con su fecha original) al mes en que se identificó
   if (/^\d{4}-\d{2}$/.test(m)) {
     const [ini, fin] = extRango(m);
-    j.filas = j.filas.filter(r => !(r.fecha_ident && String(r.fecha_ident).slice(0, 10) > fin));
+    // Excepción: si ya tiene recibo de caja con fecha de un mes anterior, quedó registrado en ese mes y no se trae al mes de identificación
+    const rcF = new Map(); try { const sb = await extApi({ accion: 'sbs', desde: '2025-01-01', hasta: fin }); if (sb && sb.ok) sb.rcs.forEach(x => rcF.set(String(x.consec), x.fecha)); } catch (e) { }
+    const rcFecha = r => rcF.get(String(r.rc || '').replace(/\D/g, '').replace(/^0+/, ''));
+    j.filas = j.filas.filter(r => !(r.fecha_ident && String(r.fecha_ident).slice(0, 10) > fin) || (rcFecha(r) && rcFecha(r) <= fin));
     const q = await extApi({ accion: 'listar', identDesde: ini, identHasta: fin });
-    if (q && q.ok) j.filas = j.filas.concat(q.filas.map(r => Object.assign(r, { _ident: true })));
+    if (q && q.ok) j.filas = j.filas.concat(q.filas.filter(r => !(rcFecha(r) && rcFecha(r) < ini)).map(r => Object.assign(r, { _ident: true })));
   }
   // Mes actual: se agregan (con su misma fecha) los movimientos SIN IDENTIFICAR de los meses anteriores del año, para que no se pierdan de vista
   const hoy = (D && D.hoy) || new Date().toISOString().slice(0, 10);
@@ -1971,6 +1976,90 @@ async function extImportar() {
     } catch (e) { $('cont').innerHTML = '<div class="err">' + esc(e.message || e) + '</div>'; }
   };
   inp.click();
+}
+
+/* ===== Contados pendientes de despacho (facturas VE a 1 día de plazo) ===== */
+const CT_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-contados';
+let CT = { filas: null, est: 'pend', mes: '', q: '', cargando: false };
+const ctApi = async b => { try { const r = await fetch(CT_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
+const ctHoy = () => (D && D.hoy) || new Date().toISOString().slice(0, 10);
+const ctDias = r => r.fecha ? Math.max(0, Math.round((Date.parse(ctHoy() + 'T00:00:00Z') - Date.parse(r.fecha + 'T00:00:00Z')) / 86400000)) : '';
+const ctFd = s => s ? s.slice(8, 10) + '/' + s.slice(5, 7) + '/' + s.slice(2, 4) : '';
+const ctEst = r => r.anulada ? 'Anulada' : r.despachado ? 'Despachado' : 'Pendiente';
+const CT_COLS = [
+  { k: 'est', t: 'Estado', v: r => ctEst(r), h: r => r.anulada ? '<span style="background:#e2e8f0;color:#475569;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700">Anulada</span>' : r.despachado ? '<span style="background:#16a34a;color:#fff;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700">✔ Despachado</span>' : '<span style="background:#f59e0b;color:#fff;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700">⏳ Pendiente</span>' },
+  { k: 'fac', t: 'Factura', num: 1, v: r => r.consec, h: r => '<b>' + esc(r.tipo + ' ' + r.consec) + '</b>' },
+  { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha || '', h: r => esc(ctFd(r.fecha)) },
+  { k: 'dias', t: 'Días', num: 1, v: r => (r.despachado || r.anulada) ? '' : ctDias(r), h: r => (r.despachado || r.anulada) ? '' : '<span style="color:' + (ctDias(r) >= 2 ? '#b91c1c;font-weight:700' : '#64748b') + '">' + ctDias(r) + '</span>' },
+  { k: 'nit', t: 'NIT', v: r => r.nit || '' },
+  { k: 'cli', t: 'Cliente', wrap: 1, v: r => r.cliente || '' },
+  { k: 'ej', t: 'Ejecutivo', v: r => (r.ejecutivo || '').trim() },
+  { k: 'canal', t: 'Canal', v: r => (r.canal || '').trim() },
+  { k: 'valor', t: 'Valor', num: 1, sum: 1, dec: 1, v: r => r.valor == null ? '' : r.valor, h: r => r.valor == null ? '–' : '<b>' + fm2(r.valor) + '</b>' },
+  { k: 'fdes', t: 'Despachado el', date: 1, v: r => r.fecha_despacho || '', h: r => esc(ctFd(r.fecha_despacho)) + (r.usuario && r.despachado && r.usuario !== 'importación' ? '<div style="font-size:9px;color:#64748b">' + esc(r.usuario) + '</div>' : '') },
+  { k: 'nota', t: 'Nota', wrap: 1, v: r => r.nota || '', h: r => esc(r.nota || '') },
+  { k: 'acc', t: 'Acción', v: r => '', h: r => (r.anulada ? '' : r.despachado ? '<button class="btn g" style="padding:3px 8px;font-size:11px" onclick="ctMarcar(' + r.id + ',false)">↩ Desmarcar</button>' : '<button class="btn" style="padding:3px 10px;font-size:11px" onclick="ctMarcar(' + r.id + ',true)">✔ Despachar</button>') + ' <button class="btn g" style="padding:3px 8px;font-size:11px" title="Agregar o editar nota" onclick="ctNota(' + r.id + ')">📝</button>' },
+];
+async function ctVista(forzar) {
+  const c = $('cont'); if (!c) return;
+  if (!CT.filas || forzar) {
+    c.innerHTML = '<div class="err">Trayendo los contados de Siesa…</div>';
+    const j = await ctApi({ accion: 'listar' });
+    if (!j || !j.ok) { c.innerHTML = '<div class="err">' + esc((j && j.error) || 'No se pudo cargar') + '</div>'; return; }
+    CT.filas = j.filas; CT.nuevos = j.nuevos;
+  }
+  if (!CT.mes) CT.mes = ctHoy().slice(0, 7);
+  ctPintar();
+}
+function ctFiltradas() {
+  const q = nz(CT.q);
+  return CT.filas.filter(r => {
+    if (CT.est === 'pend' && (r.despachado || r.anulada)) return false;
+    if (CT.est === 'desp' && !r.despachado) return false;
+    if (CT.est === 'anul' && !r.anulada) return false;
+    if (CT.est !== 'pend' && CT.mes && CT.mes !== 'todos' && String(r.fecha || '').slice(0, 7) !== CT.mes) return false;
+    if (q && !nz([r.consec, r.cliente, r.nit, r.ejecutivo, r.nota].join(' ')).includes(q)) return false;
+    return true;
+  });
+}
+function ctPintar(solo) {
+  const F = ctFiltradas(), all = CT.filas, hoy = ctHoy();
+  const pend = all.filter(r => !r.despachado && !r.anulada), vp = pend.reduce((s, r) => s + (r.valor || 0), 0);
+  const dh = all.filter(r => r.despachado && r.fecha_despacho === hoy).length, vieja = pend.filter(r => ctDias(r) >= 2).length;
+  const titulo = (CT.est === 'pend' ? 'Contados pendientes de despacho' : CT.est === 'desp' ? 'Contados despachados' : CT.est === 'anul' ? 'Contados anulados' : 'Todos los contados') + ' (' + F.length + ')';
+  if (solo && $('xg_ct')) { XG.ct.rows = F; $('xh_ct').textContent = titulo; $('ctk').innerHTML = ctKpis(pend.length, vp, vieja, dh); xgPaint('ct'); return; }
+  const meses = [...new Set(all.map(r => String(r.fecha || '').slice(0, 7)).filter(Boolean))].sort().reverse();
+  const tabs = [['pend', '⏳ Pendientes'], ['desp', '✔ Despachados'], ['anul', 'Anulados'], ['todos', 'Todos']].map(t => '<button class="tab' + (CT.est === t[0] ? ' on' : '') + '" onclick="ctEstado(\'' + t[0] + '\')">' + t[1] + '</button>').join('');
+  $('cont').innerHTML = '<div class="wrap" style="padding:0">'
+    + '<div id="ctk"></div>'
+    + '<div class="tabs">' + tabs + '</div>'
+    + '<div class="bar"><input id="ctq" placeholder="Buscar factura, cliente, NIT, ejecutivo…" value="' + esc(CT.q) + '" oninput="CT.q=this.value;ctPintar(true)" style="min-width:260px">'
+    + '<select onchange="CT.mes=this.value;ctPintar(true)" title="Mes de la factura (en Pendientes se ven todos)"><option value="todos"' + (CT.mes === 'todos' ? ' selected' : '') + '>Todos los meses</option>' + meses.map(m => '<option value="' + m + '"' + (CT.mes === m ? ' selected' : '') + '>' + MESES[+m.slice(5, 7) - 1] + ' ' + m.slice(0, 4) + '</option>').join('') + '</select>'
+    + '<button class="btn g" onclick="ctVista(true)">🔄 Traer de Siesa</button></div>'
+    + '<div class="card"><h2 id="xh_ct">' + esc(titulo) + '</h2>' + xgBar('ct') + '<div class="tw" id="xg_ct"></div></div></div>';
+  $('ctk').innerHTML = ctKpis(pend.length, vp, vieja, dh);
+  xgInit('ct', CT_COLS, { rows: F, limit: 800, nombre: 'Contados_' + CT.est, attr: r => ' style="background:' + (r.anulada ? '#f1f5f9;color:#94a3b8' : r.despachado ? '#dcfce7' : '#fff') + '"' });
+  xgPaint('ct');
+}
+function ctKpis(n, v, vieja, dh) {
+  return '<div class="kpis" style="margin:0 14px 10px"><div class="kpi"><div class="l">Pendientes de despacho</div><div class="v" style="color:#b45309">' + n + '</div><div class="s">' + fm(v) + '</div></div>'
+    + '<div class="kpi"><div class="l">Con 2+ días sin despachar</div><div class="v" style="color:' + (vieja ? '#b91c1c' : '#16a34a') + '">' + vieja + '</div></div>'
+    + '<div class="kpi"><div class="l">Despachados hoy</div><div class="v" style="color:#16a34a">' + dh + '</div></div></div>';
+}
+function ctEstado(e) { CT.est = e; ctPintar(); }
+async function ctMarcar(id, des) {
+  const r = CT.filas.find(x => x.id === id); if (!r) return;
+  if (!des && !confirm('¿Desmarcar el despacho de ' + r.tipo + ' ' + r.consec + '?')) return;
+  const j = await ctApi({ accion: 'marcar', id, despachado: des });
+  if (!j || !j.ok) { alert((j && j.error) || 'No se pudo guardar'); return; }
+  Object.assign(r, j.fila, { canal: r.canal }); ctPintar(true);
+}
+async function ctNota(id) {
+  const r = CT.filas.find(x => x.id === id); if (!r) return;
+  const n = prompt('Nota de ' + r.tipo + ' ' + r.consec + ':', r.nota || ''); if (n === null) return;
+  const j = await ctApi({ accion: 'marcar', id, despachado: r.despachado, nota: n, fecha: r.fecha_despacho || undefined });
+  if (!j || !j.ok) { alert((j && j.error) || 'No se pudo guardar'); return; }
+  Object.assign(r, j.fila, { canal: r.canal }); ctPintar(true);
 }
 
 </script>
