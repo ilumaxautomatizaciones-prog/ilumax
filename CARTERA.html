@@ -1380,6 +1380,14 @@ async function extCargarMes(m, forzar) {
   if (!forzar && EXT.cache[m]) return EXT.cache[m];
   const j = m === 'pend' ? await extApi({ accion: 'listar', pendientes: true }) : await extApi({ accion: 'listar', desde: extRango(m)[0], hasta: extRango(m)[1] });
   if (!j || !j.ok) throw new Error((j && j.error) || 'No se pudo cargar');
+  // Mes actual: se agregan (con su misma fecha) los movimientos SIN IDENTIFICAR de los meses anteriores del año, para que no se pierdan de vista
+  const hoy = (D && D.hoy) || new Date().toISOString().slice(0, 10);
+  if (/^\d{4}-\d{2}$/.test(m) && m === hoy.slice(0, 7)) {
+    const p = await extApi({ accion: 'listar', pendientes: true });
+    if (p && p.ok) { const ini = extRango(m)[0], an = hoy.slice(0, 4) + '-01-01', ids = new Set(j.filas.map(r => r.id));
+      const arr = p.filas.filter(r => r.fecha >= an && r.fecha < ini && extEst(r) === 'sinid' && !ids.has(r.id)).map(r => Object.assign(r, { _arr: true }));
+      return (EXT.cache[m] = j.filas.concat(arr)); }
+  }
   return (EXT.cache[m] = j.filas);
 }
 async function extVista(forzar) {
@@ -1394,7 +1402,7 @@ function extFiltrar(R) {
   return R.filter(r => (!EXT.banco || r.banco === EXT.banco) && (!EXT.est || (EXT.est === 'ate' ? ateRev(r) : extEst(r) === EXT.est)) && (!EXT.ej || r.ejecutivo === EXT.ej) && (!q || nz([r.banco, r.descripcion, r.texto_ref, r.ref_cliente, r.cliente, r.rc, r.ejecutivo, r.observacion, r.monto, r.nit].join(' ')).includes(q)));
 }
 const EXT_COLS = [
-  { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha, h: r => esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7) + '/' + r.fecha.slice(2, 4)) },
+  { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha, h: r => esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7) + '/' + r.fecha.slice(2, 4)) + (r._arr ? '<div style="font-size:9px;color:#b45309" title="Sin identificar de un mes anterior: se muestra aquí con su fecha original">↩ ' + esc(MESES[+r.fecha.slice(5, 7) - 1].toLowerCase()) + '</div>' : '') },
   { k: 'banco', t: 'Banco', v: r => r.banco },
   { k: 'desc', t: 'Descripción', wrap: 1, v: r => r.descripcion, h: r => esc(r.descripcion) + (r.texto_ref ? '<div style="font-size:10px;color:#64748b">' + esc(String(r.texto_ref).slice(0, 90)) + '</div>' : '') },
   { k: 'monto', t: 'Monto', num: 1, sum: 1, v: r => Number(r.monto), h: r => '<b>' + fm(Number(r.monto)) + '</b>' },
@@ -1406,9 +1414,9 @@ const EXT_COLS = [
   { k: 'obs', t: 'Observación', wrap: 1, v: r => r.observacion }];
 function extPintar(solo) {
   const c = $('cont'); if (!c) return;
-  const R = EXT.cache[EXT.mes] || [], F = extFiltrar(R), tot = a => a.reduce((s, r) => s + Number(r.monto), 0);
-  const por = e => R.filter(r => extEst(r) === e), tc = tot(R);
-  const titulo = (EXT.mes === 'pend' ? 'Movimientos pendientes (sin RC)' : EXT.mes === 'ant' ? 'Movimientos de 2025' : MESES[+EXT.mes.slice(5, 7) - 1] + ' ' + EXT.mes.slice(0, 4)) + ' · ' + F.length + ' de ' + R.length + ' · ' + fm(tot(F));
+  const R = EXT.cache[EXT.mes] || [], F = extFiltrar(R), tot = a => a.reduce((s, r) => s + Number(r.monto), 0), RP = R.filter(r => !r._arr), nArr = R.length - RP.length;
+  const por = e => R.filter(r => extEst(r) === e), tc = tot(RP);
+  const titulo = (EXT.mes === 'pend' ? 'Movimientos pendientes (sin RC)' : EXT.mes === 'ant' ? 'Movimientos de 2025' : MESES[+EXT.mes.slice(5, 7) - 1] + ' ' + EXT.mes.slice(0, 4)) + ' · ' + F.length + ' de ' + R.length + (nArr ? ' (incluye ' + nArr + ' sin identificar de meses anteriores)' : '') + ' · ' + fm(tot(F));
   if (solo && $('xg_ext')) { XG.ext.rows = F; $('xh2').textContent = titulo; xgPaint('ext'); if (EXT.cruce && EXT.cruce.mes === EXT.mes) { cruPintar(); extSubPintar(); } return; }
   const tabs = '<div class="tabs">' + extMeses().map(m => '<button class="tab' + (EXT.mes === m[0] ? ' on' : '') + '" onclick="extMes(\'' + m[0] + '\')">' + m[1] + '</button>').join('') + '<button class="tab' + (EXT.mes === 'ant' ? ' on' : '') + '" onclick="extMes(\'ant\')">2025</button><button class="tab' + (EXT.mes === 'pend' ? ' on' : '') + '" onclick="extMes(\'pend\')">⏳ Pendientes</button></div>';
   const ejs = [...new Set(R.map(r => r.ejecutivo).filter(Boolean))].sort();
@@ -1416,9 +1424,9 @@ function extPintar(solo) {
     + '<select onchange="EXT.banco=this.value;extPintar(true)"><option value="">Todos los bancos</option>' + [...new Set(R.map(r => r.banco).filter(Boolean))].sort().map(b => '<option' + (EXT.banco === b ? ' selected' : '') + '>' + esc(b) + '</option>').join('') + '</select>'
     + '<select onchange="EXT.est=this.value;extPintar(true)"><option value="">Todos los estados</option>' + Object.entries(EXT_PILL).map(([k, v]) => '<option value="' + k + '"' + (EXT.est === k ? ' selected' : '') + '>' + v[1] + '</option>').join('') + '<option value="ate"' + (EXT.est === 'ate' ? ' selected' : '') + '>🔵 ATE por revisar</option></select>'
     + '<select onchange="EXT.ej=this.value;extPintar(true)"><option value="">Todos los ejecutivos</option>' + ejs.map(e => '<option' + (EXT.ej === e ? ' selected' : '') + '>' + esc(e) + '</option>').join('') + '</select></div>'
-    + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn" onclick="extExcel()" title="Versión 11-nov 10:40">📤 Subir extracto (Excel)</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn g" onclick="ateRevisar()" title="Movimientos identificados con ATE pendientes de aprobar">🔵 Revisar ATE</button><button class="btn" onclick="ateRecibos()" title="Reporte Resumen seguimiento de recibos de caja (ATE)">🔵 Recibos ATE</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
+    + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn" onclick="extExcel()" title="Versión 11-nov 10:40">📤 Subir extracto (Excel)</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn g" onclick="ateRevisar()" title="Movimientos identificados con ATE pendientes de aprobar">🔵 Revisar ATE</button><button class="btn" onclick="ateRecibos()" title="Reporte Resumen seguimiento de recibos de caja (ATE)">🔵 Recibos ATE</button><button class="btn g" onclick="sbsProponer()" title="Enlaza movimientos sin RC con RC ya registrados en Siesa (para corroborar)">🔵 RC de Siesa</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
   c.innerHTML = '<div id="xtab">'
-    + '<div class="kpis">' + kpi('Entró al banco', fmc(tc), R.length + ' movimientos') + kpi('Con RC', fmc(tot(por('rc'))), por('rc').length + ' mov.') + kpi('Sin RC', fmc(tot(por('sinrc'))), por('sinrc').length + ' con cliente, falta RC') + kpi('Sin identificar', fmc(tot(por('sinid'))), por('sinid').length + ' sin cliente') + kpi('Otros', fmc(tot(por('otro'))), 'tesorería, nómina, NA…') + '</div>'
+    + '<div class="kpis">' + kpi('Entró al banco', fmc(tc), RP.length + ' movimientos del mes') + kpi('Con RC', fmc(tot(por('rc'))), por('rc').length + ' mov.') + kpi('Sin RC', fmc(tot(por('sinrc'))), por('sinrc').length + ' con cliente, falta RC') + kpi('Sin identificar', fmc(tot(por('sinid'))), por('sinid').length + ' sin cliente' + (nArr ? ' (' + nArr + ' de meses anteriores)' : '')) + kpi('Otros', fmc(tot(por('otro'))), 'tesorería, nómina, NA…') + '</div>'
     + tabs + bar + '<div id="xsub"></div><div id="xcruce"></div><div class="card" id="xcardext"><h2 id="xh2">' + esc(titulo) + '</h2>' + xgBar('ext') + '<div class="tw" id="xg_ext"></div></div></div>';
   xgInit('ext', EXT_COLS, { rows: F, limit: 600, nombre: 'Extracto_' + EXT.mes, attr: r => ' class="c"' + (ateRev(r) ? ' style="background:#dbeafe" title="Identificado con recibo de ATE · por revisar"' : '') + ' onclick="extEditar(' + r.id + ')"' }); xgPaint('ext');
   if (EXT.cruce && EXT.cruce.mes === EXT.mes) cruPintar(); else EXT.vista = 'ext';
@@ -1438,8 +1446,21 @@ function cliBuscar(v) {
   const L = $('fLista'); if (!L) return; const t = nz(v).split(/\s+/).filter(Boolean);
   if (!t.length) { L.style.display = 'none'; return; }
   const r = EXT.clientes.filter(c => t.every(x => c.k.includes(x))).slice(0, 40);
-  L.innerHTML = r.map(c => '<div onclick="cliElegir(\'' + esc(c.nit) + '\')"><b>' + esc(c.nombre) + '</b><br><span style="color:#64748b;font-size:11px">' + esc(c.nit) + ' · ' + esc(c.ej) + ' · ' + esc(c.canal) + '</span></div>').join('') + '<div onclick="cliNuevo()" style="color:#1d4ed8;font-weight:700">➕ Cliente nuevo (no está en la lista)</div>';
+  L.innerHTML = r.map(c => '<div onclick="cliElegir(\'' + esc(c.nit) + '\')"><b>' + esc(c.nombre) + '</b><br><span style="color:#64748b;font-size:11px">' + esc(c.nit) + ' · ' + esc(c.ej) + ' · ' + esc(c.canal) + '</span></div>').join('') + '<div id="fSies"></div><div onclick="cliBuscarSiesa()" style="color:#0f766e;font-weight:700">🔎 Buscar «' + esc(String(v).trim()) + '» en Siesa (clientes nuevos)</div><div onclick="cliNuevo()" style="color:#1d4ed8;font-weight:700">➕ Cliente nuevo (no está en la lista)</div>';
   L.style.display = 'block';
+  clearTimeout(cliBuscar.t); if (!r.length && nz(v).replace(/\D/g, '').length >= 6 || (!r.length && nz(v).length >= 4)) cliBuscar.t = setTimeout(cliBuscarSiesa, 700);   // sin resultados en la base: se busca solo en Siesa
+}
+let CLISIES = [];
+async function cliBuscarSiesa() {
+  const q = String(($('fCli') && $('fCli').value) || '').trim(), box = $('fSies'); if (!box || q.length < 3) return;
+  box.innerHTML = '<div style="padding:6px 10px;color:#64748b">Buscando en Siesa…</div>';
+  const j = await extApi({ accion: 'cliente_buscar', q }); CLISIES = (j && j.ok && j.clientes) || [];
+  const b2 = $('fSies'); if (!b2) return;
+  b2.innerHTML = CLISIES.length ? CLISIES.map((c, i) => '<div onclick="cliElegirSiesa(' + i + ')" style="background:#ecfdf5"><b>' + esc(c.nombre) + '</b> <span style="font-size:10px;color:#0f766e">SIESA</span><br><span style="color:#64748b;font-size:11px">' + esc(c.nit) + (c.vendedorCod ? ' · vendedor ' + esc(c.vendedorCod) : '') + (c.canal ? ' · ' + esc(c.canal) : '') + '</span></div>').join('') : '<div style="padding:6px 10px;color:#b91c1c">No aparece en Siesa como cliente.</div>';
+}
+function cliElegirSiesa(i) {
+  const c = CLISIES[i]; if (!c) return; cliAplicar(c);
+  const m = $('fCliMsg'); if (m) m.textContent = 'Traído de Siesa' + (c.vendedorCod ? ' (vendedor ' + c.vendedorCod + ')' : '') + '. Falta el ejecutivo' + (c.canal ? '' : ' y el canal') + ': complétalo y usa Guardar cliente para que quede en la base.';
 }
 function cliElegir(nit) {
   const c = EXT.cidx.get(String(nit)); if (!c) return;
@@ -1689,6 +1710,56 @@ async function ateRevOk() {
   for (const mo of L) { const fila = { id: mo.id }; CAMPOS.forEach(([e, k]) => fila[k] = mo[k] == null ? '' : mo[k]); fila.observacion = String(fila.observacion).trim() + ' ✔REV';
     $('xpmsg').textContent = 'Aprobando ' + (ok + 1) + ' de ' + L.length + '…'; const j = await extApi({ accion: 'guardar', fila }); if (j && j.ok) ok++; }
   alert('Aprobados ' + ok + ' de ' + L.length); extCerrar(); await extRefrescar();
+}
+/* ---- RC de Siesa (SBS): propuesta de enlace con movimientos sin RC, para corroborar ---- */
+let SBS = { it: [], M: [], sin: 0 };
+async function sbsProponer() {
+  await extClientes();
+  const hoy = (D && D.hoy) || new Date().toISOString().slice(0, 10), ini = new Date(Date.parse(hoy + 'T12:00:00Z') - 120 * 864e5).toISOString().slice(0, 10);
+  const b = $('xcruce'); if (b) b.innerHTML = '<div class="err">Buscando en Siesa los RC sin enlazar…</div>';
+  const [e, s] = await Promise.all([extApi({ accion: 'listar', desde: ini, hasta: hoy }), extApi({ accion: 'sbs', desde: ini, hasta: hoy })]);
+  if (b) b.innerHTML = '';
+  if (!e || !e.ok) { alert((e && e.error) || 'No pude leer el extracto'); return; } if (!s || !s.ok) { alert((s && s.error) || 'No pude leer los RC de Siesa'); return; }
+  const M = e.filas, usados = new Set(M.filter(m => /^\d+$/.test(String(m.rc || ''))).map(m => String(m.rc)));
+  const libres = M.filter(m => !String(m.rc || '').trim() && Number(m.monto) > 0 && !/SBS\s+\d/.test(String(m.observacion || '')));
+  const RC = s.rcs.filter(r => !usados.has(String(r.consec))), dias = (a, c) => (Date.parse(c + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 864e5, puntaje = (m, r) => {
+    const tk = ateTok(r.cliente), t = new Set(ateTok([m.cliente, m.descripcion, m.texto_ref].join(' ')));
+    return (m.nit && String(m.nit).replace(/\D/g, '') === String(r.nit).replace(/\D/g, '') ? 4 : 0) + tk.filter(w => t.has(w)).length * 2; };
+  const P = libres.map(m => { const c = RC.filter(r => Math.abs(Number(r.valor) - Number(m.monto)) <= 5 && dias(m.fecha, r.fecha) >= -3 && dias(m.fecha, r.fecha) <= 20); c.forEach(r => r._s = puntaje(m, r)); return { m, c }; }).filter(x => x.c.length);
+  const tomados = new Set(), items = []; let cambio = true; P.forEach(x => x.est = null);
+  while (cambio) { cambio = false; P.forEach(x => { if (x.est) return; const c = x.c.filter(r => !tomados.has(r.consec)); if (!c.length) return; let sel = null;
+    if (c.length === 1) sel = c[0]; else { const mx = Math.max(...c.map(r => r._s)), b2 = c.filter(r => r._s === mx); if (mx > 0 && b2.length === 1) sel = b2[0]; }
+    if (sel) { x.est = 'azul'; x.sel = sel.consec; x.opc = c; tomados.add(sel.consec); cambio = true; } }); }
+  P.forEach(x => { if (x.est) { items.push(x); return; } const c = x.c.filter(r => !tomados.has(r.consec)); if (c.length) { x.est = 'amarillo'; x.opc = c; x.sel = ''; items.push(x); } });
+  items.sort((a, c) => a.m.fecha.localeCompare(c.m.fecha));
+  SBS = { it: items, M, sin: libres.length - items.length }; sbsPintar();
+}
+function sbsPintar() {
+  const A = SBS, az = A.it.filter(x => x.est === 'azul'), am = A.it.filter(x => x.est === 'amarillo');
+  const rcTxt = r => '<b>RC ' + r.consec + '</b> · ' + r.fecha + ' · ' + esc(r.cliente) + ' · ' + fm(Number(r.valor)) + ' · <i>' + (r.estado === 1 ? 'aplicado' : 'sin aplicar') + '</i>' + (r.notas ? ' · ' + esc(String(r.notas).slice(0, 50)) : '');
+  const fila = (x, k) => '<tr style="background:' + (x.est === 'azul' ? '#dbeafe' : '#fef9c3') + '"><td><input type="checkbox" id="sbs' + k + '"' + (x.est === 'azul' ? ' checked' : '') + (x.sel ? '' : ' disabled') + '></td><td>' + x.m.fecha + '</td><td>' + esc(x.m.banco) + '</td><td>' + esc(String(x.m.descripcion || '').slice(0, 35)) + '</td><td>' + esc(x.m.cliente || '—') + '</td><td>' + esc(x.m.ejecutivo || '—') + '</td><td style="text-align:right">' + fm(Number(x.m.monto)) + '</td><td>'
+    + (x.opc.length === 1 ? rcTxt(x.opc[0]) : '<select onchange="sbsSel(' + k + ',this.value)"><option value="">— elegir RC (' + x.opc.length + ') —</option>' + x.opc.map(r => '<option value="' + r.consec + '"' + (String(x.sel) === String(r.consec) ? ' selected' : '') + '>' + rcTxt(r).replace(/<[^>]+>/g, '') + '</option>').join('') + '</select>') + '</td></tr>';
+  const w = $('xwrap'); if (w) w.remove(); const d = document.createElement('div'); d.id = 'xwrap';
+  d.innerHTML = '<div class="ov on"><div class="mo" style="max-width:1200px"><div class="mh"><span>🔵 RC de Siesa · propuesta para corroborar</span><button class="btn g" onclick="extCerrar()">✕</button></div><div style="padding:14px;font-size:13px">'
+    + '<div style="margin-bottom:8px"><span class="pill p-bl">' + az.length + ' propuestos (azul)</span> <span class="pill p-or">' + am.length + ' ambiguos (amarillo)</span> <span class="pill p-rd">' + A.sin + ' movimientos sin RC en Siesa</span></div>'
+    + '<div style="font-size:12px;color:#475569;margin-bottom:8px">Revisa cada fila: si el pago corresponde a ese RC, déjala marcada. Al aprobar se llena el RC y, si faltan, el cliente, NIT, ejecutivo y canal.</div>'
+    + (A.it.length ? '<div class="tw" style="max-height:55vh;overflow:auto"><table><thead><tr><th></th><th>Fecha</th><th>Banco</th><th>Descripción</th><th>Cliente</th><th>Ejec.</th><th>Valor</th><th>RC de Siesa</th></tr></thead><tbody>' + A.it.map((x, k) => fila(x, k)).join('') + '</tbody></table></div>' : '<div>No hay movimientos sin RC que coincidan con un RC de Siesa.</div>')
+    + '<div id="xpmsg" style="font-size:12px;margin-top:8px"></div></div><div class="mf"><button class="btn g" onclick="extCerrar()">Cerrar</button><button class="btn g" onclick="sbsAprobar(false)">Aprobar seleccionados</button><button class="btn" id="sbsbtn" onclick="sbsAprobar(true)">Aprobar todos los azules (' + az.length + ')</button></div></div></div>';
+  document.body.appendChild(d);
+}
+function sbsSel(k, v) { const x = SBS.it[k]; x.sel = v ? Number(v) : ''; const c = $('sbs' + k); if (c) { c.disabled = !v; c.checked = !!v; } }
+async function sbsAprobar(soloAzules) {
+  const L = SBS.it.map((x, k) => ({ x, k })).filter(({ x, k }) => x.sel && (soloAzules ? x.est === 'azul' : $('sbs' + k) && $('sbs' + k).checked));
+  const u = new Set(); for (const { x } of L) { if (u.has(String(x.sel))) { alert('El mismo RC está elegido en dos movimientos. Corrige antes de aprobar.'); return; } u.add(String(x.sel)); }
+  if (!L.length) { alert('No hay nada seleccionado.'); return; }
+  const m = $('xpmsg'); $('sbsbtn').disabled = true; let ok = 0, mal = 0;
+  for (const { x } of L) { m.textContent = 'Aprobando ' + (ok + mal + 1) + ' de ' + L.length + '…';
+    const r = x.opc.find(o => String(o.consec) === String(x.sel)), mo = x.m, fila = { id: mo.id }; CAMPOS.forEach(([e, k]) => fila[k] = mo[k] == null ? '' : mo[k]);
+    const c = EXT.cidx && EXT.cidx.get(String(r.nit)); fila.rc = String(r.consec);
+    if (!fila.cliente) { fila.cliente = (c && c.nombre) || r.cliente; fila.nit = fila.nit || r.nit; if (!fila.ref_cliente) fila.ref_cliente = r.nit; }
+    if (c) { fila.canal = fila.canal || c.canal; fila.ejecutivo = fila.ejecutivo || c.ej || ''; }
+    const j = await extApi({ accion: 'guardar', fila }); if (j && j.ok) ok++; else mal++; }
+  alert('Enlazados ' + ok + ' movimientos con su RC' + (mal ? ' · con error ' + mal : '')); extCerrar(); await extRefrescar();
 }
 /* ---- cruce con Siesa ---- */
 function cruSies(r) {
