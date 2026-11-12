@@ -3629,18 +3629,18 @@ async function renderReabastMod(){
   finally{ REABAST._cargando = null; reabastChipSync(false); }
   if(pintado) reabastRepintarSeguro(); else reabastGoTab(REABAST.tab || 'urgentes');
 }
-const CE_MOD_TABS = ['ce_prealerta','embarquebl','ce_transito','ce_naci','ingbl','comext','ce_indic'];
+const CE_MOD_TABS = ['ce_hoy','ce_prealerta','embarquebl','ce_transito','ce_naci','ingbl','comext'];
 function ceModTabs(){
   let nT = 0, nN = 0; try{ const act = (CBL.bls||[]).filter(b=>{ const f = cblFaseBL(b); return f!==9 && f!==-1; }); nT = act.filter(b=>cblFaseBL(b)===6).length; nN = act.filter(b=>cblFaseBL(b)===7).length; }catch(e){}
   let nP = 0; try{ nP = embConteo(); }catch(e){}
   return [
+    {id:'ce_hoy', lbl:'🧭 Qué hacer hoy'},
     {id:'ce_prealerta', lbl:'1️⃣ Prealertas'+(nP?' ('+nP+')':'')},
     {id:'embarquebl', lbl:'2️⃣ Armar BL'},
     {id:'ce_transito', lbl:'3️⃣ En tránsito'+(nT?' ('+nT+')':'')},
     {id:'ce_naci', lbl:'4️⃣ Nacionalización'+(nN?' ('+nN+')':'')},
     {id:'ingbl', lbl:'5️⃣ Ingreso'},
-    {id:'comext', lbl:'🌐 Todos los BL'},
-    {id:'ce_indic', lbl:'📈 Indicadores'}
+    {id:'comext', lbl:'🌐 Todos los BL'}
   ];
 }
 function ceModShell(tabs){
@@ -3686,10 +3686,9 @@ function ceModTabRender(body){
   const t = REABAST.tab;
   if(!CE_MOD_TABS.includes(t)) return false;
   if(t==='ce_prealerta'){ body.innerHTML = ceModPrealertaHtml(); try{ prodfCss(); }catch(e){} embPanelPintar(); return true; }
-  if(t==='ce_indic'){ body.innerHTML = '<div class="empty" style="padding:40px;text-align:center;">📈 Indicadores de Comercio Exterior — próximamente.</div>'; return true; }
-  if(t==='ce_transito' || t==='ce_naci'){
+  if(t==='ce_hoy' || t==='ce_transito' || t==='ce_naci'){
     body.innerHTML = cargaHtml('Cargando');
-    cblCargar().then(()=>{ if(REABAST.tab!==t) return; ceModPreset(t); body.innerHTML = cblHtmlCE(); });
+    cblCargar().then(()=>{ if(REABAST.tab!==t) return; ceModPreset(t); body.innerHTML = t==='ce_hoy' ? ceModHoyHtml() : cblHtmlCE(); });
     return true;
   }
   if(t==='comext' && REABAST.vistaCE) ceModPreset(t);
@@ -4261,14 +4260,15 @@ function cblHtmlTablaOC(){
       <td>${reabastEsc((b0&&b0.agente)||'—')}</td><td>${b0?reabastEsc((b0.po||'—')+' → '+(b0.pd||'—')):'—'}</td>
       <td>${cblFd(x.etd)}</td><td style="white-space:nowrap;" onclick="event.stopPropagation()">${x.eta?(x.estim?'≈ ':'')+'<b>'+cblFd(x.eta)+'</b>'+(b0&&x.fase!==9?` <span style="cursor:pointer;" title="Actualizar ETA" onclick="cblEditarFecha('${b0.id}','eta')">✏️</span>`:'')+(x.fase!==9&&d!=null?`<div style="font-size:10px;color:${d<0?'#991b1b':d<=15?'#1e40af':'var(--mu)'};">${d<0?'hace '+(-d)+' d':d===0?'hoy':'en '+d+' d'}</div>`:''):'—'}</td>
       <td style="text-align:right;">${x.enBL?x.enBL+' / ':''}${x.nItems}</td><td style="text-align:right;">${cblN(x.cbm,1)}</td><td>${pill}</td>
+      <td>${x.rim?`<b>${reabastEsc(x.rim)}</b>${b0&&b0.registro&&b0.registro.aprobado?' ✅':''}`:'<span class="arte-mu">—</span>'}${nSV?`<div style="font-size:10px;font-weight:700;color:#991b1b;" title="Ítems sin registro de importación">⚠️ ${nSV} ítem(s) sin registro</div>`:''}</td>
       <td style="white-space:nowrap;" onclick="event.stopPropagation()">${b0 && x.fase!=null ? cblBotonAvanzar(b0,true) : acc}</td></tr>`; };
-  const cab = '<thead><tr><th>BL</th><th>DIM</th><th>OC</th><th>Agente</th><th>Origen → Destino</th><th>ETD</th><th>ETA</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th>Estado</th><th>Siguiente paso</th></tr></thead>';
+  const cab = '<thead><tr><th>BL</th><th>DIM</th><th>OC</th><th>Agente</th><th>Origen → Destino</th><th>ETD</th><th>ETA</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th>Estado</th><th>Registro de importación</th><th>Siguiente paso</th></tr></thead>';
   if(!f.agrupar){ filas.sort((a,b)=>ocComparar(a.o.numero_oc,b.o.numero_oc)); return `<div class="tw"><table class="cbl-t">${cab}<tbody>${filas.map(fila).join('')}</tbody></table></div>`; }
   const g = new Map(); filas.forEach(x=>{ const k = x.blsTxt.length ? String(x.blsTxt[0]).toUpperCase() : ''; (g.get(k) || g.set(k,[]).get(k)).push(x); });
   const claves = [...g.keys()].sort((a,b)=> a===''?1 : b===''?-1 : a.localeCompare(b));
   return `<div class="tw"><table class="cbl-t">${cab}<tbody>${claves.map(k=>{ const L = g.get(k).sort((a,b)=>ocComparar(a.o.numero_oc,b.o.numero_oc)), b0 = k ? CBL.bls.find(b=>String(b.bl).toUpperCase()===k) : null;
     const cbm = L.reduce((a,x)=>a+x.cbm,0);
-    return `<tr style="background:var(--s1);${b0?'cursor:pointer;':''}" ${b0?`onclick="cblAbrir('${b0.id}')" title="Clic para editar este BL"`:''}><td colspan="11" style="font-weight:800;padding:7px 8px;">${b0?`<button class="btn btn-bl btn-xs" style="float:right;" onclick="event.stopPropagation();cblAbrir('${b0.id}')">✏️ Editar BL</button>`:''}${k?'🚢 BL <span style="font-family:monospace;">'+reabastEsc(k)+'</span>'+(b0&&cblPuede()?` <span style="cursor:pointer;" title="Cambiar el número de BL" onclick="event.stopPropagation();cblRenombrar('${b0.id}')">✏️</span>`:''):'📭 Sin BL aún'} <span class="arte-mu" style="font-weight:600;font-size:11px;">· ${L.length} OC${b0?` · ${reabastEsc(b0.agente||'sin agente')} · ${reabastEsc((b0.po||'—')+' → '+(b0.pd||'—'))} · ETD ${cblFd(b0.etd)} · ETA ${cblFd(b0.eta)}`:''}${k?'':` · ${cblN(cbm,0)} m³ por embarcar`}</span></td></tr>${L.map(fila).join('')}`; }).join('')}</tbody></table></div>`;
+    return `<tr style="background:var(--s1);${b0?'cursor:pointer;':''}" ${b0?`onclick="cblAbrir('${b0.id}')" title="Clic para editar este BL"`:''}><td colspan="12" style="font-weight:800;padding:7px 8px;">${b0?`<button class="btn btn-bl btn-xs" style="float:right;" onclick="event.stopPropagation();cblAbrir('${b0.id}')">✏️ Editar BL</button>`:''}${k?'🚢 BL <span style="font-family:monospace;">'+reabastEsc(k)+'</span>'+(b0&&cblPuede()?` <span style="cursor:pointer;" title="Cambiar el número de BL" onclick="event.stopPropagation();cblRenombrar('${b0.id}')">✏️</span>`:''):'📭 Sin BL aún'} <span class="arte-mu" style="font-weight:600;font-size:11px;">· ${L.length} OC${b0?` · ${reabastEsc(b0.agente||'sin agente')} · ${reabastEsc((b0.po||'—')+' → '+(b0.pd||'—'))} · ETD ${cblFd(b0.etd)} · ETA ${cblFd(b0.eta)}`:''}${k?'':` · ${cblN(cbm,0)} m³ por embarcar`}</span></td></tr>${L.map(fila).join('')}`; }).join('')}</tbody></table></div>`;
 }
 function cblKpi(k){ const f = CBL.f; if(k==='act') k = ''; f.kpi = (f.kpi===k ? '' : k); f.vista = 'bl'; f.estado = 'activos'; f.q = ''; reabastPintar(); }
 function cblHtmlTablaX(){ return CBL.f.kpi==='sinvig' ? cblHtmlSinVig() : cblHtmlTabla(); }
@@ -4287,13 +4287,13 @@ function cblHtmlSinVig(){
     <td style="white-space:nowrap;"><input type="date" class="inp" style="font-size:11px;" value="${cblRimEf(m.it).rimf}" ${dis} onchange="cblItemRimF('${m.id}',${m.ix},this.value)"></td></tr>`).join('')}
   </tbody></table></div>`;
 }
-function cblCabBL(){ return `<thead><tr><th>BL</th><th>DIM</th><th>OC</th><th>Agente</th><th>Origen → Destino</th><th>ETD</th><th>ETA</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th>Estado</th><th title="(proveedor + fletes + aduana) ÷ proveedor">Factor imp.</th><th>Siguiente paso</th></tr></thead>`; }
+function cblCabBL(){ return `<thead><tr><th>BL</th><th>DIM</th><th>OC</th><th>Agente</th><th>Origen → Destino</th><th>ETD</th><th>ETA</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th>Estado</th><th>Registro de importación</th><th title="(proveedor + fletes + aduana) ÷ proveedor">Factor imp.</th><th>Siguiente paso</th></tr></thead>`; }
 function cblFilaBL(b, hoy, clk){ const d = b.eta ? Math.ceil((new Date(b.eta+'T12:00:00')-hoy)/86400000) : null, fase = cblFaseBL(b), ocs = [...new Set((b.items||[]).map(it=>it.oc))], cbm = (b.items||[]).reduce((a,it)=>a+(it.cbm>0?it.cant*it.cbm:0),0), rim = b.registro && b.registro.numero;
     return `<tr style="cursor:pointer;" onclick="${clk}"><td style="font-family:monospace;font-weight:800;">${reabastEsc(b.bl)}</td><td onclick="event.stopPropagation()"><input class="inp" style="font-size:11px;width:120px;" placeholder="N.º DIM" title="Número de la declaración de importación (DIM) de este BL" value="${reabastEsc(b.dim||'')}" ${cblPuede()?'':'disabled'} onchange="cblDim('${b.id}',this.value)"></td><td title="${reabastEsc(ocs.join(', '))}">${reabastEsc(ocs.slice(0,3).join(', '))}${ocs.length>3?' +'+(ocs.length-3):''}</td><td>${reabastEsc(b.agente||'—')}</td><td>${reabastEsc((b.po||'—')+' → '+(b.pd||'—'))}</td><td onclick="event.stopPropagation()">${cblFd(b.etd)}${fase===5?` <span style="cursor:pointer;" title="Actualizar ETD" onclick="cblEditarFecha('${b.id}','etd')">✏️</span>`:''}</td>
     <td style="white-space:nowrap;" onclick="event.stopPropagation()"><b>${cblFd(b.eta)}</b>${b.etaConf?' <span title="ETA confirmada (verde en la sábana)" style="color:#16a34a;">✔</span>':''}${fase!==9&&fase!==-1?` <span style="cursor:pointer;" title="Actualizar ETA" onclick="cblEditarFecha('${b.id}','eta')">✏️</span>`:''}${fase!==9 && d!=null?`<div style="font-size:10px;color:${d<0?'#991b1b':d<=15?'#1e40af':'var(--mu)'};">${d<0?'hace '+(-d)+' d':d===0?'hoy':'en '+d+' d'}</div>`:''}</td>
     <td style="text-align:right;">${(b.items||[]).length}</td><td style="text-align:right;">${cblN(cbm,1)}</td>
     <td><span class="cbl-pill" style="${fase===9?'background:#dcfce7;color:#166534;':fase===5?'background:#ede9fe;color:#5b21b6;':fase===6?'background:#dbeafe;color:#1e40af;':fase===7?'background:#fef3c7;color:#92400e;':''}">${reabastEsc(cblEstadoBL(b))}</span>${cblParcial(b)?` <span class="cbl-pill" style="background:#fce7f3;color:#9d174d;" title="${reabastEsc(cblParcialTxt(b))}">◐ Parcial</span>`:''}</td>
-    <td style="text-align:right;font-weight:700;">${(F=>F.factor!=null?(F.s.arancel>0?F.factor.toFixed(2).replace('.',',')+'<div class="arte-mu" style="font-size:10px;font-weight:500;">sin arancel '+F.factorSin.toFixed(2).replace('.',',')+'</div>':F.factor.toFixed(2).replace('.',',')):'<span class="arte-mu">—</span>')(cblFinCalc(b))}</td><td style="white-space:nowrap;" onclick="event.stopPropagation()">${cblBotonAvanzar(b,true)}</td></tr>`; }
+    <td>${rim?`<b>${reabastEsc(b.registro.numero)}</b>${b.registro.aprobado?' ✅':''}`:'<span class="arte-mu">—</span>'}${(nSV=>nSV?`<div style="font-size:10px;font-weight:700;color:#991b1b;" title="Ítems sin registro de importación">⚠️ ${nSV} ítem(s) sin registro</div>`:'')((b.items||[]).filter(cblSinVig).length)}</td><td style="text-align:right;font-weight:700;">${(F=>F.factor!=null?(F.s.arancel>0?F.factor.toFixed(2).replace('.',',')+'<div class="arte-mu" style="font-size:10px;font-weight:500;">sin arancel '+F.factorSin.toFixed(2).replace('.',',')+'</div>':F.factor.toFixed(2).replace('.',',')):'<span class="arte-mu">—</span>')(cblFinCalc(b))}</td><td style="white-space:nowrap;" onclick="event.stopPropagation()">${cblBotonAvanzar(b,true)}</td></tr>`; }
 function cblHtmlTabla(){
   cblCupoMapa();
   const lista = cblBLsFiltrados(), hoy = Date.now();
@@ -4458,11 +4458,11 @@ function cblPintarDetalle(){
   const opts = est => { const todos = CBL_ESTADOS.includes(est) || !est ? CBL_ESTADOS : [est, ...CBL_ESTADOS]; return todos.map(e=>`<option ${ (est||'Embarque')===e?'selected':''}>${reabastEsc(e)}</option>`).join(''); };
   const cbm = (b.items||[]).reduce((a,it)=>a+(it.cbm>0?it.cant*it.cbm:0),0), cajas = (b.items||[]).reduce((a,it)=>a+(Number(it.cajas)||0),0), R = b.registro || {};
   m.innerHTML = `<div style="background:var(--w,#fff);color:var(--tx);border-radius:12px;max-width:1100px;width:100%;padding:16px 18px;box-shadow:0 20px 50px rgba(0,0,0,.35);">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;"><div style="font-weight:800;font-size:16px;">🌐 BL <span style="font-family:monospace;">${reabastEsc(b.bl)}</span>${puede?` <span style="cursor:pointer;font-size:13px;" title="Cambiar el número de BL" onclick="cblRenombrar('${b.id}')">✏️</span>`:''}</div><span class="cbl-pill">${reabastEsc(cblEstadoBL(b))}</span><span style="margin-left:auto;display:flex;gap:8px;align-items:center;">${cblBotonAvanzar(b)}<button class="btn btn-g btn-sm" onclick="cblCerrarDetalle()">✕ Cerrar</button></span></div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;"><div style="font-weight:800;font-size:16px;">🌐 BL <span style="font-family:monospace;">${reabastEsc(b.bl)}</span>${puede?` <span style="cursor:pointer;font-size:13px;" title="Cambiar el número de BL" onclick="cblRenombrar('${b.id}')">✏️</span>`:''}</div><span class="cbl-pill">${reabastEsc(cblEstadoBL(b))}</span><span class="arte-mu" style="font-size:11px;">${(b.items||[]).length} ítem(s) · ${cblN(cbm,2)} m³ · ${cblN(cajas)} cajas</span><span style="margin-left:auto;display:flex;gap:8px;align-items:center;">${cblBotonAvanzar(b)}<button class="btn btn-g btn-sm" onclick="cblCerrarDetalle()">✕ Cerrar</button></span></div>
     <div style="font-weight:700;font-size:12px;margin-bottom:4px;">Fechas y logística <span class="arte-mu" style="font-weight:500;">· el ETD y el ETA que guardes mueven el tablero de Abastecimiento</span></div>
     <div class="cbl-in">${inp('bl','Número de BL')}${inp('dim','DIM (declaración de importación)')}${inp('agente','Agente de carga')}${inp('po','Puerto de origen')}${inp('pd','Puerto de destino')}${inp('cont','Contenedor(es)')}<div><label>CBM confirmado (m³)</label><input id="cbld-cbmc" class="inp" type="number" step="0.01" min="0" value="${b.cbmc!=null?b.cbmc:''}" ${dis} placeholder="Ej. 58" style="width:100%;"><div class="arte-mu" style="font-size:10px;margin-top:2px;">Calculado por el sistema: ${cblN(cbm,2)} m³${b.cbmc!=null&&cbm>0?' · diferencia '+cblN(b.cbmc-cbm,2)+' m³':''}</div></div>${inp('etd','ETD (salida)','date')}${inp('eta','ETA (llegada)','date','onchange="cblPlantaSug()"')}${plantaInp}</div>
     <div style="margin:8px 0 14px;"><button class="btn btn-bl btn-sm" ${dis} onclick="cblGuardarCab('${b.id}')">💾 Guardar fechas y logística</button></div>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;"><b style="font-size:12px;">Ítems del BL y su estado</b><span class="arte-mu" style="font-size:11px;">Poner todos en:</span><select id="cbld-todos" class="inp" style="width:auto;" ${dis}>${(()=>{ const ests = [...new Set((b.items||[]).map(it=>it.estado||'Embarque'))]; return (ests.length===1 ? '' : '<option value="" selected disabled>— mixto —</option>') + CBL_ESTADOS.map(e=>`<option ${ests.length===1&&ests[0]===e?'selected':''}>${e}</option>`).join(''); })()}</select><button class="btn btn-g btn-xs" ${dis} onclick="cblTodosEstado('${b.id}')">Aplicar a todos</button></div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;"><b style="font-size:12px;">Ítems del BL y su estado</b><span class="arte-mu" style="font-size:11px;">Poner todos en:</span><select id="cbld-todos" class="inp" style="width:auto;" ${dis}>${CBL_ESTADOS.map(e=>`<option>${e}</option>`).join('')}</select><button class="btn btn-g btn-xs" ${dis} onclick="cblTodosEstado('${b.id}')">Aplicar a todos</button></div>
     ${(()=>{ const sv = (b.items||[]).filter(cblSinVig); const ven = (b.items||[]).filter(it=>{ if(!it.rimf) return false; const v = new Date(it.rimf+'T12:00:00'); v.setMonth(v.getMonth()+6); return v < new Date(); });
       return (sv.length||ven.length) ? `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;">⚠️ ${sv.length?sv.length+' ítem(s) sin registro de importación: '+[...new Set(sv.map(i=>i.ref))].join(', ')+'. Ninguna referencia puede llegar sin registro.':''}${ven.length?' · '+ven.length+' con el registro VENCIDO: '+[...new Set(ven.map(i=>i.ref))].join(', ')+'.':''}</div>` : ''; })()}
     <div class="tw" style="max-height:340px;"><table class="cbl-t"><thead><tr><th>OC</th><th>Ref.</th><th>Descripción</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Cajas</th><th>Estado</th><th>Reg. importación</th><th>Llegada a planta</th><th>Ingreso a bodega</th><th></th></tr></thead><tbody>
@@ -8251,8 +8251,9 @@ function tesoCalcularAnticipo(o){
   const items = REABAST.ocItems[o.id]||[];
   const fob = items.reduce((a,it)=>a+(Number(it.precio_fob_usd)||0)*(Number(it.cantidad)||0),0) + (Number(o.costo_extra_usd)||0); // incluye costo extra del proveedor
   const trm = Number(o.trm) || (typeof OC_TRM_APROX!=='undefined' ? OC_TRM_APROX : 0);
-  const usd = Math.round(fob*pct*100)/100;
-  return {pct, fob, usd, trm, cop: Math.round(fob*pct*trm), saldo: Math.round((fob-usd)*100)/100, prov};
+  let usd = Math.round(fob*pct*100)/100;
+  try{ const _A = ((PP.ajustes||{})[ceNum(o.numero_oc)]||{}).anticipo; if(_A && _A.usd!=null && isFinite(Number(_A.usd))) usd = Number(_A.usd); }catch(e){}   // anticipo editado a mano
+  return {pct, fob, usd, trm, cop: Math.round(usd*trm), saldo: Math.round((fob-usd)*100)/100, prov};
 }
 async function tesoCargar(forzar){
   if(TESO.lista && !forzar) return TESO.lista;
@@ -8845,6 +8846,7 @@ async function comprasArtesTodas(){
 }
 function comprasAntInfo(o){
   const reg = tesoRegDe(o.id), an = comprasEtapa(o,'anticipo_pagado'), pi = comprasEtapa(o,'pi_confirmada'), a = tesoCalcularAnticipo(o);
+  if(!reg && segSinAnticipo(o, an)) return {k:'sinant', a};   // OC sin anticipo (0%): no aplica, no es "pagado"
   if((an && an.estado==='completada') || (reg && reg.estado==='pagado')) return {k:'pagado', reg, a};
   if(reg) return {k:'aut', reg, a};
   if(!an) return {k:'na', a};
@@ -8861,6 +8863,7 @@ function comprasAntCeldas(o){
   else if(i.k==='pagado') acc = '<span style="color:#16a34a;font-weight:700;">✅ Pagado</span>';
   else if(i.k==='sinpi') acc = '<span class="arte-mu">Falta confirmar la PI</span>';
   else if(i.k==='sinpct') acc = '<span class="arte-mu">Sin % de anticipo</span>';
+  else if(i.k==='sinant') acc = '<span class="arte-mu">No aplica · sin anticipo</span>';
   return `<td onclick="event.stopPropagation()">${num}</td><td style="text-align:center;" onclick="event.stopPropagation()">${acc}</td>`;
 }
 function comprasAntBarra(R){
@@ -8870,7 +8873,35 @@ function comprasAntBarra(R){
   const bar = pa ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;"><button class="btn btn-p btn-sm" ${sel.length?'':'disabled'} onclick="tesoAutorizar([${sel.map(x=>"'"+x.o.id+"'").join(',')}])">✅ Autorizar ${sel.length||''} anticipo(s)${sel.length?' · US$ '+COMP_USD(tot):''}</button><span class="arte-mu" style="font-size:11px;">${pend.length} por autorizar · entran al corte del ${tesoFmt(tesoCorteDe(new Date()),true)} y pasan a Tesorería. Requiere la PI confirmada.</span></div>` : '<div class="arte-mu" style="font-size:11px;margin-bottom:10px;">Solo Abastecimiento o un administrador puede autorizar anticipos.</div>';
   return {hdr, bar};
 }
+function antAj(o){ const A = (PP.ajustes||{})[ceNum(o.numero_oc)]||{}; return {ant:(A.anticipo&&A.anticipo.usd!=null)?Number(A.anticipo.usd):null, sal:(A.saldo&&A.saldo.usd!=null)?Number(A.saldo.usd):null}; }
+function antEditar(ocId){
+  const o = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId); if(!o) return;
+  if(!ppPuedeEditar()){ if(typeof toast==='function') toast('Solo Compras, Tesorería o un administrador puede editar anticipo y saldo','wa'); return; }
+  const reg = tesoRegDe(o.id); if(reg && reg.estado==='pagado'){ if(typeof toast==='function') toast('El anticipo de '+o.numero_oc+' ya está pagado: corrígelo en Programación de pagos (✎ Corregir)','wa'); return; }
+  ppCargarAjustes().then(()=>{
+    const calc = tesoCalcularAnticipo(o), aj = antAj(o), num = ceNum(o.numero_oc), sinAnt = segSinAnticipo(o, comprasEtapa(o,'anticipo_pagado'));
+    const ant0 = aj.ant!=null ? aj.ant : calc.usd, sal0 = aj.sal!=null ? aj.sal : Math.max(0, Math.round((calc.fob-(aj.ant!=null?aj.ant:calc.usd))*100)/100);
+    ppModal(`✎ Anticipo y saldo · ${reabastEsc(o.numero_oc)}`, `
+      <div style="font-size:12px;margin-bottom:8px;">Total de la orden (FOB${calc.fob?'':' sin ítems'}): <b>${tesoUsd(calc.fob)}</b>${sinAnt?' · <b>esta OC está marcada SIN anticipo</b>; si pones un valor se pagará anticipo.':''}</div>
+      <div class="fg"><label class="fl">Anticipo US$ (vacío = automático)</label><input class="inp" type="number" step="0.01" data-a value="${aj.ant!=null?aj.ant:(sinAnt?'':ant0)}" placeholder="${sinAnt?'0':ant0}"></div>
+      <div class="fg"><label class="fl">Saldo US$ (vacío = total − anticipo)</label><input class="inp" type="number" step="0.01" data-s value="${aj.sal!=null?aj.sal:''}" placeholder="${sal0}"></div>
+      <div class="fg"><label class="fl">¿Por qué cambias el valor? <span style="color:var(--rd);">(obligatorio)</span></label><input class="inp" data-m placeholder="Ej: el proveedor pidió otro anticipo"></div>
+      ${(aj.ant!=null||aj.sal!=null)?`<button class="btn btn-g btn-sm" data-auto>↩︎ Volver a los valores automáticos</button>`:''}`, async ov=>{
+        const va = ov.querySelector('[data-a]').value, vs = ov.querySelector('[data-s]').value, m = ov.querySelector('[data-m]').value.trim();
+        if(!m){ if(typeof toast==='function') toast('Escribe por qué cambias el valor','wa'); return false; }
+        if((va!=='' && Number(va)<0) || (vs!=='' && Number(vs)<0)){ if(typeof toast==='function') toast('Los valores no pueden ser negativos','wa'); return false; }
+        const A = PP.ajustes[num] = PP.ajustes[num] || {};
+        A.anticipo = {...(A.anticipo||{}), usd: va!=='' ? Number(va) : null, motivo:m, por:(CU&&CU.nombre)||'', en:new Date().toISOString()};
+        A.saldo = {...(A.saldo||{}), usd: vs!=='' ? Number(vs) : null, motivo:m, por:(CU&&CU.nombre)||'', en:new Date().toISOString()};
+        ppLog(o.numero_oc,'Editó anticipo/saldo desde Compras: anticipo '+(va!==''?'US$'+va:'automático')+' · saldo '+(vs!==''?'US$'+vs:'automático')+' · MOTIVO: '+m);
+        if(reg && reg.estado==='autorizado' && va!==''){ const u = Number(va); reg.monto_usd = u; reg.monto_cop = Math.round(u*(reg.trm||0)); reg.saldo_usd = Math.round(((reg.fob_total||0)-u)*100)/100; reg.manual_usd = true; reg.historial = [...(reg.historial||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion:'Cambió el valor del anticipo autorizado a US$'+u, nota:m}]; try{ await tesoGuardar(reg); }catch(e){} }
+        await ppGuardarAjustes(); tesoRepintar(); if(typeof ppPintar==='function'){ try{ ppPintar(); }catch(e){} } if(typeof toast==='function') toast('Anticipo y saldo actualizados','ok');
+      });
+    setTimeout(()=>{ const b = document.querySelector('[data-auto]'); if(b) b.onclick = async()=>{ const A = PP.ajustes[num]||{}; if(A.anticipo){ A.anticipo.usd = null; } if(A.saldo){ A.saldo.usd = null; } ppLog(o.numero_oc,'Volvió anticipo/saldo a automático'); await ppGuardarAjustes(); b.closest('.ov').remove(); tesoRepintar(); }; }, 0);
+  });
+}
 function comprasTabAnticipos(L){
+  if(!PP.ajustes) ppCargarAjustes().then(()=>{ try{ comprasPintar(); }catch(e){} });
   const E = reabastEsc; if(!L.length) return '<div class="empty">No hay órdenes activas con ese filtro.</div>';
   let R = L.map(o=>({o, r:comprasResumenOC(o), an:comprasEtapa(o,'anticipo_pagado')}));
   R = comprasOrdenar('anticipos', R, {oc:x=>ocNumKeyC(x.o), prov:x=>x.o.proveedor||'', cant:x=>x.r.cant, fob:x=>x.r.fob, inter:x=>x.r.inter, pct:x=>x.r.pct, dep:x=>x.r.dep, saldo:x=>x.r.saldo, est:x=>comprasStKey(x.an)});
@@ -8879,7 +8910,7 @@ function comprasTabAnticipos(L){
   const tile = (v,l,c)=>`<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;min-width:150px;"><div style="font-size:19px;font-weight:800;color:${c||'var(--tx)'};">${v}</div><div style="font-size:10px;color:var(--mu);">${l}</div></div>`;
   return `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">${tile('US$ '+COMP_USD(T.fob),'Total FOB (orden al proveedor)')}${tile('US$ '+COMP_USD(T.inter),'Total ×1,015 (ILUMAX–TRADING)','var(--bl)')}${tile('US$ '+COMP_USD(T.dep),'Anticipos (sobre FOB)','#16a34a')}${tile('US$ '+COMP_USD(T.saldo),'Saldos (sobre ×1,015)','#b45309')}</div>
   ${AB.bar}<div class="tw"><table style="font-size:12px;"><thead><tr>${comprasTh('anticipos','oc','OC')}${comprasTh('anticipos','prov','Proveedor')}${comprasTh('anticipos','cant','Cantidad',1)}${comprasTh('anticipos','fob','Valor FOB US$',1)}${comprasTh('anticipos','inter','Valor ×1,015 US$',1)}${comprasTh('anticipos','pct','Anticipo %',1)}${comprasTh('anticipos','dep','Anticipo US$',1)}${comprasTh('anticipos','saldo','Saldo US$',1)}${comprasTh('anticipos','est','Estado anticipo')}<th>Numeral</th><th style="text-align:center;">${AB.hdr}Autorizar anticipo</th></tr></thead><tbody>${R.map(({o,r,an})=>{ const ab = comprasAb(o);
-    return `<tr style="cursor:pointer;" onclick="comprasTogg('${o.id}')"><td><b>${ab?'▾':'▸'} ${E(o.numero_oc)}</b></td><td>${E(o.proveedor||'')}</td><td style="text-align:right;">${infFmt(r.cant)}</td><td style="text-align:right;">${COMP_USD(r.fob)}</td><td style="text-align:right;font-weight:700;color:var(--bl);">${COMP_USD(r.inter)}</td><td style="text-align:right;">${r.pct?Math.round(r.pct*100)+'%':'—'}</td><td style="text-align:right;">${COMP_USD(r.dep)}</td><td style="text-align:right;">${COMP_USD(r.saldo)}</td><td>${comprasBadge(an,'Pagado')}</td>${comprasAntCeldas(o)}</tr>`
+    return `<tr style="cursor:pointer;" onclick="comprasTogg('${o.id}')"><td><b>${ab?'▾':'▸'} ${E(o.numero_oc)}</b></td><td>${E(o.proveedor||'')}</td><td style="text-align:right;">${infFmt(r.cant)}</td><td style="text-align:right;">${COMP_USD(r.fob)}</td><td style="text-align:right;font-weight:700;color:var(--bl);">${COMP_USD(r.inter)}</td><td style="text-align:right;">${r.pct?Math.round(r.pct*100)+'%':'—'}</td><td style="text-align:right;white-space:nowrap;">${(()=>{ const j = antAj(o); return j.ant!=null ? '<b title="Ajustado a mano">'+COMP_USD(j.ant)+'</b> ✎' : COMP_USD(r.dep); })()}</td><td style="text-align:right;white-space:nowrap;">${(()=>{ const j = antAj(o); const sv = j.sal!=null ? j.sal : (j.ant!=null ? Math.max(0, r.inter+r.extra-j.ant) : r.saldo); const b = ppPuedeEditar() ? ` <button class="btn btn-g btn-xs" style="padding:1px 5px;" title="Editar anticipo y saldo" onclick="event.stopPropagation();antEditar('${o.id}')">✎</button>` : ''; return (j.sal!=null?'<b title="Ajustado a mano">'+COMP_USD(sv)+'</b>':COMP_USD(sv))+b; })()}</td><td>${(!tesoRegDe(o.id) && segSinAnticipo(o, an)) ? '<span class="arte-mu">No aplica · sin anticipo</span>' : comprasBadge(an,'Pagado')}</td>${comprasAntCeldas(o)}</tr>`
     + (ab ? `<tr><td colspan="11" style="background:var(--s1);padding:6px 14px;"><table style="font-size:11.5px;width:100%;"><thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th><th style="text-align:right;">FOB unit.</th><th style="text-align:right;">×1,015 unit.</th><th style="text-align:right;">Valor FOB</th><th style="text-align:right;">Valor ×1,015</th></tr></thead><tbody>${r.det.map(d=>!comprasItemOk(o,d.it)?'':`<tr><td style="font-family:monospace;"><b>${E(d.it.referencia||'')}</b></td><td>${E(d.it.descripcion||'')}</td><td style="text-align:right;">${infFmt(d.c)}</td><td style="text-align:right;">${d.f.toFixed(4)}</td><td style="text-align:right;">${d.txt}</td><td style="text-align:right;">${COMP_USD(d.c*d.f)}</td><td style="text-align:right;font-weight:700;">${COMP_USD(d.c*d.pi)}</td></tr>`).join('')}${r.extra?`<tr><td colspan="6" style="text-align:right;">Costo extra${o.costo_extra_motivo?' ('+E(o.costo_extra_motivo)+')':''}</td><td style="text-align:right;">${COMP_USD(r.extra)}</td></tr>`:''}</tbody></table></td></tr>` : ''); }).join('')}
   <tr style="border-top:2px solid var(--b1);font-weight:800;"><td colspan="3">Total</td><td style="text-align:right;">${COMP_USD(T.fob)}</td><td style="text-align:right;">${COMP_USD(T.inter)}</td><td></td><td style="text-align:right;">${COMP_USD(T.dep)}</td><td style="text-align:right;">${COMP_USD(T.saldo)}</td><td></td><td></td><td></td></tr></tbody></table></div>
   <div class="arte-mu" style="font-size:11px;margin-top:8px;">El anticipo se calcula sobre el valor FOB (igual en las dos órdenes); el saldo, sobre el valor ×1,015 de la orden intercompañía. <a href="javascript:void(0)" onclick="goPage('tesoreria')">Ir a Tesorería (pago de anticipos) ›</a></div>`;
@@ -10798,7 +10829,8 @@ function tesoCorregirPago(ocId, num){
 }
 function ppLog(num, accion){ const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {}; A.hist = [...(A.hist||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion}]; }
 function ppMarcarSaldo(num, editar){
-  const A0 = (PP.ajustes||{})[ceNum(num)] || {}; const ant = editar ? (A0.saldo && A0.saldo.pagado) : null; if(editar && !ant) return;
+  const A0 = (PP.ajustes||{})[ceNum(num)] || {}; let ant = editar ? (A0.saldo && A0.saldo.pagado) : null;
+  if(editar && !ant){ const pr = (PP.ult||[]).find(x=>x.num===num && x.tipo==='saldo' && x.estado==='pagado'); if(!pr) return; ant = {usd:pr.usd, fecha:ppIso(pr.fecha)||'', nota:'(venía de Base compras)'}; }   // pagado que viene del Excel: también se puede corregir
   const p = editar ? {usd:ant.usd} : (PP.ult||[]).find(x=>x.num===num && x.tipo==='saldo' && x.estado!=='pagado'); if(!p) return;
   { const _rg = typeof tesoRegDe==='function' ? tesoRegDe(p.ocId) : null; if(_rg && _rg.estado!=='pagado'){ if(typeof toast==='function') toast('El anticipo de '+num+' aún no está pagado (solo autorizado). Regístralo con "Registrar pago del anticipo", no como saldo.','wa'); return; } }
   ppModal(`${editar?'✎ Corregir pago del saldo':'✅ Saldo pagado'} · ${reabastEsc(num)}`, `
@@ -19066,7 +19098,7 @@ const sc = sessionStorage.getItem('ilx_cu');
 // ═══ Arranque propio de ABASTECIMIENTO (versión liviana) ═══
 function renderComextMod() {
   REABAST.vistaCE = true;
-  if (!CE_MOD_TABS.includes(REABAST.tab)) REABAST.tab = 'ce_prealerta';
+  if (!CE_MOD_TABS.includes(REABAST.tab)) REABAST.tab = 'ce_hoy';
   return renderReabastMod();
 }
 const pgMap = { reabast: renderReabastMod, comext: renderComextMod, inv: renderInvAbast, tesoreria: renderTesoreriaMod, compras: renderComprasMod, innov: renderInnovMod, onepage: renderOnePageMod, autom: renderAutomMod, calidad: renderCalidadMod, fichas: renderFichasMod };
@@ -19311,7 +19343,7 @@ function goPage(id) {
     REABAST.vistaCE = ce;
     const otro = document.getElementById(ce ? 'reabast-content' : 'comext-content'); if (otro) otro.innerHTML = '';
     if (!ce && CE_MOD_TABS.includes(REABAST.tab)) REABAST.tab = 'urgentes';
-    if (ce && !CE_MOD_TABS.includes(REABAST.tab)) REABAST.tab = 'ce_prealerta';
+    if (ce && !CE_MOD_TABS.includes(REABAST.tab)) REABAST.tab = 'ce_hoy';
   }
   document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
   const pg = document.getElementById('pg-' + id); if (pg) pg.classList.add('on');
@@ -19865,7 +19897,7 @@ function ivsGrafSvg() {
     if (!IVS_G.bar) d.forEach((v, i) => { if (v == null || !(IVS_G.val || i === n - 1)) return; const t = f(v), w = t.length * 6 + 8, x = X(i), y = Y(v, dd) + (g[0] === 'lin' ? 16 : -16); o += `<rect x="${x - w / 2}" y="${y - 7}" width="${w}" height="14" rx="2" fill="${g[4]}" opacity=".92"/><text x="${x}" y="${y + 3.5}" text-anchor="middle" font-size="9.5" font-weight="700" fill="${g[0] === 'tr' ? '#0f172a' : '#fff'}">${t}</text>`; }); });
   H.m.forEach((m, i) => { o += `<rect x="${X(i) - pw / n / 2}" y="${T}" width="${pw / n}" height="${ph}" fill="${i === IVS_G.hi ? 'rgba(37,99,235,.08)' : 'transparent'}" onmouseenter="ivsGHi(${i})" onmousemove="ivsGHi(${i})" ontouchstart="ivsGHi(${i})"/>`; });
   o += '</svg>';
-  if (IVS_G.hi >= 0) { const i = IVS_G.hi, LI = ivsGData('lin'), DE = ivsGData('des'), tot = LI[i] + DE[i], pct = (DE[i] / tot * 100).toFixed(1), left = X(i) / W * 100, m = v => '$' + f(v) + ' M';
+  if (IVS_G.hi >= 0) { const i = IVS_G.hi, LI = ivsGData('lin'), DE = ivsGData('des'), tot = LI[i] + DE[i], pct = (DE[i] / tot * 100).toFixed(1), left = X(i) / W * 100, m = v => '$ ' + Math.round(v * 1e6).toLocaleString('es-CO');
     o += `<div style="position:absolute;top:6px;${left > 55 ? 'right:' + (100 - left + 2) : 'left:' + (left + 2)}%;background:#0f172a;color:#fff;border-radius:8px;padding:8px 11px;font-size:12px;line-height:1.55;pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.25);"><b>${H.m[i]}</b>${i === n - 1 && IVS._vivo ? '<br><span style="opacity:.7">Octubre = inventario real de Siesa hoy, costo prom.</span>' : ''}<br>Activo: <b>${m(LI[i])}</b><br>Descontinuado: <b>${m(DE[i])}</b> (${pct}%)<br>Total disponible: <b>${m(tot)}</b><br>Tránsito: <b>${m(ivsGData('tr')[i])}</b>${i === n - 1 && IVS._trVivo ? ' <span style="opacity:.7">(en vivo)</span>' : ''}${H.db[i] != null ? `<br>Días bodega: <b>${H.db[i]}</b> · con tránsito: <b>${H.dt[i]}</b>` : ''}</div>`; }
   return o;
 }
