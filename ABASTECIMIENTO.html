@@ -4772,10 +4772,10 @@ function infHtmlBLMes(L, mk){
   const U = v => 'US$ '+Math.round(v).toLocaleString('es-CO'), tot = G.reduce((a,g)=>a+g.usd,0);
   const rows = G.map(g=>{
     const key = mk+'|'+g.bl, id = key.replace(/[^A-Za-z0-9]/g,'_'), ab = !!INF.blAb[id], ords = Object.keys(g.ords).sort();
-    return `<tr onclick="INF.blAb['${id}']=!INF.blAb['${id}'];infPintar()" style="cursor:pointer;"><td><b>${ab?'▾':'▸'} ${reabastEsc(g.bl)}</b></td><td>${g.eta?new Date(g.eta+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short'}):'—'}</td><td>${ords.length} orden(es): <span class="arte-mu">${ords.map(reabastEsc).join(', ')}</span></td><td style="text-align:right;font-weight:800;">${U(g.usd)}</td></tr>`
-      + (ab ? ords.map(o=>`<tr style="background:var(--s1);"><td></td><td></td><td style="padding-left:24px;">${reabastEsc(o)}</td><td style="text-align:right;">${U(g.ords[o])}</td></tr>`).join('') : '');
+    return `<tr><td><b>${reabastEsc(g.bl)}</b></td><td>${g.eta?new Date(g.eta+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short'}):'—'}</td><td>${ords.length} orden(es): <span class="arte-mu">${ords.map(reabastEsc).join(', ')}</span></td><td style="text-align:right;font-weight:800;">${U(g.usd)}</td></tr>`
+      ;
   }).join('');
-  return `<div class="tw" style="padding:0 14px 8px;"><div style="font-weight:800;font-size:12px;margin:2px 0 4px;">🚢 Costo FOB por BL (clic para ver el FOB por orden)</div><table style="font-size:11.5px;"><thead><tr><th>BL</th><th>ETA</th><th>Órdenes</th><th style="text-align:right;">FOB US$</th></tr></thead><tbody>${rows}<tr style="font-weight:800;border-top:2px solid var(--b1);"><td colspan="3">Total FOB del mes</td><td style="text-align:right;">${U(tot)}</td></tr></tbody></table></div>`;
+  return `<div class="tw" style="padding:0 14px 8px;"><div style="font-weight:800;font-size:12px;margin:2px 0 4px;">🚢 Costo FOB por BL</div><table style="font-size:11.5px;"><thead><tr><th>BL</th><th>ETA</th><th>Órdenes</th><th style="text-align:right;">FOB US$</th></tr></thead><tbody>${rows}<tr style="font-weight:800;border-top:2px solid var(--b1);"><td colspan="3">Total FOB del mes</td><td style="text-align:right;">${U(tot)}</td></tr></tbody></table></div>`;
 }
 function infDatosPlan(){ return infAsignarValor(infDatosPlan0()); }
 function infDatosPlan0(){
@@ -13899,22 +13899,11 @@ async function ocdAgregarItem(ocId){
 async function reabastEliminarOC(ocId){
   const o = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId); if(!o) return;
   const padre = ocPadre(o), its = (REABAST.ocItems[ocId]||[]);
-  const msg = padre ? '¿Eliminar la orden parcial '+o.numero_oc+'?\n\nLo que tenga ('+(its.length? its.map(i=>i.referencia+' '+reabastFmtN(i.cantidad)).join(', ') : 'sin ítems')+') queda como PENDIENTE en la orden principal '+padre.numero_oc+', con una nota.'
+  const msg = padre ? '¿Eliminar la orden parcial '+o.numero_oc+'?\n\nLo que tenga ('+(its.length? its.map(i=>i.referencia+' '+reabastFmtN(i.cantidad)).join(', ') : 'sin ítems')+') se elimina con la orden y NO vuelve a ninguna otra orden (ni a '+padre.numero_oc+').'
     : '¿Eliminar definitivamente la OC '+o.numero_oc+'? Esta acción no se puede deshacer y también borra sus filas sincronizadas en el Panel de compras.';
   if(!confirm(msg)) return;
   try{
     if(padre){
-      const quien = (CU&&CU.nombre)||'Usuario', hoy = new Date().toLocaleDateString('es-CO');
-      const itP = REABAST.ocItems[padre.id] = REABAST.ocItems[padre.id] || [];
-      for(const it of its){
-        const ya = itP.find(x=>x.referencia===it.referencia && (x.lote||'')===(it.lote||''));
-        const obs = '⏳ Pendiente de '+o.numero_oc+' ('+reabastFmtN(it.cantidad)+' u.)';
-        if(ya){ const c = (Number(ya.cantidad)||0)+(Number(it.cantidad)||0), ob = (ya.observacion?ya.observacion+' · ':'')+obs; await sbReabast.patch('oc_items','id=eq.'+ya.id,{cantidad:c, observacion:ob}); ya.cantidad = c; ya.observacion = ob; await sbReabast.delete('oc_items','id=eq.'+it.id); }
-        else { const ob = (it.observacion?it.observacion+' · ':'')+obs; await sbReabast.patch('oc_items','id=eq.'+it.id,{oc_id:padre.id, observacion:ob}); it.oc_id = padre.id; it.observacion = ob; itP.push(it); }
-      }
-      const linea = '⏳ Pendiente de '+o.numero_oc+' (eliminada '+hoy+' por '+quien+'): '+(its.length? its.map(i=>i.referencia+' '+reabastFmtN(i.cantidad)+' u.').join(', ') : 'orden sin ítems, falta definir qué se pide');
-      const notas = (padre.notas?padre.notas+'\n':'')+linea;
-      await sbReabast.patch('ordenes_compra','id=eq.'+padre.id,{notas}); padre.notas = notas;
       try{ await sbReabast.delete('oc_parciales','oc_destino_id=eq.'+ocId); PARC.rows = (PARC.rows||[]).filter(x=>x.oc_destino_id!==ocId); }catch(e){ console.warn('oc_parciales', e); }
       try{ if(PRODF.datos[ocId]){ delete PRODF.datos[ocId]; await prodfGuardar(); } }catch(e){}
       REABAST.ocItems[ocId] = [];
@@ -13929,7 +13918,7 @@ async function reabastEliminarOC(ocId){
     REABAST.panelCompras = (REABAST.panelCompras||[]).filter(f=>f.oi!==o.numero_oc);
     document.getElementById('modal-oc-detalle')?.classList.remove('on');
     reabastRepintarOC(); try{ reabastPintar(); }catch(e){}
-    if(typeof toast==='function') toast('OC '+o.numero_oc+' eliminada'+(padre?' · el pendiente quedó en '+padre.numero_oc:''),'ok');
+    if(typeof toast==='function') toast('OC '+o.numero_oc+' eliminada','ok');
   }catch(e){ if(typeof toast==='function') toast('Error eliminando: '+e.message,'er'); }
 }
 async function ocLimpiarPendiente(ocId){
