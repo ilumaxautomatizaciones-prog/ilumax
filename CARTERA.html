@@ -1446,11 +1446,18 @@ function cliBuscar(v) {
   const L = $('fLista'); if (!L) return; const t = nz(v).split(/\s+/).filter(Boolean);
   if (!t.length) { L.style.display = 'none'; return; }
   const r = EXT.clientes.filter(c => t.every(x => c.k.includes(x))).slice(0, 40);
-  L.innerHTML = r.map(c => '<div onclick="cliElegir(\'' + esc(c.nit) + '\')"><b>' + esc(c.nombre) + '</b><br><span style="color:#64748b;font-size:11px">' + esc(c.nit) + ' · ' + esc(c.ej) + ' · ' + esc(c.canal) + '</span></div>').join('') + '<div id="fSies"></div><div onclick="cliBuscarSiesa()" style="color:#0f766e;font-weight:700">🔎 Buscar «' + esc(String(v).trim()) + '» en Siesa (clientes nuevos)</div><div onclick="cliNuevo()" style="color:#1d4ed8;font-weight:700">➕ Cliente nuevo (no está en la lista)</div>';
+  L.innerHTML = r.map(c => '<div onclick="cliElegir(\'' + esc(c.nit) + '\')"><b>' + esc(c.nombre) + '</b><br><span style="color:#64748b;font-size:11px">' + esc(c.nit) + ' · ' + esc(c.ej) + ' · ' + esc(c.canal) + '</span></div>').join('') + '<div id="fSies"></div><div onclick="cliBuscarSiesa()" style="color:#0f766e;font-weight:700">🔎 Buscar «' + esc(String(v).trim()) + '» en Siesa (clientes nuevos)</div><div onclick="cliNuevo()" style="color:#1d4ed8;font-weight:700">➕ Cliente nuevo (debe existir en Siesa)</div>';
   L.style.display = 'block';
   clearTimeout(cliBuscar.t); if (!r.length && nz(v).replace(/\D/g, '').length >= 6 || (!r.length && nz(v).length >= 4)) cliBuscar.t = setTimeout(cliBuscarSiesa, 700);   // sin resultados en la base: se busca solo en Siesa
 }
 let CLISIES = [];
+// Verifica que el NIT exista como CLIENTE en Siesa (maestro de terceros/clientes). Devuelve {ok, existe, esCliente, c} o {ok:false} si no se pudo consultar
+async function cliEnSiesa(nit) {
+  const d = String(nit || '').replace(/\D/g, ''); if (d.length < 5) return { ok: true, existe: false };
+  const k = d.length === 10 ? d.slice(0, 9) : d; EXT.sies = EXT.sies || {}; if (EXT.sies[k]) return EXT.sies[k];
+  const j = await extApi({ accion: 'cliente_buscar', q: k }); if (!j || !j.ok) return { ok: false };
+  const c = (j.clientes || [])[0]; return (EXT.sies[k] = { ok: true, existe: !!c, esCliente: !!(c && c.esCliente), c: c || null });
+}
 async function cliBuscarSiesa() {
   const q = String(($('fCli') && $('fCli').value) || '').trim(), box = $('fSies'); if (!box || q.length < 3) return;
   box.innerHTML = '<div style="padding:6px 10px;color:#64748b">Buscando en Siesa…</div>';
@@ -1466,6 +1473,7 @@ function cliElegir(nit) {
   const c = EXT.cidx.get(String(nit)); if (!c) return;
   $('fNit').value = c.nit; $('fCli').value = c.nombre; $('fEj').value = c.ej; $('fCan').value = c.canal; $('fLista').style.display = 'none';
   if (!$('fRef').value) $('fRef').value = c.nit;
+  cliEnSiesa(c.nit).then(r => { const m = $('fCliMsg'); if (m && r.ok && !(r.existe && r.esCliente)) m.innerHTML = '<span style="color:#b91c1c;font-weight:700">⚠ Este NIT ' + (r.existe ? 'existe en Siesa pero NO como cliente' : 'NO existe en Siesa') + '. Créalo / actívalo en Siesa antes de guardar el movimiento.</span>'; });
 }
 const ejCod = v => { const k = nz(v || ''); if (!k) return ''; const h = Object.keys(EJ_MAP).find(c => nz(EJ_MAP[c]) === k); return h || String(v).trim(); };
 async function cliSiesa(nits) {
@@ -1489,10 +1497,14 @@ async function cliPorRef(id) {
 }
 async function cliNuevo() {
   $('fLista').style.display = 'none';
-  const nit = prompt('NIT / cédula del cliente nuevo (sin puntos ni dígito de verificación):', $('fRef').value || ''); if (!nit) return;
-  const nombre = prompt('Nombre del cliente:', $('fCli').value || ''); if (!nombre) return;
-  const ej = prompt('Código del ejecutivo (ej. CFLOREZ, CTAYLOR, VENTAS DIRECTAS):', $('fEj').value || ''); if (ej === null) return;
-  const canal = prompt('Canal (ESPECIALIZADO, MIXTO, ONLINE, PROYECTOS, MODERNO…):', $('fCan').value || 'ESPECIALIZADO'); if (canal === null) return;
+  const nit = prompt('NIT / cédula del cliente (debe estar creado como cliente en Siesa; sin puntos ni dígito de verificación):', $('fRef').value || ''); if (!nit) return;
+  const sv = await cliEnSiesa(nit.trim());
+  if (!sv.ok) { alert('No pude consultar Siesa en este momento. Intenta de nuevo en un momento.'); return; }
+  if (!sv.existe) { alert('⛔ El NIT ' + nit.trim() + ' NO existe en Siesa.\n\nCréalo primero en Siesa (Terceros → pestaña Cliente) y vuelve a buscarlo aquí; o verifica en Siesa si el NIT está bien escrito.'); return; }
+  if (!sv.esCliente) { alert('⛔ El NIT ' + nit.trim() + ' (' + sv.c.nombre + ') existe en Siesa pero NO está creado como cliente.\n\nActívalo como cliente en Siesa (Terceros → pestaña Cliente) y vuelve a intentarlo.'); return; }
+  const nombre = sv.c.nombre;
+  const ej = prompt('Cliente en Siesa: ' + nombre + (sv.c.vendedorCod ? ' (vendedor ' + sv.c.vendedorCod + ')' : '') + '\n\nCódigo del ejecutivo (ej. CFLOREZ, CTAYLOR, VENTAS DIRECTAS):', $('fEj').value || ''); if (ej === null) return;
+  const canal = prompt('Canal (ESPECIALIZADO, MIXTO, ONLINE, PROYECTOS, MODERNO…):', $('fCan').value || sv.c.canal || 'ESPECIALIZADO'); if (canal === null) return;
   const of = await ofacApi({ accion: 'consulta', doc: nit.trim(), nombre: nombre.trim() });
   if (!of || !of.ok) { if (!confirm('No pude verificar la lista OFAC (' + ((of && of.error) || 'error') + ').\n¿Crear el cliente SIN verificar?')) return; }
   else if (of.coincidencias.some(c => c.por === 'documento')) { alert('⛔ NO SE PUEDE CREAR: el documento ' + nit.trim() + ' aparece en la lista OFAC (' + of.coincidencias.filter(c => c.por === 'documento').map(c => c.nombre).join(', ') + ').'); return; }
@@ -1532,6 +1544,11 @@ async function extGuardar(id) {
   if (!fila.fecha) { alert('Falta la fecha.'); return; }
   if (!String(fila.monto).trim() || isNaN(Number(String(fila.monto).replace(/[$.\s]/g, '').replace(',', '.')))) { alert('El monto no es un número válido.'); return; }
   fila.monto = Number(String(fila.monto).replace(/[$\s]/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'));
+  if (String(fila.nit || '').replace(/\D/g, '').length >= 5 && !/^(NA|TES)/i.test(String(fila.rc || ''))) {   // el cliente debe existir en Siesa
+    const sv = await cliEnSiesa(fila.nit);
+    if (sv.ok && !(sv.existe && sv.esCliente)) { alert('⛔ No se guardó: el NIT ' + fila.nit + (sv.existe ? ' (' + sv.c.nombre + ') existe en Siesa pero NO como cliente.' : ' NO existe en Siesa.') + '\n\nCréalo / actívalo en Siesa (Terceros → pestaña Cliente) o verifica el NIT, y vuelve a guardar.'); return; }
+    if (!sv.ok && !confirm('No pude verificar el cliente en Siesa. ¿Guardar de todos modos?')) return;
+  }
   const j = await extApi({ accion: 'guardar', fila });
   if (!j || !j.ok) { alert((j && j.error) || 'No se pudo guardar'); return; }
   extCerrar(); await extRefrescar();
