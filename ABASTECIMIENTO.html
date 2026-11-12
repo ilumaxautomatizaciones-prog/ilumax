@@ -4747,6 +4747,36 @@ function infAsignarValor(rows){
   INF._reconc = {tot: (C.tr||[]).reduce((a,t)=>a+t.cop,0), asig, usdTot:(C.tr||[]).reduce((a,t)=>a+t.usd,0)};
   return rows;
 }
+// FOB (US$) del mes agrupado por BL (un embarque puede traer varias órdenes) y, al desplegar, por orden
+function infFobBLMes(L){
+  const G = {}, E = reabastEsc;
+  const fobIt = (o, it) => { const ri = (REABAST.ocItems[o.id]||[]).find(i=>ceRefKey(i.referencia)===ceRefKey(it.ref)); const M = (REABAST.referenciasMaestro||{})[String(it.ref||'').trim()]||{}; return (Number(it.cant)||0) * (Number((ri&&ri.precio_fob_usd))||Number(M.fob_usd)||0); };
+  L.forEach(x=>{
+    const ords = x.ocs ? x.ocs.map(n=>infOcPorNombre(n)).filter(Boolean) : [x.o];
+    const tot = (x.val&&x.val.usd)||0; if(!ords.length) return;
+    const ws = ords.map(o=>{ try{ return infValorOc(o).usd; }catch(e){ return 0; } }), sw = ws.reduce((a,b)=>a+b,0);
+    ords.forEach((o,i)=>{
+      const share = tot * (sw>0 ? ws[i]/sw : 1/ords.length);
+      const bls = ((typeof CBL!=='undefined' && CBL.bls)||[]).map(b=>({b, f:(b.items||[]).filter(it=>it.ocId===o.id || ceNum(it.oc)===ceNum(o.numero_oc)).reduce((a,it)=>a+fobIt(o,it),0), n:(b.items||[]).filter(it=>it.ocId===o.id || ceNum(it.oc)===ceNum(o.numero_oc)).length})).filter(z=>z.n>0);
+      const sf = bls.reduce((a,z)=>a+z.f,0);
+      const reparto = bls.length ? bls.map(z=>({k:z.b.bl||'Sin número', eta:z.b.eta||'', v: share*(sf>0 ? z.f/sf : 1/bls.length)})) : [{k:'Sin BL (aún sin embarque)', eta:'', v:share}];
+      reparto.forEach(r=>{ const g = G[r.k] = G[r.k] || {bl:r.k, eta:r.eta, usd:0, ords:{}}; g.usd += r.v; g.ords[o.numero_oc] = (g.ords[o.numero_oc]||0) + r.v; });
+    });
+  });
+  return Object.values(G).sort((a,b)=>b.usd-a.usd);
+}
+function infHtmlBLMes(L, mk){
+  let G = []; try{ G = infFobBLMes(L); }catch(e){ console.warn('FOB por BL', e); return ''; }
+  if(!G.length) return '';
+  INF.blAb = INF.blAb || {};
+  const U = v => 'US$ '+Math.round(v).toLocaleString('es-CO'), tot = G.reduce((a,g)=>a+g.usd,0);
+  const rows = G.map(g=>{
+    const key = mk+'|'+g.bl, id = key.replace(/[^A-Za-z0-9]/g,'_'), ab = !!INF.blAb[id], ords = Object.keys(g.ords).sort();
+    return `<tr onclick="INF.blAb['${id}']=!INF.blAb['${id}'];infPintar()" style="cursor:pointer;"><td><b>${ab?'▾':'▸'} ${reabastEsc(g.bl)}</b></td><td>${g.eta?new Date(g.eta+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short'}):'—'}</td><td>${ords.length} orden(es): <span class="arte-mu">${ords.map(reabastEsc).join(', ')}</span></td><td style="text-align:right;font-weight:800;">${U(g.usd)}</td></tr>`
+      + (ab ? ords.map(o=>`<tr style="background:var(--s1);"><td></td><td></td><td style="padding-left:24px;">${reabastEsc(o)}</td><td style="text-align:right;">${U(g.ords[o])}</td></tr>`).join('') : '');
+  }).join('');
+  return `<div class="tw" style="padding:0 14px 8px;"><div style="font-weight:800;font-size:12px;margin:2px 0 4px;">🚢 Costo FOB por BL (clic para ver el FOB por orden)</div><table style="font-size:11.5px;"><thead><tr><th>BL</th><th>ETA</th><th>Órdenes</th><th style="text-align:right;">FOB US$</th></tr></thead><tbody>${rows}<tr style="font-weight:800;border-top:2px solid var(--b1);"><td colspan="3">Total FOB del mes</td><td style="text-align:right;">${U(tot)}</td></tr></tbody></table></div>`;
+}
 function infDatosPlan(){ return infAsignarValor(infDatosPlan0()); }
 function infDatosPlan0(){
   const d = infDatos(), f = INF;
@@ -4965,6 +4995,7 @@ async function infIngConfirmar(ocId, ref, qEsp, fecha, qDet){
 }
 function infPintar(){
   const b = document.getElementById('inf-body'); if(!b) return;
+  if(typeof CBL!=='undefined' && !CBL.cargado && !INF._blCarg){ INF._blCarg = true; cblCargar().then(()=>infPintar()).catch(()=>{}); }
   const d = INF.modo==='oc' ? infDatosPlan() : infDatos();
   if(!INF_ING.cargado && !INF_ING.cargando) infIngCargar(d);
   if(INF.modo==='ing'){ infIngRecientes(b); return; }
@@ -5007,7 +5038,7 @@ function infPintar(){
         <div style="min-width:150px;text-align:right;font-size:11.5px;"><b>US$ ${Math.round(L.reduce((a,x)=>a+((x.val||{}).usd||0),0)).toLocaleString('es-CO')}</b><br><span style="color:var(--mu);">$${infFmt(L.reduce((a,x)=>a+((x.val||{}).cop||0),0)/1e6,0)} M COP</span></div>
         <div style="min-width:120px;text-align:right;font-size:11px;color:var(--mu);">≈ ${infFmt(cbm/cap,1)} × 40' HC</div>
       </div>
-      ${ab?`<div class="tw" style="padding:0 14px 12px;"><table style="font-size:11.5px;"><thead><tr><th>OC</th><th>Proveedor</th><th>Llegada</th><th>Etapa actual</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Valor US$</th><th style="text-align:right;">Valor COP</th><th>Contenedor</th><th>Prealerta</th></tr></thead><tbody>${L.map(x=>{
+      ${ab?infHtmlBLMes(L,k)+`<div class="tw" style="padding:0 14px 12px;"><table style="font-size:11.5px;"><thead><tr><th>OC</th><th>Proveedor</th><th>Llegada</th><th>Etapa actual</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Valor US$</th><th style="text-align:right;">Valor COP</th><th>Contenedor</th><th>Prealerta</th></tr></thead><tbody>${L.map(x=>{
         const abOc = !!INF.ocAb[x.o.id] || !!INF.q;
         const cont = x.emb && x.emb.contenedor ? x.emb.contenedor : (x.cbm>0 ? cbmContenedores(x.cbm).txt : '—');
         const pre = x.emb ? (x.emb.estado==='embarcada'?'🚢 Embarcada':x.emb.estado==='en_gestion'?'✋ En gestión':'🔔 Por gestionar') : '<span class="arte-mu">—</span>';
