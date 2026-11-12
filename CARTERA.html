@@ -75,6 +75,7 @@ tr.det td{background:#f8fafc;font-size:11px;color:#334155}
 const API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-datos';
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fm2 = n => (n < 0 ? '-' : '') + '$' + Math.abs(Number(n) || 0).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fm = n => (n < 0 ? '-' : '') + '$' + Math.round(Math.abs(n)).toLocaleString('es-CO');
 const fmc = n => { const a = Math.abs(n); return (n < 0 ? '-' : '') + '$' + (a >= 1e9 ? (a / 1e9).toFixed(2) + ' MM' : a >= 1e6 ? (a / 1e6).toFixed(1) + ' M' : Math.round(a).toLocaleString('es-CO')); };
 const BK = ['Vigente', '1-30', '31-60', '61-90', '+90'];
@@ -1196,7 +1197,7 @@ function xgPaint(id) {
   const g = XG[id], box = $('xg_' + id); if (!box) return; const V = xgView(id), cols = g.cols.filter(c => !g.hide.has(c.k));
   const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="xgh" style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '"><span style="cursor:pointer" onclick="xgSort(\'' + id + '\',\'' + c.k + '\')">' + esc(c.t) + s + '</span><button class="xgb' + (xgOn(g.f[c.k]) ? ' on' : '') + '" onclick="xgMenu(event,\'' + id + '\',\'' + c.k + '\')">▾</button></th>'; }).join('');
   const rows = V.slice(0, g.limit).map(r => '<tr' + (g.attr ? g.attr(r) : '') + '>' + cols.map(c => '<td style="text-align:' + (c.num && !c.al ? 'right' : 'left') + (c.wrap ? ';white-space:normal;min-width:150px;max-width:280px;overflow-wrap:anywhere' : '') + '">' + (c.h ? c.h(r) : esc(xgV(c, r))) + '</td>').join('') + '</tr>').join('');
-  const tot = '<tr class="tot">' + cols.map((c, i) => '<td style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '">' + (i === 0 ? V.length + ' filas' : c.sum ? fm(V.reduce((s, r) => s + (Number(xgV(c, r)) || 0), 0)) : '') + '</td>').join('') + '</tr>';
+  const tot = '<tr class="tot">' + cols.map((c, i) => '<td style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '">' + (i === 0 ? V.length + ' filas' : c.sum ? (c.dec ? fm2 : fm)(V.reduce((s, r) => s + (Number(xgV(c, r)) || 0), 0)) : '') + '</td>').join('') + '</tr>';
   box.innerHTML = '<table><thead><tr>' + th + '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + cols.length + '" class="empty">Sin resultados</td></tr>') + '</tbody><tfoot>' + tot + '</tfoot></table>' + (V.length > g.limit ? '<div class="foot">Se muestran ' + g.limit + ' de ' + V.length + '; filtra para ver el resto (el Excel trae todas).</div>' : '');
   if (g.after) g.after(box);
 }
@@ -1435,7 +1436,7 @@ const EXT_COLS = [
   { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha, h: r => esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7) + '/' + r.fecha.slice(2, 4)) + (r._ident ? '<div style="font-size:9px;color:#0f766e" title="Movimiento de un mes anterior que se identificó este mes: cuenta en este mes">✔ ident. ' + esc(r.fecha_ident.slice(8, 10) + '/' + r.fecha_ident.slice(5, 7)) + '</div>' : '') + (r._arr ? '<div style="font-size:9px;color:#b45309" title="Sin identificar de un mes anterior: se muestra aquí con su fecha original">↩ ' + esc(MESES[+r.fecha.slice(5, 7) - 1].toLowerCase()) + '</div>' : '') },
   { k: 'banco', t: 'Banco', v: r => r.banco, h: r => { const c = BANCO_COL(r.banco); return '<span style="background:' + c[0] + ';color:#fff;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700;white-space:nowrap">' + esc(r.banco || '') + '</span>'; } },
   { k: 'desc', t: 'Descripción', wrap: 1, v: r => r.descripcion, h: r => esc(r.descripcion) + (r.texto_ref ? '<div style="font-size:10px;color:#64748b">' + esc(String(r.texto_ref).slice(0, 90)) + '</div>' : '') },
-  { k: 'monto', t: 'Monto', num: 1, sum: 1, v: r => Number(r.monto), h: r => '<b>' + fm(Number(r.monto)) + '</b>' },
+  { k: 'monto', t: 'Monto', num: 1, sum: 1, dec: 1, v: r => Number(r.monto), h: r => '<b>' + fm2(Number(r.monto)) + '</b>' },
   { k: 'ref', t: 'Ref. cliente', v: r => r.ref_cliente },
   { k: 'cli', t: 'Cliente', wrap: 1, v: r => r.cliente },
   { k: 'rc', t: 'RC', v: r => r.rc || EXT_PILL[extEst(r)][1], h: r => '<span class="pill ' + EXT_PILL[extEst(r)][0] + '">' + esc(r.rc || EXT_PILL[extEst(r)][1]) + '</span>' },
@@ -1446,7 +1447,7 @@ function extPintar(solo) {
   const c = $('cont'); if (!c) return;
   const R = EXT.cache[EXT.mes] || [], FA = extFiltrar(R), F = FA.filter(r => !r._arr), F2 = FA.filter(r => r._arr), tot = a => a.reduce((s, r) => s + Number(r.monto), 0), RP = R.filter(r => !r._arr), nArr = R.length - RP.length;
   const por = e => R.filter(r => extEst(r) === e), tc = tot(RP);
-  const titulo = (EXT.mes === 'pend' ? 'Movimientos pendientes (sin RC)' : EXT.mes === 'ant' ? 'Movimientos de 2025' : MESES[+EXT.mes.slice(5, 7) - 1] + ' ' + EXT.mes.slice(0, 4)) + ' · ' + F.length + ' de ' + RP.length + ' · ' + fm(tot(F)), titulo2 = '↩ Sin identificar de meses anteriores · ' + F2.length + ' de ' + nArr + ' · ' + fm(tot(F2));
+  const titulo = (EXT.mes === 'pend' ? 'Movimientos pendientes (sin RC)' : EXT.mes === 'ant' ? 'Movimientos de 2025' : MESES[+EXT.mes.slice(5, 7) - 1] + ' ' + EXT.mes.slice(0, 4)) + ' · ' + F.length + ' de ' + RP.length + ' · ' + fm2(tot(F)), titulo2 = '↩ Sin identificar de meses anteriores · ' + F2.length + ' de ' + nArr + ' · ' + fm2(tot(F2));
   if (solo && $('xg_ext')) { XG.ext.rows = F; $('xh2').textContent = titulo; xgPaint('ext'); if ($('xg_ext2')) { XG.ext2.rows = F2; $('xh3').textContent = titulo2; xgPaint('ext2'); } if (EXT.cruce && EXT.cruce.mes === EXT.mes) { cruPintar(); extSubPintar(); } return; }
   const tabs = '<div class="tabs">' + extMeses().map(m => '<button class="tab' + (EXT.mes === m[0] ? ' on' : '') + '" onclick="extMes(\'' + m[0] + '\')">' + m[1] + '</button>').join('') + '<button class="tab' + (EXT.mes === 'ant' ? ' on' : '') + '" onclick="extMes(\'ant\')">2025</button><button class="tab' + (EXT.mes === 'pend' ? ' on' : '') + '" onclick="extMes(\'pend\')">⏳ Pendientes</button></div>';
   const ejs = [...new Set(R.map(r => r.ejecutivo).filter(Boolean))].sort();
@@ -1456,7 +1457,7 @@ function extPintar(solo) {
     + '<select onchange="EXT.ej=this.value;extPintar(true)"><option value="">Todos los ejecutivos</option>' + ejs.map(e => '<option' + (EXT.ej === e ? ' selected' : '') + '>' + esc(e) + '</option>').join('') + '</select></div>'
     + '<div class="bar"><button class="btn" onclick="extNuevo()">➕ Nuevo movimiento</button><button class="btn" onclick="extExcel()" title="Versión 11-nov 10:40">📤 Subir extracto (Excel)</button><button class="btn g" onclick="extPegar()">📋 Pegar del banco</button><button class="btn g" onclick="ateRevisar()" title="Movimientos identificados con ATE pendientes de aprobar">🔵 Revisar ATE</button><button class="btn" onclick="ateRecibos()" title="Reporte Resumen seguimiento de recibos de caja (ATE)">🔵 Recibos ATE</button><button class="btn g" onclick="sbsProponer()" title="Enlaza movimientos sin RC con RC ya registrados en Siesa (para corroborar)">🔵 RC de Siesa</button><button class="btn g" onclick="extCruzar()">🔎 Cruzar con Siesa</button><button class="btn g" onclick="extVista(true)">🔄 Recargar</button>' + (EXT.admin ? '<button class="btn g" onclick="extImportar()">📥 Cargar Excel 2026</button>' : '') + '</div>';
   c.innerHTML = '<div id="xtab">'
-    + '<div class="kpis">' + kpi('Entró al banco', fmc(tc), RP.length + ' movimientos del mes') + kpi('Con RC', fmc(tot(por('rc'))), por('rc').length + ' mov.') + kpi('Sin RC', fmc(tot(por('sinrc'))), por('sinrc').length + ' con cliente, falta RC') + kpi('Sin identificar', fmc(tot(por('sinid'))), por('sinid').length + ' sin cliente' + (nArr ? ' (' + nArr + ' de meses anteriores)' : '')) + kpi('Otros', fmc(tot(por('otro'))), 'tesorería, nómina, NA…') + '</div>'
+    + '<div class="kpis">' + kpi('Entró al banco', fm2(tc), RP.length + ' movimientos del mes') + kpi('Con RC', fm2(tot(por('rc'))), por('rc').length + ' mov.') + kpi('Sin RC', fm2(tot(por('sinrc'))), por('sinrc').length + ' con cliente, falta RC') + kpi('Sin identificar', fm2(tot(por('sinid'))), por('sinid').length + ' sin cliente' + (nArr ? ' (' + nArr + ' de meses anteriores)' : '')) + kpi('Otros', fm2(tot(por('otro'))), 'tesorería, nómina, NA…') + '</div>'
     + tabs + bar + BANCO_LEYENDA + '<div id="xsub"></div><div id="xcruce"></div><div class="card" id="xcardext"><h2 id="xh2">' + esc(titulo) + '</h2>' + xgBar('ext') + '<div class="tw" id="xg_ext"></div></div>' + (nArr ? '<div class="card" id="xcardext2" style="border-top:3px solid #b45309"><h2 id="xh3">' + esc(titulo2) + '</h2>' + xgBar('ext2') + '<div class="tw" id="xg_ext2"></div></div>' : '') + '</div>';
   xgInit('ext', EXT_COLS, { rows: F, limit: 600, nombre: 'Extracto_' + EXT.mes, attr: r => ' class="c"' + (ateRev(r) ? ' style="background:#dbeafe" title="Identificado con recibo de ATE · por revisar"' : ' style="background:' + BANCO_COL(r.banco)[1] + '"') + ' onclick="extEditar(' + r.id + ')"' }); xgPaint('ext');
   if (nArr) { xgInit('ext2', EXT_COLS, { rows: F2, limit: 600, nombre: 'Extracto_anteriores_' + EXT.mes, attr: XG.ext.attr }); xgPaint('ext2'); }
@@ -1861,9 +1862,9 @@ const CRU_COLS = [
   { k: 'cli', t: 'Cliente', wrap: 1, v: r => r.cliente, h: r => esc(r.cliente || '') + (r.otroMes ? ' <span class="pill p-bl" title="El extracto trae este pago en otro mes">pago de ' + r.otroMes + '</span>' : '') },
   { k: 'ejx', t: 'Ejecutivo extracto', v: r => r.ejExt },
   { k: 'ejs', t: 'Ejecutivo Siesa', wrap: 1, v: r => r.ejSies },
-  { k: 'ext', t: 'Extracto', num: 1, sum: 1, v: r => r.ext == null ? '' : r.ext, h: r => r.ext == null ? '–' : fm(r.ext) },
-  { k: 'sie', t: 'Siesa', num: 1, sum: 1, v: r => r.sie == null ? '' : r.sie, h: r => r.sie == null ? '–' : fm(r.sie) },
-  { k: 'dif', t: 'Diferencia', num: 1, sum: 1, v: r => r.dif || 0, h: r => r.dif ? fm(r.dif) : '–' },
+  { k: 'ext', t: 'Extracto', num: 1, sum: 1, dec: 1, v: r => r.ext == null ? '' : r.ext, h: r => r.ext == null ? '–' : fm2(r.ext) },
+  { k: 'sie', t: 'Siesa', num: 1, sum: 1, dec: 1, v: r => r.sie == null ? '' : r.sie, h: r => r.sie == null ? '–' : fm2(r.sie) },
+  { k: 'dif', t: 'Diferencia', num: 1, sum: 1, dec: 1, v: r => r.dif || 0, h: r => r.dif ? fm2(r.dif) : '–' },
   { k: 'est', t: 'Estado', v: r => r.est, h: r => '<span class="pill ' + (r.est === 'OK' ? 'p-ok' : /sin extracto|no está/i.test(r.est) ? 'p-rd' : 'p-or') + '">' + esc(r.est) + '</span>' }];
 function cruFiltrar(A) {
   const q = nz(EXT.q), en = EXT.ej ? nz(ejNom(EXT.ej) || EXT.ej) : '';
