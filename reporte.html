@@ -125,7 +125,12 @@ tr.xit>td{padding:0!important;background:#f8fafc;border-bottom:2px solid #cbd5e1
 .pill2.f{background:#fef3c7;color:#92400e}.pill2.a{background:#fee2e2;color:#991b1b}.pill2.p{background:#dbeafe;color:#1e40af}
 .pill2.s0{background:#fee2e2;color:#991b1b}.pill2.s1{background:#dcfce7;color:#166534}
 tr.xno td{background:#fee2e2!important;color:#991b1b}tr.xno.xp td{background:#fef3c7!important;color:#92400e}tr.xno small{font-weight:400;color:inherit;opacity:.85}
-#hom td,#hom th{text-align:left}#hom th.r,#hom td.r{text-align:right}#hom td,#hom th{white-space:nowrap}
+.xgh{white-space:nowrap}.xgb{border:0;background:#ffffff26;color:#fff;border-radius:5px;margin-left:5px;cursor:pointer;font-size:10px;padding:2px 5px}.xgb.on{background:#f5c518;color:#0f172a}
+.xgm{position:fixed;z-index:90;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 12px 32px #0004;width:264px;padding:10px;font-size:12px;color:#0f172a}
+.xgm input:not([type=checkbox]){display:block;width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:2px}
+.xgm .li{max-height:210px;overflow:auto;border:1px solid #e2e8f0;border-radius:6px;margin:6px 0;padding:4px 6px}.xgm label{display:flex;gap:6px;align-items:center;padding:2px 0;cursor:pointer}
+#hom tr.tot td{font-weight:800;background:#0f172a;color:#fff;position:sticky;bottom:0}
+#hom td,#hom th{white-space:nowrap}
 </style>
 </head>
 <body>
@@ -1142,77 +1147,103 @@ function homVista(R) {
     return true;
   });
 }
-const HOM_COLS = [['cod', 'Código', 't'], ['ref', 'Ref.', 't'], ['desc', 'Descripción', 't'], ['grupo', 'Estado', 't'], ['rep', 'Modalidad', 't'], ['inv', 'Inventario', 'n'], ['est', 'Estado llegada', 't'], ['fecha', 'Fecha llegada', 'd'], ['dias', 'Días', 'n'], ['unds', 'Unds', 'n'], ['ocbl', 'OC / BL', 't']];
-HOM.f = {}; HOM.s = { k: null, d: 1 };
-function homV(r, k) { const v = k === 'ocbl' ? [r.oc, r.bl].filter(Boolean).join(' · ') : r[k]; return v == null ? '' : v; }
-function homTxt(r, k) { let v = homV(r, k); if (v === '' || v === 0 && k === 'unds') return '(vacío)'; if (k === 'fecha') return new Date(v + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }); if (typeof v === 'number') return Math.round(v).toLocaleString('es-CO'); return String(v); }
-function homFiltrarCols(L, excepto) { Object.keys(HOM.f).forEach(k => { if (k === excepto) return; const ok = new Set(HOM.f[k]); L = L.filter(r => ok.has(homTxt(r, k))); }); return L; }
-function homOrdenar(L) {
-  const { k, d } = HOM.s, t = k ? HOM_COLS.find(c => c[0] === k)[2] : '';
-  if (!k) return L.sort((a, b) => (a.stock === b.stock ? 0 : a.stock === 'agotada' ? -1 : 1) || (a.inv - b.inv) || String(a.ref).localeCompare(String(b.ref), 'es', { numeric: true }));
-  return L.sort((a, b) => { const x = homV(a, k), y = homV(b, k); if (x === '' && y !== '') return 1; if (y === '' && x !== '') return -1; const c = t === 'n' ? x - y : String(x).localeCompare(String(y), 'es', { numeric: true }); return c * d; });
+/* ===== Rejilla tipo Excel (igual a la de Cartera): ordenar y filtrar desde el encabezado, elegir columnas ===== */
+const HG = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), limit: 800 };
+const hgNz = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+const hgV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
+const hgFecha = v => v ? new Date(v + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+const HOM_COLS = [
+  { k: 'cod', t: 'Código', v: r => r.cod, mono: 1 }, { k: 'ref', t: 'Ref.', v: r => r.ref, mono: 1 }, { k: 'desc', t: 'Descripción', v: r => String(r.desc || ''), wrap: 1 },
+  { k: 'grupo', t: 'Estado', v: r => r.grupo }, { k: 'rep', t: 'Modalidad', v: r => r.rep }, { k: 'ue', t: 'UE', v: r => r.ue, num: 1 },
+  { k: 'inv', t: 'Inventario', v: r => Math.round(r.inv), num: 1, sum: 1, h: r => '<b style="color:' + (r.inv <= 0 ? '#dc2626' : r.inv <= 50 ? '#ea580c' : 'inherit') + '">' + Math.round(r.inv).toLocaleString('es-CO') + '</b>' },
+  { k: 'est', t: 'Estado llegada', v: r => r.est || 'Sin información', h: r => r.est ? esc(r.est) : '<span style="color:#94a3b8">Sin información</span>' },
+  { k: 'fecha', t: 'Fecha llegada', v: r => r.fecha, date: 1, h: r => homDot(r.sem) + (r.fecha ? hgFecha(r.fecha) : '—') },
+  { k: 'dias', t: 'Días', v: r => r.dias, num: 1 }, { k: 'unds', t: 'Unds', v: r => r.unds || '', num: 1, sum: 1, h: r => r.unds ? r.unds.toLocaleString('es-CO') : '' },
+  { k: 'ocbl', t: 'OC / BL', v: r => [r.oc, r.bl].filter(Boolean).join(' · '), h: r => '<span style="font-size:11px">' + esc([r.oc, r.bl].filter(Boolean).join(' · ')) + '</span>' }];
+function hgView() {
+  const g = HG; let R = g.rows.filter(r => g.cols.every(c => {
+    const f = g.f[c.k]; if (!f) return true; const v = hgV(c, r);
+    if (f.sel && !f.sel.has(String(v))) return false;
+    if (c.num || c.date) {
+      if (f.min !== '' && f.min != null) { if (v === '') return false; if (c.num ? Number(v) < Number(f.min) : String(v) < f.min) return false; }
+      if (f.max !== '' && f.max != null) { if (v === '') return false; if (c.num ? Number(v) > Number(f.max) : String(v) > f.max) return false; }
+    }
+    return true;
+  }));
+  if (g.sort) { const c = g.cols.find(x => x.k === g.sort.k), d = g.sort.dir; if (c) R = R.map((r, i) => [r, i]).sort((a, b) => { const x = hgV(c, a[0]), y = hgV(c, b[0]); let o; if (c.num) o = (x === '' ? -Infinity : Number(x)) - (y === '' ? -Infinity : Number(y)); else o = String(x).localeCompare(String(y), 'es', { numeric: true }); return (o || a[1] - b[1]) * (o ? d : 1); }).map(x => x[0]); }
+  else R = R.map((r, i) => [r, i]).sort((a, b) => (a[0].stock === b[0].stock ? 0 : a[0].stock === 'agotada' ? -1 : 1) || (a[0].inv - b[0].inv) || (a[1] - b[1])).map(x => x[0]);
+  return R;
 }
-function homLista() { return homOrdenar(homFiltrarCols(homVista(homFilas()))); }
-function homCerrarFd() { const e = document.getElementById('homFd'); if (e) e.remove(); document.removeEventListener('mousedown', homFdFuera, true); }
-function homFdFuera(ev) { const e = document.getElementById('homFd'); if (e && !e.contains(ev.target) && !(ev.target.closest && ev.target.closest('.homTh'))) homCerrarFd(); }
-function homAbrir(k, ev) {
-  ev.stopPropagation(); const ya = document.getElementById('homFd'); const mismo = ya && ya.dataset.k === k; homCerrarFd(); if (mismo) return;
-  const base = homFiltrarCols(homVista(homFilas()), k), t = HOM_COLS.find(c => c[0] === k)[2], mp = new Map();
-  base.forEach(r => { const x = homTxt(r, k); if (!mp.has(x)) mp.set(x, homV(r, k)); });
-  let vals = [...mp.entries()].sort((a, b) => t === 'n' ? (a[1] === '' ? 1 : b[1] === '' ? -1 : a[1] - b[1]) : String(a[1]).localeCompare(String(b[1]), 'es', { numeric: true })).map(e => e[0]);
-  const sel = new Set(HOM.f[k] ? HOM.f[k].filter(x => vals.includes(x)) : vals);
-  window.__hd = { k, vals, sel };
-  const d = document.createElement('div'); d.id = 'homFd'; d.dataset.k = k;
-  const rc = ev.currentTarget.getBoundingClientRect();
-  d.style.cssText = 'position:fixed;z-index:9999;top:' + Math.min(rc.bottom + 4, innerHeight - 380) + 'px;left:' + Math.max(8, Math.min(rc.left, innerWidth - 270)) + 'px;width:260px;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.2);padding:8px;font-size:12px;color:#0f172a';
-  d.innerHTML = '<div style="display:flex;gap:6px;margin-bottom:6px"><button class="btn" style="flex:1" onclick="homSort(\'' + k + '\',1)">↑ A→Z</button><button class="btn" style="flex:1" onclick="homSort(\'' + k + '\',-1)">↓ Z→A</button></div>'
-    + '<input id="homFq" placeholder="Buscar…" style="width:100%;box-sizing:border-box;margin-bottom:6px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font:inherit" oninput="homFdPintar()">'
-    + '<label style="display:flex;gap:6px;align-items:center;font-weight:700;padding:3px 2px"><input type="checkbox" id="homFall" style="flex:none" onchange="homFdTodos(this.checked)"> (Seleccionar todo)</label>'
-    + '<div id="homFl" style="max-height:220px;overflow:auto;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;margin:4px 0"></div>'
-    + '<div style="display:flex;gap:6px"><button class="btn" style="flex:1" onclick="homFdAplicar()">Aceptar</button><button class="btn" style="flex:1" onclick="homFdLimpiar()">Quitar filtro</button></div>';
-  document.body.appendChild(d); homFdPintar(); document.addEventListener('mousedown', homFdFuera, true); setTimeout(() => { const i = document.getElementById('homFq'); if (i) i.focus(); }, 0);
+const hgOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !== '' && f.max != null));
+function hgPaint() {
+  const g = HG, box = document.getElementById('hg_hom'); if (!box) return; const V = hgView(), cols = g.cols.filter(c => !g.hide.has(c.k));
+  const al = c => c.num ? 'right' : 'left';
+  const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="xgh" style="text-align:' + al(c) + '"><span style="cursor:pointer" onclick="hgSort(\'' + c.k + '\')">' + esc(c.t) + s + '</span><button class="xgb' + (hgOn(g.f[c.k]) ? ' on' : '') + '" onclick="hgMenu(event,\'' + c.k + '\')">▾</button></th>'; }).join('');
+  const rows = V.slice(0, g.limit).map((r, i) => '<tr style="background:' + (i % 2 ? '#eff6ff' : '#fff') + '">' + cols.map(c => '<td style="text-align:' + al(c) + (c.mono ? ';font-family:monospace' : '') + (c.wrap ? ';white-space:normal;min-width:200px;max-width:320px' : '') + '">' + (c.h ? c.h(r) : esc(String(hgV(c, r)))) + '</td>').join('') + '</tr>').join('');
+  const tot = '<tr class="tot">' + cols.map((c, i) => '<td style="text-align:' + al(c) + '">' + (i === 0 ? V.length + ' filas' : c.sum ? V.reduce((s, r) => s + (Number(hgV(c, r)) || 0), 0).toLocaleString('es-CO') : '') + '</td>').join('') + '</tr>';
+  box.innerHTML = '<table><thead><tr>' + th + '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + cols.length + '" style="text-align:center;padding:20px;color:#64748b">Sin resultados</td></tr>') + '</tbody><tfoot>' + tot + '</tfoot></table>' + (V.length > g.limit ? '<div class="foot">Se muestran ' + g.limit + ' de ' + V.length + '; filtra para ver el resto (el Excel trae todas).</div>' : '');
+  const n = document.getElementById('homN'); if (n) n.textContent = V.length + ' referencias';
 }
-function homFdPintar() {
-  const h = window.__hd, q = (document.getElementById('homFq').value || '').toLowerCase(), vis = h.vals.filter(v => v.toLowerCase().includes(q));
-  document.getElementById('homFl').innerHTML = vis.slice(0, 400).map(v => '<label style="display:flex;gap:6px;align-items:center;padding:3px 2px;cursor:pointer"><input type="checkbox" style="flex:none" data-v="' + esc(v) + '"' + (h.sel.has(v) ? ' checked' : '') + ' onchange="homFdMarca(this)"> <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(v) + '</span></label>').join('') + (vis.length > 400 ? '<div style="padding:4px;color:#64748b">… usa el buscador para ver más</div>' : '');
-  document.getElementById('homFall').checked = vis.length > 0 && vis.every(v => h.sel.has(v));
+function hgSort(k) { const g = HG; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; hgPaint(); }
+function hgLimpiar() { HG.f = {}; HG.sort = null; hgPaint(); }
+function hgCerrar() { const m = document.getElementById('xgm'); if (m) m.remove(); }
+document.addEventListener('click', hgCerrar);
+function hgPos(d, ev) { const b = ev.currentTarget.getBoundingClientRect(); d.style.top = Math.max(8, Math.min(b.bottom + 4, innerHeight - 440)) + 'px'; d.style.left = Math.max(8, Math.min(b.left - 120, innerWidth - 280)) + 'px'; }
+function hgCols(ev) {
+  ev.stopPropagation(); hgCerrar(); const g = HG, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); hgPos(d, ev);
+  d.innerHTML = '<b>Columnas visibles</b><div class="li" style="max-height:300px">' + g.cols.map((c, i) => '<label><input type="checkbox" ' + (g.hide.has(c.k) ? '' : 'checked') + ' onchange="hgToggle(' + i + ',this.checked)"> ' + esc(c.t) + '</label>').join('') + '</div>';
+  document.body.appendChild(d);
 }
-function homFdMarca(el) { const h = window.__hd, v = el.getAttribute('data-v'); if (el.checked) h.sel.add(v); else h.sel.delete(v); document.getElementById('homFall').checked = h.vals.every(x => h.sel.has(x)); }
-function homFdTodos(on) { const h = window.__hd, q = (document.getElementById('homFq').value || '').toLowerCase(); h.vals.filter(v => v.toLowerCase().includes(q)).forEach(v => on ? h.sel.add(v) : h.sel.delete(v)); homFdPintar(); }
-function homFdAplicar() { const h = window.__hd; if (h.vals.every(v => h.sel.has(v))) delete HOM.f[h.k]; else HOM.f[h.k] = [...h.sel]; homCerrarFd(); pintarHom(); }
-function homFdLimpiar() { delete HOM.f[window.__hd.k]; homCerrarFd(); pintarHom(); }
-function homSort(k, d) { HOM.s = { k, d }; homCerrarFd(); pintarHom(); }
-function homLimpiarTodo() { HOM.f = {}; HOM.s = { k: null, d: 1 }; pintarHom(); }
+function hgToggle(i, on) { const g = HG, k = g.cols[i].k; if (on) g.hide.delete(k); else g.hide.add(k); hgPaint(); }
+let HGM = null;
+function hgMenu(ev, k) {
+  ev.stopPropagation(); hgCerrar(); const g = HG, c = g.cols.find(x => x.k === k), f = g.f[k] || {}, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); hgPos(d, ev);
+  const vals = c.num || c.date ? null : [...new Set(g.rows.map(r => String(hgV(c, r))))].sort((a, b) => a.localeCompare(b, 'es', { numeric: true })).slice(0, 600);
+  HGM = { k, vals };
+  const num = c.num ? 'menor a mayor' : 'A → Z', num2 = c.num ? 'mayor a menor' : 'Z → A';
+  d.innerHTML = '<button class="btn" style="width:100%;margin-bottom:4px" onclick="hgOrden(1)">↑ Ordenar ' + num + '</button><button class="btn" style="width:100%" onclick="hgOrden(-1)">↓ Ordenar ' + num2 + '</button>'
+    + (c.num ? '<div style="margin-top:8px">Mayor o igual a<input id="xgMin" value="' + esc(f.min == null ? '' : f.min) + '"></div><div>Menor o igual a<input id="xgMax" value="' + esc(f.max == null ? '' : f.max) + '"></div>' : '')
+    + (c.date ? '<div style="margin-top:8px">Desde<input type="date" id="xgMin" value="' + esc(f.min || '') + '"></div><div>Hasta<input type="date" id="xgMax" value="' + esc(f.max || '') + '"></div>' : '')
+    + (vals ? '<input id="xgBus" placeholder="Buscar…" style="margin-top:8px" oninput="hgBuscar(this.value)"><label style="margin-top:4px"><input type="checkbox" id="xgAll" ' + (!f.sel ? 'checked' : '') + ' onchange="hgTodos(this.checked)"> <b>(Seleccionar visibles)</b></label><div class="li" id="xgLi">' + vals.map((v, i) => '<label data-t="' + esc(hgNz(v)) + '"><input type="checkbox" class="xgc" data-i="' + i + '" ' + (!f.sel || f.sel.has(v) ? 'checked' : '') + '> ' + (v === '' ? '(vacío)' : esc(v)) + '</label>').join('') + '</div>' : '')
+    + '<div style="display:flex;gap:6px;margin-top:8px"><button class="btn" style="flex:1" onclick="hgAplicar()">Aplicar</button><button class="btn" style="flex:1" onclick="hgQuitar()">Quitar filtro</button></div>';
+  document.body.appendChild(d);
+}
+function hgOrden(dir) { HG.sort = { k: HGM.k, dir }; hgCerrar(); hgPaint(); }
+function hgBuscar(t) { const q = hgNz(t); document.querySelectorAll('#xgLi label').forEach(l => { const ok = !q || l.dataset.t.includes(q); l.style.display = ok ? '' : 'none'; l.querySelector('input').checked = ok; }); const a = document.getElementById('xgAll'); if (a) a.checked = true; }
+function hgTodos(on) { document.querySelectorAll('#xgLi label').forEach(l => { if (l.style.display !== 'none') l.querySelector('input').checked = on; }); }
+function hgAplicar() {
+  const g = HG, c = g.cols.find(x => x.k === HGM.k), f = {};
+  if (c.num || c.date) { const mn = document.getElementById('xgMin').value.trim().replace(',', '.'), mx = document.getElementById('xgMax').value.trim().replace(',', '.'); f.min = mn; f.max = mx; if (c.num && ((mn !== '' && isNaN(+mn)) || (mx !== '' && isNaN(+mx)))) { alert('Escribe números válidos.'); return; } }
+  if (HGM.vals) { const chk = [...document.querySelectorAll('.xgc')], on = chk.filter(x => x.checked).map(x => HGM.vals[+x.dataset.i]); if (on.length < chk.length) f.sel = new Set(on); }
+  if (hgOn(f)) g.f[HGM.k] = f; else delete g.f[HGM.k]; hgCerrar(); hgPaint();
+}
+function hgQuitar() { delete HG.f[HGM.k]; hgCerrar(); hgPaint(); }
 const homDot = s => '<span title="' + HOM_SEM[s][1] + '" style="display:inline-block;width:11px;height:11px;border-radius:50%;background:' + HOM_SEM[s][0] + ';vertical-align:middle;margin-right:5px"></span>';
 function pintarHom() {
   const el = document.getElementById('hom'), d = HOM.d;
   if (!d || d.vacio || !(d.filas || []).length) { el.innerHTML = '<div class="card"><div class="err" style="margin:20px auto">Aún no hay información de Homecenter publicada. Se actualiza cuando Abastecimiento carga el portafolio.</div></div>'; return; }
-  const R = homFilas(), L = homLista(), ag = R.filter(r => r.stock === 'agotada'), px = R.filter(r => r.stock === 'proxima');
+  const R = homFilas(), L = homVista(R), ag = R.filter(r => r.stock === 'agotada'), px = R.filter(r => r.stock === 'proxima');
   const agConLl = ag.filter(r => r.fecha), agSin = ag.length - agConLl.length, agRojo = ag.filter(r => r.sem === 'rojo' || r.sem === 'gris').length;
   const chip = (lbl, v, e, col) => '<div onclick="HOM.vista=\'' + e + '\';pintarHom()" style="cursor:pointer;flex:1;min-width:120px;background:' + (HOM.vista === e ? '#dbeafe' : '#fff') + ';border:' + (HOM.vista === e ? '2px solid #2563eb' : '1px solid #bfdbfe') + ';border-radius:12px;padding:8px 12px"><div style="font-size:22px;font-weight:800;color:' + col + '">' + v + '</div><div style="font-size:11px;color:#475569;font-weight:600">' + lbl + '</div></div>';
   const cnt = re => R.filter(r => re.test(r.rep)).length;
   const sems = ['verde', 'amarillo', 'naranja', 'rojo', 'gris'].map(k => '<span onclick="HOM.sem=HOM.sem===\'' + k + '\'?\'\':\'' + k + '\';pintarHom()" style="cursor:pointer;margin-right:12px;font-size:12px;font-weight:' + (HOM.sem === k ? 800 : 600) + ';' + (HOM.sem === k ? 'text-decoration:underline' : '') + '">' + homDot(k) + HOM_SEM[k][1] + ' (' + ag.filter(r => r.sem === k).length + ')</span>').join('');
   const opt = (arr, cur) => arr.map(o => '<option value="' + o[0] + '"' + (cur === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('');
-  const tabla = L.length ? '<div class="card tw"><table><thead><tr>' + HOM_COLS.map(c => { const fl = !!HOM.f[c[0]], so = HOM.s.k === c[0]; return '<th class="homTh' + (c[2] === 'n' ? ' r' : '') + '" style="cursor:pointer;user-select:none" onclick="homAbrir(\'' + c[0] + '\',event)" title="Filtrar / ordenar">' + c[1] + (so ? (HOM.s.d > 0 ? ' ▲' : ' ▼') : '') + ' <span style="color:' + (fl ? '#facc15' : '#94a3b8') + ';font-size:10px">' + (fl ? '⛃' : '▾') + '</span></th>'; }).join('') + '</tr></thead><tbody>'
-    + L.map((r, i) => '<tr style="background:' + (i % 2 ? '#eff6ff' : '#fff') + '"><td style="font-family:monospace">' + esc(r.cod) + '</td><td style="font-family:monospace;font-weight:700">' + esc(r.ref) + '</td><td>' + esc(String(r.desc || '').slice(0, 55)) + '</td><td>' + esc(r.grupo) + '</td><td>' + esc(r.rep) + '</td>'
-      + '<td class="r" style="font-weight:800;color:' + (r.inv <= 0 ? '#dc2626' : r.inv <= 50 ? '#ea580c' : 'inherit') + '">' + Math.round(r.inv).toLocaleString('es-CO') + '</td>'
-      + '<td>' + (r.est ? esc(r.est) : '<span style="color:#94a3b8">Sin información</span>') + '</td><td>' + homDot(r.sem) + (r.fecha ? new Date(r.fecha + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '—') + '</td>'
-      + '<td class="r">' + (r.dias == null ? '' : r.dias) + '</td><td class="r">' + (r.unds ? r.unds.toLocaleString('es-CO') : '') + '</td><td style="font-size:11px">' + esc([r.oc, r.bl].filter(Boolean).join(' · ')) + '</td></tr>').join('')
-    + '</tbody></table></div>' : '<div class="card"><div class="err" style="margin:20px auto">No hay referencias con esos filtros.</div></div>';
+  HG.rows = L; HG.cols = HOM_COLS;
   el.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">'
     + chip('Agotados (inv. ≤ 0)', ag.length, 'agotados', '#dc2626') + chip('Próximos a agotarse (1-50)', px.length, 'proximos', '#ea580c') + chip('PULL', cnt(/pull/i), 'pull', '#1d4ed8') + chip('PUSH', cnt(/push/i), 'push', '#5b21b6') + chip('IN / OUT', cnt(/in.?out/i), 'inout', '#0f766e') + chip('Portafolio completo', R.length, 'todo', '#1e3a8a') + '</div>'
     + '<div class="card" style="padding:10px 14px;margin-bottom:12px"><div style="font-size:12px;font-weight:800;margin-bottom:6px">Agotados: cuándo llegan (' + ag.length + ' referencias · ' + agConLl.length + ' con fecha · ' + agSin + ' sin fecha · ' + agRojo + ' con más de 45 días o sin fecha)</div>' + sems + '</div>'
     + '<div class="bar"><input id="homQ" placeholder="🔎 Buscar código, referencia, EAN o descripción…" value="' + esc(HOM.q) + '" oninput="HOM.q=this.value;clearTimeout(window.__homT);window.__homT=setTimeout(()=>{pintarHom();const i=document.getElementById(\'homQ\');if(i){i.focus();const v=i.value;i.value=\'\';i.value=v}},250)">'
     + '<select onchange="HOM.gr=this.value;pintarHom()">' + opt([['', 'Todos los estados'], ['Activo', 'Activo'], ['Negociación', 'Negociación'], ['Descontinuar', 'Descontinuar']], HOM.gr) + '</select>'
-    + (Object.keys(HOM.f).length || HOM.s.k ? '<button class="btn" onclick="homLimpiarTodo()">✖ Quitar filtros</button>' : '') + '<button class="btn" onclick="excelHom()">📥 Excel</button><span style="font-size:12px;color:#475569;font-weight:600">' + L.length + ' referencias</span></div>'
-    + tabla
+    + '<button class="btn" onclick="hgCols(event)">▦ Columnas</button><button class="btn" onclick="hgLimpiar()">✖ Quitar filtros y orden</button><button class="btn" onclick="excelHom()">📥 Excel de esta vista y portafolio</button><span id="homN" style="font-size:12px;color:#475569;font-weight:600"></span></div>'
+    + '<div class="card tw" id="hg_hom"></div>'
     + '<div class="foot">Portafolio: ' + esc(d.archivo || '') + ' · Inventario y llegadas actualizados ' + new Date(d.fecha).toLocaleString('es-CO') + ' · Semáforo según días a la fecha de llegada: verde 0-7, amarillo 8-21, naranja 22-45, rojo más de 45, gris sin fecha.</div>';
+  hgPaint();
 }
 async function excelHom() {
   try {
     await cargarScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
     const R = homFilas(), wb = new ExcelJS.Workbook();
-    const hojas = [['Vista actual', homLista()], ['Agotados', R.filter(r => r.stock === 'agotada')], ['Próximos a agotarse', R.filter(r => r.stock === 'proxima')], ['Portafolio completo', R]];
+    const hojas = [['Vista actual', hgView()], ['Agotados', R.filter(r => r.stock === 'agotada')], ['Próximos a agotarse', R.filter(r => r.stock === 'proxima')], ['Portafolio completo', R]];
     const col = { verde: 'FFDCFCE7', amarillo: 'FFFEF9C3', naranja: 'FFFFEDD5', rojo: 'FFFEE2E2', gris: 'FFF1F5F9' };
     hojas.forEach(([n, L]) => {
       const ws = wb.addWorksheet(n);
