@@ -4747,6 +4747,57 @@ function infAsignarValor(rows){
   INF._reconc = {tot: (C.tr||[]).reduce((a,t)=>a+t.cop,0), asig, usdTot:(C.tr||[]).reduce((a,t)=>a+t.usd,0)};
   return rows;
 }
+
+// ===== Informe confiable: TODO lo del mes (ingresado o no) desde Compras (precios/cantidades) + Comercio Exterior (BL, llegada a planta, ingreso) =====
+function infBLDatos(){
+  const R = {}, E = reabastEsc, f = INF;
+  const fac = (typeof IVS!=='undefined' && Number(IVS.factor))||1.15;
+  const ocs = REABAST.ordenesCompra||[], porId = {}, porNum = {}; ocs.forEach(o=>{ porId[o.id] = o; porNum[ceNum(o.numero_oc)] = o; });
+  const mkDe = iso => { if(!iso) return 'sin'; iso = String(iso).slice(0,10); if(f.desde && iso<f.desde) return null; if(f.hasta && iso>f.hasta) return null; return f.vista==='semana' ? infLunes(iso) : iso.slice(0,7); };
+  const M = k => R[k] = R[k] || {usd:0, cop:0, usdIng:0, cbm:0, bls:{}, sin:{usd:0, ords:{}}, ords:{}, sinPrecio:0};
+  const precio = (o, ref) => { const k = ceRefKey(ref); const ri = o ? (REABAST.ocItems[o.id]||[]).find(i=>ceRefKey(i.referencia)===k) : null; const m = (REABAST.referenciasMaestro||{})[String(ref||'').trim()]||{}; return Number(ri&&ri.precio_fob_usd)||Number(m.fob_usd)||0; };
+  const trmDe = o => (typeof IVS!=='undefined' ? (IVS.trmFijo||Number(o&&o.trm)||IVS.trm||0) : Number(o&&o.trm)||0);
+  const cubierto = {};   // ocId|ref -> cantidad ya cubierta por BL
+  ((typeof CBL!=='undefined' && CBL.bls)||[]).forEach(b=>{
+    if(/^PENDIENTE|^PDTE$/i.test(String(b.bl||'')) && false) return;
+    (b.items||[]).forEach(it=>{
+      const fase = ceFaseLinea(it.estado||'Embarque','').fase; if(fase===-1) return;   // cancelado
+      const o = porId[it.ocId] || porNum[ceNum(it.oc)] || null, cant = Number(it.cant)||0;
+      const ing = fase===9 || !!it.ingreso;
+      const iso = it.planta || b.planta || b.eta || null, mk = mkDe(iso); 
+      if(o){ const ck = o.id+'|'+ceRefKey(it.ref); cubierto[ck] = (cubierto[ck]||0)+cant; }
+      if(mk===null) return;
+      const p = precio(o, it.ref), usd = cant*p, m = M(mk), g = m.bls[b.bl||'Sin número'] = m.bls[b.bl||'Sin número'] || {bl:b.bl||'Sin número', planta:(b.planta||''), eta:(b.eta||''), ords:{}, usd:0, usdIng:0, n:0, nIng:0, fmin:99};
+      if(!(p>0)) m.sinPrecio++;
+      const nom = o ? o.numero_oc : it.oc;
+      g.ords[nom] = 1; m.ords[nom] = 1; g.usd += usd; g.n++; if(ing){ g.usdIng += usd; g.nIng++; } else g.fmin = Math.min(g.fmin, fase==null||fase<0 ? 5 : fase);
+      m.usd += usd; m.cop += usd*fac*trmDe(o); if(ing) m.usdIng += usd; m.cbm += (Number(it.cbm)||0)*cant;
+    });
+  });
+  // lo que Compras tiene y todavía no está en ningún BL (ni ingresado): por embarcar
+  ocs.forEach(o=>{
+    if(['cancelada','suspendida','completada'].includes(o.estado_general)) return;
+    let ll = null; try{ ll = ceLlegada(o); }catch(e){}
+    const iso = ll && ll.fecha ? new Date(ll.fecha).toISOString().slice(0,10) : null, mk = mkDe(iso); if(mk===null) return;
+    (REABAST.ocItems[o.id]||[]).forEach(it=>{
+      const cant = Number(it.cantidad)||0, cub = cubierto[o.id+'|'+ceRefKey(it.referencia)]||0; let ing = 0; try{ ing = ingDe(o, it.referencia); }catch(e){}
+      const rest = cant - Math.max(cub, ing); if(!(rest>0.5)) return;
+      const p = precio(o, it.referencia), usd = rest*p, m = M(mk); if(!(p>0)) m.sinPrecio++;
+      m.sin.usd += usd; m.sin.ords[o.numero_oc] = 1; m.ords[o.numero_oc] = 1; m.usd += usd; m.cop += usd*fac*trmDe(o);
+    });
+  });
+  return R;
+}
+function infHtmlBLMes2(mk, BLD){
+  const m = (BLD||{})[mk]; if(!m) return '';
+  const U = v => 'US$ '+Math.round(v).toLocaleString('es-CO'), E = reabastEsc;
+  const gs = Object.values(m.bls).sort((a,b)=>b.usd-a.usd);
+  const fd = s => s ? new Date(String(s).slice(0,10)+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short'}) : '—';
+  const est = g => g.nIng===g.n ? '<span style="color:#16a34a;font-weight:700;">✅ Ingresó</span>' : (g.nIng>0 ? '<span style="color:#b45309;font-weight:700;">◐ Ingreso parcial</span>' : '<span style="color:#2563eb;font-weight:700;">🚢 '+E(CBL_FASE_TXT[g.fmin]||'En camino')+'</span>');
+  const rows = gs.map(g=>`<tr><td><b>${E(g.bl)}</b></td><td>${fd(g.planta||g.eta)}</td><td>${Object.keys(g.ords).length} orden(es): <span class="arte-mu">${Object.keys(g.ords).sort().map(E).join(', ')}</span></td><td>${est(g)}</td><td style="text-align:right;font-weight:800;">${U(g.usd)}</td></tr>`).join('')
+    + (m.sin.usd>0 ? `<tr><td><b>Sin BL (aún sin embarque)</b></td><td>—</td><td>${Object.keys(m.sin.ords).length} orden(es): <span class="arte-mu">${Object.keys(m.sin.ords).sort().map(E).join(', ')}</span></td><td><span style="color:#64748b;font-weight:700;">⏳ Por embarcar</span></td><td style="text-align:right;font-weight:800;">${U(m.sin.usd)}</td></tr>` : '');
+  return `<div class="tw" style="padding:0 14px 8px;"><div style="font-weight:800;font-size:12px;margin:2px 0 4px;">🚢 Costo FOB por BL (todo lo del período, ingresado o no)</div><table style="font-size:11.5px;"><thead><tr><th>BL</th><th>Llegada a planta</th><th>Órdenes</th><th>Estado</th><th style="text-align:right;">FOB US$</th></tr></thead><tbody>${rows}<tr style="font-weight:800;border-top:2px solid var(--b1);"><td colspan="4">Total FOB del período</td><td style="text-align:right;">${U(m.usd)}</td></tr><tr><td colspan="4" class="arte-mu">Ya ingresado</td><td style="text-align:right;">${U(m.usdIng)}</td></tr><tr><td colspan="4" class="arte-mu">Por llegar / en camino</td><td style="text-align:right;">${U(m.usd-m.usdIng)}</td></tr></tbody></table>${m.sinPrecio?`<div class="arte-mu" style="font-size:10.5px;margin-top:4px;">⚠ ${m.sinPrecio} línea(s) sin precio FOB en Compras ni en el maestro (suman 0).</div>`:''}</div>`;
+}
 // FOB (US$) del mes agrupado por BL (un embarque puede traer varias órdenes) y, al desplegar, por orden
 function infFobBLMes(L){
   const G = {}, E = reabastEsc;
@@ -5005,6 +5056,8 @@ function infPintar(){
   const cap = (typeof CBM_CAPAS!=='undefined' ? CBM_CAPAS[2].cap : 68);
   const tot = d.reduce((a,x)=>a+x.cbm,0), sin = d.reduce((a,x)=>a+x.sin,0);
   const meses = {}; d.forEach(x=>{ (meses[x.mes] = meses[x.mes] || []).push(x); });
+  let BLD = {}; try{ if(typeof CBL!=='undefined' && CBL.cargado) BLD = infBLDatos(); }catch(e){ console.warn('infBLDatos', e); }
+  Object.keys(BLD).forEach(k=>{ if(!meses[k]) meses[k] = []; });
   const claves = Object.keys(meses).sort((a,b)=> a==='sin' ? 1 : b==='sin' ? -1 : a.localeCompare(b));
   const max = Math.max(1, ...claves.map(k=>meses[k].reduce((a,x)=>a+x.cbm,0)));
   const hoyIso = new Date().toISOString().slice(0,10), hoyMes = hoyIso.slice(0,7);
@@ -5023,8 +5076,8 @@ function infPintar(){
   if(!d.length){ b.innerHTML = h+'<div class="empty">No hay órdenes por llegar con esos filtros.</div>'; return; }
   const kPer = INF.vista==='semana' ? 'semana' : 'mes';
   h += `<div class="card" style="margin-bottom:14px;"><div class="cb"><div style="font-weight:800;font-size:14px;margin-bottom:8px;">🗓️ Resumen: cuántas OC llegan por ${kPer}</div><div class="tw"><table style="font-size:12.5px;"><thead><tr><th>${kPer==='mes'?'Mes':'Semana'}</th><th style="text-align:center;"># OC que llegan</th><th>Órdenes</th><th style="text-align:right;">CBM</th><th style="text-align:right;">≈ 40' HC</th><th style="text-align:right;">Valor US$ (FOB)</th><th style="text-align:right;" title="FOB × factor de importación × TRM, igual que el tránsito de Inventarios">Valor COP</th></tr></thead><tbody>${claves.map(k=>{
-    const L = meses[k], cbm = L.reduce((a,x)=>a+x.cbm,0), vU = L.reduce((a,x)=>a+((x.val||{}).usd||0),0), vC = L.reduce((a,x)=>a+((x.val||{}).cop||0),0), hoyK = (kPer==='mes' ? hoyMes : semK)===k;
-    return `<tr style="${hoyK?'background:#f0fdf4;':''}"><td style="white-space:nowrap;font-weight:700;">${nm(k)}${hoyK&&kPer==='mes'?' <span class="arte-mu">(este mes)</span>':''}</td><td style="text-align:center;font-size:16px;font-weight:800;color:var(--bl);">${L.length}</td><td style="font-size:11px;">${L.map(x=>reabastEsc(x.o.numero_oc)).join(', ')}</td><td style="text-align:right;font-weight:700;">${infFmt(cbm)} m³</td><td style="text-align:right;">${k==='sin'?'—':'≈ '+infFmt(cbm/cap,1)}</td><td style="text-align:right;font-weight:700;">US$ ${Math.round(vU).toLocaleString('es-CO')}</td><td style="text-align:right;font-weight:700;">$${infFmt(vC/1e6,0)} M</td></tr>`; }).join('')}<tr style="border-top:2px solid var(--b1);font-weight:800;"><td>Total</td><td style="text-align:center;font-size:16px;">${d.length}</td><td></td><td style="text-align:right;">${infFmt(tot)} m³</td><td style="text-align:right;">≈ ${infFmt(tot/cap,1)}</td><td style="text-align:right;">US$ ${Math.round(d.reduce((a,x)=>a+((x.val||{}).usd||0),0)).toLocaleString('es-CO')}</td><td style="text-align:right;">$${infFmt(d.reduce((a,x)=>a+((x.val||{}).cop||0),0)/1e6,0)} M</td></tr></tbody></table></div><div class="arte-mu" style="font-size:11px;margin-top:6px;">Valor = unidades pendientes × FOB × factor de importación × TRM (${typeof IVS!=='undefined'&&IVS.trmFijo?'TRM $'+Math.round(IVS.trmFijo).toLocaleString('es-CO'):'TRM de cada orden o la última registrada'}, factor ${(typeof IVS!=='undefined'&&Number(IVS.factor))||1.15}), igual que el tránsito de Inventarios. Cada OC trae el valor que tiene en el módulo de tránsito; si una OC llega en varias fechas, se reparte por CBM.${INF._reconc?` <b>Tránsito en Inventarios: $${infFmt(INF._reconc.tot/1e6,0)} M · repartido en esta tabla: $${infFmt(INF._reconc.asig/1e6,0)} M</b>${INF._reconc.tot-INF._reconc.asig>1e6?' (la diferencia son OC en tránsito que no aparecen en esta lista o quedan fuera de los filtros)':''}.`:''}</div></div></div>`;
+    const L = meses[k], cbm = L.reduce((a,x)=>a+x.cbm,0), vU = BLD[k] ? BLD[k].usd : L.reduce((a,x)=>a+((x.val||{}).usd||0),0), vC = BLD[k] ? BLD[k].cop : L.reduce((a,x)=>a+((x.val||{}).cop||0),0), hoyK = (kPer==='mes' ? hoyMes : semK)===k;
+    return `<tr style="${hoyK?'background:#f0fdf4;':''}"><td style="white-space:nowrap;font-weight:700;">${nm(k)}${hoyK&&kPer==='mes'?' <span class="arte-mu">(este mes)</span>':''}</td><td style="text-align:center;font-size:16px;font-weight:800;color:var(--bl);">${BLD[k]?Object.keys(BLD[k].ords).length:L.length}</td><td style="font-size:11px;">${BLD[k]?Object.keys(BLD[k].ords).sort().map(reabastEsc).join(', '):L.map(x=>reabastEsc(x.o.numero_oc)).join(', ')}</td><td style="text-align:right;font-weight:700;">${infFmt(cbm)} m³</td><td style="text-align:right;">${k==='sin'?'—':'≈ '+infFmt(cbm/cap,1)}</td><td style="text-align:right;font-weight:700;">US$ ${Math.round(vU).toLocaleString('es-CO')}${BLD[k]?`<br><span class="arte-mu" style="font-size:10px;font-weight:400;">ingresado ${Math.round(BLD[k].usdIng).toLocaleString('es-CO')} · por llegar ${Math.round(BLD[k].usd-BLD[k].usdIng).toLocaleString('es-CO')}</span>`:''}</td><td style="text-align:right;font-weight:700;">$${infFmt(vC/1e6,0)} M</td></tr>`; }).join('')}<tr style="border-top:2px solid var(--b1);font-weight:800;"><td>Total</td><td style="text-align:center;font-size:16px;">${d.length}</td><td></td><td style="text-align:right;">${infFmt(tot)} m³</td><td style="text-align:right;">≈ ${infFmt(tot/cap,1)}</td><td style="text-align:right;">US$ ${Math.round(claves.reduce((a,k)=>a+(BLD[k]?BLD[k].usd:meses[k].reduce((z,x)=>z+((x.val||{}).usd||0),0)),0)).toLocaleString('es-CO')}</td><td style="text-align:right;">$${infFmt(claves.reduce((a,k)=>a+(BLD[k]?BLD[k].cop:meses[k].reduce((z,x)=>z+((x.val||{}).cop||0),0)),0)/1e6,0)} M</td></tr></tbody></table></div><div class="arte-mu" style="font-size:11px;margin-top:6px;">Valor = TODO lo del período (ingresado o no): cantidad de cada BL × precio FOB de la orden en Compras, agrupado por llegada a planta de Comercio Exterior; lo que aún no tiene BL se toma de Compras (cantidad − lo ya cubierto) con la fecha estimada. COP = FOB × factor de importación × TRM. Detalle de órdenes abajo: unidades pendientes × FOB × factor de importación × TRM (${typeof IVS!=='undefined'&&IVS.trmFijo?'TRM $'+Math.round(IVS.trmFijo).toLocaleString('es-CO'):'TRM de cada orden o la última registrada'}, factor ${(typeof IVS!=='undefined'&&Number(IVS.factor))||1.15}), igual que el tránsito de Inventarios. Cada OC trae el valor que tiene en el módulo de tránsito; si una OC llega en varias fechas, se reparte por CBM.${INF._reconc?` <b>Tránsito en Inventarios: $${infFmt(INF._reconc.tot/1e6,0)} M · repartido en esta tabla: $${infFmt(INF._reconc.asig/1e6,0)} M</b>${INF._reconc.tot-INF._reconc.asig>1e6?' (la diferencia son OC en tránsito que no aparecen en esta lista o quedan fuera de los filtros)':''}.`:''}</div></div></div>`;
   h += infEstadoCard(claves, meses, nm);
   h += claves.map(k=>{
     const L = meses[k], cbm = L.reduce((a,x)=>a+x.cbm,0), ab = !!INF.abierto[k] || !!INF.q;
@@ -5035,10 +5088,10 @@ function infPintar(){
         <div style="flex:1;min-width:160px;background:var(--s1);border-radius:6px;height:16px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:var(--bl);"></div></div>
         <div style="min-width:90px;text-align:right;font-weight:800;">${infFmt(cbm)} m³</div>
         <div style="min-width:80px;text-align:right;font-size:13px;font-weight:800;color:var(--bl);">${L.length} OC</div>
-        <div style="min-width:150px;text-align:right;font-size:11.5px;"><b>US$ ${Math.round(L.reduce((a,x)=>a+((x.val||{}).usd||0),0)).toLocaleString('es-CO')}</b><br><span style="color:var(--mu);">$${infFmt(L.reduce((a,x)=>a+((x.val||{}).cop||0),0)/1e6,0)} M COP</span></div>
+        <div style="min-width:150px;text-align:right;font-size:11.5px;"><b>US$ ${Math.round(BLD[k]?BLD[k].usd:L.reduce((a,x)=>a+((x.val||{}).usd||0),0)).toLocaleString('es-CO')}</b><br><span style="color:var(--mu);">$${infFmt((BLD[k]?BLD[k].cop:L.reduce((a,x)=>a+((x.val||{}).cop||0),0))/1e6,0)} M COP</span></div>
         <div style="min-width:120px;text-align:right;font-size:11px;color:var(--mu);">≈ ${infFmt(cbm/cap,1)} × 40' HC</div>
       </div>
-      ${ab?infHtmlBLMes(L,k)+`<div class="tw" style="padding:0 14px 12px;"><table style="font-size:11.5px;"><thead><tr><th>OC</th><th>Proveedor</th><th>Llegada</th><th>Etapa actual</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Valor US$</th><th style="text-align:right;">Valor COP</th><th>Contenedor</th><th>Prealerta</th></tr></thead><tbody>${L.map(x=>{
+      ${ab?(BLD[k]?infHtmlBLMes2(k,BLD):infHtmlBLMes(L,k))+`<div class="tw" style="padding:0 14px 12px;"><table style="font-size:11.5px;"><thead><tr><th>OC</th><th>Proveedor</th><th>Llegada</th><th>Etapa actual</th><th style="text-align:right;">Ítems</th><th style="text-align:right;">CBM</th><th style="text-align:right;">Valor US$</th><th style="text-align:right;">Valor COP</th><th>Contenedor</th><th>Prealerta</th></tr></thead><tbody>${L.map(x=>{
         const abOc = !!INF.ocAb[x.o.id] || !!INF.q;
         const cont = x.emb && x.emb.contenedor ? x.emb.contenedor : (x.cbm>0 ? cbmContenedores(x.cbm).txt : '—');
         const pre = x.emb ? (x.emb.estado==='embarcada'?'🚢 Embarcada':x.emb.estado==='en_gestion'?'✋ En gestión':'🔔 Por gestionar') : '<span class="arte-mu">—</span>';
@@ -6493,6 +6546,16 @@ async function ocRepararRama(o){
 async function ocRepararRamas(){
   if(!reabastEsAdmin() || REABAST._pasadaCache) return;
   for(const o of (REABAST.ordenesCompra||[])){ const es = REABAST.ocEtapas[o.id]||[]; if(!ocEsRama(o) || !es.length) continue; await ocRepararRama(o); }
+}
+// Una OC no se cierra mientras Comercio Exterior la tenga abierta (BL sin ingreso o en embarque/tránsito/nacionalización)
+function ocAbiertaEnCE(o){
+  try{
+    const n = ceNum(o.numero_oc), bls = [];
+    ((typeof CBL!=='undefined' && CBL.bls)||[]).forEach(b=>(b.items||[]).forEach(it=>{ if(it.ocId!==o.id && ceNum(it.oc)!==n) return; const f = ceFaseLinea(it.estado||'Embarque','').fase; if(f===-1) return; if(!(f===9 || it.ingreso)) bls.push(b.bl||'BL'); }));
+    if(bls.length) return 'BL '+Array.from(new Set(bls)).join(', ');
+    const r = ceDe(o.numero_oc); if(r && r.fase!=null && r.fase>=5 && r.fase<9) return 'estado '+(CBL_FASE_TXT[r.fase]||r.fase);
+  }catch(e){}
+  return '';
 }
 function ocBLsDe(o){
   if(!o) return [];
@@ -17556,7 +17619,7 @@ async function ocMarcarEtapaCompleta(ocId, etapaId, extra){
     e.estado = 'completada';
     await ocActivarDependientes(ocId, etapas);
     const todasCompletas = etapas.every(x=>x.estado==='completada');
-    if(todasCompletas) await sbReabast.patch('ordenes_compra', 'id=eq.'+ocId, {estado_general:'completada'});
+    if(todasCompletas){ const oo = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId), abCE = oo ? ocAbiertaEnCE(oo) : ''; if(abCE){ if(typeof toast==='function') toast('🔒 La OC sigue abierta en Comercio Exterior ('+abCE+'): no se puede cerrar hasta que Comercio Exterior la dé por ingresada','wa'); } else await sbReabast.patch('ordenes_compra', 'id=eq.'+ocId, {estado_general:'completada'}); }
     if(typeof toast==='function') toast('Etapa marcada como completa','ok');
     await cargarOC();
     const modalAbierto = document.getElementById('modal-oc-detalle')?.classList.contains('on');
