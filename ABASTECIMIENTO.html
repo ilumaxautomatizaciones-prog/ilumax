@@ -4760,12 +4760,68 @@ function infAsignarValor(rows){
 }
 
 // ===== Informe confiable: TODO lo del mes (ingresado o no) desde Compras (precios/cantidades) + Comercio Exterior (BL, llegada a planta, ingreso) =====
+// ===== Conciliación: Libro1 (USD que llega a ILUMAX en el mes) vs ERP vs sábana =====
+async function infLibro1(inp){
+  const f = inp.files && inp.files[0]; if(!f) return; inp.value = '';
+  try{
+    if(typeof CBL==='undefined' || !CBL.cargado){ try{ await cblCargar(true); }catch(e){} }
+    const wb = XLSX.read(await f.arrayBuffer(), {type:'array'}), ws = wb.Sheets[wb.SheetNames[0]], A = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true});
+    const lib = {};
+    A.forEach((row,ri)=>{ (row||[]).forEach((c,ci)=>{
+      if(String(c==null?'':c).trim().toUpperCase()!=='ORDEN' || String(row[ci+1]==null?'':row[ci+1]).trim().toUpperCase()!=='CHINA') return;
+      if(!/lleg/i.test(String((A[ri-1]||[])[ci]||''))) return;   // solo el bloque «llegada» (el de «zarpe» es otra cosa)
+      for(let r=ri+1; r<A.length; r++){ const o = A[r] && A[r][ci], v = A[r] && A[r][ci+1]; if(o==null || String(o).trim()==='') break; if(typeof v!=='number') continue; const k = ceNum(String(o).trim()); lib[k] = (lib[k]||0) + v; }
+    }); });
+    if(!Object.keys(lib).length){ toast('No encontré el bloque «llegada» (ORDEN / CHINA) en el Libro','er'); return; }
+    const hoy = new Date().toISOString().slice(0,7), mk = (prompt('¿Qué mes comparas? (AAAA-MM)', hoy)||'').trim(); if(!/^\d{4}-\d{2}$/.test(mk)) return;
+    const F = INF, d0 = F.desde, h0 = F.hasta, v0 = F.vista; F.desde = ''; F.hasta = ''; F.vista = 'mes';
+    let BLD; try{ BLD = infBLDatos(); } finally { F.desde = d0; F.hasta = h0; F.vista = v0; }
+    const m = BLD[mk] || {ordUsd:{}, sin:{ords:{}}};
+    const erp = {}; Object.entries(m.ordUsd||{}).forEach(([n,v])=>{ erp[ceNum(n)] = (erp[ceNum(n)]||0) + v; });
+    const sinBL = {}; Object.keys((m.sin&&m.sin.ords)||{}).forEach(n=>sinBL[ceNum(n)] = 1);
+    const otros = k => Object.keys(BLD).filter(x=>x!==mk && BLD[x].ordUsd && BLD[x].ordUsd[Object.keys(BLD[x].ordUsd).find(n=>ceNum(n)===k)]>0).map(x=>x+' (US$ '+Math.round(BLD[x].ordUsd[Object.keys(BLD[x].ordUsd).find(n=>ceNum(n)===k)]).toLocaleString('es-CO')+')');
+    // sábana: cantidades de la sábana × precio de la OC, líneas que llegan a planta en el mes
+    const ocs = REABAST.ordenesCompra||[], porNum = {}; ocs.forEach(o=>porNum[ceNum(o.numero_oc)] = o);
+    const precio = (o, ref) => { const k = ceRefKey(ref), ri = o ? (REABAST.ocItems[o.id]||[]).find(i=>ceRefKey(i.referencia)===k) : null, mm = (REABAST.referenciasMaestro||{})[String(ref||'').trim()]||{}; return Number(ri&&ri.precio_fob_usd)||Number(mm.fob_usd)||0; };
+    const sab = {}, enSab = {};
+    (CE._blsBase||[]).forEach(x=>{ if(x.f===-1) return; const k = ceNum(x.oc); enSab[k] = 1; if(String(x.pl||'').slice(0,7)!==mk) return; sab[k] = (sab[k]||0) + (Number(x.c)||0)*precio(porNum[k], x.r); });
+    const keys = [...new Set([...Object.keys(lib), ...Object.keys(erp)])].sort((a,b)=>a.localeCompare(b,'es',{numeric:true}));
+    const US = v => Math.round(v||0);
+    const filas = keys.map(k=>{
+      const L = lib[k]||0, E = erp[k]||0, S = sab[k]||0, dif = E-L; let why = '';
+      if(Math.abs(dif)<=Math.max(1, L*0.005)) why = 'Cuadra';
+      else if(L>0 && !(E>0)){ const o = otros(k); why = o.length ? 'El ERP la cuenta en otro mes: '+o.join(', ')+' (distinta fecha de llegada a planta)' : (S>0 ? 'La sábana la trae este mes pero el ERP no la valora (¿sin precio, OC cancelada/completada o BL ingresado?)' : (enSab[k] ? 'En la sábana no llega a planta este mes' : 'No aparece en la sábana ni en el ERP')); }
+      else if(!(L>0) && E>0){ why = !enSab[k] && /-\d+$/.test(k) ? 'Rama del ERP que NO existe en la sábana (sobra o debe fusionarse con su orden base)' : (S>0 ? 'La sábana sí la trae este mes y el Libro1 no' : (sinBL[k] ? 'Cantidad pendiente sin BL en el ERP; la sábana no la trae este mes' : 'El ERP la cuenta este mes y la sábana no')); }
+      else if(S>0 && Math.abs(S-L)<=Math.max(1,L*0.01)) why = 'La sábana coincide con el Libro1: el ERP tiene otras cantidades o precio FOB';
+      else if(S>0 && Math.abs(S-E)<=Math.max(1,E*0.01)) why = 'El ERP coincide con la sábana: el Libro1 usa otro precio o cantidad';
+      else why = 'Difieren Libro1, ERP y sábana: revisar cantidades y precio FOB (sábana×precio OC = US$ '+US(S).toLocaleString('es-CO')+')';
+      if(sinBL[k] && E>0 && why!=='Cuadra') why += ' · incluye cantidades sin BL';
+      return {k, L, E, S, dif, why};
+    });
+    INF._cmp = {mk, filas};
+    infCmpPintar();
+  }catch(e){ console.error(e); toast('No se pudo comparar: '+e.message,'er'); }
+}
+function infCmpPintar(){
+  const C = INF._cmp; if(!C) return; const E = reabastEsc, U = v => (v<0?'-':'')+'US$ '+Math.abs(Math.round(v)).toLocaleString('es-CO');
+  const T = C.filas.reduce((a,r)=>({L:a.L+r.L, E:a.E+r.E, S:a.S+r.S}), {L:0,E:0,S:0});
+  let ov = document.getElementById('infCmpOv'); if(!ov){ ov = document.createElement('div'); ov.id = 'infCmpOv'; ov.style.cssText = 'position:fixed;inset:0;background:#0008;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'; document.body.appendChild(ov); }
+  ov.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:1250px;width:100%;max-height:90vh;display:flex;flex-direction:column;"><div style="padding:14px 18px;border-bottom:1px solid #e2e8f0;display:flex;gap:10px;align-items:center;"><b style="font-size:15px;">Libro1 vs ERP vs sábana · ${E(C.mk)}</b><span style="color:#64748b;font-size:12px;">Diferencia = ERP − Libro1 (USD FOB)</span><button class="btn btn-gr btn-sm" style="margin-left:auto;" onclick="infCmpExcel()">⬇️ Excel</button><button class="btn btn-sm" onclick="document.getElementById('infCmpOv').remove()">✕ Cerrar</button></div>
+  <div style="overflow:auto;padding:0 18px 14px;"><table style="font-size:12px;width:100%;"><thead><tr><th style="text-align:left;position:sticky;top:0;background:#f1f5f9;">Orden</th><th style="text-align:right;position:sticky;top:0;background:#f1f5f9;">Libro1</th><th style="text-align:right;position:sticky;top:0;background:#f1f5f9;">ERP</th><th style="text-align:right;position:sticky;top:0;background:#f1f5f9;">Diferencia</th><th style="text-align:right;position:sticky;top:0;background:#f1f5f9;">Sábana × precio OC</th><th style="text-align:left;position:sticky;top:0;background:#f1f5f9;">Por qué</th></tr></thead><tbody>
+  ${C.filas.map(r=>`<tr style="${r.why==='Cuadra'?'color:#166534;':''}"><td><b>${E(r.k)}</b></td><td style="text-align:right;">${r.L?U(r.L):'—'}</td><td style="text-align:right;">${r.E?U(r.E):'—'}</td><td style="text-align:right;font-weight:700;color:${r.why==='Cuadra'?'#166534':(r.dif>0?'#b45309':'#b91c1c')};">${r.why==='Cuadra'?'0':U(r.dif)}</td><td style="text-align:right;">${r.S?U(r.S):'—'}</td><td style="max-width:520px;white-space:normal;">${E(r.why)}</td></tr>`).join('')}
+  <tr style="font-weight:800;border-top:2px solid #0f172a;"><td>TOTAL</td><td style="text-align:right;">${U(T.L)}</td><td style="text-align:right;">${U(T.E)}</td><td style="text-align:right;">${U(T.E-T.L)}</td><td style="text-align:right;">${U(T.S)}</td><td></td></tr></tbody></table></div></div>`;
+}
+function infCmpExcel(){
+  const C = INF._cmp; if(!C) return;
+  const aoa = [['Orden','Libro1 USD','ERP USD','Diferencia (ERP-Libro1)','Sábana x precio OC','Por qué']].concat(C.filas.map(r=>[r.k, Math.round(r.L), Math.round(r.E), Math.round(r.dif), Math.round(r.S), r.why]));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Conciliacion'); XLSX.writeFile(wb, 'Conciliacion_Libro1_'+C.mk+'.xlsx');
+}
 function infBLDatos(){
   const R = {}, E = reabastEsc, f = INF;
   const fac = (typeof IVS!=='undefined' && Number(IVS.factor))||1.15;
   const ocs = REABAST.ordenesCompra||[], porId = {}, porNum = {}; ocs.forEach(o=>{ porId[o.id] = o; porNum[ceNum(o.numero_oc)] = o; });
   const mkDe = iso => { if(!iso) return 'sin'; iso = String(iso).slice(0,10); if(f.desde && iso<f.desde) return null; if(f.hasta && iso>f.hasta) return null; return f.vista==='semana' ? infLunes(iso) : iso.slice(0,7); };
-  const M = k => R[k] = R[k] || {usd:0, cop:0, usdIng:0, cbm:0, bls:{}, sin:{usd:0, ords:{}}, ords:{}, sinPrecio:0};
+  const M = k => R[k] = R[k] || {usd:0, cop:0, usdIng:0, cbm:0, bls:{}, sin:{usd:0, ords:{}}, ords:{}, ordUsd:{}, sinPrecio:0};
   const precio = (o, ref) => { const k = ceRefKey(ref); const ri = o ? (REABAST.ocItems[o.id]||[]).find(i=>ceRefKey(i.referencia)===k) : null; const m = (REABAST.referenciasMaestro||{})[String(ref||'').trim()]||{}; return Number(ri&&ri.precio_fob_usd)||Number(m.fob_usd)||0; };
   const trmDe = o => (typeof IVS!=='undefined' ? (IVS.trmFijo||Number(o&&o.trm)||IVS.trm||0) : Number(o&&o.trm)||0);
   const cubierto = {};   // ocId|ref -> cantidad ya cubierta por BL
@@ -4784,7 +4840,7 @@ function infBLDatos(){
       const p = precio(o, it.ref), usd = cant*p, m = M(mk), g = m.bls[b.bl||'Sin número'] = m.bls[b.bl||'Sin número'] || {bl:b.bl||'Sin número', planta:(sb&&sb.pl)||b.planta||'', eta:(sb&&sb.d2)||b.eta||'', etd:(sb&&sb.d1)||b.etd||'', impo:sb?Object.keys(sb.im):[], ords:{}, usd:0, usdIng:0, n:0, nIng:0, fmin:99};
       if(!(p>0)) m.sinPrecio++;
       const nom = o ? o.numero_oc : it.oc;
-      g.ords[nom] = 1; m.ords[nom] = 1; g.usd += usd; g.n++; if(ing){ g.usdIng += usd; g.nIng++; } else g.fmin = Math.min(g.fmin, fase==null||fase<0 ? 5 : fase);
+      g.ords[nom] = 1; m.ords[nom] = 1; m.ordUsd[nom] = (m.ordUsd[nom]||0) + usd; g.usd += usd; g.n++; if(ing){ g.usdIng += usd; g.nIng++; } else g.fmin = Math.min(g.fmin, fase==null||fase<0 ? 5 : fase);
       m.usd += usd; m.cop += usd*fac*trmDe(o); if(ing) m.usdIng += usd; m.cbm += (Number(it.cbm)||0)*cant;
     });
   });
@@ -4797,7 +4853,7 @@ function infBLDatos(){
       const cant = Number(it.cantidad)||0, cub = cubierto[o.id+'|'+ceRefKey(it.referencia)]||0; let ing = 0; try{ ing = ingDe(o, it.referencia); }catch(e){}
       const rest = cant - Math.max(cub, ing); if(!(rest>0.5)) return;
       const p = precio(o, it.referencia), usd = rest*p, m = M(mk); if(!(p>0)) m.sinPrecio++;
-      m.sin.usd += usd; m.sin.ords[o.numero_oc] = 1; m.ords[o.numero_oc] = 1; m.usd += usd; m.cop += usd*fac*trmDe(o);
+      m.sin.usd += usd; m.sin.ords[o.numero_oc] = 1; m.ords[o.numero_oc] = 1; m.ordUsd[o.numero_oc] = (m.ordUsd[o.numero_oc]||0) + usd; m.usd += usd; m.cop += usd*fac*trmDe(o);
     });
   });
   return R;
@@ -4965,6 +5021,7 @@ function infHtmlShell(){
       <div style="display:flex;gap:4px;"><button class="btn btn-sm ${INF.vista==='mes'?'btn-p':'btn-g'}" onclick="INF.vista='mes';INF.abierto={};reabastPintar()">Por mes</button><button class="btn btn-sm ${INF.vista==='semana'?'btn-p':'btn-g'}" onclick="INF.vista='semana';INF.abierto={};reabastPintar()">Por semana</button></div>
       <button class="btn btn-g btn-sm" onclick="INF.desde='';INF.hasta='';INF.prov='';INF.q='';reabastPintar()">Limpiar</button>
       <button class="btn btn-gr btn-sm" onclick="infExcel()">⬇️ Excel</button>
+      <button class="btn btn-bl btn-sm" onclick="document.getElementById('infLib1').click()" title="Sube el Libro1 (bloque «llegada») y compara por orden contra el ERP y la sábana">⚖️ Comparar con Libro1</button><input type="file" id="infLib1" accept=".xlsx,.xls" style="display:none" onchange="infLibro1(this)">
       <button class="btn btn-bl btn-sm" onclick="INF.manual=!INF.manual;reabastPintar()">ℹ️ ¿Cómo se calcula?</button>
     </div>
     ${INF.manual ? infManual() : ''}

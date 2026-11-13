@@ -420,8 +420,20 @@ async function cargarVme(force) {
   } catch (e) { VME.cargando = false; el.innerHTML = '<div class="err"><b>No se pudo cargar el reporte por mes.</b><br>' + esc(e.message) + '</div>'; }
 }
 /* ===== Ventas por mes: rejilla tipo Excel (filtros por columna, buscador, canal, columnas, mapa de calor, Excel) ===== */
-const VG = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), q: '', canal: '', ejec: '', group: true, heat: false, desg: true, union: true, sel: new Set(), names: [], meses: [] };
+const VG = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), q: '', canal: '', ejec: '', group: true, heat: false, desg: true, union: true, zona: '', sel: new Set(), names: [], meses: [] };
 const VGM_ = {};
+/* Zonas comerciales por vendedor (según el listado de Cindy, 13-nov-2026). El vendedor puede venir como «APELLIDOS NOMBRES» o «NOMBRE APELLIDO»: se compara por palabras. */
+const VG_ZONAS = [['FLOREZ PELAEZ CARMELINA', 'Eje cafetero'], ['FERREIRA TORRES JAIME', 'Santanderes'], ['PARRA ZAPATA SERGIO ANDRES', 'Antioquia'], ['FERRO BAQUERO MAURICIO', 'Bogotá sur'], ['TAYLOR RAMOS CAMILO GUSTAVO', 'Valle-Nariño'], ['CHAVES ZULUAGA GERSSON ANDRES', 'Bogotá Norte'], ['SANCHEZ LEON LIZ KATHERINE', 'Cali'], ['PADILLA MORALES ROSA ANGELICA', 'Costa Norte'], ['CHABUR SANCHEZ EDWIN', 'Cali'], ['CRUZ QUINONEZ ANGELICA MARIA', 'Costa Norte'], ['SANTOFIMIO YENY PAHOLA', 'Tolhuca'], ['LOZADA ACOSTA LUIS FELIPE', 'Tolhuca'], ['BASTO MARTINEZ JEISSON ENRIQUE', 'Bogotá Norte'], ['GARCIA NOGUERA CLAUDIA LORENA', 'Contact center']];
+const vgTok_ = s => hgNz(s).replace(/[^A-Z ]/g, ' ').split(/\s+/).filter(Boolean);
+const VG_ZT = VG_ZONAS.map(z => [new Set(vgTok_(z[0])), z[1]]), VG_ZC = {};
+function vgZonaDe(nom) {
+  if (nom in VG_ZC) return VG_ZC[nom];
+  const t = vgTok_(nom); let z = '';
+  for (const [st, zn] of VG_ZT) { if (t.length === st.size && t.every(w => st.has(w))) { z = zn; break; } }
+  if (!z && t.length >= 2) for (const [st, zn] of VG_ZT) { if (t.every(w => st.has(w))) { z = zn; break; } }
+  return VG_ZC[nom] = z;
+}
+const VG_ZLISTA = [...new Set(VG_ZONAS.map(z => z[1]))].sort((a, b) => a.localeCompare(b, 'es'));
 const vgV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
 function vgView() {
   const g = VG, q = hgNz(g.q);
@@ -467,7 +479,7 @@ function vgPaint() {
 function vgSelAbrir(ev) {
   ev.stopPropagation(); hgCerrar(); const g = VG, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.style.width = '300px'; d.onclick = e => e.stopPropagation(); hgPos(d, ev);
   d.innerHTML = '<b>Vendedores (elige uno o varios)</b><input id="vgSelQ" placeholder="Buscar vendedor…" style="margin-top:6px" oninput="vgSelBus(this.value)"><div class="li" id="vgSelLi" style="max-height:280px">'
-    + g.names.map((n, i) => '<label data-t="' + esc(hgNz(n)) + '"><input type="checkbox" ' + (g.sel.has(n) ? 'checked' : '') + ' onchange="vgSelTog(' + i + ',this.checked)"> ' + esc(n) + '</label>').join('') + '</div>'
+    + g.names.map((n, i) => '<label data-t="' + esc(hgNz(n)) + '"><input type="checkbox" ' + (g.sel.has(n) ? 'checked' : '') + ' onchange="vgSelTog(' + i + ',this.checked)"> ' + esc(n) + (vgZonaDe(n) ? ' <span style="color:#94a3b8;font-size:10.5px">· ' + esc(vgZonaDe(n)) + '</span>' : '') + '</label>').join('') + '</div>'
     + '<div style="display:flex;gap:6px"><button class="btn" style="flex:1" onclick="VG.sel=new Set();hgCerrar();pintarVme()">Limpiar</button></div>'
     + '<div style="font-size:11px;color:#64748b;margin-top:6px">Con 2 o más marcados y «Unir en una zona» activo, sus ventas se suman en una sola fila.</div>';
   document.body.appendChild(d);
@@ -636,13 +648,20 @@ function pintarVme() {
     else { let k = 'OTR', b = 0; ORD.forEach(c => { if ((x.c[c] || 0) > b) { b = x.c[c]; k = c; } }); rows.push(mkRow(x.nombre, k, x.m)); }   // canal principal
   });
   const tn = {}; det.forEach(r => tn[r.nom] = (tn[r.nom] || 0) + Math.max(0, r.tot)); det.forEach(r => r.pct = tn[r.nom] > 0 ? Math.round(Math.max(0, r.tot) / tn[r.nom] * 1000) / 10 : 0); rows.forEach(r => { if (r.pct == null) r.pct = 100; });
-  if (VG.union && VG.sel.size >= 2) {   // varios vendedores = una sola zona: se suman sus ventas
-    const sl = det.filter(r => VG.sel.has(r.nom)), lab = 'Zona: ' + [...VG.sel].join(' + '), by = {};
-    sl.forEach(r => { (by[r.g] = by[r.g] || []).push(r); });
-    const mk2 = (k, arr) => { const mp = {}; meses.forEach((mm, i) => mp[mm] = arr.reduce((a, r) => a + r.vals[i], 0)); const r = mkRow(lab, k, mp); r.zona = 1; return r; };
-    rows.length = 0;
-    if (VG.desg) { ORD.filter(k => by[k]).forEach(k => rows.push(mk2(k, by[k]))); const T = rows.reduce((a, r) => a + Math.max(0, r.tot), 0) || 1; rows.forEach(r => r.pct = Math.round(Math.max(0, r.tot) / T * 1000) / 10); }
-    else if (sl.length) { const k = Object.keys(by).sort((a, b) => by[b].reduce((x, r) => x + r.tot, 0) - by[a].reduce((x, r) => x + r.tot, 0))[0]; const r = mk2(k, sl); r.pct = 100; rows.push(r); }
+  const vgZ = (arr, lab) => {   // suma varios vendedores en una sola zona (una fila por canal si se desglosa)
+    const by = {}; arr.forEach(r => { (by[r.g] = by[r.g] || []).push(r); });
+    const mk2 = (k, a) => { const mp = {}; meses.forEach((mm, i) => mp[mm] = a.reduce((x, r) => x + r.vals[i], 0)); const r = mkRow(lab, k, mp); r.zona = 1; return r; }, out = [];
+    if (VG.desg) { ORD.filter(k => by[k]).forEach(k => out.push(mk2(k, by[k]))); const T = out.reduce((a, r) => a + Math.max(0, r.tot), 0) || 1; out.forEach(r => r.pct = Math.round(Math.max(0, r.tot) / T * 1000) / 10); }
+    else if (arr.length) { const k = Object.keys(by).sort((a, b) => by[b].reduce((x, r) => x + r.tot, 0) - by[a].reduce((x, r) => x + r.tot, 0))[0]; const r = mk2(k, arr); r.pct = 100; out.push(r); }
+    return out;
+  };
+  if (VG.zona === '*') {   // todas las zonas: una fila por zona (y canal), los vendedores sin zona van en «Sin zona»
+    const zs = {}; det.forEach(r => { const z = vgZonaDe(r.nom) || 'Sin zona'; (zs[z] = zs[z] || []).push(r); });
+    rows.length = 0; Object.keys(zs).sort((a, b) => a === 'Sin zona' ? 1 : b === 'Sin zona' ? -1 : a.localeCompare(b, 'es')).forEach(z => rows.push(...vgZ(zs[z], 'Zona: ' + z)));
+  } else if (VG.zona) {   // una zona: suma sus vendedores
+    const sl = det.filter(r => vgZonaDe(r.nom) === VG.zona); rows.length = 0; rows.push(...vgZ(sl, 'Zona: ' + VG.zona));
+  } else if (VG.union && VG.sel.size >= 2) {   // varios vendedores = una sola zona: se suman sus ventas
+    const sl = det.filter(r => VG.sel.has(r.nom)); rows.length = 0; rows.push(...vgZ(sl, 'Zona: ' + [...VG.sel].join(' + ')));
   }
   rows.sort((a, b) => a.ord - b.ord || b.tot - a.tot);
   const cols = [{ k: 'nom', t: 'Ejecutivo', v: r => r.nom }, { k: 'canal', t: 'Canal', v: r => r.canal }];
@@ -655,6 +674,7 @@ function pintarVme() {
     + '<div class="card"><h2>📈 Ventas por mes — ejecutivo y canal (' + VME.y + ')</h2>'
     + '<div class="bar" style="flex-wrap:wrap"><input id="vgQ" placeholder="🔎 Buscar ejecutivo o canal…" value="' + esc(VG.q) + '" oninput="VG.q=this.value;vgPaint()" style="min-width:220px">'
     + '<button class="btn" onclick="vgSelAbrir(event)" title="Elige uno o varios vendedores">👥 Vendedores' + (VG.sel.size ? ' (' + VG.sel.size + ')' : '') + ' ▾</button>'
+    + '<select onchange="VG.zona=this.value;pintarVme()" title="Ver la estadística de una zona (suma a sus vendedores) o de todas las zonas"><option value="">📍 Por vendedor</option><option value="*"' + (VG.zona === '*' ? ' selected' : '') + '>Todas las zonas (una fila por zona)</option>' + VG_ZLISTA.map(z => '<option value="' + esc(z) + '"' + (VG.zona === z ? ' selected' : '') + '>Zona ' + esc(z) + '</option>').join('') + '</select>'
     + '<label style="font-size:12px;display:flex;gap:4px;align-items:center" title="Suma las ventas de los vendedores marcados en una sola fila"><input type="checkbox" ' + (VG.union ? 'checked' : '') + ' onchange="VG.union=this.checked;pintarVme()"> Unir en una zona</label>'
     + '<select onchange="VG.canal=this.value;vgPaint()">' + opt(canales, VG.canal, 'Todos los canales') + '</select>'
     + '<label style="font-size:12px;display:flex;gap:4px;align-items:center" title="Si un asesor vende en varios canales, sale una fila por cada canal"><input type="checkbox" ' + (VG.desg ? 'checked' : '') + ' onchange="VG.desg=this.checked;pintarVme()"> Desglosar por canal</label>'
