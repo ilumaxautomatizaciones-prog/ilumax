@@ -562,7 +562,7 @@ function devImprimir() {
   w.document.close();
 }
 /* --- Importar Excel de ADT --- */
-const DVCAMPOS = [['doc_adt', 'Documento ADT', /documento|doc\.?\s*adt|adt|pedido|n[uú]mero|consecutivo|devoluci/i], ['guia', 'Guía', /gu[ií]a/i], ['cliente', 'Cliente', /cliente|raz[oó]n|nombre/i], ['nit', 'NIT', /nit|identific|c[eé]dula|cod\.?\s*cliente/i], ['ejecutivo', 'Ejecutivo', /ejecutivo|vendedor|asesor/i], ['motivo', 'Motivo', /motivo|causa|raz[oó]n de/i], ['fecha_doc', 'Fecha documento', /fecha/i], ['factura_ref', 'Factura de venta', /factura/i], ['referencia', 'Referencia', /referencia|\bref\b|c[oó]digo|sku/i], ['descripcion', 'Descripción', /descripci|producto|art[ií]culo|item|[ií]tem/i], ['cant_doc', 'Cantidad', /cant|unid/i], ['valor', 'Valor (sin IVA)', /neto sin|valor|total/i]];
+const DVCAMPOS = [['doc_adt', 'Documento ADT', /documento|doc\.?\s*adt|adt|cod\.?\s*pedido|n[uú]mero|consecutivo|devoluci/i], ['guia', 'Guía', /gu[ií]a/i], ['cliente', 'Cliente', /cliente|raz[oó]n|nombre/i], ['nit', 'NIT', /nit|identific|c[eé]dula|cod\.?\s*cliente/i], ['ejecutivo', 'Ejecutivo', /ejecutivo|vendedor|asesor/i], ['motivo', 'Motivo', /motivo|causa|raz[oó]n de/i], ['fecha_doc', 'Fecha documento', /fecha/i], ['factura_ref', 'Factura de venta', /factura/i], ['referencia', 'Referencia', /referencia|\bref\b|c[oó]digo|sku/i], ['descripcion', 'Descripción', /descripci[oó]n|nombre prod|art[ií]culo/i], ['cant_doc', 'Cantidad', /cant|unid|[ií]tems pedidos/i], ['valor', 'Valor (sin IVA)', /neto sin|valor|total/i]];
 function devImpAbrir() {
   const o = dvOv('ovImp'); DV.imp = null;
   o.innerHTML = '<div class="mo"><div class="mh">📥 Importar devoluciones de ADT<button class="btn g" onclick="$(\'ovImp\').classList.remove(\'on\')">✕</button></div><div class="cb"><input type="file" accept=".xlsx,.xls,.csv" onchange="devImpLeer(this)"><div id="dvImpRes" class="hint" style="padding:8px 0">Sube el Excel que exporta ADT. Se crean como «Por recibir» y las que ya existen (mismo documento) se omiten.</div></div></div>';
@@ -584,9 +584,10 @@ function dvFecha(v) { v = String(v || '').trim(); let m = v.match(/^(\d{4})-(\d{
 function devImpGrupos() {
   const I = DV.imp, G = new Map(), c = k => I.map[k] == null || I.map[k] === '' ? -1 : Number(I.map[k]);
   I.M.slice(I.h + 1).forEach(r => {
-    const val = k => c(k) < 0 ? '' : String(r[c(k)] == null ? '' : r[c(k)]).trim(), doc = val('doc_adt'), guia = val('guia'), key = doc || (guia ? 'G' + guia : ''); if (!key) return;
-    let d = G.get(key); if (!d) G.set(key, d = { doc_adt: doc, guia, cliente: val('cliente'), nit: val('nit').replace(/^(\d+)-\d+-\d+$/, '$1'), ejecutivo: val('ejecutivo'), motivo: val('motivo'), fecha_doc: dvFecha(val('fecha_doc')), factura_ref: val('factura_ref'), items: [], sinDet: 0, valor: 0 });
-    const ref = val('referencia'), des = val('descripcion'), cn = val('cant_doc').replace(',', '.'); if (ref || des) d.items.push({ referencia: ref, descripcion: des, cant_doc: cn }); else d.sinDet += Number(cn) || 0;
+    const val = k => c(k) < 0 ? '' : String(r[c(k)] == null ? '' : r[c(k)]).trim(), doc = val('doc_adt'), guia = val('guia'), fr = val('fecha_doc'), nitv = val('nit').replace(/\D/g, '').slice(0, 12), syn = !doc && !guia && fr && nitv, key = doc || (guia ? 'G' + guia : (syn ? 'P' + nitv + '-' + fr.replace(/\D/g, '') : '')); if (!key) return;
+    let d = G.get(key); if (!d) G.set(key, d = { doc_adt: doc || (syn ? key : ''), syn: !!syn, guia, cliente: val('cliente'), nit: val('nit').replace(/^(\d+)-\d+-\d+$/, '$1'), ejecutivo: val('ejecutivo'), motivo: val('motivo'), fecha_doc: dvFecha(val('fecha_doc')), factura_ref: val('factura_ref'), items: [], sinDet: 0, valor: 0 });
+    let ref = val('referencia'), des = val('descripcion'); if (!ref) { const mm = des.match(/^\[([A-Za-z0-9._-]+)\]\s*-\s*(.*?)(\s*-\s*\[[^\]]*\])?$/); if (mm) { ref = mm[1]; des = mm[2]; } }
+    const cn = val('cant_doc').replace(',', '.'); if (ref || des) d.items.push({ referencia: ref, descripcion: des, cant_doc: cn }); else d.sinDet += Number(cn) || 0;
     d.valor += Math.abs(Number(val('valor').replace(',', '.'))) || 0;
   });
   return [...G.values()].map(d => { if (!d.items.length && d.sinDet) d.items.push({ referencia: '', descripcion: '(detallar al recibir: ' + d.sinDet + ' und en ADT)', cant_doc: d.sinDet }); if (d.valor) d.obs = 'Valor en ADT sin IVA: $' + Math.round(d.valor).toLocaleString('es-CO'); return d; });
@@ -599,9 +600,20 @@ function devImpVista() {
     + '<div class="bar"><button class="btn" ' + (G.length ? '' : 'disabled') + ' onclick="devImpGo()">Importar ' + fm(G.length) + '</button></div>';
 }
 async function devImpGo() {
-  const G = devImpGrupos(); let cr = 0, ex = 0;
+  let G = devImpGrupos(); let cr = 0, ex = 0, up = 0;
+  // Pedidos sin código (reporte detallado): si ya existe el resumen del mismo pedido (NIT + fecha + unidades), se le completan los ítems.
+  const nitd = x => String(x || '').replace(/\D/g, ''), sinCod = [];
+  for (const g of G) {
+    if (!g.syn) { sinCod.push(g); continue; }
+    const u = g.items.reduce((t, i) => t + (Number(i.cant_doc) || 0), 0);
+    const c = (DV.l || []).filter(x => x.estado === 'por_recibir' && x.origen === 'adt' && !/^P\d+-\d+$/.test(x.doc_adt || '') && nitd(x.nit) === nitd(g.nit) && x.fecha_doc === g.fecha_doc);
+    const m = c.find(x => devSum(x, 'cant_doc') === u) || (c.length === 1 ? c[0] : null);
+    if (m) { const j = await api({ accion: 'dev_guardar', dev: { ...m }, items: g.items }); if (j.ok) { up++; DV.l = DV.l.filter(x => x !== m); continue; } }
+    sinCod.push(g);
+  }
+  G = sinCod;
   for (let i = 0; i < G.length; i += 150) { const j = await api({ accion: 'dev_importar', archivo: DV.imp.nombre, devs: G.slice(i, i + 150) }); if (!j.ok) { alert(j.error || 'No se pudo importar'); break; } cr += j.creadas; ex += j.existentes; }
-  $('dvImpRes').innerHTML = '<div class="ok" style="margin:0">Listo: ' + fm(cr) + ' creadas · ' + fm(ex) + ' ya existían.</div>'; devCargar();
+  $('dvImpRes').innerHTML = '<div class="ok" style="margin:0">Listo: ' + fm(cr) + ' creadas · ' + fm(up) + ' completadas con sus ítems · ' + fm(ex) + ' ya existían.</div>'; devCargar();
 }
 
 cargar();
