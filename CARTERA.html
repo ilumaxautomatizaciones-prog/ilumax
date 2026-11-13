@@ -56,6 +56,7 @@ tr.det td{background:#f8fafc;font-size:11px;color:#334155}
 .btn.g{background:#e2e8f0;color:#0f172a}.btn.r{background:#fee2e2;color:#b91c1c;margin-right:auto}
 .lst{position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #cbd5e1;border-radius:8px;max-height:260px;overflow:auto;z-index:60;box-shadow:0 8px 24px #0002;text-align:left}
 .lst div{padding:7px 10px;cursor:pointer;font-size:12px;border-bottom:1px solid #f1f5f9}.lst div:hover{background:#f1f5f9}
+.xms{display:block;margin-top:2px;font-size:10px;padding:1px 2px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#475569;max-width:92px;cursor:pointer}
 .pill{display:inline-block;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;white-space:nowrap}
 .p-ok{background:#dcfce7;color:#166534}.p-or{background:#ffedd5;color:#9a3412}.p-rd{background:#fee2e2;color:#991b1b}.p-bl{background:#dbeafe;color:#1e40af}
 .xgh{white-space:nowrap}.xgb{border:0;background:#ffffff26;color:#fff;border-radius:5px;margin-left:5px;cursor:pointer;font-size:10px;padding:2px 5px}.xgb.on{background:#f5c518;color:#0f172a}
@@ -1410,16 +1411,19 @@ async function extCargarMes(m, forzar) {
     // Excepción: si ya tiene recibo de caja con fecha de un mes anterior, quedó registrado en ese mes y no se trae al mes de identificación
     const rcF = new Map(); try { const sb = await extApi({ accion: 'sbs', desde: '2025-01-01', hasta: fin }); if (sb && sb.ok) sb.rcs.forEach(x => rcF.set(String(x.consec), x.fecha)); } catch (e) { }
     const rcFecha = r => rcF.get(String(r.rc || '').replace(/\D/g, '').replace(/^0+/, ''));
-    j.filas = j.filas.filter(r => !(r.fecha_ident && String(r.fecha_ident).slice(0, 10) > fin) || (rcFecha(r) && rcFecha(r) <= fin));
+    j.filas = j.filas.filter(r => r.mes_cuenta ? r.mes_cuenta === m : (!(r.fecha_ident && String(r.fecha_ident).slice(0, 10) > fin) || (rcFecha(r) && rcFecha(r) <= fin)));
     const q = await extApi({ accion: 'listar', identDesde: ini, identHasta: fin });
-    if (q && q.ok) j.filas = j.filas.concat(q.filas.filter(r => !(rcFecha(r) && rcFecha(r) < ini)).map(r => Object.assign(r, { _ident: true })));
+    if (q && q.ok) j.filas = j.filas.concat(q.filas.filter(r => !r.mes_cuenta && !(rcFecha(r) && rcFecha(r) < ini)).map(r => Object.assign(r, { _ident: true })));
+    // Movimientos de otra fecha que se asignaron a mano a ESTE mes
+    const ids0 = new Set(j.filas.map(r => r.id)), mc = await extApi({ accion: 'listar', mesCuenta: m });
+    if (mc && mc.ok) j.filas = j.filas.concat(mc.filas.filter(r => !ids0.has(r.id)).map(r => Object.assign(r, { _mes: true })));
   }
   // Mes actual: se agregan (con su misma fecha) los movimientos SIN IDENTIFICAR de los meses anteriores del año, para que no se pierdan de vista
   const hoy = (D && D.hoy) || new Date().toISOString().slice(0, 10);
   if (/^\d{4}-\d{2}$/.test(m) && m === hoy.slice(0, 7)) {
     const p = await extApi({ accion: 'listar', pendientes: true });
     if (p && p.ok) { const ini = extRango(m)[0], an = hoy.slice(0, 4) + '-01-01', ids = new Set(j.filas.map(r => r.id));
-      const arr = p.filas.filter(r => r.fecha >= an && r.fecha < ini && extEst(r) === 'sinid' && !ids.has(r.id)).map(r => Object.assign(r, { _arr: true }));
+      const arr = p.filas.filter(r => r.fecha >= an && r.fecha < ini && extEst(r) === 'sinid' && !ids.has(r.id) && !r.mes_cuenta).map(r => Object.assign(r, { _arr: true }));
       return (EXT.cache[m] = j.filas.concat(arr)); }
   }
   return (EXT.cache[m] = j.filas);
@@ -1437,8 +1441,17 @@ function extFiltrar(R) {
 }
 const BANCO_COL = b => { const s = String(b || '').toUpperCase(); return /BANCOLOMBIA/.test(s) ? ['#2563eb', '#eff6ff', 'Bancolombia'] : /BOGOT/.test(s) ? ['#16a34a', '#f0fdf4', 'Banco de Bogotá'] : /DAVIVIENDA/.test(s) ? ['#dc2626', '#fef2f2', 'Davivienda'] : /OCCIDENTE/.test(s) ? ['#ea580c', '#fff7ed', 'Occidente'] : ['#64748b', '#f8fafc', String(b || 'Otro')]; };
 const BANCO_LEYENDA = '<div style="display:flex;gap:14px;flex-wrap:wrap;margin:6px 0 10px;font-size:11px;font-weight:700">' + ['BANCOLOMBIA', 'BANCO DE BOGOTA', 'DAVIVIENDA', 'BDO OCCIDENTE'].map(b => { const c = BANCO_COL(b); return '<span><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:' + c[0] + ';vertical-align:middle;margin-right:5px"></span>' + c[2] + '</span>'; }).join('') + '</div>';
+function extMesSel(r) {
+  const cur = r.mes_cuenta || '', L = extMeses().slice();
+  if (cur && !L.some(m => m[0] === cur)) L.push([cur, cur]);
+  return '<select class="xms" onclick="event.stopPropagation()" onchange="extMover(' + r.id + ',this.value)" title="Mes en que cuenta este movimiento (Auto = según su fecha / identificación)"><option value="">📅 auto</option>' + L.map(m => '<option value="' + m[0] + '"' + (cur === m[0] ? ' selected' : '') + '>' + m[1] + '</option>').join('') + '</select>';
+}
+async function extMover(id, mes) {
+  const j = await extApi({ accion: 'mes', id, mes }); if (!j || !j.ok) { alert((j && j.error) || 'No se pudo cambiar el mes'); return; }
+  await extRefrescar();
+}
 const EXT_COLS = [
-  { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha, h: r => esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7) + '/' + r.fecha.slice(2, 4)) + (r._ident ? '<div style="font-size:9px;color:#0f766e" title="Movimiento de un mes anterior que se identificó este mes: cuenta en este mes">✔ ident. ' + esc(r.fecha_ident.slice(8, 10) + '/' + r.fecha_ident.slice(5, 7)) + '</div>' : '') + (r._arr ? '<div style="font-size:9px;color:#b45309" title="Sin identificar de un mes anterior: se muestra aquí con su fecha original">↩ ' + esc(MESES[+r.fecha.slice(5, 7) - 1].toLowerCase()) + '</div>' : '') },
+  { k: 'fecha', t: 'Fecha', date: 1, v: r => r.fecha, h: r => esc(r.fecha.slice(8, 10) + '/' + r.fecha.slice(5, 7) + '/' + r.fecha.slice(2, 4)) + (r._ident ? '<div style="font-size:9px;color:#0f766e" title="Movimiento de un mes anterior que se identificó este mes: cuenta en este mes">✔ ident. ' + esc(r.fecha_ident.slice(8, 10) + '/' + r.fecha_ident.slice(5, 7)) + '</div>' : '') + (r._arr ? '<div style="font-size:9px;color:#b45309" title="Sin identificar de un mes anterior: se muestra aquí con su fecha original">↩ ' + esc(MESES[+r.fecha.slice(5, 7) - 1].toLowerCase()) + '</div>' : '') + (r._mes ? '<div style="font-size:9px;color:#7c3aed" title="Movimiento de otra fecha que se asignó a este mes">📅 de ' + esc(MESES[+r.fecha.slice(5, 7) - 1].toLowerCase()) + '</div>' : '') + extMesSel(r) },
   { k: 'banco', t: 'Banco', v: r => r.banco, h: r => { const c = BANCO_COL(r.banco); return '<span style="background:' + c[0] + ';color:#fff;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700;white-space:nowrap">' + esc(r.banco || '') + '</span>'; } },
   { k: 'desc', t: 'Descripción', wrap: 1, v: r => r.descripcion, h: r => esc(r.descripcion) + (r.texto_ref ? '<div style="font-size:10px;color:#64748b">' + esc(String(r.texto_ref).slice(0, 90)) + '</div>' : '') },
   { k: 'monto', t: 'Monto', num: 1, sum: 1, dec: 1, v: r => Number(r.monto), h: r => '<b>' + fm2(Number(r.monto)) + '</b>' },
@@ -1552,7 +1565,7 @@ async function cliNuevo() {
   const i = EXT.clientes.findIndex(x => x.nit === c.nit); if (i >= 0) EXT.clientes[i] = c; else EXT.clientes.push(c); EXT.cidx.set(c.nit, c); cliElegir(c.nit);
 }
 /* ---- formulario ---- */
-const CAMPOS = [['fBan', 'banco'], ['fFec', 'fecha'], ['fDes', 'descripcion'], ['fTxt', 'texto_ref'], ['fMon', 'monto'], ['fChe', 'monto_cheque'], ['fRef', 'ref_cliente'], ['fNit', 'nit'], ['fCli', 'cliente'], ['fRc', 'rc'], ['fEj', 'ejecutivo'], ['fCan', 'canal'], ['fObs', 'observacion']];
+const CAMPOS = [['fBan', 'banco'], ['fFec', 'fecha'], ['fDes', 'descripcion'], ['fTxt', 'texto_ref'], ['fMon', 'monto'], ['fChe', 'monto_cheque'], ['fRef', 'ref_cliente'], ['fNit', 'nit'], ['fCli', 'cliente'], ['fRc', 'rc'], ['fEj', 'ejecutivo'], ['fCan', 'canal'], ['fObs', 'observacion'], ['fMes', 'mes_cuenta']];
 function extForm(r) {
   const eje = [...new Set(EXT.clientes.map(c => c.ej).filter(Boolean))].sort(), can = [...new Set(EXT.clientes.map(c => c.canal).filter(Boolean))].sort();
   const f = (id, l, h, w) => '<div class="f' + (w ? ' w' : '') + '"><label>' + l + '</label>' + h + '</div>';
@@ -1570,6 +1583,7 @@ function extForm(r) {
     + f('', 'Ejecutivo', '<input id="fEj" list="dlEj" value="' + esc(r.ejecutivo || '') + '"><datalist id="dlEj">' + eje.map(e => '<option value="' + esc(e) + '">').join('') + '</datalist>')
     + f('', 'Canal', '<input id="fCan" list="dlCan" value="' + esc(r.canal || '') + '"><datalist id="dlCan">' + can.map(e => '<option value="' + esc(e) + '">').join('') + '</datalist>')
     + f('', 'Observación', '<input id="fObs" value="' + esc(r.observacion || '') + '">', 1)
+    + f('', 'Cuenta en el mes', '<select id="fMes"><option value="">Automático (según su fecha / identificación)</option>' + extMeses().concat(r.mes_cuenta && !extMeses().some(m => m[0] === r.mes_cuenta) ? [[r.mes_cuenta, r.mes_cuenta]] : []).map(m => '<option value="' + m[0] + '"' + (r.mes_cuenta === m[0] ? ' selected' : '') + '>' + m[1] + '</option>').join('') + '</select><div style="font-size:11px;color:#64748b">Si lo eliges, este movimiento se muestra y suma solo en ese mes (no en los demás).</div>', 1)
     + '</div><div class="mf">' + (r.id ? '<button class="btn r" onclick="extBorrar(' + r.id + ')">🗑 Eliminar</button>' : '') + '<button class="btn g" onclick="extCerrar()">Cancelar</button><button class="btn" onclick="extGuardar(' + (r.id || 0) + ')">💾 Guardar</button></div></div></div>';
 }
 function extAbrir(r) { const d = document.createElement('div'); d.id = 'xwrap'; d.innerHTML = extForm(r); document.body.appendChild(d); setTimeout(() => { if (!r.id) $('fBan').focus(); rcInfo(); if (!r.cliente && (r.nit || r.ref_cliente)) cliPorRef(r.nit ? 'fNit' : 'fRef'); }, 30); }
