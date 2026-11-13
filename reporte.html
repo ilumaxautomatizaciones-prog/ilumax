@@ -420,12 +420,12 @@ async function cargarVme(force) {
   } catch (e) { VME.cargando = false; el.innerHTML = '<div class="err"><b>No se pudo cargar el reporte por mes.</b><br>' + esc(e.message) + '</div>'; }
 }
 /* ===== Ventas por mes: rejilla tipo Excel (filtros por columna, buscador, canal, columnas, mapa de calor, Excel) ===== */
-const VG = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), q: '', canal: '', ejec: '', group: true, heat: false, desg: true, meses: [] };
+const VG = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), q: '', canal: '', ejec: '', group: true, heat: false, desg: true, union: true, sel: new Set(), names: [], meses: [] };
 const VGM_ = {};
 const vgV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
 function vgView() {
   const g = VG, q = hgNz(g.q);
-  let R = g.rows.filter(r => (!g.canal || r.canal === g.canal) && (!q || hgNz(r.nom + ' ' + r.canal).includes(q)) && g.cols.every(c => {
+  let R = g.rows.filter(r => (r.zona || !g.sel.size || g.sel.has(r.nom)) && (!g.canal || r.canal === g.canal) && (!q || hgNz(r.nom + ' ' + r.canal).includes(q)) && g.cols.every(c => {
     const f = g.f[c.k]; if (!f) return true; const v = vgV(c, r);
     if (f.sel && !f.sel.has(String(v))) return false;
     if (c.num) { if (f.min !== '' && f.min != null) { if (v === '' || Number(v) < Number(f.min)) return false; } if (f.max !== '' && f.max != null) { if (v === '' || Number(v) > Number(f.max)) return false; } }
@@ -441,17 +441,17 @@ function vgPaint() {
   const g = VG, box = document.getElementById('vg_box'); if (!box) return;
   const V = vgView(), cols = g.cols.filter(c => !g.hide.has(c.k)), last = g.meses.length - 1;
   const al = c => c.num ? 'right' : 'left';
-  const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="xgh' + (c.k === 'nom' ? ' vgs' : '') + '" style="text-align:' + al(c) + '"><span style="cursor:pointer" onclick="vgSort(\'' + c.k + '\')">' + esc(c.t) + s + '</span><button class="xgb' + (vgOn(g.f[c.k]) ? ' on' : '') + '" onclick="vgMenu(event,\'' + c.k + '\')">▾</button></th>'; }).join('');
+  const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="xgh' + (c.k === 'nom' ? ' vgs' : c.k === 'canal' ? ' vgs2' : '') + '" style="text-align:' + al(c) + '"><span style="cursor:pointer" onclick="vgSort(\'' + c.k + '\')">' + esc(c.t) + s + '</span><button class="xgb' + (vgOn(g.f[c.k]) ? ' on' : '') + '" onclick="vgMenu(event,\'' + c.k + '\')">▾</button></th>'; }).join('');
   const cel = (c, r, bg) => {
-    const v = vgV(c, r); let st = 'text-align:' + al(c), cls = c.k === 'nom' ? ' class="vgs"' : '';
+    const v = vgV(c, r); let st = 'text-align:' + al(c), cls = c.k === 'nom' ? ' class="vgs"' : c.k === 'canal' ? ' class="vgs2"' : '';
     if (c.k === 'nom') st += ';font-weight:700';
     if (c.k === 'canal') st += ';color:#64748b';
     if (c.mi != null) { if (c.mi === last) st += ';font-style:italic'; if (g.heat && r.mx > 0 && v > 0) st += ';background:rgba(37,99,235,' + (0.07 + 0.35 * v / r.mx).toFixed(2) + ')'; }
     if (c.avg) st += ';font-weight:700;' + (g.heat ? '' : 'background:#fffbeb');
-    let ck = ''; if (!r.sub && (c.k === 'nom' || c.mi != null)) { ck = ' onclick="vgDr(\'' + vgQ(r.nom) + '\',\'' + (g.desg ? r.g : '') + '\',\'' + (c.mi != null ? meses_(c.mi) : '') + '\')" title="Clic para ver el detalle"'; st += ';cursor:pointer'; }
+    let ck = ''; if (!r.sub && !r.zona && (c.k === 'nom' || c.mi != null)) { ck = ' onclick="vgDr(\'' + vgQ(r.nom) + '\',\'' + (g.desg ? r.g : '') + '\',\'' + (c.mi != null ? meses_(c.mi) : '') + '\')" title="Clic para ver el detalle"'; st += ';cursor:pointer'; }
     return '<td' + cls + ck + ' style="' + st + '">' + (c.pc ? (v ? String(v).replace('.', ',') + '%' : '—') : c.num ? (v ? $(v) : '—') : esc(String(v))) + '</td>';
   };
-  const filaTot = (txt, S, estilo, cls) => '<tr class="' + (cls || '') + '" style="' + estilo + '">' + cols.map((c, i) => '<td' + (c.k === 'nom' ? ' class="vgs"' : '') + ' style="text-align:' + al(c) + ';font-weight:800">' + (c.k === 'nom' ? esc(txt) : c.pc ? '' : c.num ? (S[c.k] ? $(S[c.k]) : '—') : '') + '</td>').join('') + '</tr>';
+  const filaTot = (txt, S, estilo, cls) => '<tr class="' + (cls || '') + '" style="' + estilo + '">' + cols.map((c, i) => '<td' + (c.k === 'nom' ? ' class="vgs"' : c.k === 'canal' ? ' class="vgs2"' : '') + ' style="text-align:' + al(c) + ';font-weight:800">' + (c.k === 'nom' ? esc(txt) : c.pc ? '' : c.num ? (S[c.k] ? $(S[c.k]) : '—') : '') + '</td>').join('') + '</tr>';
   let body = '', n = 0;
   if (g.group && !g.sort) {
     const orden = [...new Set(g.rows.map(r => r.canal))];
@@ -464,6 +464,16 @@ function vgPaint() {
   try { vgChart(V); } catch (e) { console.warn(e); }
   const nn = document.getElementById('vgN'); if (nn) nn.textContent = V.length + ' de ' + g.rows.length + (g.desg ? ' filas (ejecutivo × canal)' : ' ejecutivos');
 }
+function vgSelAbrir(ev) {
+  ev.stopPropagation(); hgCerrar(); const g = VG, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.style.width = '300px'; d.onclick = e => e.stopPropagation(); hgPos(d, ev);
+  d.innerHTML = '<b>Vendedores (elige uno o varios)</b><input id="vgSelQ" placeholder="Buscar vendedor…" style="margin-top:6px" oninput="vgSelBus(this.value)"><div class="li" id="vgSelLi" style="max-height:280px">'
+    + g.names.map((n, i) => '<label data-t="' + esc(hgNz(n)) + '"><input type="checkbox" ' + (g.sel.has(n) ? 'checked' : '') + ' onchange="vgSelTog(' + i + ',this.checked)"> ' + esc(n) + '</label>').join('') + '</div>'
+    + '<div style="display:flex;gap:6px"><button class="btn" style="flex:1" onclick="VG.sel=new Set();hgCerrar();pintarVme()">Limpiar</button></div>'
+    + '<div style="font-size:11px;color:#64748b;margin-top:6px">Con 2 o más marcados y «Unir en una zona» activo, sus ventas se suman en una sola fila.</div>';
+  document.body.appendChild(d);
+}
+function vgSelBus(t) { const q = hgNz(t); document.querySelectorAll('#vgSelLi label').forEach(l => { l.style.display = !q || l.dataset.t.includes(q) ? '' : 'none'; }); }
+function vgSelTog(i, on) { const n = VG.names[i]; if (on) VG.sel.add(n); else VG.sel.delete(n); pintarVme(); }
 const vgQ = s => encodeURIComponent(s).replace(/'/g, '%27');
 function vgDr(nom, g, mes) { VG.dr = { nom: nom ? decodeURIComponent(nom) : '', g: g || '', mes: mes || '' }; vgDrPaint(); const el = document.getElementById('vg_drill'); if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
 function vgDrCerrar() { VG.dr = null; vgDrPaint(); }
@@ -515,7 +525,7 @@ async function vgDrPaint() {
 }
 const abrM = v => v >= 1e6 ? (v / 1e6).toFixed(v >= 1e7 ? 0 : 1).replace('.', ',') + 'M' : Math.round(v / 1e3) + 'k';
 function vgPie(V) {
-  const g = VG, nombres = new Set(V.map(r => r.nom)), q = hgNz(g.q), M = {};
+  const g = VG, nombres = new Set(g.sel.size ? [...g.sel] : V.map(r => r.nom)), q = hgNz(g.q), M = {};
   (g.det || []).forEach(r => { if (!nombres.has(r.nom) || (g.canal && r.canal !== g.canal) || (q && !hgNz(r.nom + ' ' + r.canal).includes(q))) return; M[r.canal] = (M[r.canal] || 0) + r.tot; });
   const GC = {}; (g.det || []).forEach(r => GC[r.canal] = r.g); const uno = nombres.size === 1 ? [...nombres][0] : '';
   const A = Object.entries(M).filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]), T = A.reduce((s, e) => s + e[1], 0);
@@ -531,7 +541,7 @@ function vgPie(V) {
   return '<div style="font-size:12px;font-weight:800;margin-bottom:4px">🥧 Participación por canal (año, sigue los filtros) · clic en una porción</div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><svg viewBox="0 0 180 180" style="width:170px;height:170px;flex:none">' + sv + '</svg><div>' + leg + '</div></div>';
 }
 function vgMix(V) {
-  const g = VG, nombres = new Set(V.map(r => r.nom)), q = hgNz(g.q), P = {};
+  const g = VG, nombres = new Set(g.sel.size ? [...g.sel] : V.map(r => r.nom)), q = hgNz(g.q), P = {};
   (g.det || []).forEach(r => { if (!nombres.has(r.nom) || (q && !hgNz(r.nom + ' ' + r.canal).includes(q))) return; (P[r.nom] = P[r.nom] || []).push(r); });
   const PAL = { 'Especializado': '#2563eb', 'Mixto': '#16a34a', 'Proyectos': '#ea580c', 'Online': '#9333ea', 'Home Center': '#0891b2', 'Distribuidor': '#ca8a04', 'Otros canales': '#94a3b8' };
   const L = Object.entries(P).map(([n, a]) => ({ n, a: a.filter(r => r.tot > 0).sort((x, y) => y.tot - x.tot), t: a.reduce((s, r) => s + Math.max(0, r.tot), 0) })).filter(x => x.a.length > 1 && x.t > 0).sort((a, b) => b.t - a.t);
@@ -626,17 +636,26 @@ function pintarVme() {
     else { let k = 'OTR', b = 0; ORD.forEach(c => { if ((x.c[c] || 0) > b) { b = x.c[c]; k = c; } }); rows.push(mkRow(x.nombre, k, x.m)); }   // canal principal
   });
   const tn = {}; det.forEach(r => tn[r.nom] = (tn[r.nom] || 0) + Math.max(0, r.tot)); det.forEach(r => r.pct = tn[r.nom] > 0 ? Math.round(Math.max(0, r.tot) / tn[r.nom] * 1000) / 10 : 0); rows.forEach(r => { if (r.pct == null) r.pct = 100; });
+  if (VG.union && VG.sel.size >= 2) {   // varios vendedores = una sola zona: se suman sus ventas
+    const sl = det.filter(r => VG.sel.has(r.nom)), lab = 'Zona: ' + [...VG.sel].join(' + '), by = {};
+    sl.forEach(r => { (by[r.g] = by[r.g] || []).push(r); });
+    const mk2 = (k, arr) => { const mp = {}; meses.forEach((mm, i) => mp[mm] = arr.reduce((a, r) => a + r.vals[i], 0)); const r = mkRow(lab, k, mp); r.zona = 1; return r; };
+    rows.length = 0;
+    if (VG.desg) { ORD.filter(k => by[k]).forEach(k => rows.push(mk2(k, by[k]))); const T = rows.reduce((a, r) => a + Math.max(0, r.tot), 0) || 1; rows.forEach(r => r.pct = Math.round(Math.max(0, r.tot) / T * 1000) / 10); }
+    else if (sl.length) { const k = Object.keys(by).sort((a, b) => by[b].reduce((x, r) => x + r.tot, 0) - by[a].reduce((x, r) => x + r.tot, 0))[0]; const r = mk2(k, sl); r.pct = 100; rows.push(r); }
+  }
   rows.sort((a, b) => a.ord - b.ord || b.tot - a.tot);
   const cols = [{ k: 'nom', t: 'Ejecutivo', v: r => r.nom }, { k: 'canal', t: 'Canal', v: r => r.canal }];
   meses.forEach((mm, i) => cols.push({ k: 'm' + i, mi: i, t: MESN[+mm.slice(5) - 1].slice(0, 3) + (i === meses.length - 1 ? ' (en curso)' : ''), v: r => r.vals[i], num: 1 }));
-  cols.push({ k: 'p3', t: 'Prom. 3 meses', v: r => r.p3, num: 1, avg: 1 }, { k: 'p6', t: 'Prom. 6 meses', v: r => r.p6, num: 1, avg: 1 }, { k: 'pa', t: 'Prom. año', v: r => r.pa, num: 1, avg: 1 }, { k: 'tot', t: 'Total año', v: r => r.tot, num: 1 }, { k: 'pct', t: '% mix del asesor', v: r => r.pct, num: 1, pc: 1 });
-  VG.NC = NC; VG.rows = rows; VG.det = det; VG.cols = cols; VG.meses = meses;
+  cols.push({ k: 'tot', t: 'Total año', v: r => r.tot, num: 1 }, { k: 'pct', t: '% mix del asesor', v: r => r.pct, num: 1, pc: 1 }, { k: 'p3', t: 'Prom. 3 meses', v: r => r.p3, num: 1, avg: 1 }, { k: 'p6', t: 'Prom. 6 meses', v: r => r.p6, num: 1, avg: 1 }, { k: 'pa', t: 'Prom. año', v: r => r.pa, num: 1, avg: 1 });
+  VG.names = [...new Set(det.map(r => r.nom))].sort((a, b) => a.localeCompare(b, 'es')); VG.NC = NC; VG.rows = rows; VG.det = det; VG.cols = cols; VG.meses = meses;
   const canales = [...new Set(rows.map(r => r.canal))], ejs = [...new Set(rows.map(r => r.nom))].sort((a, b) => a.localeCompare(b, 'es'));
   const opt = (arr, cur, todos) => '<option value="">' + todos + '</option>' + arr.map(o => '<option' + (cur === o ? ' selected' : '') + '>' + esc(o) + '</option>').join('');
-  el.innerHTML = '<style>#vme table{font-size:11.5px}#vme td,#vme th{white-space:nowrap;padding:5px 8px}#vme thead th{position:sticky;top:0;z-index:3;background:#0f172a;color:#fff}#vme tfoot td{position:sticky;bottom:0;z-index:3;background:#0f172a;color:#fff}#vme td.vgs,#vme th.vgs{position:sticky;left:0;z-index:2;background:inherit;box-shadow:2px 0 0 #cbd5e1}#vme thead th.vgs{z-index:4;background:#0f172a}#vme tfoot td.vgs{z-index:4}#vme #vg_box{max-height:74vh;overflow:auto}#vme .bar input[type=checkbox]{flex:none;width:auto;padding:0}</style>'
+  el.innerHTML = '<style>#vme table{font-size:11.5px}#vme td,#vme th{white-space:nowrap;padding:5px 8px}#vme thead th{position:sticky;top:0;z-index:3;background:#0f172a;color:#fff}#vme tfoot td{position:sticky;bottom:0;z-index:3;background:#0f172a;color:#fff}#vme td.vgs,#vme th.vgs{position:sticky;left:0;z-index:2;background:inherit;min-width:230px;max-width:230px;overflow:hidden;text-overflow:ellipsis}#vme td.vgs2,#vme th.vgs2{position:sticky;left:230px;z-index:2;background:inherit;min-width:125px;max-width:125px;box-shadow:2px 0 0 #cbd5e1}#vme thead th.vgs,#vme thead th.vgs2{z-index:4;background:#0f172a}#vme tfoot td.vgs,#vme tfoot td.vgs2{z-index:4}#vme #vg_box{max-height:74vh;overflow:auto}#vme .bar input[type=checkbox]{flex:none;width:auto;padding:0}</style>'
     + '<div class="card"><h2>📈 Ventas por mes — ejecutivo y canal (' + VME.y + ')</h2>'
     + '<div class="bar" style="flex-wrap:wrap"><input id="vgQ" placeholder="🔎 Buscar ejecutivo o canal…" value="' + esc(VG.q) + '" oninput="VG.q=this.value;vgPaint()" style="min-width:220px">'
-    + '<select onchange="VG.ejec=this.value;VG.q=this.value;document.getElementById(\'vgQ\').value=this.value;vgPaint()">' + opt(ejs, VG.ejec, 'Todos los ejecutivos') + '</select>'
+    + '<button class="btn" onclick="vgSelAbrir(event)" title="Elige uno o varios vendedores">👥 Vendedores' + (VG.sel.size ? ' (' + VG.sel.size + ')' : '') + ' ▾</button>'
+    + '<label style="font-size:12px;display:flex;gap:4px;align-items:center" title="Suma las ventas de los vendedores marcados en una sola fila"><input type="checkbox" ' + (VG.union ? 'checked' : '') + ' onchange="VG.union=this.checked;pintarVme()"> Unir en una zona</label>'
     + '<select onchange="VG.canal=this.value;vgPaint()">' + opt(canales, VG.canal, 'Todos los canales') + '</select>'
     + '<label style="font-size:12px;display:flex;gap:4px;align-items:center" title="Si un asesor vende en varios canales, sale una fila por cada canal"><input type="checkbox" ' + (VG.desg ? 'checked' : '') + ' onchange="VG.desg=this.checked;pintarVme()"> Desglosar por canal</label>'
     + '<label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ' + (VG.group ? 'checked' : '') + ' onchange="VG.group=this.checked;vgPaint()"> Subtotales por canal</label>'
