@@ -436,6 +436,7 @@ function vgView() {
 }
 const vgOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !== '' && f.max != null));
 function vgSumas(R, cols) { const s = {}; cols.forEach(c => { if (c.num && !c.pc) s[c.k] = R.reduce((a, r) => a + (Number(vgV(c, r)) || 0), 0); }); return s; }
+const meses_ = i => VG.meses[i];
 function vgPaint() {
   const g = VG, box = document.getElementById('vg_box'); if (!box) return;
   const V = vgView(), cols = g.cols.filter(c => !g.hide.has(c.k)), last = g.meses.length - 1;
@@ -447,7 +448,8 @@ function vgPaint() {
     if (c.k === 'canal') st += ';color:#64748b';
     if (c.mi != null) { if (c.mi === last) st += ';font-style:italic'; if (g.heat && r.mx > 0 && v > 0) st += ';background:rgba(37,99,235,' + (0.07 + 0.35 * v / r.mx).toFixed(2) + ')'; }
     if (c.avg) st += ';font-weight:700;' + (g.heat ? '' : 'background:#fffbeb');
-    return '<td' + cls + ' style="' + st + '">' + (c.pc ? (v ? String(v).replace('.', ',') + '%' : '—') : c.num ? (v ? $(v) : '—') : esc(String(v))) + '</td>';
+    let ck = ''; if (!r.sub && (c.k === 'nom' || c.mi != null)) { ck = ' onclick="vgDr(\'' + vgQ(r.nom) + '\',\'' + (g.desg ? r.g : '') + '\',\'' + (c.mi != null ? meses_(c.mi) : '') + '\')" title="Clic para ver el detalle"'; st += ';cursor:pointer'; }
+    return '<td' + cls + ck + ' style="' + st + '">' + (c.pc ? (v ? String(v).replace('.', ',') + '%' : '—') : c.num ? (v ? $(v) : '—') : esc(String(v))) + '</td>';
   };
   const filaTot = (txt, S, estilo, cls) => '<tr class="' + (cls || '') + '" style="' + estilo + '">' + cols.map((c, i) => '<td' + (c.k === 'nom' ? ' class="vgs"' : '') + ' style="text-align:' + al(c) + ';font-weight:800">' + (c.k === 'nom' ? esc(txt) : c.pc ? '' : c.num ? (S[c.k] ? $(S[c.k]) : '—') : '') + '</td>').join('') + '</tr>';
   let body = '', n = 0;
@@ -462,19 +464,71 @@ function vgPaint() {
   try { vgChart(V); } catch (e) { console.warn(e); }
   const nn = document.getElementById('vgN'); if (nn) nn.textContent = V.length + ' de ' + g.rows.length + (g.desg ? ' filas (ejecutivo × canal)' : ' ejecutivos');
 }
+const vgQ = s => encodeURIComponent(s).replace(/'/g, '%27');
+function vgDr(nom, g, mes) { VG.dr = { nom: nom ? decodeURIComponent(nom) : '', g: g || '', mes: mes || '' }; vgDrPaint(); const el = document.getElementById('vg_drill'); if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+function vgDrCerrar() { VG.dr = null; vgDrPaint(); }
+function vgCli(i) { const d = VG.dr, c = (VG.drCli || [])[i]; if (!d || !c) return; abrirDr({ a: d.mes + '-01', b: d.mes + '-31', ase: d.nom || undefined, g: d.g || undefined, cli: c }); }
+function vgFact() { const d = VG.dr; if (d && d.mes) abrirDr({ a: d.mes + '-01', b: d.mes + '-31', ase: d.nom || undefined, g: d.g || undefined }); }
+async function vgDrPaint() {
+  const box = document.getElementById('vg_drill'); if (!box) return; const d = VG.dr;
+  if (!d) { box.innerHTML = ''; return; }
+  const meses = VG.meses, NC = VG.NC || {}, tok = VG.drTok = (VG.drTok || 0) + 1;
+  const D = (VG.det || []).filter(r => (!d.g || r.g === d.g) && (!d.nom || r.nom === d.nom));
+  const mlbl = mm => MESN[+mm.slice(5) - 1] + ' ' + mm.slice(0, 4);
+  const cr = (txt, js) => '<a href="#" style="color:#1d4ed8;font-weight:700;text-decoration:none" onclick="' + js + ';return false">' + txt + '</a>';
+  const sep = ' <span style="color:#94a3b8">›</span> ';
+  let path = [cr('Resumen', "vgDr('','','')")];
+  if (d.g) path.push(d.nom || d.mes ? cr(esc(NC[d.g] || d.g), "vgDr('','" + d.g + "','')") : '<b>' + esc(NC[d.g] || d.g) + '</b>');
+  if (d.nom) path.push(d.mes ? cr(esc(d.nom), "vgDr('" + vgQ(d.nom) + "','" + d.g + "','')") : '<b>' + esc(d.nom) + '</b>');
+  if (d.mes) path.push('<b>' + mlbl(d.mes) + '</b>');
+  const head = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px"><div style="font-size:12.5px">🔎 Detalle · ' + path.join(sep) + '</div><button class="btn" onclick="vgDrCerrar()">✕ Cerrar</button></div>';
+  const wrap = h => { box.innerHTML = '<div style="margin:6px 14px 10px;padding:12px 14px;border:1px solid #bfdbfe;background:#f8fbff;border-radius:12px">' + head + h + '</div>'; };
+  if (!d.mes) {
+    const sm = meses.map((_, i) => D.reduce((s, r) => s + (r.vals[i] || 0), 0)), tot = sm.reduce((a, b) => a + b, 0), mx = Math.max(1, ...sm);
+    const bars = '<div style="display:flex;gap:6px;align-items:flex-end;height:120px;margin:6px 0 4px">' + meses.map((mm, i) => '<div onclick="vgDr(\'' + vgQ(d.nom) + '\',\'' + d.g + '\',\'' + mm + '\')" title="' + mlbl(mm) + ': ' + $(sm[i]) + ' · clic para ver los clientes" style="flex:1;cursor:pointer;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%"><div style="font-size:9.5px;color:#475569">' + (sm[i] ? abrM(sm[i]) : '') + '</div><div style="width:100%;background:' + (i === meses.length - 1 ? '#93c5fd' : '#2563eb') + ';border-radius:4px 4px 0 0;height:' + (sm[i] / mx * 90) + 'px;min-height:' + (sm[i] ? 2 : 0) + 'px"></div><div style="font-size:10.5px;color:#64748b">' + MESN[+mm.slice(5) - 1].slice(0, 3) + '</div></div>').join('') + '</div>';
+    let lista = '';
+    if (!d.nom) {
+      const m = {}; D.forEach(r => { m[r.nom] = (m[r.nom] || 0) + Math.max(0, r.tot); });
+      const A = Object.entries(m).sort((a, b) => b[1] - a[1]), T = A.reduce((s, e) => s + e[1], 0) || 1;
+      lista = '<table><thead><tr><th style="text-align:left">Vendedor</th><th style="text-align:right">Venta año</th><th style="text-align:right">% del ' + (d.g ? 'canal' : 'total') + '</th><th></th></tr></thead><tbody>' + A.map(([n, v]) => '<tr style="cursor:pointer" onclick="vgDr(\'' + vgQ(n) + '\',\'' + d.g + '\',\'\')"><td style="font-weight:700">' + esc(n) + '</td><td style="text-align:right">' + $(v) + '</td><td style="text-align:right">' + (v / T * 100).toFixed(1).replace('.', ',') + '%</td><td><div style="height:8px;background:#2563eb;border-radius:4px;width:' + (v / T * 100) + '%;min-width:2px"></div></td></tr>').join('') + '</tbody></table>';
+    } else if (!d.g) {
+      const T = D.reduce((s, r) => s + Math.max(0, r.tot), 0) || 1;
+      lista = '<table><thead><tr><th style="text-align:left">Canal donde vende</th><th style="text-align:right">Venta año</th><th style="text-align:right">% mix</th><th></th></tr></thead><tbody>' + D.slice().sort((a, b) => b.tot - a.tot).map(r => '<tr style="cursor:pointer" onclick="vgDr(\'' + vgQ(d.nom) + '\',\'' + r.g + '\',\'\')"><td style="font-weight:700">' + esc(r.canal) + '</td><td style="text-align:right">' + $(r.tot) + '</td><td style="text-align:right">' + (Math.max(0, r.tot) / T * 100).toFixed(1).replace('.', ',') + '%</td><td><div style="height:8px;background:#16a34a;border-radius:4px;width:' + (Math.max(0, r.tot) / T * 100) + '%;min-width:2px"></div></td></tr>').join('') + '</tbody></table>';
+    }
+    wrap('<div style="font-size:12px;color:#475569">Venta del año: <b>' + $(tot) + '</b> · Clic en una barra para ver los clientes de ese mes' + (lista ? ' · clic en una fila para profundizar' : '') + '</div>' + bars + lista);
+    return;
+  }
+  wrap('<div class="err" style="margin:10px">Cargando facturas de ' + mlbl(d.mes) + '…</div>');
+  try { if (!DET.cargado || (DET.mes !== d.mes && DET.prev !== d.mes)) await cargarDet(d.mes); } catch (e) { /* */ }
+  if (tok !== VG.drTok) return;
+  const F = DET.cargado ? DET.rows.filter(x => x[0].slice(0, 7) === d.mes && okF(x, { ase: d.nom || undefined, g: d.g || undefined })) : [];
+  if (!F.length) { wrap('<div class="err" style="margin:10px">No hay facturas de esta selección en ' + mlbl(d.mes) + ' (o el mes no está disponible en el detalle).</div>'); return; }
+  const C = {}; F.forEach(x => { const c = C[x[2]] || (C[x[2]] = { cli: x[2], v: 0, docs: new Set(), ase: new Set(), can: new Set() }); c.v += x[5]; c.docs.add(x[1]); c.ase.add(x[3]); c.can.add(x[4]); });
+  const L = Object.values(C).sort((a, b) => b.v - a.v), T = L.reduce((s, c) => s + c.v, 0) || 1, nd = new Set(F.map(x => x[1])).size;
+  VG.drCli = L.map(c => c.cli);
+  const kp = (t, v) => '<div style="background:#fff;border:1px solid #dbeafe;border-radius:10px;padding:6px 12px"><div style="font-size:16px;font-weight:800">' + v + '</div><div style="font-size:10.5px;color:#64748b">' + t + '</div></div>';
+  let acum = 0;
+  wrap('<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">' + kp('Venta del mes (sin IVA)', $(T)) + kp('Clientes', L.length) + kp('Facturas', nd) + kp('Ticket promedio', $(T / nd)) + kp('Mayor cliente', (L[0].v / T * 100).toFixed(1).replace('.', ',') + '%') + '<button class="btn" onclick="vgFact()" style="align-self:center">🧾 Ver todas las facturas</button></div>'
+    + '<div class="tw" style="max-height:420px;overflow:auto"><table><thead><tr><th style="text-align:left">Cliente</th>' + (d.nom ? '' : '<th style="text-align:left">Vendedor</th>') + (d.g ? '' : '<th style="text-align:left">Canal</th>') + '<th style="text-align:right">Facturas</th><th style="text-align:right">Venta</th><th style="text-align:right">%</th><th style="text-align:right">% acum.</th></tr></thead><tbody>'
+    + L.slice(0, 300).map((c, i) => { acum += c.v; return '<tr style="cursor:pointer" title="Clic para ver las facturas e ítems de este cliente" onclick="vgCli(' + i + ')"><td style="font-weight:600;text-align:left">' + esc(c.cli) + '</td>' + (d.nom ? '' : '<td style="text-align:left">' + esc([...c.ase].join(', ')) + '</td>') + (d.g ? '' : '<td style="text-align:left">' + esc([...c.can].join(', ')) + '</td>') + '<td style="text-align:right">' + c.docs.size + '</td><td style="text-align:right;font-weight:700">' + $(c.v) + '</td><td style="text-align:right">' + (c.v / T * 100).toFixed(1).replace('.', ',') + '%</td><td style="text-align:right;color:#64748b">' + (acum / T * 100).toFixed(0) + '%</td></tr>'; }).join('')
+    + '</tbody></table></div>');
+}
+const abrM = v => v >= 1e6 ? (v / 1e6).toFixed(v >= 1e7 ? 0 : 1).replace('.', ',') + 'M' : Math.round(v / 1e3) + 'k';
 function vgPie(V) {
   const g = VG, nombres = new Set(V.map(r => r.nom)), q = hgNz(g.q), M = {};
   (g.det || []).forEach(r => { if (!nombres.has(r.nom) || (g.canal && r.canal !== g.canal) || (q && !hgNz(r.nom + ' ' + r.canal).includes(q))) return; M[r.canal] = (M[r.canal] || 0) + r.tot; });
+  const GC = {}; (g.det || []).forEach(r => GC[r.canal] = r.g); const uno = nombres.size === 1 ? [...nombres][0] : '';
   const A = Object.entries(M).filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]), T = A.reduce((s, e) => s + e[1], 0);
   if (!T) return '';
   const PAL = ['#2563eb', '#16a34a', '#ea580c', '#9333ea', '#0891b2', '#dc2626', '#ca8a04', '#db2777'], R = 80, C = 90;
   let ang = -Math.PI / 2, sv = '';
   A.forEach(([k, v], i) => { const f = v / T, a2 = ang + f * 2 * Math.PI, col = PAL[i % PAL.length], tt = esc(k) + ': ' + (f * 100).toFixed(1).replace('.', ',') + '% · ' + $(v);
-    if (f > 0.9999) sv += '<circle cx="' + C + '" cy="' + C + '" r="' + R + '" fill="' + col + '"><title>' + tt + '</title></circle>';
-    else sv += '<path d="M' + C + ',' + C + ' L' + (C + R * Math.cos(ang)) + ',' + (C + R * Math.sin(ang)) + ' A' + R + ',' + R + ' 0 ' + (f > 0.5 ? 1 : 0) + ' 1 ' + (C + R * Math.cos(a2)) + ',' + (C + R * Math.sin(a2)) + ' Z" fill="' + col + '" stroke="#fff" stroke-width="1.5"><title>' + tt + '</title></path>';
+    const clk = ' style="cursor:pointer" onclick="vgDr(\'' + vgQ(uno) + '\',\'' + GC[k] + '\',\'\')"';
+    if (f > 0.9999) sv += '<circle' + clk + ' cx="' + C + '" cy="' + C + '" r="' + R + '" fill="' + col + '"><title>' + tt + '</title></circle>';
+    else sv += '<path' + clk + ' d="M' + C + ',' + C + ' L' + (C + R * Math.cos(ang)) + ',' + (C + R * Math.sin(ang)) + ' A' + R + ',' + R + ' 0 ' + (f > 0.5 ? 1 : 0) + ' 1 ' + (C + R * Math.cos(a2)) + ',' + (C + R * Math.sin(a2)) + ' Z" fill="' + col + '" stroke="#fff" stroke-width="1.5"><title>' + tt + '</title></path>';
     ang = a2; });
-  const leg = A.map(([k, v], i) => '<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;margin:2px 0"><i style="width:11px;height:11px;border-radius:2px;background:' + PAL[i % PAL.length] + ';display:inline-block"></i><b>' + (v / T * 100).toFixed(1).replace('.', ',') + '%</b> ' + esc(k) + ' <span style="color:#64748b">' + $(v) + '</span></div>').join('');
-  return '<div style="font-size:12px;font-weight:800;margin-bottom:4px">🥧 Participación por canal (año, sigue los filtros)</div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><svg viewBox="0 0 180 180" style="width:170px;height:170px;flex:none">' + sv + '</svg><div>' + leg + '</div></div>';
+  const leg = A.map(([k, v], i) => '<div onclick="vgDr(\'' + vgQ(uno) + '\',\'' + GC[k] + '\',\'\')" title="Clic para ver los vendedores de este canal" style="cursor:pointer;display:flex;align-items:center;gap:6px;font-size:11.5px;margin:2px 0"><i style="width:11px;height:11px;border-radius:2px;background:' + PAL[i % PAL.length] + ';display:inline-block"></i><b>' + (v / T * 100).toFixed(1).replace('.', ',') + '%</b> ' + esc(k) + ' <span style="color:#64748b">' + $(v) + '</span></div>').join('');
+  return '<div style="font-size:12px;font-weight:800;margin-bottom:4px">🥧 Participación por canal (año, sigue los filtros) · clic en una porción</div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><svg viewBox="0 0 180 180" style="width:170px;height:170px;flex:none">' + sv + '</svg><div>' + leg + '</div></div>';
 }
 function vgMix(V) {
   const g = VG, nombres = new Set(V.map(r => r.nom)), q = hgNz(g.q), P = {};
@@ -482,8 +536,8 @@ function vgMix(V) {
   const PAL = { 'Especializado': '#2563eb', 'Mixto': '#16a34a', 'Proyectos': '#ea580c', 'Online': '#9333ea', 'Home Center': '#0891b2', 'Distribuidor': '#ca8a04', 'Otros canales': '#94a3b8' };
   const L = Object.entries(P).map(([n, a]) => ({ n, a: a.filter(r => r.tot > 0).sort((x, y) => y.tot - x.tot), t: a.reduce((s, r) => s + Math.max(0, r.tot), 0) })).filter(x => x.a.length > 1 && x.t > 0).sort((a, b) => b.t - a.t);
   if (!L.length) return '';
-  const fila = x => '<div style="margin:6px 0"><div style="font-size:12px;font-weight:700">' + esc(x.n) + ' <span style="color:#64748b;font-weight:600">· ' + $(x.t) + '</span></div><div style="display:flex;height:16px;border-radius:4px;overflow:hidden;margin:3px 0">'
-    + x.a.map(r => '<div title="' + esc(r.canal) + ': ' + $(r.tot) + '" style="width:' + (r.tot / x.t * 100) + '%;background:' + (PAL[r.canal] || '#64748b') + '"></div>').join('') + '</div><div style="font-size:11px;color:#475569">'
+  const fila = x => '<div style="margin:6px 0"><div style="font-size:12px;font-weight:700;cursor:pointer" onclick="vgDr(\'' + vgQ(x.n) + '\',\'\',\'\')">' + esc(x.n) + ' <span style="color:#64748b;font-weight:600">· ' + $(x.t) + '</span></div><div style="display:flex;height:16px;border-radius:4px;overflow:hidden;margin:3px 0">'
+    + x.a.map(r => '<div onclick="vgDr(\'' + vgQ(x.n) + '\',\'' + r.g + '\',\'\')" title="' + esc(r.canal) + ': ' + $(r.tot) + ' · clic para ver el detalle" style="cursor:pointer;width:' + (r.tot / x.t * 100) + '%;background:' + (PAL[r.canal] || '#64748b') + '"></div>').join('') + '</div><div style="font-size:11px;color:#475569">'
     + x.a.map(r => '<span style="margin-right:12px"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:' + (PAL[r.canal] || '#64748b') + '"></i> ' + esc(r.canal) + ' <b>' + (r.tot / x.t * 100).toFixed(1).replace('.', ',') + '%</b></span>').join('') + '</div></div>';
   return '<div style="padding:4px 14px 10px"><div style="font-size:12px;font-weight:800">🔀 Mix de venta de los asesores que venden en varios canales (' + L.length + ')</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:0 24px">' + L.map(fila).join('') + '</div></div>';
 }
@@ -494,8 +548,8 @@ function vgChart(V) {
   const PIE = vgPie(V);
   const porEj = V.length <= 8;
   let S = [];
-  if (porEj) S = V.map(r => ({ t: VG.desg ? r.nom + ' · ' + r.canal : r.nom, v: r.vals.slice() }));
-  else { const m = {}; V.forEach(r => { const x = m[r.canal] || (m[r.canal] = { t: r.canal, v: meses.map(() => 0) }); r.vals.forEach((v, i) => x.v[i] += v); }); S = Object.values(m); S.push({ t: 'Total', v: meses.map((_, i) => V.reduce((s, r) => s + r.vals[i], 0)), tot: 1 }); }
+  if (porEj) S = V.map(r => ({ t: VG.desg ? r.nom + ' · ' + r.canal : r.nom, nom: r.nom, g: VG.desg ? r.g : '', v: r.vals.slice() }));
+  else { const m = {}; V.forEach(r => { const x = m[r.canal] || (m[r.canal] = { t: r.canal, nom: '', g: r.g, v: meses.map(() => 0) }); r.vals.forEach((v, i) => x.v[i] += v); }); S = Object.values(m); S.push({ t: 'Total', nom: '', g: '', v: meses.map((_, i) => V.reduce((s, r) => s + r.vals[i], 0)), tot: 1 }); }
   const PAL = ['#2563eb', '#16a34a', '#ea580c', '#9333ea', '#0891b2', '#dc2626', '#ca8a04', '#db2777'];
   S.forEach((s, i) => s.c = s.tot ? '#0f172a' : PAL[i % PAL.length]);
   const W = 1100, H = 250, L = 70, R = 16, T = 14, B = 28, mx = Math.max(1, ...S.flatMap(s => s.v)) * 1.08;
@@ -507,11 +561,11 @@ function vgChart(V) {
   S.forEach(s => {
     const seg = (a, b, dash) => '<polyline fill="none" stroke="' + s.c + '" stroke-width="' + (s.tot ? 3 : 2) + '"' + (dash ? ' stroke-dasharray="5 4"' : '') + ' points="' + s.v.slice(a, b + 1).map((v, i) => X(a + i) + ',' + Y(v)).join(' ') + '"/>';
     g += seg(0, last - 1 >= 0 ? last - 1 : 0, false) + seg(last - 1, last, true);
-    s.v.forEach((v, i) => { g += '<circle cx="' + X(i) + '" cy="' + Y(v) + '" r="3.5" fill="' + s.c + '"><title>' + esc(s.t) + ' · ' + MESN[+meses[i].slice(5) - 1] + ': ' + $(v) + '</title></circle>'; });
+    s.v.forEach((v, i) => { g += '<circle style="cursor:pointer" onclick="vgDr(\'' + vgQ(s.nom) + '\',\'' + s.g + '\',\'' + meses[i] + '\')" cx="' + X(i) + '" cy="' + Y(v) + '" r="5" fill="' + s.c + '" stroke="#fff" stroke-width="1"><title>' + esc(s.t) + ' · ' + MESN[+meses[i].slice(5) - 1] + ': ' + $(v) + ' · clic para ver clientes y facturas</title></circle>'; });
   });
   if (S.length === 1 && V.length === 1) { const pr = V.length === 1 ? V[0].pa : 0; if (pr) g += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(pr) + '" y2="' + Y(pr) + '" stroke="#f59e0b" stroke-dasharray="2 4"/><text x="' + (W - R) + '" y="' + (Y(pr) - 4) + '" text-anchor="end" font-size="10" fill="#b45309">Prom. año</text>'; }
   const leg = S.map(s => '<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:11.5px;font-weight:600"><i style="width:14px;height:3px;background:' + s.c + ';display:inline-block"></i>' + esc(s.t) + '</span>').join('');
-  box.innerHTML = '<div style="display:flex;gap:16px;flex-wrap:wrap;padding:0 14px"><div style="flex:1 1 620px;min-width:0"><div style="padding:8px 0 0"><div style="font-size:12px;font-weight:800;margin-bottom:4px">📉 Tendencia mensual · ' + (porEj ? 'por ejecutivo' : 'por canal y total') + ' (sigue los filtros)</div><svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;max-height:280px">' + g + '</svg><div>' + leg + '</div><div style="font-size:10.5px;color:#64748b;margin-top:2px">* mes en curso (tramo punteado). Pasa el mouse por un punto para ver el valor.</div></div></div><div style="flex:0 1 380px;padding:8px 0">' + PIE + '</div></div>' + vgMix(V);
+  box.innerHTML = '<div style="display:flex;gap:16px;flex-wrap:wrap;padding:0 14px"><div style="flex:1 1 620px;min-width:0"><div style="padding:8px 0 0"><div style="font-size:12px;font-weight:800;margin-bottom:4px">📉 Tendencia mensual · ' + (porEj ? 'por ejecutivo' : 'por canal y total') + ' (sigue los filtros)</div><svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;max-height:280px">' + g + '</svg><div>' + leg + '</div><div style="font-size:10.5px;color:#64748b;margin-top:2px">* mes en curso (tramo punteado). Pasa el mouse por un punto para ver el valor y haz clic para ver los clientes y facturas de ese mes.</div></div></div><div style="flex:0 1 380px;padding:8px 0">' + PIE + '</div></div>' + vgMix(V);
 }
 function vgSort(k) { const g = VG; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; vgPaint(); }
 function vgLimpiar() { VG.f = {}; VG.sort = null; VG.q = ''; VG.canal = ''; pintarVme(); }
@@ -564,7 +618,7 @@ function pintarVme() {
   }); });
   const prom = (arr, n) => { const a = arr.slice(-n); return a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0; };
   const mkRow = (nom, k, mp) => { const vals = meses.map(mm => Math.round(mp[mm] || 0)), vc = vals.slice(0, cerr.length);
-    return { nom, canal: NC[k], ord: ORD.indexOf(k), vals, mx: Math.max(0, ...vals), p3: Math.round(prom(vc, 3)), p6: Math.round(prom(vc, 6)), pa: Math.round(prom(vc, 12)), tot: vals.reduce((s, v) => s + v, 0) }; };
+    return { nom, canal: NC[k], g: k, ord: ORD.indexOf(k), vals, mx: Math.max(0, ...vals), p3: Math.round(prom(vc, 3)), p6: Math.round(prom(vc, 6)), pa: Math.round(prom(vc, 12)), tot: vals.reduce((s, v) => s + v, 0) }; };
   const rows = [], det = [];
   Object.values(E).forEach(x => {
     ORD.forEach(k => { const mp = x.mc[k] || {}; if (meses.some(mm => Math.abs(mp[mm] || 0) >= 1)) det.push(mkRow(x.nombre, k, mp)); });
@@ -576,7 +630,7 @@ function pintarVme() {
   const cols = [{ k: 'nom', t: 'Ejecutivo', v: r => r.nom }, { k: 'canal', t: 'Canal', v: r => r.canal }];
   meses.forEach((mm, i) => cols.push({ k: 'm' + i, mi: i, t: MESN[+mm.slice(5) - 1].slice(0, 3) + (i === meses.length - 1 ? ' (en curso)' : ''), v: r => r.vals[i], num: 1 }));
   cols.push({ k: 'p3', t: 'Prom. 3 meses', v: r => r.p3, num: 1, avg: 1 }, { k: 'p6', t: 'Prom. 6 meses', v: r => r.p6, num: 1, avg: 1 }, { k: 'pa', t: 'Prom. año', v: r => r.pa, num: 1, avg: 1 }, { k: 'tot', t: 'Total año', v: r => r.tot, num: 1 }, { k: 'pct', t: '% mix del asesor', v: r => r.pct, num: 1, pc: 1 });
-  VG.rows = rows; VG.det = det; VG.cols = cols; VG.meses = meses;
+  VG.NC = NC; VG.rows = rows; VG.det = det; VG.cols = cols; VG.meses = meses;
   const canales = [...new Set(rows.map(r => r.canal))], ejs = [...new Set(rows.map(r => r.nom))].sort((a, b) => a.localeCompare(b, 'es'));
   const opt = (arr, cur, todos) => '<option value="">' + todos + '</option>' + arr.map(o => '<option' + (cur === o ? ' selected' : '') + '>' + esc(o) + '</option>').join('');
   el.innerHTML = '<style>#vme table{font-size:11.5px}#vme td,#vme th{white-space:nowrap;padding:5px 8px}#vme thead th{position:sticky;top:0;z-index:3;background:#0f172a;color:#fff}#vme tfoot td{position:sticky;bottom:0;z-index:3;background:#0f172a;color:#fff}#vme td.vgs,#vme th.vgs{position:sticky;left:0;z-index:2;background:inherit;box-shadow:2px 0 0 #cbd5e1}#vme thead th.vgs{z-index:4;background:#0f172a}#vme tfoot td.vgs{z-index:4}#vme #vg_box{max-height:74vh;overflow:auto}#vme .bar input[type=checkbox]{flex:none;width:auto;padding:0}</style>'
@@ -588,9 +642,9 @@ function pintarVme() {
     + '<label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ' + (VG.group ? 'checked' : '') + ' onchange="VG.group=this.checked;vgPaint()"> Subtotales por canal</label>'
     + '<label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ' + (VG.heat ? 'checked' : '') + ' onchange="VG.heat=this.checked;vgPaint()"> 🌡 Mapa de calor</label>'
     + '<button class="btn" onclick="vgCols(event)">▦ Columnas</button><button class="btn" onclick="vgLimpiar()">✖ Quitar filtros y orden</button><button class="btn" onclick="vgExcel()">📥 Excel de esta vista</button><button class="btn" onclick="cargarVme(true)">↻ Actualizar</button><span id="vgN" style="font-size:12px;color:#475569;font-weight:600"></span></div>'
-    + '<div id="vg_chart"></div><div id="vg_box"></div>'
+    + '<div id="vg_chart"></div><div id="vg_drill"></div><div id="vg_box"></div>'
     + '<div style="padding:8px 14px;font-size:11px;color:#64748b">Clic en el título ordena; ▾ filtra por columna (valores, mayor/menor). Los totales y subtotales siguen los filtros. Los promedios usan solo meses cerrados' + (cerr.length ? ' (' + MESN[+cerr[0].slice(5) - 1] + ' a ' + MESN[+cerr[cerr.length - 1].slice(5) - 1] + ')' : '') + ': Prom. 3 y 6 = últimos 3 y 6 meses cerrados, Prom. año = todos los cerrados; se divide entre los meses del período aunque no haya vendido en alguno.</div></div>';
-  vgPaint();
+  vgPaint(); vgDrPaint();
 }
 
 function verTab(t) {
