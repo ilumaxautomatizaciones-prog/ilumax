@@ -409,11 +409,16 @@ async function cargarVme(force) {
   VME.cargando = true; el.innerHTML = '<div class="err">Cargando las ventas de ' + y + '…</div>';
   try {
     const meses = []; for (let m = 1; m <= mAct; m++) meses.push(y + '-' + String(m).padStart(2, '0'));
-    const res = {};
-    for (let i = 0; i < meses.length; i += 3) {
-      await Promise.all(meses.slice(i, i + 3).map(async mm => {
+    const res = {}, who = (typeof ACC !== 'undefined' && ACC ? ACC.rol + '_' + ACC.nombre : ''), hoyD = hoy.getUTCDate();
+    // Los meses ya cerrados casi no cambian: se guardan 3 horas en este navegador (el mes anterior no, durante sus primeros 3 días del mes)
+    const kc = mm => 'rv_vme_' + mm + '_' + who, cerr = mm => mm < y + '-' + String(mAct).padStart(2, '0') && !(mm === y + '-' + String(mAct - 1).padStart(2, '0') && hoyD <= 3);
+    const falta = [];
+    meses.forEach(mm => { let c = null; if (cerr(mm)) { try { c = JSON.parse(localStorage.getItem(kc(mm)) || 'null'); } catch (e) { } } if (c && c.d && Date.now() - c.t < 3 * 3600e3) res[mm] = c.d; else falta.push(mm); });
+    for (let i = 0; i < falta.length; i += 6) {
+      await Promise.all(falta.slice(i, i + 6).map(async mm => {
         const r = await fetch(API + '?k=' + encodeURIComponent(token()) + '&mes=' + mm, { cache: 'no-store' }), d = await r.json();
         if (!r.ok || d.error) throw new Error(d.error || ('Error en ' + mm)); res[mm] = d;
+        if (cerr(mm)) { try { localStorage.setItem(kc(mm), JSON.stringify({ t: Date.now(), d })); } catch (e) { } }
       }));
     }
     VME.d = res; VME.meses = meses; VME.y = y; VME.m = mAct; VME.cargando = false; pintarVme();
