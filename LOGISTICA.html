@@ -225,8 +225,9 @@ function pintar() {
     + '<div class="bar pad"><button class="btn" onclick="guardarCortes()">Guardar cortes</button></div><div class="hint">Las facturas de la serie con número mayor al corte no entran hoy: quedan como «Fuera de corte» y pasan solas al plan de mañana. Deja el campo vacío para quitar el corte.</div></div>';
   const carga = '<div class="card"><h2>📥 Relación de despacho (Excel)</h2><div class="cb"><div class="bar" style="margin-top:0"><input type="file" id="dfile" accept=".xlsx,.xls,.csv" onchange="leerExcel(this)"><span class="fechab"><label style="font-size:11px;color:#64748b">Despachado el</label><input type="date" id="dfecha" value="' + D.fecha + '"></span></div><div id="dres"></div></div>'
     + '<div class="hint">Sube el archivo al final del día. Todas las facturas que traiga se marcan como despachadas en esa fecha; las que no aparezcan quedan pendientes y pasan al día siguiente.</div></div>';
-  const tabs = '<div class="tabs"><button class="tab' + (TAB === 'plan' ? ' on' : '') + '" onclick="TAB=\'plan\';pintar()">Plan del día</button><button class="tab' + (TAB === 'hist' ? ' on' : '') + '" onclick="TAB=\'hist\';pintar()">Histórico por día</button>' + (D.admin ? '<button class="tab" onclick="accesos()">🔐 Accesos</button>' : '') + '</div>';
+  const tabs = '<div class="tabs"><button class="tab' + (TAB === 'plan' ? ' on' : '') + '" onclick="TAB=\'plan\';pintar()">Plan del día</button><button class="tab' + (TAB === 'hist' ? ' on' : '') + '" onclick="TAB=\'hist\';pintar()">Histórico por día</button><button class="tab' + (TAB === 'dev' ? ' on' : '') + '" onclick="devTab()">↩️ Devoluciones</button>' + (D.admin ? '<button class="tab" onclick="accesos()">🔐 Accesos</button>' : '') + '</div>';
   const nav = '<div class="bar"><span class="fechab"><button class="btn g" onclick="irFecha(sumaDias(FECHA,-1))">◀</button><input type="date" value="' + D.fecha + '" onchange="irFecha(this.value)"><button class="btn g" onclick="irFecha(sumaDias(FECHA,1))">▶</button><button class="btn g" onclick="irFecha(D.hoy)">Hoy</button><button class="btn g" onclick="cargar(FECHA)">↻ Actualizar</button></span><button class="btn g sm" style="margin-left:auto" title="Subir el Excel de la transportadora o la relación de despacho" onclick="CARGA=!CARGA;pintar()">📥 Relación de despacho</button></div>';
+  if (TAB === 'dev') { $('app').innerHTML = tabs + devPintar(); if (DV.l) xgPaint('dev'); return; }
   let cuerpo;
   if (TAB === 'plan') cuerpo = '<div class="card"><h2>Facturas del plan · ' + fechaL(D.fecha) + '</h2>' + xgBar('plan', '<select class="sel" onchange="xgEst(\'plan\',this.value)">' + [['', 'Ver: todas'], ['plan', 'A despachar hoy (plan)'], ['arr', 'Arrastre de días anteriores'], ['pend', 'Solo pendientes (sin despachar)'], ['desp', 'Solo despachadas'], ['fuera', 'Solo fuera de corte']].map(o => '<option value="' + o[0] + '"' + ((XG.plan && XG.plan.estv || '') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select><button class="btn" onclick="excelCompleto()">📊 Excel completo (día + mes)</button><button class="btn g" onclick="itemsVista()">📦 Ítems de esta vista</button>') + '<div class="bar pad"><button class="btn" onclick="marcarVisibles()">✔ Marcar visibles como despachadas</button><span style="font-size:11.5px;color:#64748b">Solo las pendientes que se ven con tus filtros.</span></div><div class="tw" id="xg_plan"></div></div>';
   else cuerpo = '<div class="card"><h2>Nivel de despacho por día</h2>' + xgBar('hist') + '<div class="tw" id="xg_hist"></div></div>';
@@ -449,6 +450,139 @@ async function pinNuevo() { const j = await api({ accion: 'pin_guardar', nombre:
 let PINS = [];
 async function pinAct(i) { const p = PINS[i]; const j = await api({ accion: 'pin_guardar', id: p.id, nombre: p.nombre, pin: p.pin, activo: !p.activo }); if (!j.ok) alert(j.error || 'No se pudo cambiar'); accesos(); }
 async function pinDel(id) { if (!confirm('¿Borrar este código?')) return; const j = await api({ accion: 'pin_borrar', id }); if (!j.ok) alert(j.error || 'No se pudo borrar'); accesos(); }
+/* ===== Devoluciones ===== */
+const DV = { l: null, cur: null, imp: null };
+const DVE = { por_recibir: ['Por recibir', 'p-bl'], recibida: ['Recibida · falta verificar', 'p-or'], verificada: ['Verificada · falta nota crédito', 'p-rd'], nota_credito: ['Con nota crédito', 'p-ok'] };
+Object.assign(ESTF, { dpr: r => r.estado === 'por_recibir', drc: r => r.estado === 'recibida', dvf: r => r.estado === 'verificada', dnc: r => r.estado === 'nota_credito' });
+async function devCargar() { const j = await api({ accion: 'dev_list' }); if (!j.ok) { alert(j.error || 'No se pudieron cargar las devoluciones'); return; } DV.l = j.devs; pintar(); }
+function devTab() { TAB = 'dev'; DV.l ? pintar() : (pintar(), devCargar()); if (DV.l) devCargar(); }
+function devFiltro(v) { const g = XG.dev || xgInit('dev', []); xgEst('dev', g.estv === v ? '' : v, true); }
+const devSum = (d, k) => (d.items || []).reduce((s, i) => s + (Number(i[k]) || 0), 0);
+function devPintar() {
+  const L = DV.l;
+  if (!L) return '<div class="err">Cargando devoluciones…</div>';
+  const n = e => L.filter(d => d.estado === e).length, g = XG.dev || {};
+  const kp = (l, e, s, f) => '<div class="kpi click' + (g.estv === f ? ' act' : '') + '" onclick="devFiltro(\'' + f + '\')" title="Clic para filtrar"><div class="l">' + l + '</div><div class="v">' + fm(n(e)) + '</div><div class="s">' + s + '</div></div>';
+  const kpis = '<div class="kpis">' + kp('Por recibir', 'por_recibir', 'Documento de ADT, mercancía no ha llegado', 'dpr') + kp('Recibidas', 'recibida', 'Falta verificar (Valentina)', 'drc') + kp('Verificadas', 'verificada', 'Falta nota crédito (Tatiana)', 'dvf') + kp('Con nota crédito', 'nota_credito', 'Proceso terminado', 'dnc') + '</div>';
+  const pill = e => '<span class="pill ' + DVE[e][1] + '">' + DVE[e][0] + '</span>';
+  const rows = L.map(d => ({ ...d, ud: devSum(d, 'cant_doc'), ur: d.estado === 'por_recibir' ? '' : devSum(d, 'cant_recibida'), est: DVE[d.estado][0] }));
+  xgInit('dev', [
+    { k: 'doc_adt', t: 'Doc. ADT', v: r => r.doc_adt || '', h: r => '<a class="lnk" href="#" onclick="devAbrir(\'' + r.id + '\');return false">' + esc(r.doc_adt || '(sin documento)') + '</a>' },
+    { k: 'guia', t: 'Guía', v: r => r.guia || '' },
+    { k: 'cliente', t: 'Cliente', v: r => r.cliente || '', wrap: true },
+    { k: 'ejecutivo', t: 'Ejecutivo', v: r => r.ejecutivo || '' },
+    { k: 'motivo', t: 'Motivo', v: r => r.motivo || '', wrap: true },
+    { k: 'fecha_recibo', t: 'Fecha recibo', v: r => r.fecha_recibo || '', date: true, al: true },
+    { k: 'ud', t: 'Und. documento', v: r => r.ud, num: true, sum: true },
+    { k: 'ur', t: 'Und. recibidas', v: r => r.ur, num: true, sum: true },
+    { k: 'estado', t: 'Estado', v: r => r.est, h: r => pill(r.estado) },
+    { k: 'nc', t: 'Nota crédito', v: r => r.nc_numero || '' },
+    { k: 'x', t: '', v: r => '', h: r => '<button class="btn sm' + (r.estado === 'nota_credito' ? ' g' : '') + '" onclick="devAbrir(\'' + r.id + '\')">' + ({ por_recibir: '📦 Recibir', recibida: '✔ Verificar', verificada: '🧾 Nota crédito', nota_credito: 'Ver' })[r.estado] + '</button>' }
+  ], { rows, nombre: 'Devoluciones', attr: r => r.estado === 'nota_credito' ? ' class="desp"' : '' });
+  return kpis + '<div class="card"><h2>↩️ Devoluciones</h2>' + xgBar('dev', '<button class="btn" onclick="devAbrir()">+ Nueva devolución</button><button class="btn g" onclick="devImpAbrir()">📥 Importar Excel de ADT</button>') + '<div class="tw" id="xg_dev"></div></div>'
+    + '<div class="foot">Flujo: ADT (ejecutivo) → recibe y revisa la mercancía → Valentina verifica → Tatiana genera la nota crédito. Buena → bodega Disponible · Mala → Javería.</div>';
+}
+const dvOv = id => { let o = $(id); if (!o) { o = document.createElement('div'); o.id = id; o.className = 'ov'; document.body.appendChild(o); } return o; };
+function devItemRow(i, k, ro) {
+  const v = (f) => esc(i[f] == null ? '' : i[f]), d = ro ? ' disabled' : '';
+  return '<tr data-r="' + k + '"><td><input id="dvi_' + k + '_referencia" value="' + v('referencia') + '"' + d + ' style="width:90px"></td><td><input id="dvi_' + k + '_descripcion" value="' + v('descripcion') + '"' + d + ' style="min-width:150px"></td>'
+    + '<td><input id="dvi_' + k + '_cant_doc" inputmode="decimal" value="' + v('cant_doc') + '"' + d + ' style="width:62px"></td><td><input id="dvi_' + k + '_cant_recibida" inputmode="decimal" value="' + v('cant_recibida') + '"' + d + ' style="width:62px"></td>'
+    + '<td><select id="dvi_' + k + '_estado_item"' + d + ' onchange="dvBod(' + k + ')"><option value="">—</option><option value="buena"' + (i.estado_item === 'buena' ? ' selected' : '') + '>Buena</option><option value="mala"' + (i.estado_item === 'mala' ? ' selected' : '') + '>Mala</option></select></td>'
+    + '<td><input id="dvi_' + k + '_bodega" value="' + v('bodega') + '"' + d + ' style="width:90px"></td><td>' + (ro ? '' : '<button class="btn g sm" onclick="this.closest(\'tr\').remove()">✕</button>') + '</td></tr>';
+}
+function dvBod(k) { const e = $('dvi_' + k + '_estado_item').value; $('dvi_' + k + '_bodega').value = e === 'buena' ? 'Disponible' : e === 'mala' ? 'Javería' : ''; }
+let DVK = 0;
+function dvAgregar() { const tb = $('dvTb'); tb.insertAdjacentHTML('beforeend', devItemRow({}, ++DVK, false)); }
+function devAbrir(id) {
+  const d = id ? DV.l.find(x => x.id === id) : { items: [{}], fecha_recibo: D.hoy, estado: null };
+  DV.cur = d; const s = d.estado, ro = s === 'nota_credito' && !D.admin;
+  const f = (k, l, w, t) => '<div class="f' + (w ? ' w' : '') + '"><label>' + l + '</label><input id="dv_' + k + '"' + (t ? ' type="' + t + '"' : '') + ' value="' + esc(d[k] || '') + '"' + (ro ? ' disabled' : '') + '></div>';
+  DVK = 0;
+  const its = (d.items && d.items.length ? d.items : [{}]).map(i => devItemRow(i, ++DVK, ro)).join('');
+  const aud = [d.creado_por && 'Creada por ' + d.creado_por + (d.origen === 'adt' ? ' (importada de ADT)' : ''), d.recibida_por && 'Recibida: ' + d.recibida_por + ' · ' + (d.recibida_en || '').slice(0, 16).replace('T', ' '), d.verificada_por && 'Verificada: ' + d.verificada_por + ' · ' + (d.verificada_en || '').slice(0, 16).replace('T', ' '), d.nc_por && 'Nota crédito ' + d.nc_numero + ': ' + d.nc_por + ' · ' + (d.nc_en || '').slice(0, 16).replace('T', ' ')].filter(Boolean);
+  const o = dvOv('ovDev');
+  o.innerHTML = '<div class="mo" style="max-width:860px"><div class="mh">' + (d.id ? '↩️ Devolución ' + esc(d.doc_adt || '') + ' ' + '<span class="pill ' + DVE[s][1] + '">' + DVE[s][0] + '</span>' : '↩️ Nueva devolución') + '<button class="btn g" onclick="$(\'ovDev\').classList.remove(\'on\')">✕</button></div>'
+    + '<div class="mb">' + f('doc_adt', 'Documento ADT') + f('guia', 'Guía') + f('cliente', 'Cliente', 1) + f('nit', 'NIT') + f('ejecutivo', 'Ejecutivo') + f('factura_ref', 'Factura de venta (opcional)') + f('fecha_doc', 'Fecha documento', 0, 'date') + f('fecha_recibo', 'Fecha de recibo', 0, 'date') + f('motivo', 'Motivo de la devolución', 1) + f('obs', 'Observaciones', 1) + '</div>'
+    + '<div class="cb" style="padding-top:0"><div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:4px">Ítems</div><div class="tw"><table class="fit"><thead><tr><th>Referencia</th><th>Descripción</th><th>Cant. doc.</th><th>Cant. recibida</th><th>Estado</th><th>Bodega</th><th></th></tr></thead><tbody id="dvTb">' + its + '</tbody></table></div>'
+    + (ro ? '' : '<button class="btn g sm" style="margin-top:6px" onclick="dvAgregar()">+ Agregar ítem</button>')
+    + (s === 'recibida' ? '<div class="f w" style="margin-top:10px"><label style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Observación de la verificación (opcional)</label><input id="dvObsV" style="width:100%;font:inherit;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px" value="' + esc(d.obs_verif || '') + '"></div>' : '')
+    + (s === 'verificada' ? '<div class="f w" style="margin-top:10px"><label style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Nº de la nota crédito</label><input id="dvNc" style="width:100%;font:inherit;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px"></div>' : '')
+    + (d.obs_verif && s !== 'recibida' ? '<div class="hint" style="padding:8px 0 0">Verificación: ' + esc(d.obs_verif) + '</div>' : '')
+    + (aud.length ? '<div class="hint" style="padding:8px 0 0">' + aud.map(esc).join('<br>') + '</div>' : '') + '</div>'
+    + '<div class="mf">' + (d.id && D.admin ? '<button class="btn r" onclick="devBorrar()">🗑 Borrar</button>' : '') + '<button class="btn g" onclick="devImprimir()">🖨 Imprimir hoja</button>'
+    + (s === 'verificada' ? '<button class="btn g" onclick="devPaso(\'reabrir\')">↩ Devolver a revisión</button>' : '') + (s === 'nota_credito' && D.admin ? '<button class="btn g" onclick="devPaso(\'reabrir\')">↩ Reabrir (admin)</button>' : '')
+    + (ro ? '' : '<button class="btn g" onclick="devGuardar()">' + (d.id ? 'Guardar cambios' : 'Guardar como recibida') + '</button>')
+    + (s === 'por_recibir' ? '<button class="btn" onclick="devGuardar(\'recibir\')">📦 Marcar recibida</button>' : '') + (s === 'recibida' ? '<button class="btn" onclick="devGuardar(\'verificar\')">✔ Verificar</button>' : '') + (s === 'verificada' ? '<button class="btn" onclick="devGuardar(\'nc\')">🧾 Registrar nota crédito</button>' : '') + '</div></div>';
+  o.classList.add('on');
+}
+function devRecoger() {
+  const g = k => ($('dv_' + k) ? $('dv_' + k).value.trim() : ''), dev = {}; ['doc_adt', 'guia', 'cliente', 'nit', 'ejecutivo', 'factura_ref', 'fecha_doc', 'fecha_recibo', 'motivo', 'obs'].forEach(k => dev[k] = g(k));
+  if (DV.cur && DV.cur.id) dev.id = DV.cur.id; if (DV.cur && DV.cur.estado === 'por_recibir') dev.estado = 'por_recibir';
+  const items = [...document.querySelectorAll('#dvTb tr')].map(tr => { const k = tr.dataset.r, v = f => $('dvi_' + k + '_' + f).value.trim(); return { referencia: v('referencia'), descripcion: v('descripcion'), cant_doc: v('cant_doc'), cant_recibida: v('cant_recibida'), estado_item: v('estado_item'), bodega: v('bodega') }; }).filter(i => i.referencia || i.descripcion);
+  return { dev, items };
+}
+async function devGuardar(paso) {
+  const { dev, items } = devRecoger(); if (!dev.cliente && !dev.doc_adt && !dev.guia) { alert('Falta el cliente, el documento ADT o la guía'); return; }
+  if (paso === 'recibir') items.forEach(i => { if (i.cant_recibida === '') i.cant_recibida = i.cant_doc; if (!i.estado_item) { i.estado_item = 'buena'; i.bodega = i.bodega || 'Disponible'; } });
+  if (paso === 'verificar') { const f = items.filter(i => i.cant_recibida === '' || !i.estado_item); if (!items.length || f.length) { alert('Para verificar, cada ítem necesita cantidad recibida y estado (buena/mala).'); return; } }
+  if (paso === 'nc' && !($('dvNc') && $('dvNc').value.trim())) { alert('Escribe el número de la nota crédito'); return; }
+  let j = await api({ accion: 'dev_guardar', dev, items }); if (!j.ok) { alert(j.error || 'No se pudo guardar'); return; }
+  if (paso) { j = await api({ accion: 'dev_paso', id: j.id, paso, obs: $('dvObsV') ? $('dvObsV').value : '', nc: $('dvNc') ? $('dvNc').value : '', fecha_recibo: dev.fecha_recibo }); if (!j.ok) { alert(j.error || 'No se pudo avanzar'); devCargar(); return; } }
+  $('ovDev').classList.remove('on'); devCargar();
+}
+async function devPaso(paso) { const j = await api({ accion: 'dev_paso', id: DV.cur.id, paso }); if (!j.ok) { alert(j.error || 'No se pudo'); return; } $('ovDev').classList.remove('on'); devCargar(); }
+async function devBorrar() { if (!confirm('¿Borrar esta devolución?')) return; const j = await api({ accion: 'dev_borrar', id: DV.cur.id }); if (!j.ok) { alert(j.error || 'No se pudo borrar'); return; } $('ovDev').classList.remove('on'); devCargar(); }
+function devImprimir() {
+  const { dev, items } = devRecoger(), c = DV.cur || {};
+  const w = window.open('', '_blank'); if (!w) { alert('El navegador bloqueó la ventana de impresión'); return; }
+  const r = (l, v) => '<tr><th>' + l + '</th><td>' + esc(v || '') + '</td></tr>';
+  w.document.write('<!DOCTYPE html><meta charset="utf-8"><title>Devolución</title><style>body{font:13px Arial;margin:24px}h1{font-size:18px;margin:0 0 10px}table{border-collapse:collapse;width:100%;margin-bottom:14px}th,td{border:1px solid #444;padding:5px 7px;text-align:left}th{background:#eee;width:150px}.i th{width:auto}.f{display:flex;gap:30px;margin-top:50px}.f div{flex:1;border-top:1px solid #000;padding-top:4px;text-align:center}</style><h1>ILUMAX · Devolución de mercancía</h1><table>'
+    + r('Documento ADT', dev.doc_adt) + r('Guía', dev.guia) + r('Cliente', dev.cliente) + r('NIT', dev.nit) + r('Ejecutivo', dev.ejecutivo) + r('Factura de venta', dev.factura_ref) + r('Fecha documento', dev.fecha_doc) + r('Fecha de recibo', dev.fecha_recibo) + r('Motivo', dev.motivo) + r('Observaciones', dev.obs) + '</table>'
+    + '<table class="i"><tr><th>Referencia</th><th>Descripción</th><th>Cant. doc.</th><th>Cant. recibida</th><th>Estado</th><th>Bodega</th></tr>' + items.map(i => '<tr><td>' + esc(i.referencia) + '</td><td>' + esc(i.descripcion) + '</td><td>' + esc(i.cant_doc) + '</td><td>' + esc(i.cant_recibida) + '</td><td>' + esc(i.estado_item === 'buena' ? 'Buena' : i.estado_item === 'mala' ? 'Mala' : '') + '</td><td>' + esc(i.bodega) + '</td></tr>').join('') + '</table>'
+    + '<div class="f"><div>Recibió (bodega)</div><div>Verificó (Valentina)</div><div>Nota crédito (Tatiana)' + (c.nc_numero ? ' · ' + esc(c.nc_numero) : '') + '</div></div><script>onload=()=>print()<\/script>');
+  w.document.close();
+}
+/* --- Importar Excel de ADT --- */
+const DVCAMPOS = [['doc_adt', 'Documento ADT', /documento|doc\.?\s*adt|adt|n[uú]mero|consecutivo|devoluci/i], ['guia', 'Guía', /gu[ií]a/i], ['cliente', 'Cliente', /cliente|raz[oó]n|nombre/i], ['nit', 'NIT', /nit|identific|c[eé]dula/i], ['ejecutivo', 'Ejecutivo', /ejecutivo|vendedor|asesor/i], ['motivo', 'Motivo', /motivo|causa|raz[oó]n de/i], ['fecha_doc', 'Fecha documento', /fecha/i], ['factura_ref', 'Factura de venta', /factura/i], ['referencia', 'Referencia', /referencia|\bref\b|c[oó]digo|sku/i], ['descripcion', 'Descripción', /descripci|producto|art[ií]culo|item|[ií]tem/i], ['cant_doc', 'Cantidad', /cant|unid/i]];
+function devImpAbrir() {
+  const o = dvOv('ovImp'); DV.imp = null;
+  o.innerHTML = '<div class="mo"><div class="mh">📥 Importar devoluciones de ADT<button class="btn g" onclick="$(\'ovImp\').classList.remove(\'on\')">✕</button></div><div class="cb"><input type="file" accept=".xlsx,.xls,.csv" onchange="devImpLeer(this)"><div id="dvImpRes" class="hint" style="padding:8px 0">Sube el Excel que exporta ADT. Se crean como «Por recibir» y las que ya existen (mismo documento) se omiten.</div></div></div>';
+  o.classList.add('on');
+}
+function devImpLeer(inp) {
+  const f = inp.files && inp.files[0]; if (!f) return; const rd = new FileReader();
+  rd.onload = e => { try {
+    const wb = XLSX.read(e.target.result, { type: 'array', cellDates: false }), M = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
+    let h = M.findIndex(r => r.filter(c => String(c).trim()).length >= 3); if (h < 0) h = 0;
+    const enc = (M[h] || []).map(c => String(c).trim()), map = {}, usado = new Set();
+    ['guia', 'nit', 'ejecutivo', 'motivo', 'factura_ref', 'referencia', 'cant_doc', 'descripcion', 'fecha_doc', 'cliente', 'doc_adt'].forEach(k => { const re = DVCAMPOS.find(c => c[0] === k)[2]; const i = enc.findIndex((c, ix) => !usado.has(ix) && re.test(c)); if (i >= 0) { map[k] = i; usado.add(i); } });
+    DV.imp = { M, h, enc, map, nombre: f.name }; devImpVista();
+  } catch (err) { $('dvImpRes').innerHTML = '<div class="err">No pude leer el archivo.</div>'; } };
+  rd.readAsArrayBuffer(f);
+}
+function dvFecha(v) { v = String(v || '').trim(); let m = v.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return m[0]; m = v.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/); if (m) { const y = m[3].length === 2 ? '20' + m[3] : m[3]; return y + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2); } return ''; }
+function devImpGrupos() {
+  const I = DV.imp, G = new Map(), c = k => I.map[k] == null || I.map[k] === '' ? -1 : Number(I.map[k]);
+  I.M.slice(I.h + 1).forEach(r => {
+    const val = k => c(k) < 0 ? '' : String(r[c(k)] == null ? '' : r[c(k)]).trim(), doc = val('doc_adt'), guia = val('guia'), key = doc || (guia ? 'G' + guia : ''); if (!key) return;
+    let d = G.get(key); if (!d) G.set(key, d = { doc_adt: doc, guia, cliente: val('cliente'), nit: val('nit'), ejecutivo: val('ejecutivo'), motivo: val('motivo'), fecha_doc: dvFecha(val('fecha_doc')), factura_ref: val('factura_ref'), items: [] });
+    const ref = val('referencia'), des = val('descripcion'); if (ref || des) d.items.push({ referencia: ref, descripcion: des, cant_doc: val('cant_doc').replace(',', '.') });
+  });
+  return [...G.values()];
+}
+function devImpVista() {
+  const I = DV.imp, opts = k => '<option value="">— no usar —</option>' + I.enc.map((c, i) => '<option value="' + i + '"' + (I.map[k] === i ? ' selected' : '') + '>' + esc(c || 'Col ' + (i + 1)) + '</option>').join('');
+  const G = devImpGrupos();
+  $('dvImpRes').innerHTML = '<div style="font-size:12px;margin:6px 0">Revisa a qué columna corresponde cada dato:</div><div class="mb" style="padding:0">' + DVCAMPOS.map(c => '<div class="f"><label>' + c[1] + '</label><select onchange="DV.imp.map[\'' + c[0] + '\']=this.value;devImpVista()">' + opts(c[0]) + '</select></div>').join('') + '</div>'
+    + '<div class="ok" style="margin:10px 0">' + fm(G.length) + ' devoluciones · ' + fm(G.reduce((s, d) => s + d.items.length, 0)) + ' ítems detectados' + (G[0] ? ' (ej.: ' + esc(G[0].doc_adt || 'G' + G[0].guia) + ' · ' + esc(G[0].cliente) + ')' : '') + '</div>'
+    + '<div class="bar"><button class="btn" ' + (G.length ? '' : 'disabled') + ' onclick="devImpGo()">Importar ' + fm(G.length) + '</button></div>';
+}
+async function devImpGo() {
+  const G = devImpGrupos(); let cr = 0, ex = 0;
+  for (let i = 0; i < G.length; i += 150) { const j = await api({ accion: 'dev_importar', archivo: DV.imp.nombre, devs: G.slice(i, i + 150) }); if (!j.ok) { alert(j.error || 'No se pudo importar'); break; } cr += j.creadas; ex += j.existentes; }
+  $('dvImpRes').innerHTML = '<div class="ok" style="margin:0">Listo: ' + fm(cr) + ' creadas · ' + fm(ex) + ' ya existían.</div>'; devCargar();
+}
+
 cargar();
 </script>
 </body>
