@@ -220,7 +220,7 @@ function pintar() {
   const tabs = '<div class="tabs"><button class="tab' + (TAB === 'plan' ? ' on' : '') + '" onclick="TAB=\'plan\';pintar()">Plan del día</button><button class="tab' + (TAB === 'hist' ? ' on' : '') + '" onclick="TAB=\'hist\';pintar()">Histórico por día</button>' + (D.admin ? '<button class="tab" onclick="accesos()">🔐 Accesos</button>' : '') + '</div>';
   const nav = '<div class="bar"><span class="fechab"><button class="btn g" onclick="irFecha(sumaDias(FECHA,-1))">◀</button><input type="date" value="' + D.fecha + '" onchange="irFecha(this.value)"><button class="btn g" onclick="irFecha(sumaDias(FECHA,1))">▶</button><button class="btn g" onclick="irFecha(D.hoy)">Hoy</button><button class="btn g" onclick="cargar(FECHA)">↻ Actualizar</button></span></div>';
   let cuerpo;
-  if (TAB === 'plan') cuerpo = '<div class="card"><h2>Facturas del plan · ' + fechaL(D.fecha) + '</h2>' + xgBar('plan') + '<div class="tw" id="xg_plan"></div></div>';
+  if (TAB === 'plan') cuerpo = '<div class="card"><h2>Facturas del plan · ' + fechaL(D.fecha) + '</h2>' + xgBar('plan') + '<div class="bar pad"><button class="btn" onclick="marcarVisibles()">✔ Marcar visibles como despachadas</button><span style="font-size:11.5px;color:#64748b">Solo las pendientes que se ven con tus filtros.</span></div><div class="tw" id="xg_plan"></div></div>';
   else cuerpo = '<div class="card"><h2>Nivel de despacho por día</h2>' + xgBar('hist') + '<div class="tw" id="xg_hist"></div></div>';
   $('app').innerHTML = nav + kpis + cortes + carga + tabs + '<div id="cuerpo">' + cuerpo + '</div><div class="foot">Facturas y unidades desde Siesa (sin anuladas). Datos de ' + fm(D.dias.length) + ' día(s).</div>';
   if (TAB === 'plan') {
@@ -233,7 +233,7 @@ function pintar() {
       { k: 'u', t: 'Unidades', v: r => r.u, num: true, sum: true },
       { k: 'arr', t: 'Días de arrastre', v: r => r.arr, num: true },
       { k: 'est', t: 'Estado', v: r => r.est, h: r => pill(r.est) },
-      { k: 'x', t: '', v: r => '', h: r => r.est === 'Despachada' ? '<button class="btn g sm" title="Quitar despacho" onclick="quitar(\'' + r.doc + '\')">↩ Quitar</button>' : '' }
+      { k: 'x', t: '', v: r => '', h: r => r.est === 'Despachada' ? '<button class="btn g sm" title="Quitar despacho" onclick="quitar(\'' + r.doc + '\')">↩ Quitar</button>' : r.est === 'Fuera de corte' ? '' : '<button class="btn sm" title="Marcar como despachada" onclick="marcarDesp(\'' + r.doc + '\')">✔ Despachada</button>' }
     ], { rows, nombre: 'Logistica_' + D.fecha });
     xgPaint('plan');
   } else {
@@ -262,6 +262,16 @@ async function guardarCortes() {
   }
   if (err) { alert(err); return; }
   await cargar(D.fecha);
+}
+async function marcarDesp(doc) {
+  const j = await api({ accion: 'despachar', fecha: D.fecha, numeros: [doc.replace(/\D/g, '')], archivo: 'manual' });
+  if (!j.ok) { alert(j.error || 'No se pudo marcar'); return; } await cargar(D.fecha);
+}
+async function marcarVisibles() {
+  const R = xgView('plan').filter(r => r.est === 'Pendiente' || r.est === 'Arrastrada'); if (!R.length) { alert('No hay pendientes en la vista.'); return; }
+  if (!confirm('¿Marcar ' + R.length + ' facturas (' + fm(R.reduce((a, r) => a + r.u, 0)) + ' und) como despachadas el ' + D.fecha + '?')) return;
+  const j = await api({ accion: 'despachar', fecha: D.fecha, numeros: R.map(r => r.doc.replace(/\D/g, '')), archivo: 'manual' });
+  if (!j.ok) { alert(j.error || 'No se pudo marcar'); return; } await cargar(D.fecha);
 }
 async function quitar(doc) { if (!confirm('¿Quitar el despacho de la factura ' + doc + '? Volverá a quedar pendiente.')) return; const j = await api({ accion: 'quitar', doc }); if (!j.ok) { alert(j.error || 'No se pudo quitar'); return; } await cargar(D.fecha); }
 
