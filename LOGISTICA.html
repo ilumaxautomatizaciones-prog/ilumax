@@ -478,7 +478,7 @@ function devPintar() {
     { k: 'ur', t: 'Und. recibidas', v: r => r.ur, num: true, sum: true },
     { k: 'estado', t: 'Estado', v: r => r.est, h: r => pill(r.estado) },
     { k: 'nc', t: 'Nota crédito', v: r => r.nc_numero || '' },
-    { k: 'x', t: '', v: r => '', h: r => '<button class="btn sm' + (r.estado === 'nota_credito' ? ' g' : '') + '" onclick="devAbrir(\'' + r.id + '\')">' + ({ por_recibir: '📦 Recibir', recibida: '✔ Verificar', verificada: '🧾 Nota crédito', nota_credito: 'Ver' })[r.estado] + '</button>' }
+    { k: 'x', t: '', v: r => '', h: r => '<button class="btn sm' + (r.estado === 'nota_credito' ? ' g' : '') + '" onclick="' + (r.estado === 'nota_credito' ? 'devAbrir' : 'devRapido') + '(\'' + r.id + '\')">' + ({ por_recibir: '📦 Recibir', recibida: '✔ Verificar', verificada: '🧾 Nota crédito', nota_credito: 'Ver' })[r.estado] + '</button>' }
   ], { rows, nombre: 'Devoluciones', attr: r => r.estado === 'nota_credito' ? ' class="desp"' : '' });
   return kpis + '<div class="card"><h2>↩️ Devoluciones</h2>' + xgBar('dev', '<button class="btn" onclick="devAbrir()">+ Nueva devolución</button><button class="btn g" onclick="devImpAbrir()">📥 Importar Excel de ADT</button>') + '<div class="tw" id="xg_dev"></div></div>'
     + '<div class="foot">Flujo: el ejecutivo la crea en Adatec (ADT) → Sebastián recibe la mercancía y arma la relación → Valentina la verifica con el soporte y la firma → Tatiana genera la nota crédito (le llega al cliente). Buena → bodega Disponible · Mala → Javería.</div>';
@@ -490,6 +490,33 @@ function devItemRow(i, k, ro) {
     + '<td><input id="dvi_' + k + '_cant_doc" inputmode="decimal" value="' + v('cant_doc') + '"' + d + ' style="width:62px"></td><td><input id="dvi_' + k + '_cant_recibida" inputmode="decimal" value="' + v('cant_recibida') + '"' + d + ' style="width:62px"></td>'
     + '<td><select id="dvi_' + k + '_estado_item"' + d + ' onchange="dvBod(' + k + ')"><option value="">—</option><option value="buena"' + (i.estado_item === 'buena' ? ' selected' : '') + '>Buena</option><option value="mala"' + (i.estado_item === 'mala' ? ' selected' : '') + '>Mala</option></select>'
     + '<input type="hidden" id="dvi_' + k + '_bodega" value="' + v('bodega') + '"></td><td>' + (ro ? '' : '<button class="btn g sm" onclick="this.closest(\'tr\').remove()">✕</button>') + '</td></tr>';
+}
+/* --- Paso rápido: solo lo pendiente de cada etapa --- */
+function devRapido(id) {
+  const d = DV.l.find(x => x.id === id), s = d.estado, its = d.items || [], o = dvOv('ovRap'); DV.cur = d;
+  const th = '<th style="text-align:left">Referencia</th><th style="text-align:left">Descripción</th><th>Doc.</th>';
+  const fila = (i, k) => '<tr><td style="text-align:left">' + esc(i.referencia || '') + '</td><td style="text-align:left;white-space:normal">' + esc(i.descripcion || '') + '</td><td>' + esc(i.cant_doc) + '</td>'
+    + (s === 'por_recibir' ? '<td><input id="rp_c' + k + '" inputmode="decimal" value="' + esc(i.cant_recibida == null ? i.cant_doc : i.cant_recibida) + '" style="width:64px;font:inherit;padding:6px;border:1px solid #cbd5e1;border-radius:6px"></td><td><select id="rp_e' + k + '" style="font:inherit;padding:6px;border:1px solid #cbd5e1;border-radius:6px"><option value="buena"' + (i.estado_item !== 'mala' ? ' selected' : '') + '>Buena</option><option value="mala"' + (i.estado_item === 'mala' ? ' selected' : '') + '>Mala</option></select></td>'
+      : '<td>' + esc(i.cant_recibida) + '</td><td>' + (i.estado_item === 'mala' ? '<span class="pill p-rd">Mala · Javería</span>' : '<span class="pill p-ok">Buena</span>') + '</td>') + '</tr>';
+  const extra = s === 'recibida' ? '<div class="f w" style="margin-top:10px"><label style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Observación de la verificación (opcional)</label><input id="rp_obs" style="width:100%;font:inherit;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px"></div>'
+    : s === 'verificada' ? '<div class="f w" style="margin-top:10px"><label style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Nº de la nota crédito</label><input id="rp_nc" style="width:100%;font:inherit;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px"></div>' : '';
+  const ok = { por_recibir: ['📦 Confirmar recibida', 'recibir'], recibida: ['✔ Verificar', 'verificar'], verificada: ['🧾 Registrar nota crédito', 'nc'] }[s];
+  o.innerHTML = '<div class="mo" style="max-width:720px"><div class="mh">Nº ' + esc(d.consecutivo) + ' · ' + esc(d.cliente || '') + '<button class="btn g" onclick="$(\'ovRap\').classList.remove(\'on\')">✕</button></div><div class="cb">'
+    + '<div class="hint" style="padding:0 0 8px">' + (s === 'por_recibir' ? 'Confirma las cantidades que llegaron y su estado. Ya vienen como el documento y buenas: cambia solo lo que difiera.' : s === 'recibida' ? 'Revisa contra el soporte y verifica.' : 'Verificada. Registra el número de la nota crédito.') + (d.factura_ref ? ' · Factura ' + esc(d.factura_ref) : '') + '</div>'
+    + '<div class="tw"><table class="fit"><thead><tr>' + th + '<th>Recibida</th><th>Estado</th></tr></thead><tbody>' + its.map(fila).join('') + '</tbody></table></div>' + extra + '</div>'
+    + '<div class="mf"><button class="btn g" onclick="$(\'ovRap\').classList.remove(\'on\');devAbrir(\'' + d.id + '\')">Ver / editar todo</button>' + '<button class="btn" onclick="devRapGo(\'' + ok[1] + '\')">' + ok[0] + '</button></div></div>';
+  o.classList.add('on');
+}
+async function devRapGo(paso) {
+  const d = DV.cur, its = d.items || [];
+  if (paso === 'recibir') {
+    const items = its.map((i, k) => ({ referencia: i.referencia || '', descripcion: i.descripcion || '', cant_doc: i.cant_doc, cant_recibida: $('rp_c' + k).value.trim() || i.cant_doc, estado_item: $('rp_e' + k).value, bodega: $('rp_e' + k).value === 'mala' ? 'Javería' : 'Disponible', obs: i.obs || '' }));
+    const j = await api({ accion: 'dev_guardar', dev: { ...d }, items }); if (!j.ok) { alert(j.error || 'No se pudo guardar'); return; }
+  }
+  if (paso === 'nc' && !$('rp_nc').value.trim()) { alert('Escribe el número de la nota crédito'); return; }
+  const j = await api({ accion: 'dev_paso', id: d.id, paso, obs: $('rp_obs') ? $('rp_obs').value : '', nc: $('rp_nc') ? $('rp_nc').value : '' });
+  if (!j.ok) { alert(j.error || 'No se pudo avanzar'); return; }
+  $('ovRap').classList.remove('on'); devCargar();
 }
 let DVT = 0;
 function dvCli(v) {
