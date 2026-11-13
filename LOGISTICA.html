@@ -75,6 +75,8 @@ tr.det td{background:#f8fafc;font-size:11px;color:#334155}
 .cb{padding:12px 14px}
 .bar.pad{padding:0 14px}
 .btn.sm{padding:3px 8px;font-size:10px}
+tr.desp td{background:#dcfce7}tr.arr td{background:#fee2e2}tr.fue td{background:#f1f5f9;color:#64748b}
+.bar .q{flex:1 1 260px;min-width:200px;border:2px solid #f5c518}.bar .sel{flex:none}
 </style>
 </head>
 <body>
@@ -98,7 +100,8 @@ function xgInit(id, cols, opt) { const g = XG[id] || (XG[id] = { sort: null, f: 
 const xgV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
 function xgView(id) {
   const g = XG[id];
-  let R = g.rows.filter(r => g.cols.every(c => {
+  const q = nz(g.q || '');
+  let R = g.rows.filter(r => (!g.est || g.est(r)) && (!q || g.cols.some(c => nz(xgV(c, r)).includes(q))) && g.cols.every(c => {
     const f = g.f[c.k]; if (!f) return true; const v = xgV(c, r);
     if (f.sel && !f.sel.has(String(v))) return false;
     if (c.num || c.date) {
@@ -111,7 +114,9 @@ function xgView(id) {
   return R;
 }
 const xgOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !== '' && f.max != null));
-function xgBar(id) { return '<div class="bar" style="padding:0 14px"><button class="btn g" onclick="xgCols(event,\'' + id + '\')">▦ Columnas</button><button class="btn g" onclick="xgLimpiar(\'' + id + '\')">✖ Quitar filtros y orden</button><button class="btn g" onclick="xgExcel(\'' + id + '\')">⬇ Excel de esta vista</button></div>'; }
+function xgQ(id, v) { XG[id].q = v; xgPaint(id); }
+function xgEst(id, v) { const g = XG[id]; g.estv = v; g.est = v === 'pend' ? r => r.est === 'Pendiente' || r.est === 'Arrastrada' : v === 'desp' ? r => r.est === 'Despachada' : v === 'fuera' ? r => r.est === 'Fuera de corte' : null; xgPaint(id); }
+function xgBar(id, extra) { const g = XG[id] || {}; return '<div class="bar" style="padding:0 14px"><input class="q" id="xgq_' + id + '" placeholder="🔍 Buscar por factura, cliente, quién facturó, guía…" value="' + esc(g.q || '') + '" oninput="xgQ(\'' + id + '\',this.value)">' + (extra || '') + '<button class="btn g" onclick="xgCols(event,\'' + id + '\')">▦ Columnas</button><button class="btn g" onclick="xgLimpiar(\'' + id + '\')">✖ Quitar filtros y orden</button><button class="btn g" onclick="xgExcel(\'' + id + '\')">⬇ Excel de esta vista</button></div>'; }
 function xgPaint(id) {
   const g = XG[id], box = $('xg_' + id); if (!box) return; const V = xgView(id), cols = g.cols.filter(c => !g.hide.has(c.k));
   const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="xgh" style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '"><span style="cursor:pointer" onclick="xgSort(\'' + id + '\',\'' + c.k + '\')">' + esc(c.t) + s + '</span><button class="xgb' + (xgOn(g.f[c.k]) ? ' on' : '') + '" onclick="xgMenu(event,\'' + id + '\',\'' + c.k + '\')">▾</button></th>'; }).join('');
@@ -220,11 +225,11 @@ function pintar() {
   const tabs = '<div class="tabs"><button class="tab' + (TAB === 'plan' ? ' on' : '') + '" onclick="TAB=\'plan\';pintar()">Plan del día</button><button class="tab' + (TAB === 'hist' ? ' on' : '') + '" onclick="TAB=\'hist\';pintar()">Histórico por día</button>' + (D.admin ? '<button class="tab" onclick="accesos()">🔐 Accesos</button>' : '') + '</div>';
   const nav = '<div class="bar"><span class="fechab"><button class="btn g" onclick="irFecha(sumaDias(FECHA,-1))">◀</button><input type="date" value="' + D.fecha + '" onchange="irFecha(this.value)"><button class="btn g" onclick="irFecha(sumaDias(FECHA,1))">▶</button><button class="btn g" onclick="irFecha(D.hoy)">Hoy</button><button class="btn g" onclick="cargar(FECHA)">↻ Actualizar</button></span></div>';
   let cuerpo;
-  if (TAB === 'plan') cuerpo = '<div class="card"><h2>Facturas del plan · ' + fechaL(D.fecha) + '</h2>' + xgBar('plan') + '<div class="bar pad"><button class="btn" onclick="marcarVisibles()">✔ Marcar visibles como despachadas</button><span style="font-size:11.5px;color:#64748b">Solo las pendientes que se ven con tus filtros.</span></div><div class="tw" id="xg_plan"></div></div>';
+  if (TAB === 'plan') cuerpo = '<div class="card"><h2>Facturas del plan · ' + fechaL(D.fecha) + '</h2>' + xgBar('plan', '<select class="sel" onchange="xgEst(\'plan\',this.value)">' + [['', 'Ver: todas'], ['pend', 'Solo pendientes (sin despachar)'], ['desp', 'Solo despachadas'], ['fuera', 'Solo fuera de corte']].map(o => '<option value="' + o[0] + '"' + ((XG.plan && XG.plan.estv || '') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select><button class="btn" onclick="excelCompleto()">📊 Excel completo (día + mes)</button>') + '<div class="bar pad"><button class="btn" onclick="marcarVisibles()">✔ Marcar visibles como despachadas</button><span style="font-size:11.5px;color:#64748b">Solo las pendientes que se ven con tus filtros.</span></div><div class="tw" id="xg_plan"></div></div>';
   else cuerpo = '<div class="card"><h2>Nivel de despacho por día</h2>' + xgBar('hist') + '<div class="tw" id="xg_hist"></div></div>';
   $('app').innerHTML = nav + kpis + cortes + carga + tabs + '<div id="cuerpo">' + cuerpo + '</div><div class="foot">Facturas y unidades desde Siesa (sin anuladas). Datos de ' + fm(D.dias.length) + ' día(s).</div>';
   if (TAB === 'plan') {
-    const rows = D.filas.concat(D.fuera).map(r => ({ doc: r[0], fecha: r[1], cli: r[2], u: r[3], arr: r[4], hora: r[6] || '', fac: r[7] || '', est: r[5] === 'despachada' ? 'Despachada' : r[5] === 'fuera' ? 'Fuera de corte' : r[4] > 0 ? 'Arrastrada' : 'Pendiente' }));
+    const rows = D.filas.concat(D.fuera).map(r => ({ doc: r[0], fecha: r[1], cli: r[2], u: r[3], arr: r[4], hora: r[6] || '', fac: r[7] || '', guia: r[8] || '', fdes: r[9] || '', hdes: r[10] || '', est: r[5] === 'despachada' ? 'Despachada' : r[5] === 'fuera' ? 'Fuera de corte' : r[4] > 0 ? 'Arrastrada' : 'Pendiente' }));
     const pill = e => '<span class="pill ' + (e === 'Despachada' ? 'p-ok' : e === 'Fuera de corte' ? 'p-bl' : e === 'Arrastrada' ? 'p-rd' : 'p-or') + '">' + e + '</span>';
     xgInit('plan', [
       { k: 'doc', t: 'Factura', v: r => r.doc },
@@ -232,11 +237,14 @@ function pintar() {
       { k: 'hora', t: 'Hora', v: r => r.hora, al: true },
       { k: 'fac', t: 'Facturó', v: r => r.fac },
       { k: 'cli', t: 'Cliente', v: r => r.cli, wrap: true },
+      { k: 'guia', t: 'Guía · ciudad', v: r => r.guia },
       { k: 'u', t: 'Unidades', v: r => r.u, num: true, sum: true },
       { k: 'arr', t: 'Días de arrastre', v: r => r.arr, num: true },
       { k: 'est', t: 'Estado', v: r => r.est, h: r => pill(r.est) },
+      { k: 'fdes', t: 'Fecha de despacho', v: r => r.fdes, date: true, al: true },
+      { k: 'hdes', t: 'Hora despacho', v: r => r.hdes, al: true },
       { k: 'x', t: '', v: r => '', h: r => r.est === 'Despachada' ? '<button class="btn g sm" title="Quitar despacho" onclick="quitar(\'' + r.doc + '\')">↩ Quitar</button>' : r.est === 'Fuera de corte' ? '' : '<button class="btn sm" title="Marcar como despachada" onclick="marcarDesp(\'' + r.doc + '\')">✔ Despachada</button>' }
-    ], { rows, nombre: 'Logistica_' + D.fecha });
+    ], { rows, nombre: 'Logistica_' + D.fecha, attr: r => r.est === 'Despachada' ? ' class="desp"' : r.est === 'Arrastrada' ? ' class="arr"' : r.est === 'Fuera de corte' ? ' class="fue"' : '' });
     xgPaint('plan');
   } else {
     const rows = D.dias.slice().reverse().map(x => ({ fecha: x.fecha, pf: x.pf, pu: x.pu, nf: x.nf, af: x.af, df: x.df, du: x.du, qf: x.qf, qu: x.qu, cum: x.pu > 0 ? Math.round(1000 * x.du / x.pu) / 10 : '' }));
@@ -266,16 +274,89 @@ async function guardarCortes() {
   await cargar(D.fecha);
 }
 async function marcarDesp(doc) {
-  const j = await api({ accion: 'despachar', fecha: D.fecha, numeros: [doc.replace(/\D/g, '')], archivo: 'manual' });
+  const j = await api({ accion: 'despachar', fecha: D.fecha, items: [{ doc }], archivo: 'manual' });
   if (!j.ok) { alert(j.error || 'No se pudo marcar'); return; } await cargar(D.fecha);
 }
 async function marcarVisibles() {
   const R = xgView('plan').filter(r => r.est === 'Pendiente' || r.est === 'Arrastrada'); if (!R.length) { alert('No hay pendientes en la vista.'); return; }
   if (!confirm('¿Marcar ' + R.length + ' facturas (' + fm(R.reduce((a, r) => a + r.u, 0)) + ' und) como despachadas el ' + D.fecha + '?')) return;
-  const j = await api({ accion: 'despachar', fecha: D.fecha, numeros: R.map(r => r.doc.replace(/\D/g, '')), archivo: 'manual' });
+  const j = await api({ accion: 'despachar', fecha: D.fecha, items: R.map(r => ({ doc: r.doc })), archivo: 'manual' });
   if (!j.ok) { alert(j.error || 'No se pudo marcar'); return; } await cargar(D.fecha);
 }
 async function quitar(doc) { if (!confirm('¿Quitar el despacho de la factura ' + doc + '? Volverá a quedar pendiente.')) return; const j = await api({ accion: 'quitar', doc }); if (!j.ok) { alert(j.error || 'No se pudo quitar'); return; } await cargar(D.fecha); }
+
+/* ===== Excel completo (día + mes) con fórmulas ===== */
+function cargaScript(src, glob) { return new Promise((ok, no) => { if (window[glob]) return ok(); const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => no(new Error('No cargó ' + glob)); document.head.appendChild(s); }); }
+async function excelCompleto() {
+  try { await cargaScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js', 'ExcelJS'); } catch (e) { alert('No se pudo cargar el generador de Excel. Revisa la conexión.'); return; }
+  const NAVY = 'FF0F172A', fl = c => ({ type: 'pattern', pattern: 'solid', fgColor: { argb: c } }), bd = { top: { style: 'thin', color: { argb: 'FFE2E8F0' } }, bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } }, left: { style: 'thin', color: { argb: 'FFE2E8F0' } }, right: { style: 'thin', color: { argb: 'FFE2E8F0' } } };
+  const estado = r => r[5] === 'despachada' ? 'Despachada' : r[5] === 'fuera' ? 'Fuera de corte' : r[4] > 0 ? 'Arrastrada' : 'Pendiente';
+  const F = D.filas.concat(D.fuera).map(r => ({ doc: r[0], fecha: r[1], hora: r[6] || '', fac: r[7] || '', cli: r[2], guia: r[8] || '', fdes: r[9] || '', hdes: r[10] || '', u: Number(r[3]) || 0, arr: Number(r[4]) || 0, est: estado(r) }));
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX'; wb.calcProperties = { fullCalcOnLoad: true };
+  const wR = wb.addWorksheet('Resumen del día', { views: [{ showGridLines: false }], properties: { tabColor: { argb: 'FFF5C518' } } });
+  const wF = wb.addWorksheet('Facturas', { views: [{ state: 'frozen', ySplit: 1, xSplit: 1 }] });
+  const wM = wb.addWorksheet('Resumen mensual', { views: [{ showGridLines: false }] });
+  // --- Facturas (tabla)
+  const N = F.length;
+  wF.addTable({ name: 'tblFac', ref: 'A1', headerRow: true, totalsRow: true, style: { theme: 'TableStyleLight1', showRowStripes: false },
+    columns: [{ name: 'Factura', totalsRowLabel: 'TOTAL', filterButton: true }, { name: 'Fecha factura', filterButton: true }, { name: 'Hora', filterButton: true }, { name: 'Facturó', filterButton: true }, { name: 'Cliente', filterButton: true }, { name: 'Guía · ciudad', filterButton: true }, { name: 'Unidades', totalsRowFunction: 'sum', filterButton: true }, { name: 'Días de arrastre', filterButton: true }, { name: 'Estado', filterButton: true }, { name: 'Fecha de despacho', filterButton: true }, { name: 'Hora despacho', filterButton: true }],
+    rows: N ? F.map(r => [r.doc, r.fecha, r.hora, r.fac, r.cli, r.guia, r.u, r.arr, r.est, r.fdes, r.hdes]) : [['', '', '', '', '', '', 0, 0, '', '', '']] });
+  [12, 13, 8, 18, 46, 28, 11, 11, 15, 15, 12].forEach((w, i) => wF.getColumn(i + 1).width = w);
+  wF.getRow(1).height = 24; wF.getRow(1).eachCell(c => { c.fill = fl(NAVY); c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }; });
+  for (let i = 2; i <= N + 1; i++) { wF.getRow(i).eachCell(c => { c.border = bd; c.font = { size: 10 }; }); wF.getCell(i, 7).numFmt = '#,##0'; }
+  wF.getRow(N + 2).eachCell(c => { c.fill = fl('FFE2E8F0'); c.font = { bold: true }; }); wF.getCell(N + 2, 7).numFmt = '#,##0';
+  const rg = 'A2:K' + (N + 1), cf = (col, bg) => ({ type: 'expression', formulae: ['$I2="' + col + '"'], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: bg } } } });
+  wF.addConditionalFormatting({ ref: rg, rules: [cf('Despachada', 'FFDCFCE7'), cf('Arrastrada', 'FFFEE2E2'), cf('Pendiente', 'FFFFEDD5'), cf('Fuera de corte', 'FFF1F5F9')] });
+  // --- Resumen del día
+  [30, 16, 16, 16, 16, 3].forEach((w, i) => wR.getColumn(i + 1).width = w);
+  wR.getCell('A1').value = 'Logística · cierre del día'; wR.getCell('A1').font = { bold: true, size: 20, color: { argb: NAVY } };
+  wR.getCell('A2').value = fechaL(D.fecha) + ' · generado ' + new Date().toLocaleString('es-CO') + ' · las cifras se calculan con fórmulas sobre la hoja «Facturas»'; wR.getCell('A2').font = { italic: true, size: 9, color: { argb: 'FF64748B' } };
+  const barra = (row, txt, n) => { for (let c = 1; c <= n; c++) { const k = wR.getCell(row, c); k.fill = fl(NAVY); k.font = { bold: true, color: { argb: 'FFFFFFFF' } }; } wR.getCell(row, 1).value = txt; };
+  const enc = (row, t) => t.forEach((x, i) => { const k = wR.getCell(row, 1 + i); k.value = x; k.fill = fl('FFE2E8F0'); k.font = { bold: true, size: 10 }; k.border = bd; k.alignment = { horizontal: i ? 'right' : 'left', wrapText: true }; });
+  const S = (est, f) => F.filter(r => r.est === est).reduce((s, r) => s + (f ? f(r) : 1), 0);
+  barra(4, 'INDICADORES DEL DÍA', 5); enc(5, ['Indicador', 'Facturas', 'Unidades', '% unidades', '']);
+  const filas = [['Plan del día (sin fuera de corte)', 'COUNTA(tblFac[Factura])-COUNTIF(tblFac[Estado],"Fuera de corte")', 'SUM(tblFac[Unidades])-SUMIFS(tblFac[Unidades],tblFac[Estado],"Fuera de corte")', N - S('Fuera de corte'), F.reduce((s, r) => s + r.u, 0) - S('Fuera de corte', r => r.u), 'FFF1F5F9'],
+    ['Despachadas', 'COUNTIF(tblFac[Estado],"Despachada")', 'SUMIFS(tblFac[Unidades],tblFac[Estado],"Despachada")', S('Despachada'), S('Despachada', r => r.u), 'FFDCFCE7'],
+    ['Pendientes (de hoy)', 'COUNTIF(tblFac[Estado],"Pendiente")', 'SUMIFS(tblFac[Unidades],tblFac[Estado],"Pendiente")', S('Pendiente'), S('Pendiente', r => r.u), 'FFFFEDD5'],
+    ['Arrastradas (de días anteriores)', 'COUNTIF(tblFac[Estado],"Arrastrada")', 'SUMIFS(tblFac[Unidades],tblFac[Estado],"Arrastrada")', S('Arrastrada'), S('Arrastrada', r => r.u), 'FFFEE2E2'],
+    ['Fuera de corte (pasan a mañana)', 'COUNTIF(tblFac[Estado],"Fuera de corte")', 'SUMIFS(tblFac[Unidades],tblFac[Estado],"Fuera de corte")', S('Fuera de corte'), S('Fuera de corte', r => r.u), 'FFF1F5F9']];
+  const plU = filas[0][4];
+  filas.forEach((f, i) => { const r = 6 + i; wR.getCell(r, 1).value = f[0]; wR.getCell(r, 2).value = { formula: f[1], result: f[3] }; wR.getCell(r, 3).value = { formula: f[2], result: f[4] }; wR.getCell(r, 4).value = { formula: i === 0 ? 'IF(C6=0,0,1)' : 'IF($C$6=0,0,C' + r + '/$C$6)', result: i === 0 ? 1 : (plU ? f[4] / plU : 0) };
+    for (let c = 1; c <= 4; c++) { const k = wR.getCell(r, c); k.fill = fl(f[5]); k.border = bd; if (c === 2 || c === 3) k.numFmt = '#,##0'; if (c === 4) k.numFmt = '0.0%'; } wR.getCell(r, 1).font = { bold: true }; });
+  wR.getCell('A12').value = 'CUMPLIMIENTO (unidades despachadas / plan)'; wR.getCell('A12').font = { bold: true };
+  wR.getCell('C12').value = { formula: 'IF(C6=0,0,C7/C6)', result: plU ? S('Despachada', r => r.u) / plU : 0 }; wR.getCell('C12').numFmt = '0.0%'; wR.getCell('C12').font = { bold: true, size: 14, color: { argb: 'FF166534' } };
+  wR.addConditionalFormatting({ ref: 'C12', rules: [{ type: 'cellIs', operator: 'lessThan', formulae: [0.8], style: { font: { color: { argb: 'FFB91C1C' } } } }] });
+  // por quién facturó
+  const quien = [...new Set(F.map(r => r.fac || '(sin dato)'))].sort(); let r0 = 14; barra(r0, 'POR QUIÉN FACTURÓ', 5); enc(r0 + 1, ['Facturó', 'Facturas', 'Unidades', 'Despachadas (und)', 'Pendientes (und)']);
+  quien.forEach((q, i) => { const r = r0 + 2 + i, g = F.filter(x => (x.fac || '(sin dato)') === q), key = q === '(sin dato)' ? '""' : '$A' + r;
+    wR.getCell(r, 1).value = q; wR.getCell(r, 2).value = { formula: 'COUNTIFS(tblFac[Facturó],' + key + ')', result: g.length }; wR.getCell(r, 3).value = { formula: 'SUMIFS(tblFac[Unidades],tblFac[Facturó],' + key + ')', result: g.reduce((s, x) => s + x.u, 0) };
+    wR.getCell(r, 4).value = { formula: 'SUMIFS(tblFac[Unidades],tblFac[Facturó],' + key + ',tblFac[Estado],"Despachada")', result: g.filter(x => x.est === 'Despachada').reduce((s, x) => s + x.u, 0) }; wR.getCell(r, 5).value = { formula: 'C' + r + '-D' + r, result: g.filter(x => x.est !== 'Despachada').reduce((s, x) => s + x.u, 0) };
+    for (let c = 1; c <= 5; c++) { const k = wR.getCell(r, c); k.border = bd; if (c > 1) k.numFmt = '#,##0'; } });
+  // top clientes con pendientes
+  r0 = r0 + 3 + quien.length; const cm = {}; F.forEach(x => { if (x.est === 'Pendiente' || x.est === 'Arrastrada') cm[x.cli] = (cm[x.cli] || 0) + x.u; });
+  const top = Object.keys(cm).sort((x, y) => cm[y] - cm[x]).slice(0, 10); barra(r0, 'TOP 10 CLIENTES CON PENDIENTES (UNIDADES)', 5); enc(r0 + 1, ['Cliente', 'Facturas pend.', 'Unidades pend.', '', '']);
+  top.forEach((c, i) => { const r = r0 + 2 + i, g = F.filter(x => x.cli === c && (x.est === 'Pendiente' || x.est === 'Arrastrada')); wR.getCell(r, 1).value = c;
+    wR.getCell(r, 2).value = { formula: 'COUNTIFS(tblFac[Cliente],$A' + r + ',tblFac[Estado],"Pendiente")+COUNTIFS(tblFac[Cliente],$A' + r + ',tblFac[Estado],"Arrastrada")', result: g.length };
+    wR.getCell(r, 3).value = { formula: 'SUMIFS(tblFac[Unidades],tblFac[Cliente],$A' + r + ',tblFac[Estado],"Pendiente")+SUMIFS(tblFac[Unidades],tblFac[Cliente],$A' + r + ',tblFac[Estado],"Arrastrada")', result: cm[c] };
+    for (let k = 1; k <= 3; k++) { const q = wR.getCell(r, k); q.border = bd; if (k > 1) q.numFmt = '#,##0'; } });
+  wR.getColumn(1).width = 46;
+  // --- Resumen mensual
+  const mes = FECHA.slice(0, 7), DM = D.dias.filter(x => x.fecha.slice(0, 7) === mes);
+  wM.getCell('A1').value = 'Nivel de despacho · ' + mes; wM.getCell('A1').font = { bold: true, size: 20, color: { argb: NAVY } };
+  wM.getCell('A2').value = 'Por día, desde ' + D.inicio + '. Cumplimiento = unidades despachadas / unidades del plan del día.'; wM.getCell('A2').font = { italic: true, size: 9, color: { argb: 'FF64748B' } };
+  const H = ['Día', 'Facturas plan', 'Unidades plan', 'Facturas nuevas', 'Facturas arrastre', 'Facturas despachadas', 'Unidades despachadas', 'Facturas pendientes', 'Unidades pendientes', 'Cumplimiento'];
+  wM.addTable({ name: 'tblDia', ref: 'A4', headerRow: true, totalsRow: true, style: { theme: 'TableStyleLight1', showRowStripes: false },
+    columns: H.map((n, i) => i === 0 ? { name: n, totalsRowLabel: 'TOTAL', filterButton: true } : i === 9 ? { name: n, filterButton: true } : { name: n, totalsRowFunction: 'sum', filterButton: true }),
+    rows: DM.length ? DM.map((x, i) => [x.fecha, x.pf, x.pu, x.nf, x.af, x.df, x.du, x.qf, { formula: 'C' + (5 + i) + '-G' + (5 + i), result: x.qu }, { formula: 'IF(C' + (5 + i) + '=0,"",G' + (5 + i) + '/C' + (5 + i) + ')', result: x.pu > 0 ? x.du / x.pu : '' }]) : [['', 0, 0, 0, 0, 0, 0, 0, 0, '']] });
+  wM.getRow(4).height = 30; wM.getRow(4).eachCell(c => { c.fill = fl(NAVY); c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }; });
+  const nD = DM.length; wM.getColumn(1).width = 14; for (let c = 2; c <= 10; c++) wM.getColumn(c).width = 15;
+  for (let i = 5; i <= 4 + nD; i++) for (let c = 1; c <= 10; c++) { const k = wM.getCell(i, c); k.border = bd; if (c >= 2 && c <= 9) k.numFmt = '#,##0'; if (c === 10) k.numFmt = '0.0%'; }
+  const tm = 5 + nD; wM.getRow(tm).eachCell(c => { c.fill = fl('FFE2E8F0'); c.font = { bold: true }; }); for (let c = 2; c <= 9; c++) wM.getCell(tm, c).numFmt = '#,##0';
+  wM.getCell(tm, 10).value = { formula: 'IF(C' + tm + '=0,"",G' + tm + '/C' + tm + ')', result: '' }; wM.getCell(tm, 10).numFmt = '0.0%';
+  if (nD) wM.addConditionalFormatting({ ref: 'J5:J' + (4 + nD), rules: [{ type: 'colorScale', cfvo: [{ type: 'num', value: 0.5 }, { type: 'num', value: 0.8 }, { type: 'num', value: 1 }], color: [{ argb: 'FFFCA5A5' }, { argb: 'FFFDE68A' }, { argb: 'FF86EFAC' }] }] });
+  const buf = await wb.xlsx.writeBuffer(), url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })), el = document.createElement('a');
+  el.href = url; el.download = 'Logistica_' + D.fecha + '.xlsx'; document.body.appendChild(el); el.click(); setTimeout(() => { el.remove(); URL.revokeObjectURL(url); }, 1500);
+}
 
 /* ===== Excel de despacho ===== */
 function leerExcel(inp) {
@@ -290,20 +371,32 @@ function leerExcel(inp) {
       if (col < 0) col = enc.findIndex(c => /documento|\bdoc\b/i.test(c));
       if (col < 0) col = enc.findIndex(c => /n[uú]mero|nro|n°/i.test(c));
       if (col < 0) { let best = 0; enc.forEach((c, i) => { const n = M.slice(h + 1).filter(r => /^[A-Za-z]{0,3}\d{4,6}$/.test(String(r[i]).trim())).length; if (n > best) { best = n; col = i; } }); }
-      ARCH.col = col; resumenExcel();
+      ARCH.col = col; ARCH.guias = null;
+      const ix = k => enc.findIndex(c => c.toLowerCase().replace(/[^a-z_]/g, '') === k);
+      const cG = ix('guia'), cD = ix('num_documentos');
+      if (cG >= 0 && cD >= 0) { // Excel de la transportadora (cola de guías)
+        ARCH.col = cD; ARCH.guias = { g: cG, d: ix('nom_destinatario'), c: ix('ciudest'), l: ix('num_unidades'), f: ix('totalguia'), fe: ix('fec_modif') };
+        const cnt = {}; M.slice(h + 1).forEach(r => { const m = String(r[ARCH.guias.fe] || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (m) { const k = m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2); cnt[k] = (cnt[k] || 0) + 1; } });
+        const top = Object.keys(cnt).sort((x, y) => cnt[y] - cnt[x])[0]; if (top && $('dfecha')) $('dfecha').value = top;
+      }
+      resumenExcel();
     } catch (err) { $('dres').innerHTML = '<div class="err">No pude leer el archivo.</div>'; }
   };
   rd.readAsArrayBuffer(f);
 }
+const itemsExcel = () => { const G = ARCH.guias, seen = new Set(), res = []; if (!G) return res;
+  ARCH.M.slice(ARCH.h + 1).forEach(r => { const doc = String(r[ARCH.col] == null ? '' : r[ARCH.col]).toUpperCase().replace(/[^A-Z0-9]/g, ''); if (!/\d{3}/.test(doc) || seen.has(doc)) return; seen.add(doc);
+    res.push({ doc, guia: String(r[G.g] || '').replace(/\D/g, ''), destinatario: G.d >= 0 ? String(r[G.d] || '') : '', ciudad: G.c >= 0 ? String(r[G.c] || '') : '', lios: G.l >= 0 ? Number(r[G.l]) || 0 : null, flete: G.f >= 0 ? Number(r[G.f]) || 0 : null }); });
+  return res; };
 const numsExcel = () => [...new Set(ARCH.M.slice(ARCH.h + 1).map(r => { const v = r[ARCH.col]; return typeof v === 'number' ? String(Math.round(v)) : String(v == null ? '' : v).replace(/\D/g, ''); }).filter(x => x && x.length >= 3 && x.length <= 9))];
 function resumenExcel() {
   const enc = (ARCH.M[ARCH.h] || []).map((c, i) => String(c).trim() || 'Columna ' + (i + 1));
-  const n = ARCH.col >= 0 ? numsExcel().length : 0;
-  $('dres').innerHTML = '<div class="bar"><label style="font-size:11px;color:#64748b">Columna de factura</label><select onchange="ARCH.col=+this.value;resumenExcel()">' + enc.map((c, i) => '<option value="' + i + '"' + (i === ARCH.col ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select><span style="font-size:12px;font-weight:700">' + fm(n) + ' facturas en «' + esc(ARCH.nombre) + '»</span><button class="btn" ' + (n ? '' : 'disabled') + ' onclick="subirDespacho()">Marcar como despachadas</button></div>';
+  const n = ARCH.col >= 0 ? (ARCH.guias ? itemsExcel().length : numsExcel().length) : 0;
+  $('dres').innerHTML = '<div class="bar"><label style="font-size:11px;color:#64748b">Columna de factura</label><select onchange="ARCH.col=+this.value;resumenExcel()">' + enc.map((c, i) => '<option value="' + i + '"' + (i === ARCH.col ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select><span style="font-size:12px;font-weight:700">' + fm(n) + ' facturas en «' + esc(ARCH.nombre) + '»' + (ARCH.guias ? ' · formato transportadora (guías)' : '') + '</span><button class="btn" ' + (n ? '' : 'disabled') + ' onclick="subirDespacho()">Marcar como despachadas</button></div>';
 }
 async function subirDespacho() {
-  const nums = numsExcel(); if (!nums.length) return; const b = document.querySelector('#dres .btn'); if (b) { b.disabled = true; b.textContent = '⏳ Guardando…'; }
-  const j = await api({ accion: 'despachar', fecha: $('dfecha').value, numeros: nums, archivo: ARCH.nombre });
+  const items = ARCH.guias ? itemsExcel() : [], nums = numsExcel(); if (!items.length && !nums.length) return; const b = document.querySelector('#dres .btn'); if (b) { b.disabled = true; b.textContent = '⏳ Guardando…'; }
+  const j = await api({ accion: 'despachar', fecha: $('dfecha').value, numeros: nums, items, archivo: ARCH.nombre });
   if (!j.ok) { $('dres').innerHTML = '<div class="err">' + esc(j.error || 'No se pudo guardar') + '</div>'; return; }
   const msg = '<div class="ok">✔ ' + fm(j.marcadas) + ' facturas marcadas como despachadas (' + fm(j.nuevas) + ' nuevas, ' + fm(j.yaMarcadas) + ' ya estaban).</div>'
     + (j.totalNo ? '<div class="err">' + fm(j.totalNo) + ' números del archivo no se encontraron en las facturas de Siesa: ' + esc(j.noEncontradas.slice(0, 40).join(', ')) + (j.totalNo > 40 ? '…' : '') + '</div>' : '');
