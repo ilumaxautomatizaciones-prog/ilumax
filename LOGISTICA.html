@@ -75,7 +75,8 @@ tr.det td{background:#f8fafc;font-size:11px;color:#334155}
 .cb{padding:12px 14px}
 .bar.pad{padding:0 14px}
 .btn.sm{padding:3px 8px;font-size:10px}
-tr.desp td{background:#dcfce7}tr.arr td{background:#fee2e2}tr.fue td{background:#f1f5f9;color:#64748b}
+tr.desp td{background:#dcfce7}.lnk{color:#1d4ed8;font-weight:700;text-decoration:none;cursor:pointer}.lnk:hover{text-decoration:underline}
+.kpi.click{cursor:pointer;transition:.15s}.kpi.click:hover{border-color:#f5c518;box-shadow:0 2px 8px #0001}.kpi.act{border:2px solid #f5c518;background:#fffbeb}tr.arr td{background:#fee2e2}tr.fue td{background:#f1f5f9;color:#64748b}
 .bar .q{flex:1 1 260px;min-width:200px;border:2px solid #f5c518}.bar .sel{flex:none}
 </style>
 </head>
@@ -92,7 +93,7 @@ const fm2 = fm;
 const nz = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
 const xNum = v => { if (typeof v === 'number') return v; let s = String(v == null ? '' : v).replace(/[\s]/g, ''); if (/,\d{1,2}$/.test(s) && /\./.test(s)) s = s.replace(/\./g, '').replace(',', '.'); else if (/,/.test(s) && !/\./.test(s)) s = s.replace(',', '.'); return Number(s); };
 const pct = (a, b) => b > 0 ? (100 * a / b).toFixed(1) + '%' : '—';
-let D = null, TAB = 'plan', FECHA = '', ARCH = null;
+let D = null, TAB = 'plan', FECHA = '', ARCH = null, CARGA = false;
 
 /* ===== Rejilla tipo Excel: ordenar y filtrar desde el encabezado, elegir columnas ===== */
 const XG = {};
@@ -115,7 +116,9 @@ function xgView(id) {
 }
 const xgOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !== '' && f.max != null));
 function xgQ(id, v) { XG[id].q = v; xgPaint(id); }
-function xgEst(id, v) { const g = XG[id]; g.estv = v; g.est = v === 'pend' ? r => r.est === 'Pendiente' || r.est === 'Arrastrada' : v === 'desp' ? r => r.est === 'Despachada' : v === 'fuera' ? r => r.est === 'Fuera de corte' : null; xgPaint(id); }
+const ESTF = { plan: r => r.est !== 'Fuera de corte', arr: r => r.arr > 0 && r.est !== 'Fuera de corte', pend: r => r.est === 'Pendiente' || r.est === 'Arrastrada', desp: r => r.est === 'Despachada', fuera: r => r.est === 'Fuera de corte' };
+function xgEst(id, v, rep) { const g = XG[id] || xgInit(id, []); g.estv = v; g.est = ESTF[v] || null; if (rep) pintar(); else xgPaint(id); }
+function kpiFiltro(v) { TAB = 'plan'; const g = XG.plan || xgInit('plan', []); xgEst('plan', g.estv === v ? '' : v, true); }
 function xgBar(id, extra) { const g = XG[id] || {}; return '<div class="bar" style="padding:0 14px"><input class="q" id="xgq_' + id + '" placeholder="🔍 Buscar por factura, cliente, quién facturó, guía…" value="' + esc(g.q || '') + '" oninput="xgQ(\'' + id + '\',this.value)">' + (extra || '') + '<button class="btn g" onclick="xgCols(event,\'' + id + '\')">▦ Columnas</button><button class="btn g" onclick="xgLimpiar(\'' + id + '\')">✖ Quitar filtros y orden</button><button class="btn g" onclick="xgExcel(\'' + id + '\')">⬇ Excel de esta vista</button></div>'; }
 function xgPaint(id) {
   const g = XG[id], box = $('xg_' + id); if (!box) return; const V = xgView(id), cols = g.cols.filter(c => !g.hide.has(c.k));
@@ -208,14 +211,14 @@ function pintar() {
   $('out').style.display = ''; $('sub').textContent = D.nombre + ' · ' + fechaL(D.fecha) + ' · seguimiento desde ' + D.inicio;
   const dia = D.dias.find(x => x.fecha === D.fecha) || { pf: 0, pu: 0, nf: 0, nu: 0, af: 0, au: 0, df: 0, du: 0, qf: 0, qu: 0 };
   const fu = D.fuera.reduce((s, r) => s + r[3], 0);
-  const kp = (l, v, s) => '<div class="kpi"><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="s">' + (s || '') + '</div></div>';
+  const kp = (l, v, s, f) => '<div class="kpi' + (f ? ' click' + ((XG.plan && XG.plan.estv) === f ? ' act' : '') + '" title="Clic para ver estas facturas" onclick="kpiFiltro(\'' + f + '\')' : '') + '"><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="s">' + (s || '') + '</div></div>';
   const kpis = '<div class="kpis">'
-    + kp('A despachar hoy', fm(dia.pu) + ' und', fm(dia.pf) + ' facturas')
-    + kp('Arrastre del día anterior', fm(dia.au) + ' und', fm(dia.af) + ' facturas')
-    + kp('Despachadas', fm(dia.du) + ' und', fm(dia.df) + ' facturas')
-    + kp('Pendientes', fm(dia.qu) + ' und', fm(dia.qf) + ' facturas')
+    + kp('A despachar hoy', fm(dia.pu) + ' und', fm(dia.pf) + ' facturas', 'plan')
+    + kp('Arrastre del día anterior', fm(dia.au) + ' und', fm(dia.af) + ' facturas', 'arr')
+    + kp('Despachadas', fm(dia.du) + ' und', fm(dia.df) + ' facturas', 'desp')
+    + kp('Pendientes', fm(dia.qu) + ' und', fm(dia.qf) + ' facturas', 'pend')
     + kp('Cumplimiento', pct(dia.du, dia.pu), 'unidades despachadas / plan')
-    + kp('Fuera de corte', fm(fu) + ' und', fm(D.fuera.length) + ' facturas · pasan a mañana')
+    + kp('Fuera de corte', fm(fu) + ' und', fm(D.fuera.length) + ' facturas · pasan a mañana', 'fuera')
     + '</div>';
   const series = [...new Set(['VE', 'VZ', 'VM', ...Object.keys(D.maxSerie), ...Object.keys(D.cortes)])];
   const cortes = '<div class="card"><h2>✂️ Corte del día</h2><div class="cortes">' + series.map(s => '<div class="f"><label>Serie ' + s + ' · hasta factura nº</label><input id="cor_' + s + '" inputmode="numeric" value="' + (D.cortes[s] || '') + '" placeholder="' + (D.maxSerie[s] ? 'última de hoy: ' + D.maxSerie[s] : 'sin facturas hoy') + '"><div class="s">' + (D.cortes[s] ? 'Corte guardado' : 'Sin corte: entra todo lo facturado') + '</div></div>').join('') + '</div>'
@@ -223,16 +226,16 @@ function pintar() {
   const carga = '<div class="card"><h2>📥 Relación de despacho (Excel)</h2><div class="cb"><div class="bar" style="margin-top:0"><input type="file" id="dfile" accept=".xlsx,.xls,.csv" onchange="leerExcel(this)"><span class="fechab"><label style="font-size:11px;color:#64748b">Despachado el</label><input type="date" id="dfecha" value="' + D.fecha + '"></span></div><div id="dres"></div></div>'
     + '<div class="hint">Sube el archivo al final del día. Todas las facturas que traiga se marcan como despachadas en esa fecha; las que no aparezcan quedan pendientes y pasan al día siguiente.</div></div>';
   const tabs = '<div class="tabs"><button class="tab' + (TAB === 'plan' ? ' on' : '') + '" onclick="TAB=\'plan\';pintar()">Plan del día</button><button class="tab' + (TAB === 'hist' ? ' on' : '') + '" onclick="TAB=\'hist\';pintar()">Histórico por día</button>' + (D.admin ? '<button class="tab" onclick="accesos()">🔐 Accesos</button>' : '') + '</div>';
-  const nav = '<div class="bar"><span class="fechab"><button class="btn g" onclick="irFecha(sumaDias(FECHA,-1))">◀</button><input type="date" value="' + D.fecha + '" onchange="irFecha(this.value)"><button class="btn g" onclick="irFecha(sumaDias(FECHA,1))">▶</button><button class="btn g" onclick="irFecha(D.hoy)">Hoy</button><button class="btn g" onclick="cargar(FECHA)">↻ Actualizar</button></span></div>';
+  const nav = '<div class="bar"><span class="fechab"><button class="btn g" onclick="irFecha(sumaDias(FECHA,-1))">◀</button><input type="date" value="' + D.fecha + '" onchange="irFecha(this.value)"><button class="btn g" onclick="irFecha(sumaDias(FECHA,1))">▶</button><button class="btn g" onclick="irFecha(D.hoy)">Hoy</button><button class="btn g" onclick="cargar(FECHA)">↻ Actualizar</button></span><button class="btn g sm" style="margin-left:auto" title="Subir el Excel de la transportadora o la relación de despacho" onclick="CARGA=!CARGA;pintar()">📥 Relación de despacho</button></div>';
   let cuerpo;
-  if (TAB === 'plan') cuerpo = '<div class="card"><h2>Facturas del plan · ' + fechaL(D.fecha) + '</h2>' + xgBar('plan', '<select class="sel" onchange="xgEst(\'plan\',this.value)">' + [['', 'Ver: todas'], ['pend', 'Solo pendientes (sin despachar)'], ['desp', 'Solo despachadas'], ['fuera', 'Solo fuera de corte']].map(o => '<option value="' + o[0] + '"' + ((XG.plan && XG.plan.estv || '') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select><button class="btn" onclick="excelCompleto()">📊 Excel completo (día + mes)</button>') + '<div class="bar pad"><button class="btn" onclick="marcarVisibles()">✔ Marcar visibles como despachadas</button><span style="font-size:11.5px;color:#64748b">Solo las pendientes que se ven con tus filtros.</span></div><div class="tw" id="xg_plan"></div></div>';
+  if (TAB === 'plan') cuerpo = '<div class="card"><h2>Facturas del plan · ' + fechaL(D.fecha) + '</h2>' + xgBar('plan', '<select class="sel" onchange="xgEst(\'plan\',this.value)">' + [['', 'Ver: todas'], ['plan', 'A despachar hoy (plan)'], ['arr', 'Arrastre de días anteriores'], ['pend', 'Solo pendientes (sin despachar)'], ['desp', 'Solo despachadas'], ['fuera', 'Solo fuera de corte']].map(o => '<option value="' + o[0] + '"' + ((XG.plan && XG.plan.estv || '') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select><button class="btn" onclick="excelCompleto()">📊 Excel completo (día + mes)</button><button class="btn g" onclick="itemsVista()">📦 Ítems de esta vista</button>') + '<div class="bar pad"><button class="btn" onclick="marcarVisibles()">✔ Marcar visibles como despachadas</button><span style="font-size:11.5px;color:#64748b">Solo las pendientes que se ven con tus filtros.</span></div><div class="tw" id="xg_plan"></div></div>';
   else cuerpo = '<div class="card"><h2>Nivel de despacho por día</h2>' + xgBar('hist') + '<div class="tw" id="xg_hist"></div></div>';
-  $('app').innerHTML = nav + kpis + cortes + carga + tabs + '<div id="cuerpo">' + cuerpo + '</div><div class="foot">Facturas y unidades desde Siesa (sin anuladas). Datos de ' + fm(D.dias.length) + ' día(s).</div>';
+  $('app').innerHTML = nav + (CARGA ? carga : '') + kpis + tabs + '<div id="cuerpo">' + cuerpo + '</div>' + cortes + '<div class="foot">Facturas y unidades desde Siesa (sin anuladas). Datos de ' + fm(D.dias.length) + ' día(s).</div>';
   if (TAB === 'plan') {
     const rows = D.filas.concat(D.fuera).map(r => ({ doc: r[0], fecha: r[1], cli: r[2], u: r[3], arr: r[4], hora: r[6] || '', fac: r[7] || '', guia: r[8] || '', fdes: r[9] || '', hdes: r[10] || '', est: r[5] === 'despachada' ? 'Despachada' : r[5] === 'fuera' ? 'Fuera de corte' : r[4] > 0 ? 'Arrastrada' : 'Pendiente' }));
     const pill = e => '<span class="pill ' + (e === 'Despachada' ? 'p-ok' : e === 'Fuera de corte' ? 'p-bl' : e === 'Arrastrada' ? 'p-rd' : 'p-or') + '">' + e + '</span>';
     xgInit('plan', [
-      { k: 'doc', t: 'Factura', v: r => r.doc },
+      { k: 'doc', t: 'Factura', v: r => r.doc, h: r => '<a class="lnk" href="#" title="Ver ítems y cantidades" onclick="verItems(\'' + r.doc + '\');return false">' + esc(r.doc) + '</a>' },
       { k: 'fecha', t: 'Fecha factura', v: r => r.fecha, date: true, al: true },
       { k: 'hora', t: 'Hora', v: r => r.hora, al: true },
       { k: 'fac', t: 'Facturó', v: r => r.fac },
@@ -245,6 +248,7 @@ function pintar() {
       { k: 'hdes', t: 'Hora despacho', v: r => r.hdes, al: true },
       { k: 'x', t: '', v: r => '', h: r => r.est === 'Despachada' ? '<button class="btn g sm" title="Quitar despacho" onclick="quitar(\'' + r.doc + '\')">↩ Quitar</button>' : r.est === 'Fuera de corte' ? '' : '<button class="btn sm" title="Marcar como despachada" onclick="marcarDesp(\'' + r.doc + '\')">✔ Despachada</button>' }
     ], { rows, nombre: 'Logistica_' + D.fecha, attr: r => r.est === 'Despachada' ? ' class="desp"' : r.est === 'Arrastrada' ? ' class="arr"' : r.est === 'Fuera de corte' ? ' class="fue"' : '' });
+    if (!XG.plan._h) { XG.plan._h = 1; ['fac', 'hdes'].forEach(k => XG.plan.hide.add(k)); }
     xgPaint('plan');
   } else {
     const rows = D.dias.slice().reverse().map(x => ({ fecha: x.fecha, pf: x.pf, pu: x.pu, nf: x.nf, af: x.af, df: x.df, du: x.du, qf: x.qf, qu: x.qu, cum: x.pu > 0 ? Math.round(1000 * x.du / x.pu) / 10 : '' }));
@@ -284,6 +288,33 @@ async function marcarVisibles() {
   if (!j.ok) { alert(j.error || 'No se pudo marcar'); return; } await cargar(D.fecha);
 }
 async function quitar(doc) { if (!confirm('¿Quitar el despacho de la factura ' + doc + '? Volverá a quedar pendiente.')) return; const j = await api({ accion: 'quitar', doc }); if (!j.ok) { alert(j.error || 'No se pudo quitar'); return; } await cargar(D.fecha); }
+
+/* ===== Detalle de ítems por factura / por vista ===== */
+function itmCerrar() { const m = $('itm'); if (m) m.remove(); }
+function itmAbrir(tit, cuerpo) { itmCerrar(); const d = document.createElement('div'); d.className = 'ov on'; d.id = 'itm'; d.onclick = e => { if (e.target === d) itmCerrar(); }; d.innerHTML = '<div class="mo" style="max-width:860px"><div class="mh"><span>' + tit + '</span><button class="btn g sm" onclick="itmCerrar()">✖ Cerrar</button></div><div class="cb" id="itmb">' + cuerpo + '</div></div>'; document.body.appendChild(d); }
+async function lineasDe(docs) { const j = await api({ accion: 'items', docs }); return j.ok ? j.lineas : null; }
+async function verItems(doc) {
+  const r = XG.plan.rows.find(x => x.doc === doc) || { doc, cli: '', est: '' };
+  itmAbrir('🧾 ' + esc(doc) + ' · ' + esc(r.cli), '<div class="foot">Cargando ítems…</div>');
+  const L = await lineasDe([doc]); if (!$('itmb')) return;
+  if (!L) { $('itmb').innerHTML = '<div class="err">No se pudieron traer los ítems.</div>'; return; }
+  const tot = L.reduce((s, l) => s + l[3], 0);
+  $('itmb').innerHTML = '<div style="font-size:12px;color:#475569;margin-bottom:8px">' + [r.est && '<b>' + esc(r.est) + '</b>', r.fdes && 'despachada el ' + esc(r.fdes) + (r.hdes ? ' ' + esc(r.hdes) : ''), r.guia && 'guía ' + esc(r.guia), r.fecha && 'facturada ' + esc(r.fecha) + (r.hora ? ' ' + esc(r.hora) : '')].filter(Boolean).join(' · ') + '</div>'
+    + '<div class="tw"><table><thead><tr><th style="text-align:left">Referencia</th><th style="text-align:left">Descripción</th><th>Cantidad</th></tr></thead><tbody>' + (L.map(l => '<tr><td style="text-align:left">' + esc(l[1]) + '</td><td style="text-align:left;white-space:normal">' + esc(l[2]) + '</td><td>' + fm(l[3]) + '</td></tr>').join('') || '<tr><td colspan="3" class="empty">Sin líneas</td></tr>') + '</tbody><tfoot><tr class="tot"><td colspan="2" style="text-align:left">' + L.length + ' ítems</td><td>' + fm(tot) + '</td></tr></tfoot></table></div>';
+}
+async function itemsVista() {
+  const V = xgView('plan'); if (!V.length) { alert('No hay facturas en la vista.'); return; }
+  const docs = V.map(r => r.doc), cap = docs.length > 600;
+  itmAbrir('📦 Ítems de la vista · ' + fm(Math.min(docs.length, 600)) + ' facturas', '<div class="foot">Cargando ítems…</div>');
+  const L = await lineasDe(docs.slice(0, 600)); if (!$('itmb')) return;
+  if (!L) { $('itmb').innerHTML = '<div class="err">No se pudieron traer los ítems.</div>'; return; }
+  const m = {}; L.forEach(l => { const o = m[l[1]] || (m[l[1]] = { ref: l[1], desc: l[2], cant: 0, f: new Set() }); o.cant += l[3]; o.f.add(l[0]); });
+  const R = Object.values(m).sort((x, y) => y.cant - x.cant); window.ITM_R = R;
+  const tot = R.reduce((s, o) => s + o.cant, 0);
+  $('itmb').innerHTML = (cap ? '<div class="err">La vista tiene ' + fm(docs.length) + ' facturas; se muestran las primeras 600. Filtra para ver el resto.</div>' : '') + '<div class="bar" style="margin-top:0"><span style="font-size:12px;font-weight:700">' + fm(R.length) + ' referencias · ' + fm(tot) + ' unidades</span><button class="btn g sm" onclick="itmExcel()">⬇ Excel</button></div>'
+    + '<div class="tw"><table><thead><tr><th style="text-align:left">Referencia</th><th style="text-align:left">Descripción</th><th>Cantidad</th><th>Facturas</th></tr></thead><tbody>' + R.map(o => '<tr><td style="text-align:left">' + esc(o.ref) + '</td><td style="text-align:left;white-space:normal">' + esc(o.desc) + '</td><td>' + fm(o.cant) + '</td><td>' + o.f.size + '</td></tr>').join('') + '</tbody><tfoot><tr class="tot"><td colspan="2" style="text-align:left">TOTAL</td><td>' + fm(tot) + '</td><td></td></tr></tfoot></table></div>';
+}
+function itmExcel() { const R = window.ITM_R || []; if (!R.length) return; const ws = XLSX.utils.json_to_sheet(R.map(o => ({ Referencia: o.ref, Descripción: o.desc, Cantidad: o.cant, Facturas: o.f.size }))), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'ITEMS'); XLSX.writeFile(wb, 'Logistica_items_' + D.fecha + '.xlsx'); }
 
 /* ===== Excel completo (día + mes) con fórmulas ===== */
 function cargaScript(src, glob) { return new Promise((ok, no) => { if (window[glob]) return ok(); const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => no(new Error('No cargó ' + glob)); document.head.appendChild(s); }); }
@@ -395,6 +426,7 @@ function resumenExcel() {
   $('dres').innerHTML = '<div class="bar"><label style="font-size:11px;color:#64748b">Columna de factura</label><select onchange="ARCH.col=+this.value;resumenExcel()">' + enc.map((c, i) => '<option value="' + i + '"' + (i === ARCH.col ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select><span style="font-size:12px;font-weight:700">' + fm(n) + ' facturas en «' + esc(ARCH.nombre) + '»' + (ARCH.guias ? ' · formato transportadora (guías)' : '') + '</span><button class="btn" ' + (n ? '' : 'disabled') + ' onclick="subirDespacho()">Marcar como despachadas</button></div>';
 }
 async function subirDespacho() {
+  CARGA = true;
   const items = ARCH.guias ? itemsExcel() : [], nums = numsExcel(); if (!items.length && !nums.length) return; const b = document.querySelector('#dres .btn'); if (b) { b.disabled = true; b.textContent = '⏳ Guardando…'; }
   const j = await api({ accion: 'despachar', fecha: $('dfecha').value, numeros: nums, items, archivo: ARCH.nombre });
   if (!j.ok) { $('dres').innerHTML = '<div class="err">' + esc(j.error || 'No se pudo guardar') + '</div>'; return; }
