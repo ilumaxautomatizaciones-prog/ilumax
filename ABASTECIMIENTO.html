@@ -4769,16 +4769,19 @@ function infBLDatos(){
   const precio = (o, ref) => { const k = ceRefKey(ref); const ri = o ? (REABAST.ocItems[o.id]||[]).find(i=>ceRefKey(i.referencia)===k) : null; const m = (REABAST.referenciasMaestro||{})[String(ref||'').trim()]||{}; return Number(ri&&ri.precio_fob_usd)||Number(m.fob_usd)||0; };
   const trmDe = o => (typeof IVS!=='undefined' ? (IVS.trmFijo||Number(o&&o.trm)||IVS.trm||0) : Number(o&&o.trm)||0);
   const cubierto = {};   // ocId|ref -> cantidad ya cubierta por BL
+  // Sábana de Comercio Exterior manda: órdenes reales del BL = columna No. IMPO; planta/ETD/ETA = fechas de la sábana
+  const SB = {}; (CE._blsBase||[]).forEach(x=>{ const n = String(x.bl||'').toUpperCase().trim(); if(!n || x.f===-1) return; const z = SB[n] = SB[n] || {im:{}, pl:'', d1:'', d2:''};
+    String(x.im||'').split('|').filter(Boolean).forEach(t=>z.im[t]=1); ['pl','d1','d2'].forEach(k=>{ if(x[k] && x[k]>z[k]) z[k]=x[k]; }); });
   ((typeof CBL!=='undefined' && CBL.bls)||[]).forEach(b=>{
     if(/^PENDIENTE|^PDTE$/i.test(String(b.bl||'')) && false) return;
     (b.items||[]).forEach(it=>{
       const fase = ceFaseLinea(it.estado||'Embarque','').fase; if(fase===-1) return;   // cancelado
       const o = porId[it.ocId] || porNum[ceNum(it.oc)] || null, cant = Number(it.cant)||0;
       const ing = fase===9 || !!it.ingreso;
-      const iso = it.planta || b.planta || b.eta || null, mk = mkDe(iso); 
+      const sb = SB[String(b.bl||'').toUpperCase().trim()]||null, iso = (sb&&sb.pl) || it.planta || b.planta || (sb&&sb.d2) || b.eta || null, mk = mkDe(iso); 
       if(o){ const ck = o.id+'|'+ceRefKey(it.ref); cubierto[ck] = (cubierto[ck]||0)+cant; }
       if(mk===null) return;
-      const p = precio(o, it.ref), usd = cant*p, m = M(mk), g = m.bls[b.bl||'Sin número'] = m.bls[b.bl||'Sin número'] || {bl:b.bl||'Sin número', planta:(b.planta||''), eta:(b.eta||''), ords:{}, usd:0, usdIng:0, n:0, nIng:0, fmin:99};
+      const p = precio(o, it.ref), usd = cant*p, m = M(mk), g = m.bls[b.bl||'Sin número'] = m.bls[b.bl||'Sin número'] || {bl:b.bl||'Sin número', planta:(sb&&sb.pl)||b.planta||'', eta:(sb&&sb.d2)||b.eta||'', etd:(sb&&sb.d1)||b.etd||'', impo:sb?Object.keys(sb.im):[], ords:{}, usd:0, usdIng:0, n:0, nIng:0, fmin:99};
       if(!(p>0)) m.sinPrecio++;
       const nom = o ? o.numero_oc : it.oc;
       g.ords[nom] = 1; m.ords[nom] = 1; g.usd += usd; g.n++; if(ing){ g.usdIng += usd; g.nIng++; } else g.fmin = Math.min(g.fmin, fase==null||fase<0 ? 5 : fase);
@@ -4805,7 +4808,7 @@ function infHtmlBLMes2(mk, BLD){
   const gs = Object.values(m.bls).sort((a,b)=>b.usd-a.usd);
   const fd = s => s ? new Date(String(s).slice(0,10)+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short'}) : '—';
   const est = g => g.nIng===g.n ? '<span style="color:#16a34a;font-weight:700;">✅ Ingresó</span>' : (g.nIng>0 ? '<span style="color:#b45309;font-weight:700;">◐ Ingreso parcial</span>' : '<span style="color:#2563eb;font-weight:700;">🚢 '+E(CBL_FASE_TXT[g.fmin]||'En camino')+'</span>');
-  const rows = gs.map(g=>`<tr><td><b>${E(g.bl)}</b></td><td>${fd(g.planta||g.eta)}</td><td>${Object.keys(g.ords).length} orden(es): <span class="arte-mu">${Object.keys(g.ords).sort().map(E).join(', ')}</span></td><td>${est(g)}</td><td style="text-align:right;font-weight:800;">${U(g.usd)}</td></tr>`).join('')
+  const rows = gs.map(g=>`<tr><td><b>${E(g.bl)}</b></td><td>${fd(g.planta||g.eta)}<div class="arte-mu" style="font-size:10px;">ETD ${fd(g.etd)} · ETA ${fd(g.eta)}</div></td><td>${(g.impo&&g.impo.length) ? g.impo.length+' orden(es) (No. IMPO): <span class="arte-mu">'+g.impo.map(E).join(', ')+'</span>'+(Object.keys(g.ords).filter(n=>!g.impo.map(ceNum).includes(ceNum(n))).length ? '<br><span style="color:#b45309;font-size:10.5px;">ERP no está en la sábana: '+Object.keys(g.ords).filter(n=>!g.impo.map(ceNum).includes(ceNum(n))).sort().map(E).join(', ')+'</span>' : '') : Object.keys(g.ords).length+' orden(es): <span class="arte-mu">'+Object.keys(g.ords).sort().map(E).join(', ')+'</span>'}</td><td>${est(g)}</td><td style="text-align:right;font-weight:800;">${U(g.usd)}</td></tr>`).join('')
     + (m.sin.usd>0 ? `<tr><td><b>Sin BL (aún sin embarque)</b></td><td>—</td><td>${Object.keys(m.sin.ords).length} orden(es): <span class="arte-mu">${Object.keys(m.sin.ords).sort().map(E).join(', ')}</span></td><td><span style="color:#64748b;font-weight:700;">⏳ Por embarcar</span></td><td style="text-align:right;font-weight:800;">${U(m.sin.usd)}</td></tr>` : '');
   return `<div class="tw" style="padding:0 14px 8px;"><div style="font-weight:800;font-size:12px;margin:2px 0 4px;">🚢 Costo FOB por BL (todo lo del período, ingresado o no)</div><table style="font-size:11.5px;"><thead><tr><th>BL</th><th>Llegada a planta</th><th>Órdenes</th><th>Estado</th><th style="text-align:right;">FOB US$</th></tr></thead><tbody>${rows}<tr style="font-weight:800;border-top:2px solid var(--b1);"><td colspan="4">Total FOB del período</td><td style="text-align:right;">${U(m.usd)}</td></tr><tr><td colspan="4" class="arte-mu">Ya ingresado</td><td style="text-align:right;">${U(m.usdIng)}</td></tr><tr><td colspan="4" class="arte-mu">Por llegar / en camino</td><td style="text-align:right;">${U(m.usd-m.usdIng)}</td></tr></tbody></table>${m.sinPrecio?`<div class="arte-mu" style="font-size:10.5px;margin-top:4px;">⚠ ${m.sinPrecio} línea(s) sin precio FOB en Compras ni en el maestro (suman 0).</div>`:''}</div>`;
 }
@@ -9720,7 +9723,7 @@ function ceCompactarBL(lineas){
   const iso = d => d ? new Date(d).toISOString().slice(0,10) : null;
   return lineas.filter(l=>l.ref!=null && String(l.ref).trim()!=='').map(l=>{
     const sub = (l.tokens||[]).find(t=>t!==l.orden && t.startsWith(l.orden+'-') && /^-\d+$/.test(t.slice(l.orden.length)));
-    return {o:l.orden, oc: sub||l.orden, r:String(l.ref).trim(), c: ceCantLinea(l.cantEnv, l.cantOrd), env:l.cantEnv, co:l.cantOrd, bl: ceBlOrden(l, sub||l.orden), ct: l.cont?String(l.cont).trim():'', dm: l.dim!=null&&String(l.dim).trim()?ceDimFmt(l.dim):'', cm: l.comentario?String(l.comentario).slice(0,200):'', rm: l.rim?String(l.rim).trim():'',
+    return {o:l.orden, im:(l.tokens||[]).join('|'), oc: sub||l.orden, r:String(l.ref).trim(), c: ceCantLinea(l.cantEnv, l.cantOrd), env:l.cantEnv, co:l.cantOrd, bl: ceBlOrden(l, sub||l.orden), ct: l.cont?String(l.cont).trim():'', dm: l.dim!=null&&String(l.dim).trim()?ceDimFmt(l.dim):'', cm: l.comentario?String(l.comentario).slice(0,200):'', rm: l.rim?String(l.rim).trim():'',
       e:l.estado||'', f:ceFaseLinea(l.estado, l.comentario).fase, zv:l.etdV?1:0, ev:l.etaV?1:0, d1:iso(l.etd), d2:iso(l.eta), pl:iso(l.planta), ing:iso(l.ingreso)};
   });
 }
