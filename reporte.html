@@ -420,7 +420,7 @@ async function cargarVme(force) {
   } catch (e) { VME.cargando = false; el.innerHTML = '<div class="err"><b>No se pudo cargar el reporte por mes.</b><br>' + esc(e.message) + '</div>'; }
 }
 /* ===== Ventas por mes: rejilla tipo Excel (filtros por columna, buscador, canal, columnas, mapa de calor, Excel) ===== */
-const VG = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), q: '', canal: '', ejec: '', group: true, heat: false, meses: [] };
+const VG = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), q: '', canal: '', ejec: '', group: true, heat: false, desg: true, meses: [] };
 const VGM_ = {};
 const vgV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
 function vgView() {
@@ -458,8 +458,34 @@ function vgPaint() {
       body += filaTot('Subtotal ' + cn, vgSumas(arr, cols), 'background:#e2e8f0'); });
   } else V.slice(0, 1500).forEach(r => { body += '<tr style="background:' + (n++ % 2 ? '#eff6ff' : '#fff') + '">' + cols.map(c => cel(c, r)).join('') + '</tr>'; });
   const S = vgSumas(V, cols);
-  box.innerHTML = '<table><thead><tr>' + th + '</tr></thead><tbody>' + (body || '<tr><td colspan="' + cols.length + '" style="text-align:center;padding:20px;color:#64748b">Sin resultados</td></tr>') + '</tbody><tfoot>' + filaTot('TOTAL · ' + V.length + ' ejecutivos', S, 'background:#0f172a;color:#fff', 'tot') + '</tfoot></table>';
-  const nn = document.getElementById('vgN'); if (nn) nn.textContent = V.length + ' de ' + g.rows.length + ' ejecutivos';
+  box.innerHTML = '<table><thead><tr>' + th + '</tr></thead><tbody>' + (body || '<tr><td colspan="' + cols.length + '" style="text-align:center;padding:20px;color:#64748b">Sin resultados</td></tr>') + '</tbody><tfoot>' + filaTot('TOTAL · ' + V.length + (VG.desg ? ' filas' : ' ejecutivos'), S, 'background:#0f172a;color:#fff', 'tot') + '</tfoot></table>';
+  try { vgChart(V); } catch (e) { console.warn(e); }
+  const nn = document.getElementById('vgN'); if (nn) nn.textContent = V.length + ' de ' + g.rows.length + (g.desg ? ' filas (ejecutivo × canal)' : ' ejecutivos');
+}
+function vgChart(V) {
+  const box = document.getElementById('vg_chart'); if (!box) return;
+  const meses = VG.meses, n = meses.length, last = n - 1;
+  if (!V.length || n < 2) { box.innerHTML = ''; return; }
+  const porEj = V.length <= 8;
+  let S = [];
+  if (porEj) S = V.map(r => ({ t: VG.desg ? r.nom + ' · ' + r.canal : r.nom, v: r.vals.slice() }));
+  else { const m = {}; V.forEach(r => { const x = m[r.canal] || (m[r.canal] = { t: r.canal, v: meses.map(() => 0) }); r.vals.forEach((v, i) => x.v[i] += v); }); S = Object.values(m); S.push({ t: 'Total', v: meses.map((_, i) => V.reduce((s, r) => s + r.vals[i], 0)), tot: 1 }); }
+  const PAL = ['#2563eb', '#16a34a', '#ea580c', '#9333ea', '#0891b2', '#dc2626', '#ca8a04', '#db2777'];
+  S.forEach((s, i) => s.c = s.tot ? '#0f172a' : PAL[i % PAL.length]);
+  const W = 1100, H = 250, L = 70, R = 16, T = 14, B = 28, mx = Math.max(1, ...S.flatMap(s => s.v)) * 1.08;
+  const X = i => L + (W - L - R) * i / (n - 1), Y = v => T + (H - T - B) * (1 - v / mx);
+  const abr = v => v >= 1e6 ? '$' + (v / 1e6).toFixed(v >= 1e7 ? 0 : 1).replace('.', ',') + ' M' : '$' + Math.round(v / 1e3) + ' mil';
+  let g = '';
+  for (let k = 0; k <= 4; k++) { const v = mx * k / 4, y = Y(v); g += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y + '" y2="' + y + '" stroke="#e2e8f0"/><text x="' + (L - 6) + '" y="' + (y + 4) + '" text-anchor="end" font-size="11" fill="#64748b">' + abr(v) + '</text>'; }
+  meses.forEach((mm, i) => { g += '<text x="' + X(i) + '" y="' + (H - 8) + '" text-anchor="middle" font-size="11" fill="#64748b">' + MESN[+mm.slice(5) - 1].slice(0, 3) + (i === last ? '*' : '') + '</text>'; });
+  S.forEach(s => {
+    const seg = (a, b, dash) => '<polyline fill="none" stroke="' + s.c + '" stroke-width="' + (s.tot ? 3 : 2) + '"' + (dash ? ' stroke-dasharray="5 4"' : '') + ' points="' + s.v.slice(a, b + 1).map((v, i) => X(a + i) + ',' + Y(v)).join(' ') + '"/>';
+    g += seg(0, last - 1 >= 0 ? last - 1 : 0, false) + seg(last - 1, last, true);
+    s.v.forEach((v, i) => { g += '<circle cx="' + X(i) + '" cy="' + Y(v) + '" r="3.5" fill="' + s.c + '"><title>' + esc(s.t) + ' · ' + MESN[+meses[i].slice(5) - 1] + ': ' + $(v) + '</title></circle>'; });
+  });
+  if (S.length === 1 && V.length === 1) { const pr = V.length === 1 ? V[0].pa : 0; if (pr) g += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(pr) + '" y2="' + Y(pr) + '" stroke="#f59e0b" stroke-dasharray="2 4"/><text x="' + (W - R) + '" y="' + (Y(pr) - 4) + '" text-anchor="end" font-size="10" fill="#b45309">Prom. año</text>'; }
+  const leg = S.map(s => '<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:11.5px;font-weight:600"><i style="width:14px;height:3px;background:' + s.c + ';display:inline-block"></i>' + esc(s.t) + '</span>').join('');
+  box.innerHTML = '<div style="padding:8px 14px 0"><div style="font-size:12px;font-weight:800;margin-bottom:4px">📉 Tendencia mensual · ' + (porEj ? 'por ejecutivo' : 'por canal y total') + ' (sigue los filtros)</div><svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;max-height:280px">' + g + '</svg><div>' + leg + '</div><div style="font-size:10.5px;color:#64748b;margin-top:2px">* mes en curso (tramo punteado). Pasa el mouse por un punto para ver el valor.</div></div>';
 }
 function vgSort(k) { const g = VG; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; vgPaint(); }
 function vgLimpiar() { VG.f = {}; VG.sort = null; VG.q = ''; VG.canal = ''; pintarVme(); }
@@ -505,31 +531,36 @@ function pintarVme() {
   const NC = { ESP: 'Especializado', MIX: 'Mixto', PRO: 'Proyectos', ONL: 'Online', HOM: 'Home Center', DIS: 'Distribuidor', OTR: 'Otros canales' }, ORD = Object.keys(NC);
   const E = {};
   meses.forEach(mm => { ((VME.d[mm] || {}).ejecutivos || []).forEach(e => {
-    const x = E[e.nombre] || (E[e.nombre] = { nombre: e.nombre, m: {}, c: {} });
-    x.m[mm] = (x.m[mm] || 0) + (Number(e.v && e.v.total) || 0);
-    ORD.forEach(k => { x.c[k] = (x.c[k] || 0) + (Number(e.v && e.v[k]) || 0); });
+    const x = E[e.nombre] || (E[e.nombre] = { nombre: e.nombre, m: {}, c: {}, mc: {} });
+    const tm = Number(e.v && e.v.total) || 0; x.m[mm] = (x.m[mm] || 0) + tm;
+    let su = 0; ORD.forEach(k => { const v = Number(e.v && e.v[k]) || 0; su += v; x.c[k] = (x.c[k] || 0) + v; (x.mc[k] = x.mc[k] || {})[mm] = ((x.mc[k] || {})[mm] || 0) + v; });
+    if (Math.abs(tm - su) > 1) { x.c.OTR += tm - su; x.mc.OTR[mm] = (x.mc.OTR[mm] || 0) + tm - su; }   // lo que no viene asignado a un canal queda en Otros
   }); });
   const prom = (arr, n) => { const a = arr.slice(-n); return a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0; };
-  const rows = Object.values(E).map(x => {   // canal principal = donde más vende en el año
-    let k = 'OTR', b = 0; ORD.forEach(c => { if ((x.c[c] || 0) > b) { b = x.c[c]; k = c; } });
-    const vals = meses.map(mm => Math.round(x.m[mm] || 0)), vc = vals.slice(0, cerr.length);
-    return { nom: x.nombre, canal: NC[k], ord: ORD.indexOf(k), vals, mx: Math.max(0, ...vals), p3: Math.round(prom(vc, 3)), p6: Math.round(prom(vc, 6)), pa: Math.round(prom(vc, 12)), tot: vals.reduce((s, v) => s + v, 0) };
-  }).sort((a, b) => a.ord - b.ord || b.tot - a.tot);
+  const mkRow = (nom, k, mp) => { const vals = meses.map(mm => Math.round(mp[mm] || 0)), vc = vals.slice(0, cerr.length);
+    return { nom, canal: NC[k], ord: ORD.indexOf(k), vals, mx: Math.max(0, ...vals), p3: Math.round(prom(vc, 3)), p6: Math.round(prom(vc, 6)), pa: Math.round(prom(vc, 12)), tot: vals.reduce((s, v) => s + v, 0) }; };
+  const rows = [];
+  Object.values(E).forEach(x => {
+    if (VG.desg) ORD.forEach(k => { const mp = x.mc[k] || {}; if (meses.some(mm => Math.abs(mp[mm] || 0) >= 1)) rows.push(mkRow(x.nombre, k, mp)); });   // una fila por ejecutivo y canal donde vendió
+    else { let k = 'OTR', b = 0; ORD.forEach(c => { if ((x.c[c] || 0) > b) { b = x.c[c]; k = c; } }); rows.push(mkRow(x.nombre, k, x.m)); }   // canal principal
+  });
+  rows.sort((a, b) => a.ord - b.ord || b.tot - a.tot);
   const cols = [{ k: 'nom', t: 'Ejecutivo', v: r => r.nom }, { k: 'canal', t: 'Canal', v: r => r.canal }];
   meses.forEach((mm, i) => cols.push({ k: 'm' + i, mi: i, t: MESN[+mm.slice(5) - 1].slice(0, 3) + (i === meses.length - 1 ? ' (en curso)' : ''), v: r => r.vals[i], num: 1 }));
   cols.push({ k: 'p3', t: 'Prom. 3 meses', v: r => r.p3, num: 1, avg: 1 }, { k: 'p6', t: 'Prom. 6 meses', v: r => r.p6, num: 1, avg: 1 }, { k: 'pa', t: 'Prom. año', v: r => r.pa, num: 1, avg: 1 }, { k: 'tot', t: 'Total año', v: r => r.tot, num: 1 });
   VG.rows = rows; VG.cols = cols; VG.meses = meses;
-  const canales = [...new Set(rows.map(r => r.canal))], ejs = rows.map(r => r.nom).sort((a, b) => a.localeCompare(b, 'es'));
+  const canales = [...new Set(rows.map(r => r.canal))], ejs = [...new Set(rows.map(r => r.nom))].sort((a, b) => a.localeCompare(b, 'es'));
   const opt = (arr, cur, todos) => '<option value="">' + todos + '</option>' + arr.map(o => '<option' + (cur === o ? ' selected' : '') + '>' + esc(o) + '</option>').join('');
   el.innerHTML = '<style>#vme table{font-size:11.5px}#vme td,#vme th{white-space:nowrap;padding:5px 8px}#vme thead th{position:sticky;top:0;z-index:3;background:#0f172a;color:#fff}#vme tfoot td{position:sticky;bottom:0;z-index:3;background:#0f172a;color:#fff}#vme td.vgs,#vme th.vgs{position:sticky;left:0;z-index:2;background:inherit;box-shadow:2px 0 0 #cbd5e1}#vme thead th.vgs{z-index:4;background:#0f172a}#vme tfoot td.vgs{z-index:4}#vme #vg_box{max-height:74vh;overflow:auto}#vme .bar input[type=checkbox]{flex:none;width:auto;padding:0}</style>'
     + '<div class="card"><h2>📈 Ventas por mes — ejecutivo y canal (' + VME.y + ')</h2>'
     + '<div class="bar" style="flex-wrap:wrap"><input id="vgQ" placeholder="🔎 Buscar ejecutivo o canal…" value="' + esc(VG.q) + '" oninput="VG.q=this.value;vgPaint()" style="min-width:220px">'
     + '<select onchange="VG.ejec=this.value;VG.q=this.value;document.getElementById(\'vgQ\').value=this.value;vgPaint()">' + opt(ejs, VG.ejec, 'Todos los ejecutivos') + '</select>'
     + '<select onchange="VG.canal=this.value;vgPaint()">' + opt(canales, VG.canal, 'Todos los canales') + '</select>'
+    + '<label style="font-size:12px;display:flex;gap:4px;align-items:center" title="Si un asesor vende en varios canales, sale una fila por cada canal"><input type="checkbox" ' + (VG.desg ? 'checked' : '') + ' onchange="VG.desg=this.checked;pintarVme()"> Desglosar por canal</label>'
     + '<label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ' + (VG.group ? 'checked' : '') + ' onchange="VG.group=this.checked;vgPaint()"> Subtotales por canal</label>'
     + '<label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ' + (VG.heat ? 'checked' : '') + ' onchange="VG.heat=this.checked;vgPaint()"> 🌡 Mapa de calor</label>'
     + '<button class="btn" onclick="vgCols(event)">▦ Columnas</button><button class="btn" onclick="vgLimpiar()">✖ Quitar filtros y orden</button><button class="btn" onclick="vgExcel()">📥 Excel de esta vista</button><button class="btn" onclick="cargarVme(true)">↻ Actualizar</button><span id="vgN" style="font-size:12px;color:#475569;font-weight:600"></span></div>'
-    + '<div id="vg_box"></div>'
+    + '<div id="vg_chart"></div><div id="vg_box"></div>'
     + '<div style="padding:8px 14px;font-size:11px;color:#64748b">Clic en el título ordena; ▾ filtra por columna (valores, mayor/menor). Los totales y subtotales siguen los filtros. Los promedios usan solo meses cerrados' + (cerr.length ? ' (' + MESN[+cerr[0].slice(5) - 1] + ' a ' + MESN[+cerr[cerr.length - 1].slice(5) - 1] + ')' : '') + ': Prom. 3 y 6 = últimos 3 y 6 meses cerrados, Prom. año = todos los cerrados; se divide entre los meses del período aunque no haya vendido en alguno.</div></div>';
   vgPaint();
 }
