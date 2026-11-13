@@ -419,6 +419,87 @@ async function cargarVme(force) {
     VME.d = res; VME.meses = meses; VME.y = y; VME.m = mAct; VME.cargando = false; pintarVme();
   } catch (e) { VME.cargando = false; el.innerHTML = '<div class="err"><b>No se pudo cargar el reporte por mes.</b><br>' + esc(e.message) + '</div>'; }
 }
+/* ===== Ventas por mes: rejilla tipo Excel (filtros por columna, buscador, canal, columnas, mapa de calor, Excel) ===== */
+const VG = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), q: '', canal: '', ejec: '', group: true, heat: false, meses: [] };
+const VGM_ = {};
+const vgV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
+function vgView() {
+  const g = VG, q = hgNz(g.q);
+  let R = g.rows.filter(r => (!g.canal || r.canal === g.canal) && (!q || hgNz(r.nom + ' ' + r.canal).includes(q)) && g.cols.every(c => {
+    const f = g.f[c.k]; if (!f) return true; const v = vgV(c, r);
+    if (f.sel && !f.sel.has(String(v))) return false;
+    if (c.num) { if (f.min !== '' && f.min != null) { if (v === '' || Number(v) < Number(f.min)) return false; } if (f.max !== '' && f.max != null) { if (v === '' || Number(v) > Number(f.max)) return false; } }
+    return true;
+  }));
+  if (g.sort) { const c = g.cols.find(x => x.k === g.sort.k), d = g.sort.dir; if (c) R = R.map((r, i) => [r, i]).sort((a, b) => { const x = vgV(c, a[0]), y = vgV(c, b[0]); const o = c.num ? (Number(x) || 0) - (Number(y) || 0) : String(x).localeCompare(String(y), 'es', { numeric: true }); return (o || a[1] - b[1]) * (o ? d : 1); }).map(x => x[0]); }
+  return R;
+}
+const vgOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !== '' && f.max != null));
+function vgSumas(R, cols) { const s = {}; cols.forEach(c => { if (c.num) s[c.k] = R.reduce((a, r) => a + (Number(vgV(c, r)) || 0), 0); }); return s; }
+function vgPaint() {
+  const g = VG, box = document.getElementById('vg_box'); if (!box) return;
+  const V = vgView(), cols = g.cols.filter(c => !g.hide.has(c.k)), last = g.meses.length - 1;
+  const al = c => c.num ? 'right' : 'left';
+  const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="xgh' + (c.k === 'nom' ? ' vgs' : '') + '" style="text-align:' + al(c) + '"><span style="cursor:pointer" onclick="vgSort(\'' + c.k + '\')">' + esc(c.t) + s + '</span><button class="xgb' + (vgOn(g.f[c.k]) ? ' on' : '') + '" onclick="vgMenu(event,\'' + c.k + '\')">▾</button></th>'; }).join('');
+  const cel = (c, r, bg) => {
+    const v = vgV(c, r); let st = 'text-align:' + al(c), cls = c.k === 'nom' ? ' class="vgs"' : '';
+    if (c.k === 'nom') st += ';font-weight:700';
+    if (c.k === 'canal') st += ';color:#64748b';
+    if (c.mi != null) { if (c.mi === last) st += ';font-style:italic'; if (g.heat && r.mx > 0 && v > 0) st += ';background:rgba(37,99,235,' + (0.07 + 0.35 * v / r.mx).toFixed(2) + ')'; }
+    if (c.avg) st += ';font-weight:700;' + (g.heat ? '' : 'background:#fffbeb');
+    return '<td' + cls + ' style="' + st + '">' + (c.num ? (v ? $(v) : '—') : esc(String(v))) + '</td>';
+  };
+  const filaTot = (txt, S, estilo, cls) => '<tr class="' + (cls || '') + '" style="' + estilo + '">' + cols.map((c, i) => '<td' + (c.k === 'nom' ? ' class="vgs"' : '') + ' style="text-align:' + al(c) + ';font-weight:800">' + (c.k === 'nom' ? esc(txt) : c.num ? (S[c.k] ? $(S[c.k]) : '—') : '') + '</td>').join('') + '</tr>';
+  let body = '', n = 0;
+  if (g.group && !g.sort) {
+    const orden = [...new Set(g.rows.map(r => r.canal))];
+    orden.forEach(cn => { const arr = V.filter(r => r.canal === cn); if (!arr.length) return;
+      arr.forEach(r => { body += '<tr style="background:' + (n++ % 2 ? '#eff6ff' : '#fff') + '">' + cols.map(c => cel(c, r)).join('') + '</tr>'; });
+      body += filaTot('Subtotal ' + cn, vgSumas(arr, cols), 'background:#e2e8f0'); });
+  } else V.slice(0, 1500).forEach(r => { body += '<tr style="background:' + (n++ % 2 ? '#eff6ff' : '#fff') + '">' + cols.map(c => cel(c, r)).join('') + '</tr>'; });
+  const S = vgSumas(V, cols);
+  box.innerHTML = '<table><thead><tr>' + th + '</tr></thead><tbody>' + (body || '<tr><td colspan="' + cols.length + '" style="text-align:center;padding:20px;color:#64748b">Sin resultados</td></tr>') + '</tbody><tfoot>' + filaTot('TOTAL · ' + V.length + ' ejecutivos', S, 'background:#0f172a;color:#fff', 'tot') + '</tfoot></table>';
+  const nn = document.getElementById('vgN'); if (nn) nn.textContent = V.length + ' de ' + g.rows.length + ' ejecutivos';
+}
+function vgSort(k) { const g = VG; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; vgPaint(); }
+function vgLimpiar() { VG.f = {}; VG.sort = null; VG.q = ''; VG.canal = ''; pintarVme(); }
+function vgCols(ev) {
+  ev.stopPropagation(); hgCerrar(); const g = VG, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); hgPos(d, ev);
+  d.innerHTML = '<b>Columnas visibles</b><div class="li" style="max-height:300px">' + g.cols.map((c, i) => '<label><input type="checkbox" ' + (g.hide.has(c.k) ? '' : 'checked') + ' onchange="vgToggle(' + i + ',this.checked)"> ' + esc(c.t) + '</label>').join('') + '</div>';
+  document.body.appendChild(d);
+}
+function vgToggle(i, on) { const k = VG.cols[i].k; if (on) VG.hide.delete(k); else VG.hide.add(k); vgPaint(); }
+function vgMenu(ev, k) {
+  ev.stopPropagation(); hgCerrar(); const g = VG, c = g.cols.find(x => x.k === k), f = g.f[k] || {}, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); hgPos(d, ev);
+  const vals = c.num ? null : [...new Set(g.rows.map(r => String(vgV(c, r))))].sort((a, b) => a.localeCompare(b, 'es', { numeric: true })).slice(0, 600);
+  VGM_.k = k; VGM_.vals = vals;
+  const t1 = c.num ? 'menor a mayor' : 'A → Z', t2 = c.num ? 'mayor a menor' : 'Z → A';
+  d.innerHTML = '<button class="btn" style="width:100%;margin-bottom:4px" onclick="vgOrden(1)">↑ Ordenar ' + t1 + '</button><button class="btn" style="width:100%" onclick="vgOrden(-1)">↓ Ordenar ' + t2 + '</button>'
+    + (c.num ? '<div style="margin-top:8px">Mayor o igual a<input id="xgMin" value="' + esc(f.min == null ? '' : f.min) + '"></div><div>Menor o igual a<input id="xgMax" value="' + esc(f.max == null ? '' : f.max) + '"></div>' : '')
+    + (vals ? '<input id="xgBus" placeholder="Buscar…" style="margin-top:8px" oninput="hgBuscar(this.value)"><label style="margin-top:4px"><input type="checkbox" id="xgAll" ' + (!f.sel ? 'checked' : '') + ' onchange="hgTodos(this.checked)"> <b>(Seleccionar visibles)</b></label><div class="li" id="xgLi">' + vals.map((v, i) => '<label data-t="' + esc(hgNz(v)) + '"><input type="checkbox" class="xgc" data-i="' + i + '" ' + (!f.sel || f.sel.has(v) ? 'checked' : '') + '> ' + (v === '' ? '(vacío)' : esc(v)) + '</label>').join('') + '</div>' : '')
+    + '<div style="display:flex;gap:6px;margin-top:8px"><button class="btn" style="flex:1" onclick="vgAplicar()">Aplicar</button><button class="btn" style="flex:1" onclick="vgQuitar()">Quitar filtro</button></div>';
+  document.body.appendChild(d);
+}
+function vgOrden(dir) { VG.sort = { k: VGM_.k, dir }; hgCerrar(); vgPaint(); }
+function vgAplicar() {
+  const g = VG, c = g.cols.find(x => x.k === VGM_.k), f = {};
+  if (c.num) { const mn = document.getElementById('xgMin').value.trim().replace(',', '.'), mx = document.getElementById('xgMax').value.trim().replace(',', '.'); f.min = mn; f.max = mx; if ((mn !== '' && isNaN(+mn)) || (mx !== '' && isNaN(+mx))) { alert('Escribe números válidos.'); return; } }
+  if (VGM_.vals) { const chk = [...document.querySelectorAll('.xgc')], on = chk.filter(x => x.checked).map(x => VGM_.vals[+x.dataset.i]); if (on.length < chk.length) f.sel = new Set(on); }
+  if (vgOn(f)) g.f[VGM_.k] = f; else delete g.f[VGM_.k]; hgCerrar(); vgPaint();
+}
+function vgQuitar() { delete VG.f[VGM_.k]; hgCerrar(); vgPaint(); }
+async function vgExcel() {
+  try {
+    await cargarScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
+    const g = VG, V = vgView(), cols = g.cols.filter(c => !g.hide.has(c.k)), wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('Ventas por mes');
+    ws.addRow(cols.map(c => c.t)); const h = ws.getRow(1); h.font = { bold: true, color: { argb: 'FFFFFFFF' } }; h.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    V.forEach(r => ws.addRow(cols.map(c => { const v = vgV(c, r); return c.num ? Number(v) || 0 : v; })));
+    const S = vgSumas(V, cols), t = ws.addRow(cols.map((c, i) => c.k === 'nom' ? 'TOTAL' : c.num ? S[c.k] : '')); t.font = { bold: true };
+    cols.forEach((c, i) => { const col = ws.getColumn(i + 1); col.width = c.num ? 16 : c.k === 'nom' ? 38 : 16; if (c.num) col.numFmt = '#,##0'; });
+    ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }]; ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
+    const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'application/octet-stream' })); a.download = 'ventas_por_mes_' + VME.y + '.xlsx'; a.click();
+  } catch (e) { alert(e.message); }
+}
 function pintarVme() {
   const el = document.getElementById('vme'), meses = VME.meses, cerr = meses.slice(0, -1);   // el mes en curso (el último) no entra en los promedios
   const NC = { ESP: 'Especializado', MIX: 'Mixto', PRO: 'Proyectos', ONL: 'Online', HOM: 'Home Center', DIS: 'Distribuidor', OTR: 'Otros canales' }, ORD = Object.keys(NC);
@@ -428,25 +509,29 @@ function pintarVme() {
     x.m[mm] = (x.m[mm] || 0) + (Number(e.v && e.v.total) || 0);
     ORD.forEach(k => { x.c[k] = (x.c[k] || 0) + (Number(e.v && e.v[k]) || 0); });
   }); });
-  const G = {};   // canal principal = donde más vende en el año
-  Object.values(E).forEach(x => { let k = 'OTR', b = 0; ORD.forEach(c => { if ((x.c[c] || 0) > b) { b = x.c[c]; k = c; } }); (G[k] = G[k] || []).push(x); });
   const prom = (arr, n) => { const a = arr.slice(-n); return a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0; };
-  const fila = (nombre, canal, vals, estilo) => '<tr style="' + (estilo || '') + '"><td>' + esc(canal) + '</td><td style="font-weight:' + (estilo ? 800 : 600) + '">' + esc(nombre) + '</td>'
-    + meses.map((mm, i) => '<td style="text-align:right;' + (i === meses.length - 1 ? 'background:#f1f5f9;font-style:italic;' : '') + '">' + (vals[i] ? $(vals[i]) : '—') + '</td>').join('')
-    + [3, 6, cerr.length].map(n => '<td style="text-align:right;font-weight:700;background:#fffbeb">' + (cerr.length ? $(prom(vals.slice(0, cerr.length), n)) : '—') + '</td>').join('') + '</tr>';
-  let body = '', tot = meses.map(() => 0);
-  ORD.filter(k => G[k]).forEach(k => {
-    const arr = G[k].sort((a, b) => meses.reduce((s, mm) => s + (b.m[mm] || 0) - (a.m[mm] || 0), 0));
-    const sub = meses.map(mm => arr.reduce((s, x) => s + (x.m[mm] || 0), 0));
-    arr.forEach((x, i) => { body += fila(x.nombre, i === 0 ? NC[k] : '', meses.map(mm => x.m[mm] || 0)); });
-    body += fila('Subtotal ' + NC[k], '', sub, 'background:#eef2f7;font-weight:800'); sub.forEach((v, i) => tot[i] += v);
-  });
-  body += fila('TOTAL', '', tot, 'background:#0f172a;color:#fff;font-weight:800');
-  const th = t => '<th style="text-align:right">' + t + '</th>';
-  el.innerHTML = '<div class="card"><h2>📈 Ventas por mes — ejecutivo y canal (' + VME.y + ')</h2><div class="hint">Venta facturada de cada ejecutivo, agrupado por su canal principal. Desliza hacia la derecha si no ves todas las columnas.</div>'
-    + '<div class="tw"><table><thead><tr><th>Canal</th><th>Ejecutivo</th>' + meses.map((mm, i) => th(MESN[+mm.slice(5) - 1].slice(0, 3) + (i === meses.length - 1 ? ' (en curso)' : ''))).join('')
-    + th('Prom. 3 meses') + th('Prom. 6 meses') + th('Prom. año') + '</tr></thead><tbody>' + body + '</tbody></table></div>'
-    + '<div style="padding:8px 14px;font-size:11px;color:#64748b">Los promedios usan solo meses cerrados' + (cerr.length ? ' (' + MESN[+cerr[0].slice(5) - 1] + ' a ' + MESN[+cerr[cerr.length - 1].slice(5) - 1] + ')' : '') + ' y excluyen el mes en curso. Prom. 3 y 6 = últimos 3 y 6 meses cerrados; Prom. año = todos los meses cerrados del año. Se divide entre el número de meses del período, incluso si el ejecutivo no vendió en alguno. <a href="#" onclick="cargarVme(true);return false">Actualizar</a></div></div>';
+  const rows = Object.values(E).map(x => {   // canal principal = donde más vende en el año
+    let k = 'OTR', b = 0; ORD.forEach(c => { if ((x.c[c] || 0) > b) { b = x.c[c]; k = c; } });
+    const vals = meses.map(mm => Math.round(x.m[mm] || 0)), vc = vals.slice(0, cerr.length);
+    return { nom: x.nombre, canal: NC[k], ord: ORD.indexOf(k), vals, mx: Math.max(0, ...vals), p3: Math.round(prom(vc, 3)), p6: Math.round(prom(vc, 6)), pa: Math.round(prom(vc, 12)), tot: vals.reduce((s, v) => s + v, 0) };
+  }).sort((a, b) => a.ord - b.ord || b.tot - a.tot);
+  const cols = [{ k: 'nom', t: 'Ejecutivo', v: r => r.nom }, { k: 'canal', t: 'Canal', v: r => r.canal }];
+  meses.forEach((mm, i) => cols.push({ k: 'm' + i, mi: i, t: MESN[+mm.slice(5) - 1].slice(0, 3) + (i === meses.length - 1 ? ' (en curso)' : ''), v: r => r.vals[i], num: 1 }));
+  cols.push({ k: 'p3', t: 'Prom. 3 meses', v: r => r.p3, num: 1, avg: 1 }, { k: 'p6', t: 'Prom. 6 meses', v: r => r.p6, num: 1, avg: 1 }, { k: 'pa', t: 'Prom. año', v: r => r.pa, num: 1, avg: 1 }, { k: 'tot', t: 'Total año', v: r => r.tot, num: 1 });
+  VG.rows = rows; VG.cols = cols; VG.meses = meses;
+  const canales = [...new Set(rows.map(r => r.canal))], ejs = rows.map(r => r.nom).sort((a, b) => a.localeCompare(b, 'es'));
+  const opt = (arr, cur, todos) => '<option value="">' + todos + '</option>' + arr.map(o => '<option' + (cur === o ? ' selected' : '') + '>' + esc(o) + '</option>').join('');
+  el.innerHTML = '<style>#vme table{font-size:11.5px}#vme td,#vme th{white-space:nowrap;padding:5px 8px}#vme thead th{position:sticky;top:0;z-index:3;background:#0f172a;color:#fff}#vme tfoot td{position:sticky;bottom:0;z-index:3;background:#0f172a;color:#fff}#vme td.vgs,#vme th.vgs{position:sticky;left:0;z-index:2;background:inherit;box-shadow:2px 0 0 #cbd5e1}#vme thead th.vgs{z-index:4;background:#0f172a}#vme tfoot td.vgs{z-index:4}#vme #vg_box{max-height:74vh;overflow:auto}#vme .bar input[type=checkbox]{flex:none;width:auto;padding:0}</style>'
+    + '<div class="card"><h2>📈 Ventas por mes — ejecutivo y canal (' + VME.y + ')</h2>'
+    + '<div class="bar" style="flex-wrap:wrap"><input id="vgQ" placeholder="🔎 Buscar ejecutivo o canal…" value="' + esc(VG.q) + '" oninput="VG.q=this.value;vgPaint()" style="min-width:220px">'
+    + '<select onchange="VG.ejec=this.value;VG.q=this.value;document.getElementById(\'vgQ\').value=this.value;vgPaint()">' + opt(ejs, VG.ejec, 'Todos los ejecutivos') + '</select>'
+    + '<select onchange="VG.canal=this.value;vgPaint()">' + opt(canales, VG.canal, 'Todos los canales') + '</select>'
+    + '<label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ' + (VG.group ? 'checked' : '') + ' onchange="VG.group=this.checked;vgPaint()"> Subtotales por canal</label>'
+    + '<label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ' + (VG.heat ? 'checked' : '') + ' onchange="VG.heat=this.checked;vgPaint()"> 🌡 Mapa de calor</label>'
+    + '<button class="btn" onclick="vgCols(event)">▦ Columnas</button><button class="btn" onclick="vgLimpiar()">✖ Quitar filtros y orden</button><button class="btn" onclick="vgExcel()">📥 Excel de esta vista</button><button class="btn" onclick="cargarVme(true)">↻ Actualizar</button><span id="vgN" style="font-size:12px;color:#475569;font-weight:600"></span></div>'
+    + '<div id="vg_box"></div>'
+    + '<div style="padding:8px 14px;font-size:11px;color:#64748b">Clic en el título ordena; ▾ filtra por columna (valores, mayor/menor). Los totales y subtotales siguen los filtros. Los promedios usan solo meses cerrados' + (cerr.length ? ' (' + MESN[+cerr[0].slice(5) - 1] + ' a ' + MESN[+cerr[cerr.length - 1].slice(5) - 1] + ')' : '') + ': Prom. 3 y 6 = últimos 3 y 6 meses cerrados, Prom. año = todos los cerrados; se divide entre los meses del período aunque no haya vendido en alguno.</div></div>';
+  vgPaint();
 }
 
 function verTab(t) {
@@ -462,7 +547,7 @@ function verTab(t) {
   document.getElementById('vme').style.display = t === 'vme' ? '' : 'none';
   document.getElementById('prc').style.display = t === 'prc' ? '' : 'none';
   document.getElementById('hom').style.display = t === 'hom' ? '' : 'none';
-  { const w = document.querySelector('.wrap'); if (w) w.classList.toggle('full', t === 'hom'); }
+  { const w = document.querySelector('.wrap'); if (w) w.classList.toggle('full', t === 'hom' || t === 'vme'); }
   if (t === 'hom') cargarHom();
   if (t === 'vme') cargarVme(false);
   if (t === 'prc') cargarPrc(PRC.mes, false);
