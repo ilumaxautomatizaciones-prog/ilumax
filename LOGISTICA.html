@@ -488,8 +488,8 @@ function devItemRow(i, k, ro) {
   const v = (f) => esc(i[f] == null ? '' : i[f]), d = ro ? ' disabled' : '';
   return '<tr data-r="' + k + '"><td><input id="dvi_' + k + '_referencia" value="' + v('referencia') + '"' + d + ' style="width:90px" onchange="dvDesc(' + k + ')"></td><td><input id="dvi_' + k + '_descripcion" value="' + v('descripcion') + '"' + d + ' style="min-width:150px"></td>'
     + '<td><input id="dvi_' + k + '_cant_doc" inputmode="decimal" value="' + v('cant_doc') + '"' + d + ' style="width:62px"></td><td><input id="dvi_' + k + '_cant_recibida" inputmode="decimal" value="' + v('cant_recibida') + '"' + d + ' style="width:62px"></td>'
-    + '<td><select id="dvi_' + k + '_estado_item"' + d + ' onchange="dvBod(' + k + ')"><option value="">—</option><option value="buena"' + (i.estado_item === 'buena' ? ' selected' : '') + '>Buena</option><option value="mala"' + (i.estado_item === 'mala' ? ' selected' : '') + '>Mala</option></select></td>'
-    + '<td><input id="dvi_' + k + '_bodega" value="' + v('bodega') + '"' + d + ' style="width:90px"></td><td>' + (ro ? '' : '<button class="btn g sm" onclick="this.closest(\'tr\').remove()">✕</button>') + '</td></tr>';
+    + '<td><select id="dvi_' + k + '_estado_item"' + d + ' onchange="dvBod(' + k + ')"><option value="">—</option><option value="buena"' + (i.estado_item === 'buena' ? ' selected' : '') + '>Buena</option><option value="mala"' + (i.estado_item === 'mala' ? ' selected' : '') + '>Mala</option></select>'
+    + '<input type="hidden" id="dvi_' + k + '_bodega" value="' + v('bodega') + '"></td><td>' + (ro ? '' : '<button class="btn g sm" onclick="this.closest(\'tr\').remove()">✕</button>') + '</td></tr>';
 }
 let DVT = 0;
 function dvCli(v) {
@@ -500,6 +500,14 @@ function dvCli(v) {
   }, 250);
 }
 function dvCliPon(i) { const x = DV.cli[i]; $('dv_cliente').value = x.cliente; $('dv_nit').value = x.nit; $('dv_ejecutivo').value = x.ejecutivo; $('dvLst').style.display = 'none'; }
+async function dvFac() {
+  const l = $('dvLstF'), refs = [...document.querySelectorAll('#dvTb tr')].map(tr => $('dvi_' + tr.dataset.r + '_referencia').value.trim()).filter(Boolean).join(','), nit = $('dv_nit').value, cli = $('dv_cliente').value;
+  if (!nit.trim() && !cli.trim()) { alert('Primero elige el cliente'); return; }
+  l.innerHTML = '<div style="color:#64748b">Buscando en Siesa…</div>'; l.style.display = '';
+  try { const j = await (await fetch(API.replace('logistica-datos', 'logistica-ref') + '?k=' + encodeURIComponent(token()) + '&fac=1&nit=' + encodeURIComponent(nit) + '&cliente=' + encodeURIComponent(cli) + '&refs=' + encodeURIComponent(refs))).json(); const F = j.facturas || []; DV.fac = F;
+    l.innerHTML = F.length ? F.map((x, i) => '<div onclick="dvFacPon(' + i + ')"><b>' + esc(x.doc) + '</b> · ' + esc(x.fecha) + (x.total ? ' · ' + x.coinciden + ' de ' + x.total + ' referencias' : '') + '</div>').join('') : '<div style="color:#64748b">No encontré facturas de este cliente: escríbela</div>'; } catch (e) { l.style.display = 'none'; }
+}
+function dvFacPon(i) { $('dv_factura_ref').value = DV.fac[i].doc; $('dvLstF').style.display = 'none'; }
 async function dvDesc(k) {
   const r = $('dvi_' + k + '_referencia').value.trim(), d = $('dvi_' + k + '_descripcion'); if (!r) return;
   d.placeholder = 'Buscando…';
@@ -513,12 +521,13 @@ function devAbrir(id) {
   DV.cur = d; const s = d.estado, ro = s === 'nota_credito' && !D.admin;
   const f = (k, l, w, t) => '<div class="f' + (w ? ' w' : '') + '"><label>' + l + '</label><input id="dv_' + k + '"' + (t ? ' type="' + t + '"' : '') + ' value="' + esc(d[k] || '') + '"' + (ro ? ' disabled' : '') + '></div>';
   DVK = 0;
-  const its = (d.items && d.items.length ? d.items : [{}]).map(i => devItemRow(i, ++DVK, ro)).join('');
+  const pre = i => s === 'por_recibir' ? { ...i, cant_recibida: i.cant_recibida == null ? i.cant_doc : i.cant_recibida, estado_item: i.estado_item || 'buena', bodega: i.bodega || 'Disponible' } : i; // por recibir: ya trae lo del documento; solo se corrige lo que difiera
+  const its = (d.items && d.items.length ? d.items : [{}]).map(i => devItemRow(pre(i), ++DVK, ro)).join('');
   const aud = [d.creado_por && 'Creada por ' + d.creado_por + (d.origen === 'adt' ? ' (importada de ADT)' : ''), d.recibida_por && 'Recibida: ' + d.recibida_por + ' · ' + (d.recibida_en || '').slice(0, 16).replace('T', ' '), d.verificada_por && 'Verificada: ' + d.verificada_por + ' · ' + (d.verificada_en || '').slice(0, 16).replace('T', ' '), d.nc_por && 'Nota crédito ' + d.nc_numero + ': ' + d.nc_por + ' · ' + (d.nc_en || '').slice(0, 16).replace('T', ' ')].filter(Boolean);
   const o = dvOv('ovDev');
   o.innerHTML = '<div class="mo" style="max-width:860px"><div class="mh">' + (d.id ? '↩️ Devolución Nº ' + esc(d.consecutivo) + ' ' + '<span class="pill ' + DVE[s][1] + '">' + DVE[s][0] + '</span>' : '↩️ Nueva devolución') + '<button class="btn g" onclick="$(\'ovDev\').classList.remove(\'on\')">✕</button></div>'
-    + '<div class="mb">' + f('doc_adt', 'Documento ADT (si lo tiene)') + f('guia', 'Guía') + '<div class="f w"><label>Cliente (escribe nombre o NIT)</label><input id="dv_cliente" autocomplete="off" value="' + esc(d.cliente || '') + '"' + (ro ? ' disabled' : '') + ' oninput="dvCli(this.value)"><div class="lst" id="dvLst" style="display:none"></div></div>' + f('nit', 'NIT') + f('ejecutivo', 'Ejecutivo') + f('factura_ref', 'Factura de venta (opcional)') + f('fecha_doc', 'Fecha documento', 0, 'date') + f('fecha_recibo', 'Fecha de recibo', 0, 'date') + f('motivo', 'Motivo de la devolución', 1) + f('obs', 'Observaciones', 1) + '</div>'
-    + '<div class="cb" style="padding-top:0"><div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:4px">Ítems</div><div class="tw"><table class="fit"><thead><tr><th>Referencia</th><th>Descripción</th><th>Cant. doc.</th><th>Cant. recibida</th><th>Estado</th><th>Bodega</th><th></th></tr></thead><tbody id="dvTb">' + its + '</tbody></table></div>'
+    + '<div class="mb">' + '<div class="f w"><label>Cliente (escribe nombre o NIT)</label><input id="dv_cliente" autocomplete="off" value="' + esc(d.cliente || '') + '"' + (ro ? ' disabled' : '') + ' oninput="dvCli(this.value)"><div class="lst" id="dvLst" style="display:none"></div></div>' + f('nit', 'NIT') + f('ejecutivo', 'Ejecutivo') + '<div class="f w"><label>Factura de venta</label><div style="display:flex;gap:6px"><input id="dv_factura_ref" value="' + esc(d.factura_ref || '') + '"' + (ro ? ' disabled' : '') + ' style="flex:1"><button class="btn g sm" type="button" onclick="dvFac()">🔍 Buscar en Siesa</button></div><div class="lst" id="dvLstF" style="display:none"></div></div>' + '<details class="f w"' + ((d.motivo || d.obs || d.guia) ? ' open' : '') + '><summary style="cursor:pointer;font-size:12px;font-weight:700;color:#475569">Más datos (documento ADT, guía, fechas, motivo, observaciones)</summary><div class="mb" style="padding:8px 0 0">' + f('doc_adt', 'Documento ADT (si lo tiene)') + f('guia', 'Guía') + f('fecha_doc', 'Fecha documento', 0, 'date') + f('fecha_recibo', 'Fecha de recibo', 0, 'date') + f('motivo', 'Motivo de la devolución', 1) + f('obs', 'Observaciones', 1) + '</div></details></div>'
+    + '<div class="cb" style="padding-top:0"><div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:4px">Ítems</div><div class="tw"><table class="fit"><thead><tr><th>Referencia</th><th>Descripción</th><th>Cant. doc.</th><th>Cant. recibida</th><th>Estado</th><th></th></tr></thead><tbody id="dvTb">' + its + '</tbody></table></div>'
     + (ro ? '' : '<button class="btn g sm" style="margin-top:6px" onclick="dvAgregar()">+ Agregar ítem</button>')
     + (s === 'recibida' ? '<div class="f w" style="margin-top:10px"><label style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Observación de la verificación (opcional)</label><input id="dvObsV" style="width:100%;font:inherit;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px" value="' + esc(d.obs_verif || '') + '"></div>' : '')
     + (s === 'verificada' ? '<div class="f w" style="margin-top:10px"><label style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Nº de la nota crédito</label><input id="dvNc" style="width:100%;font:inherit;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px"></div>' : '')
@@ -527,7 +536,7 @@ function devAbrir(id) {
     + '<div class="mf">' + (d.id && D.admin ? '<button class="btn r" onclick="devBorrar()">🗑 Borrar</button>' : '') + '<button class="btn g" onclick="devImprimir()">🖨 Imprimir hoja</button>'
     + (s === 'verificada' ? '<button class="btn g" onclick="devPaso(\'reabrir\')">↩ Devolver a revisión</button>' : '') + (s === 'nota_credito' && D.admin ? '<button class="btn g" onclick="devPaso(\'reabrir\')">↩ Reabrir (admin)</button>' : '')
     + (ro ? '' : '<button class="btn g" onclick="devGuardar()">' + (d.id ? 'Guardar cambios' : 'Guardar como recibida') + '</button>')
-    + (s === 'por_recibir' ? '<button class="btn" onclick="devGuardar(\'recibir\')">📦 Marcar recibida</button>' : '') + (s === 'recibida' ? '<button class="btn" onclick="devGuardar(\'verificar\')">✔ Verificar</button>' : '') + (s === 'verificada' ? '<button class="btn" onclick="devGuardar(\'nc\')">🧾 Registrar nota crédito</button>' : '') + '</div></div>';
+    + (s === 'por_recibir' ? '<span class="hint" style="padding:0;align-self:center;max-width:300px">Ya vienen las cantidades del documento como buenas: cambia solo lo que difiera.</span><button class="btn" onclick="devGuardar(\'recibir\')">📦 Marcar recibida</button>' : '') + (s === 'recibida' ? '<button class="btn" onclick="devGuardar(\'verificar\')">✔ Verificar</button>' : '') + (s === 'verificada' ? '<button class="btn" onclick="devGuardar(\'nc\')">🧾 Registrar nota crédito</button>' : '') + '</div></div>';
   o.classList.add('on');
 }
 function devRecoger() {
@@ -538,7 +547,7 @@ function devRecoger() {
 }
 async function devGuardar(paso) {
   const { dev, items } = devRecoger(); if (!dev.cliente && !dev.doc_adt && !dev.guia) { alert('Falta el cliente, el documento ADT o la guía'); return; }
-  if (paso === 'recibir') items.forEach(i => { if (i.cant_recibida === '') i.cant_recibida = i.cant_doc; if (!i.estado_item) { i.estado_item = 'buena'; i.bodega = i.bodega || 'Disponible'; } });
+  if (paso === 'recibir' || (!dev.id && dev.estado !== 'por_recibir')) items.forEach(i => { if (i.cant_recibida === '') i.cant_recibida = i.cant_doc; if (!i.estado_item) { i.estado_item = 'buena'; i.bodega = i.bodega || 'Disponible'; } });
   if (paso === 'verificar') { const f = items.filter(i => i.cant_recibida === '' || !i.estado_item); if (!items.length || f.length) { alert('Para verificar, cada ítem necesita cantidad recibida y estado (buena/mala).'); return; } }
   if (paso === 'nc' && !($('dvNc') && $('dvNc').value.trim())) { alert('Escribe el número de la nota crédito'); return; }
   if (!dev.id && dev.factura_ref && dev.cliente) {
