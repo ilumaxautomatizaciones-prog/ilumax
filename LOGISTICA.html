@@ -467,6 +467,7 @@ function devPintar() {
   const pill = e => '<span class="pill ' + DVE[e][1] + '">' + DVE[e][0] + '</span>';
   const rows = L.map(d => ({ ...d, ud: devSum(d, 'cant_doc'), ur: d.estado === 'por_recibir' ? '' : devSum(d, 'cant_recibida'), est: DVE[d.estado][0] }));
   xgInit('dev', [
+    { k: 'cons', t: 'Nº', v: r => r.consecutivo, num: true, al: true, h: r => '<a class="lnk" href="#" onclick="devAbrir(\'' + r.id + '\');return false">' + esc(r.consecutivo) + '</a>' },
     { k: 'doc_adt', t: 'Doc. ADT', v: r => r.doc_adt || '', h: r => '<a class="lnk" href="#" onclick="devAbrir(\'' + r.id + '\');return false">' + esc(r.doc_adt || '(sin documento)') + '</a>' },
     { k: 'guia', t: 'Guía', v: r => r.guia || '' },
     { k: 'cliente', t: 'Cliente', v: r => r.cliente || '', wrap: true },
@@ -485,10 +486,24 @@ function devPintar() {
 const dvOv = id => { let o = $(id); if (!o) { o = document.createElement('div'); o.id = id; o.className = 'ov'; document.body.appendChild(o); } return o; };
 function devItemRow(i, k, ro) {
   const v = (f) => esc(i[f] == null ? '' : i[f]), d = ro ? ' disabled' : '';
-  return '<tr data-r="' + k + '"><td><input id="dvi_' + k + '_referencia" value="' + v('referencia') + '"' + d + ' style="width:90px"></td><td><input id="dvi_' + k + '_descripcion" value="' + v('descripcion') + '"' + d + ' style="min-width:150px"></td>'
+  return '<tr data-r="' + k + '"><td><input id="dvi_' + k + '_referencia" value="' + v('referencia') + '"' + d + ' style="width:90px" onchange="dvDesc(' + k + ')"></td><td><input id="dvi_' + k + '_descripcion" value="' + v('descripcion') + '"' + d + ' style="min-width:150px"></td>'
     + '<td><input id="dvi_' + k + '_cant_doc" inputmode="decimal" value="' + v('cant_doc') + '"' + d + ' style="width:62px"></td><td><input id="dvi_' + k + '_cant_recibida" inputmode="decimal" value="' + v('cant_recibida') + '"' + d + ' style="width:62px"></td>'
     + '<td><select id="dvi_' + k + '_estado_item"' + d + ' onchange="dvBod(' + k + ')"><option value="">—</option><option value="buena"' + (i.estado_item === 'buena' ? ' selected' : '') + '>Buena</option><option value="mala"' + (i.estado_item === 'mala' ? ' selected' : '') + '>Mala</option></select></td>'
     + '<td><input id="dvi_' + k + '_bodega" value="' + v('bodega') + '"' + d + ' style="width:90px"></td><td>' + (ro ? '' : '<button class="btn g sm" onclick="this.closest(\'tr\').remove()">✕</button>') + '</td></tr>';
+}
+let DVT = 0;
+function dvCli(v) {
+  clearTimeout(DVT); const l = $('dvLst'); if (v.trim().length < 3) { l.style.display = 'none'; return; }
+  DVT = setTimeout(async () => {
+    try { const j = await (await fetch(API.replace('logistica-datos', 'logistica-ref') + '?k=' + encodeURIComponent(token()) + '&q=' + encodeURIComponent(v.trim()))).json(); const c = j.clientes || []; DV.cli = c;
+      l.innerHTML = c.length ? c.map((x, i) => '<div onclick="dvCliPon(' + i + ')"><b>' + esc(x.cliente) + '</b><br><span style="color:#64748b">NIT ' + esc(x.nit) + ' · ' + esc(x.ejecutivo) + '</span></div>').join('') : '<div style="color:#64748b">Sin coincidencias: escríbelo a mano</div>'; l.style.display = ''; } catch (e) { }
+  }, 250);
+}
+function dvCliPon(i) { const x = DV.cli[i]; $('dv_cliente').value = x.cliente; $('dv_nit').value = x.nit; $('dv_ejecutivo').value = x.ejecutivo; $('dvLst').style.display = 'none'; }
+async function dvDesc(k) {
+  const r = $('dvi_' + k + '_referencia').value.trim(), d = $('dvi_' + k + '_descripcion'); if (!r) return;
+  d.placeholder = 'Buscando…';
+  try { const j = await (await fetch(API.replace('logistica-datos', 'logistica-ref') + '?k=' + encodeURIComponent(token()) + '&refs=' + encodeURIComponent(r))).json(); const t = j.desc && j.desc[r]; d.placeholder = t ? '' : 'No encontrada en Siesa: escríbela'; if (t && (!d.value.trim() || d.dataset.auto === '1')) { d.value = t; d.dataset.auto = '1'; } } catch (e) { d.placeholder = ''; }
 }
 function dvBod(k) { const e = $('dvi_' + k + '_estado_item').value; $('dvi_' + k + '_bodega').value = e === 'buena' ? 'Disponible' : e === 'mala' ? 'Javería' : ''; }
 let DVK = 0;
@@ -501,8 +516,8 @@ function devAbrir(id) {
   const its = (d.items && d.items.length ? d.items : [{}]).map(i => devItemRow(i, ++DVK, ro)).join('');
   const aud = [d.creado_por && 'Creada por ' + d.creado_por + (d.origen === 'adt' ? ' (importada de ADT)' : ''), d.recibida_por && 'Recibida: ' + d.recibida_por + ' · ' + (d.recibida_en || '').slice(0, 16).replace('T', ' '), d.verificada_por && 'Verificada: ' + d.verificada_por + ' · ' + (d.verificada_en || '').slice(0, 16).replace('T', ' '), d.nc_por && 'Nota crédito ' + d.nc_numero + ': ' + d.nc_por + ' · ' + (d.nc_en || '').slice(0, 16).replace('T', ' ')].filter(Boolean);
   const o = dvOv('ovDev');
-  o.innerHTML = '<div class="mo" style="max-width:860px"><div class="mh">' + (d.id ? '↩️ Devolución ' + esc(d.doc_adt || '') + ' ' + '<span class="pill ' + DVE[s][1] + '">' + DVE[s][0] + '</span>' : '↩️ Nueva devolución') + '<button class="btn g" onclick="$(\'ovDev\').classList.remove(\'on\')">✕</button></div>'
-    + '<div class="mb">' + f('doc_adt', 'Documento ADT') + f('guia', 'Guía') + f('cliente', 'Cliente', 1) + f('nit', 'NIT') + f('ejecutivo', 'Ejecutivo') + f('factura_ref', 'Factura de venta (opcional)') + f('fecha_doc', 'Fecha documento', 0, 'date') + f('fecha_recibo', 'Fecha de recibo', 0, 'date') + f('motivo', 'Motivo de la devolución', 1) + f('obs', 'Observaciones', 1) + '</div>'
+  o.innerHTML = '<div class="mo" style="max-width:860px"><div class="mh">' + (d.id ? '↩️ Devolución Nº ' + esc(d.consecutivo) + ' ' + '<span class="pill ' + DVE[s][1] + '">' + DVE[s][0] + '</span>' : '↩️ Nueva devolución') + '<button class="btn g" onclick="$(\'ovDev\').classList.remove(\'on\')">✕</button></div>'
+    + '<div class="mb">' + f('doc_adt', 'Documento ADT (si lo tiene)') + f('guia', 'Guía') + '<div class="f w"><label>Cliente (escribe nombre o NIT)</label><input id="dv_cliente" autocomplete="off" value="' + esc(d.cliente || '') + '"' + (ro ? ' disabled' : '') + ' oninput="dvCli(this.value)"><div class="lst" id="dvLst" style="display:none"></div></div>' + f('nit', 'NIT') + f('ejecutivo', 'Ejecutivo') + f('factura_ref', 'Factura de venta (opcional)') + f('fecha_doc', 'Fecha documento', 0, 'date') + f('fecha_recibo', 'Fecha de recibo', 0, 'date') + f('motivo', 'Motivo de la devolución', 1) + f('obs', 'Observaciones', 1) + '</div>'
     + '<div class="cb" style="padding-top:0"><div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:4px">Ítems</div><div class="tw"><table class="fit"><thead><tr><th>Referencia</th><th>Descripción</th><th>Cant. doc.</th><th>Cant. recibida</th><th>Estado</th><th>Bodega</th><th></th></tr></thead><tbody id="dvTb">' + its + '</tbody></table></div>'
     + (ro ? '' : '<button class="btn g sm" style="margin-top:6px" onclick="dvAgregar()">+ Agregar ítem</button>')
     + (s === 'recibida' ? '<div class="f w" style="margin-top:10px"><label style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Observación de la verificación (opcional)</label><input id="dvObsV" style="width:100%;font:inherit;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px" value="' + esc(d.obs_verif || '') + '"></div>' : '')
@@ -526,6 +541,10 @@ async function devGuardar(paso) {
   if (paso === 'recibir') items.forEach(i => { if (i.cant_recibida === '') i.cant_recibida = i.cant_doc; if (!i.estado_item) { i.estado_item = 'buena'; i.bodega = i.bodega || 'Disponible'; } });
   if (paso === 'verificar') { const f = items.filter(i => i.cant_recibida === '' || !i.estado_item); if (!items.length || f.length) { alert('Para verificar, cada ítem necesita cantidad recibida y estado (buena/mala).'); return; } }
   if (paso === 'nc' && !($('dvNc') && $('dvNc').value.trim())) { alert('Escribe el número de la nota crédito'); return; }
+  if (!dev.id && dev.factura_ref && dev.cliente) {
+    const m = DV.l.find(x => x.estado !== 'nota_credito' && (x.factura_ref || '').toLowerCase() === dev.factura_ref.toLowerCase() && (x.cliente || '').toLowerCase() === dev.cliente.toLowerCase());
+    if (m) { if (!confirm('Ya existe la devolución Nº ' + m.consecutivo + ' de esta factura y cliente.\n¿Agregar estos ítems a ella (mismo consecutivo)?')) return; dev.id = m.id; dev.estado = m.estado; items.unshift(...(m.items || []).map(i => ({ referencia: i.referencia || '', descripcion: i.descripcion || '', cant_doc: i.cant_doc, cant_recibida: i.cant_recibida == null ? '' : i.cant_recibida, estado_item: i.estado_item || '', bodega: i.bodega || '' }))); ['doc_adt', 'guia', 'nit', 'ejecutivo', 'motivo', 'obs', 'fecha_doc', 'fecha_recibo'].forEach(k => { if (!dev[k]) dev[k] = m[k] || ''; }); }
+  }
   let j = await api({ accion: 'dev_guardar', dev, items }); if (!j.ok) { alert(j.error || 'No se pudo guardar'); return; }
   if (paso) { j = await api({ accion: 'dev_paso', id: j.id, paso, obs: $('dvObsV') ? $('dvObsV').value : '', nc: $('dvNc') ? $('dvNc').value : '', fecha_recibo: dev.fecha_recibo }); if (!j.ok) { alert(j.error || 'No se pudo avanzar'); devCargar(); return; } }
   $('ovDev').classList.remove('on'); devCargar();
@@ -537,7 +556,7 @@ function devImprimir() {
   const w = window.open('', '_blank'); if (!w) { alert('El navegador bloqueó la ventana de impresión'); return; }
   const r = (l, v) => '<tr><th>' + l + '</th><td>' + esc(v || '') + '</td></tr>';
   w.document.write('<!DOCTYPE html><meta charset="utf-8"><title>Devolución</title><style>body{font:13px Arial;margin:24px}h1{font-size:18px;margin:0 0 10px}table{border-collapse:collapse;width:100%;margin-bottom:14px}th,td{border:1px solid #444;padding:5px 7px;text-align:left}th{background:#eee;width:150px}.i th{width:auto}.f{display:flex;gap:30px;margin-top:50px}.f div{flex:1;border-top:1px solid #000;padding-top:4px;text-align:center}</style><h1>ILUMAX · Devolución de mercancía</h1><table>'
-    + r('Documento ADT', dev.doc_adt) + r('Guía', dev.guia) + r('Cliente', dev.cliente) + r('NIT', dev.nit) + r('Ejecutivo', dev.ejecutivo) + r('Factura de venta', dev.factura_ref) + r('Fecha documento', dev.fecha_doc) + r('Fecha de recibo', dev.fecha_recibo) + r('Motivo', dev.motivo) + r('Observaciones', dev.obs) + '</table>'
+    + r('Nº devolución', c.consecutivo) + r('Documento ADT', dev.doc_adt) + r('Guía', dev.guia) + r('Cliente', dev.cliente) + r('NIT', dev.nit) + r('Ejecutivo', dev.ejecutivo) + r('Factura de venta', dev.factura_ref) + r('Fecha documento', dev.fecha_doc) + r('Fecha de recibo', dev.fecha_recibo) + r('Motivo', dev.motivo) + r('Observaciones', dev.obs) + '</table>'
     + '<table class="i"><tr><th>Referencia</th><th>Descripción</th><th>Cant. doc.</th><th>Cant. recibida</th><th>Estado</th><th>Bodega</th></tr>' + items.map(i => '<tr><td>' + esc(i.referencia) + '</td><td>' + esc(i.descripcion) + '</td><td>' + esc(i.cant_doc) + '</td><td>' + esc(i.cant_recibida) + '</td><td>' + esc(i.estado_item === 'buena' ? 'Buena' : i.estado_item === 'mala' ? 'Mala' : '') + '</td><td>' + esc(i.bodega) + '</td></tr>').join('') + '</table>'
     + '<div class="f"><div>Recibió (bodega)</div><div>Verificó (Valentina)</div><div>Nota crédito (Tatiana)' + (c.nc_numero ? ' · ' + esc(c.nc_numero) : '') + '</div></div><script>onload=()=>print()<\/script>');
   w.document.close();
