@@ -3829,6 +3829,17 @@ async function cblGuardar(cambiados, eliminados){
   let remoto = []; try{ const r = await sb.get('configuracion','clave=eq.cbl_embarques'); const v = r && r[0] ? r[0].valor : null; const j = typeof v==='string' ? JSON.parse(v) : v; remoto = (j && j.bls) || []; }catch(e){}
   const m = new Map(remoto.map(b=>[b.id,b])); (cambiados||[]).forEach(b=>m.set(b.id,b)); (eliminados||[]).forEach(id=>m.delete(id));
   CBL.bls = cblNormPuertos([...m.values()]);
+  // Tope: lo que Comercio Exterior asigna a los BL de una OC/referencia no puede superar lo que dice la orden de compra
+  try{
+    const tope = {}, usado = {}, avisos = [], ids = new Set((cambiados||[]).map(b=>b.id));
+    CBL.bls.forEach(b=>(b.items||[]).forEach(it=>{ if(ceFaseLinea(it.estado||'Embarque','').fase===-1 || !it.ocId) return; const k = it.ocId+'|'+ceRefKey(it.ref); if(!(k in tope)) tope[k] = (REABAST.ocItems[it.ocId]||[]).filter(x=>ceRefKey(x.referencia)===ceRefKey(it.ref)).reduce((a,x)=>a+(Number(x.cantidad)||0),0); }));
+    CBL.bls.filter(b=>!ids.has(b.id)).forEach(b=>(b.items||[]).forEach(it=>{ if(ceFaseLinea(it.estado||'Embarque','').fase===-1 || !it.ocId) return; const k = it.ocId+'|'+ceRefKey(it.ref); usado[k] = (usado[k]||0)+(Number(it.cant)||0); }));
+    CBL.bls.filter(b=>ids.has(b.id)).forEach(b=>{ b.items = (b.items||[]).filter(it=>{ if(ceFaseLinea(it.estado||'Embarque','').fase===-1 || !it.ocId) return true; const k = it.ocId+'|'+ceRefKey(it.ref), t = tope[k]; if(!(t>0)) return true;
+      const libre = Math.max(0, t-(usado[k]||0)), c = Number(it.cant)||0;
+      if(c>libre+0.5){ avisos.push(it.oc+' · ref '+it.ref+': '+reabastFmtN(c)+' → '+reabastFmtN(libre)+' (la OC tiene '+reabastFmtN(t)+')'); if(libre<=0.5) return false; it.cant = libre; }
+      usado[k] = (usado[k]||0)+(Number(it.cant)||0); return true; }); });
+    if(avisos.length && typeof toast==='function') toast('⚠ Cantidades limitadas a lo que dice la orden de compra:\n'+avisos.slice(0,6).join('\n')+(avisos.length>6?'\n… y '+(avisos.length-6)+' más':''),'wa');
+  }catch(e){ console.warn('tope OC', e); }
   await sb.upsert('configuracion', {clave:'cbl_embarques', valor:JSON.stringify({fecha:new Date().toISOString(), usuario:(CU&&CU.nombre)||'', bls:CBL.bls}), tipo:'json'}, 'clave');
 }
 function cblUxCaja(ref){ const M = (REABAST.referenciasMaestro||{})[String(ref||'').trim()] || {}; const t = String(M.master_packaging||'').trim();
@@ -6546,6 +6557,20 @@ async function ocRepararRama(o){
 async function ocRepararRamas(){
   if(!reabastEsAdmin() || REABAST._pasadaCache) return;
   for(const o of (REABAST.ordenesCompra||[])){ const es = REABAST.ocEtapas[o.id]||[]; if(!ocEsRama(o) || !es.length) continue; await ocRepararRama(o); }
+}
+// Regla de Tesorería: una OC solo se cierra si lo pagado (anticipos + saldos + abonos + notas crédito) iguala el valor total de la factura y no queda nada pendiente
+async function ocPagosCuadran(o){
+  try{
+    if(!PP.ajustes && typeof ppCargarAjustes==='function') await ppCargarAjustes();
+    const l = ppConstruir().filter(x=>x.ocId===o.id); if(!l.length) return 'no tiene anticipos ni saldos registrados en Programación de pagos';
+    const tot = Number(l[0].tot)||0; if(!(tot>0)) return '';
+    const pag = l.filter(x=>x.estado==='pagado').reduce((a,x)=>a+(Number(x.usd)||0),0), pen = l.filter(x=>x.estado!=='pagado').reduce((a,x)=>a+(Number(x.usd)||0),0);
+    const rg = typeof tesoRegDe==='function' ? tesoRegDe(o.id) : null, nc = rg && typeof tesoNcUsd==='function' ? tesoNcUsd(rg) : 0;
+    const dif = Math.round((tot - pag - nc)*100)/100, tol = Math.max(1, tot*0.005);
+    if(pen>0.5) return 'aún tiene pagos pendientes por US$ '+Math.round(pen).toLocaleString('es-CO');
+    if(Math.abs(dif)>tol) return 'anticipos + saldos (US$ '+Math.round(pag+nc).toLocaleString('es-CO')+') no igualan el total de la factura (US$ '+Math.round(tot).toLocaleString('es-CO')+')';
+  }catch(e){ console.warn('ocPagosCuadran', e); }
+  return '';
 }
 // Una OC no se cierra mientras Comercio Exterior la tenga abierta (BL sin ingreso o en embarque/tránsito/nacionalización)
 function ocAbiertaEnCE(o){
@@ -10008,7 +10033,7 @@ async function ceAplicarOC(oc, r){
   // estado general de la OC
   if(r.fase===9){
     const resto = etapas.filter(e=>!CE_ETAPAS.includes(e.etapa_id));
-    if(resto.every(e=>e.estado==='completada') && oc.estado_general!=='completada'){ await sbReabast.patch('ordenes_compra','id=eq.'+oc.id,{estado_general:'completada'}); cambios++; }
+    if(resto.every(e=>e.estado==='completada') && oc.estado_general!=='completada'){ let _pg = ''; try{ _pg = await ocPagosCuadran(oc); }catch(e){} if(!_pg){ await sbReabast.patch('ordenes_compra','id=eq.'+oc.id,{estado_general:'completada'}); cambios++; } }
   } else if(oc.estado_general==='completada' && String(oc.creado_por||'').includes('Panel')){
     await sbReabast.patch('ordenes_compra','id=eq.'+oc.id,{estado_general:'activa'}); cambios++;
   }
@@ -10722,6 +10747,10 @@ function ppConstruir(){
     const r = typeof ceDe==='function' ? ceDe(o.numero_oc) : null;
     const emb = r && r.fase!=null ? (r.fase>=6 ? {cls:'ok', txt:'🚢 Zarpó'+(r.bl&&r.bl.length?' · BL '+r.bl[0]:'')} : r.fase===5 ? {cls:'med', txt:'⏳ En embarque'} : {cls:'no', txt:'🏭 Sin zarpar'}) : {cls:'no', txt:'— sin dato Com. Ext.'};
     const rev = A.saldo && A.saldo.rev || null;
+    const _abs = (A.saldo && A.saldo.abonos) || [];
+    if(_abs.length){   // abonos a la factura: pagos parciales del saldo; el saldo sigue siendo UNO solo (total − abonos)
+      _abs.forEach(a=>pagos.push({...base, tipo:'saldo', usd:Number(a.usd)||0, esp:Number(a.usd)||0, fecha:a.fecha ? new Date(a.fecha+'T12:00:00') : null, estado:'pagado', origen:'Abono a la factura', abono:true, nota:a.nota, emb}));
+      salUsd = Math.round((salUsd - _abs.reduce((q,a)=>q+(Number(a.usd)||0),0))*100)/100; }
     if(salUsd>0.004){
       let pendUsd = salUsd;
       if(A.saldo && A.saldo.pagado){
@@ -10737,7 +10766,7 @@ function ppConstruir(){
           pendUsd = lPend.length ? Math.max(0, Math.round((salUsd - Math.min(pagadoPanel, salUsd))*100)/100) : 0;
         }
         let _hayBL = false;
-        if(!lPag.length && !(A.saldo && A.saldo.fecha)){
+        if(!lPag.length && !(A.saldo && A.saldo.fecha) && !_abs.length){
           const blp = ppSaldoPorBL(o, num, salUsd, base, hoy, emb, rev);
           if(blp.length){ _hayBL = true; blp.forEach(x=>pagos.push(x)); pendUsd = Math.max(0, Math.round((pendUsd - blp.reduce((a,x)=>a+x.usd,0))*100)/100); if(pendUsd <= Math.max(0.5, salUsd*0.005)) pendUsd = 0; }
         }
@@ -10880,7 +10909,7 @@ function ppPintarInterno(el){
     const one = x => `${usd(x.usd)} ${x.estado==='pagado' ? '<span style="color:var(--gr);font-weight:700;">✅ pagado '+fx(x.fecha)+'</span>' : '<span style="color:#b45309;">⏳ '+fx(x.fecha)+'</span>'}`;
     const aTxt = A.length ? A.map(one).join('<br>') : (l[0] && l[0].modo && l[0].modo.tot ? '<span class="arte-mu">No aplica (pago total)</span>' : '<span class="arte-mu">—</span>');
     const dif = difOC(l);
-    return `<div style="font-size:10.5px;line-height:1.5;white-space:nowrap;"><b>Total factura ${usd(t)}</b><br><b>Anticipo:</b> ${aTxt}<br><b>Saldo:</b> ${S.length ? S.map(one).join('<br>') : '<span class="arte-mu">—</span>'}${dif ? '<br>'+difHtml(dif) : ''}</div>`;
+    return `<div style="font-size:10.5px;line-height:1.5;white-space:nowrap;"><b>Total factura ${usd(t)}</b><br><b>Anticipo:</b> ${aTxt}<br><b>Saldo:</b> ${S.length>1 ? usd(S.reduce((a,x)=>a+x.usd,0))+'<br>'+S.map(x=>'· '+(x.estado==='pagado' ? 'abono ' : 'resta ')+one(x)).join('<br>') : S.length ? S.map(one).join('<br>') : '<span class="arte-mu">—</span>'}${dif ? '<br>'+difHtml(dif) : ''}</div>`;
   };
   const puede = ppPuedeEditar();
   fcIndexar();
@@ -10891,7 +10920,7 @@ function ppPintarInterno(el){
     if(p.estado!=='pagado'){
       if(puede) o.push(b('✎ Editar',`ppAjustar('${n}','${p.tipo}')`,'Cambiar fecha o valor (el saldo se recalcula)'));
       if(p.tipo==='anticipo'){ if(reg && reg.estado==='autorizado' && tesoPuedePagar()) o.push(b('💸 Pagado',`tesoMarcarPagado('${p.ocId}')`,'Registrar el pago del anticipo','btn-gr')); }
-      else if(puede) o.push(b('✅ Pagado',`ppMarcarSaldo('${n}')`,'Marcar el saldo como pagado','btn-gr'));
+      else if(puede) o.push(b('✅ Pagado',`ppMarcarSaldo('${n}')`,'Marcar el saldo como pagado','btn-gr'), b('💵 Abono',`ppMarcarSaldo('${n}',false,true)`,'Registrar un abono a la factura (el saldo sigue abierto con lo que resta)'));
     } else {
       if(p.tipo==='anticipo' && reg && reg.estado==='pagado' && tesoPuedePagar()) o.push(b('✎ Corregir',`tesoCorregirPago('${p.ocId}','${n}')`,'Corregir valor, fecha o TRM del pago'), b('↩︎ Devolver',`tesoDevolverPago('${p.ocId}','${n}')`,'Quitar el pago y dejar el anticipo como autorizado'));
       if(p.tipo==='saldo' && puede) o.push(b('✎ Corregir',`ppMarcarSaldo('${n}',true)`,'Corregir el pago del saldo'), b('↩︎',`ppDeshacerSaldo('${n}')`,'Deshacer'));
@@ -11046,7 +11075,12 @@ function ppAjustar(num, tipo){
       if(Math.abs((A[tipo].usd||0) - p.usd) < 0.005 && !prev.usd) A[tipo].usd = null;
       ppLog(num,'Ajustó '+(tipo==='anticipo'?'el anticipo':'el saldo')+': valor '+(A[tipo].usd!=null?'US$'+A[tipo].usd:'automático')+' · fecha '+(A[tipo].fecha||'automática')+' (antes: fecha '+(ppIso(p.fecha)||'—')+' · US$'+Math.round(p.usd*100)/100+')'+(motivo?' · MOTIVO: '+motivo:'')+(A[tipo].nota?' · '+A[tipo].nota:''));
       if(tipo==='anticipo' && A.anticipo.usd!=null && typeof tesoRegDe==='function'){ const rg = tesoRegDe(p.ocId); if(rg && rg.estado==='autorizado'){ const u = A.anticipo.usd; rg.monto_usd = u; rg.monto_cop = Math.round(u*(rg.trm||0)); rg.saldo_usd = Math.round(((rg.fob_total||0)-u)*100)/100; rg.manual_usd = true; rg.historial = [...(rg.historial||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion:'Cambió el valor del anticipo autorizado a US$'+u, nota:A.anticipo.nota||''}]; try{ await tesoGuardar(rg); }catch(e){} } }
-      await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Programación actualizada','ok');
+      try{   // lo que se cambia en Programación de pagos también queda en la orden de compra (% de anticipo + historial de la OC)
+        const oc = (REABAST.ordenesCompra||[]).find(x=>x.id===p.ocId);
+        if(oc && tipo==='anticipo' && A.anticipo.usd!=null && p.tot>0){ const pct = Math.round(A.anticipo.usd/p.tot*10000)/10000; if(isFinite(pct) && pct>=0 && pct<=1 && Math.abs((Number(oc.deposito_pct)||0)-pct)>0.0001){ await sbReabast.patch('ordenes_compra','id=eq.'+oc.id,{deposito_pct:pct}); oc.deposito_pct = pct; } }
+        if(oc && cambio) await ocnAgregar(oc.id, [{tipo:'pago', campo:(tipo==='anticipo'?'Anticipo':'Saldo')+' · Programación de pagos', antes:'US$ '+(Math.round(p.usd*100)/100)+' · '+(ppIso(p.fecha)||'sin fecha'), despues:'US$ '+(A[tipo].usd!=null ? A[tipo].usd : (Math.round(p.usd*100)/100))+' · '+(A[tipo].fecha||'automática'), motivo:motivo||'', nota:A[tipo].nota||'', origen:'Programación de pagos'}]);
+      }catch(e){ console.warn('sync pagos→OC', e); }
+      await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Programación actualizada y guardada también en la orden de compra','ok');
     });
   setTimeout(()=>{ const b = document.querySelector('[data-quitar]'); if(b) b.onclick = async()=>{ const A = PP.ajustes[ceNum(num)]||{}; const pag = A[tipo] && A[tipo].pagado; A[tipo] = pag ? {pagado:pag} : undefined; await ppGuardarAjustes(); b.closest('.ov').remove(); ppPintar(); }; }, 0);
 }
@@ -11074,25 +11108,31 @@ function tesoCorregirPago(ocId, num){
     });
 }
 function ppLog(num, accion){ const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {}; A.hist = [...(A.hist||[]), {t:new Date().toISOString(), quien:(CU&&CU.nombre)||'', accion}]; }
-function ppMarcarSaldo(num, editar){
+function ppMarcarSaldo(num, editar, abono){
   const A0 = (PP.ajustes||{})[ceNum(num)] || {}; let ant = editar ? (A0.saldo && A0.saldo.pagado) : null;
   if(editar && !ant){ const pr = (PP.ult||[]).find(x=>x.num===num && x.tipo==='saldo' && x.estado==='pagado'); if(!pr) return; ant = {usd:pr.usd, fecha:ppIso(pr.fecha)||'', nota:'(venía de Base compras)'}; }   // pagado que viene del Excel: también se puede corregir
   const p = editar ? {usd:ant.usd} : (PP.ult||[]).find(x=>x.num===num && x.tipo==='saldo' && x.estado!=='pagado'); if(!p) return;
   { const _rg = typeof tesoRegDe==='function' ? tesoRegDe(p.ocId) : null; if(_rg && _rg.estado!=='pagado'){ if(typeof toast==='function') toast('El anticipo de '+num+' aún no está pagado (solo autorizado). Regístralo con "Registrar pago del anticipo", no como saldo.','wa'); return; } }
-  ppModal(`${editar?'✎ Corregir pago del saldo':'✅ Saldo pagado'} · ${reabastEsc(num)}`, `
+  ppModal(`${editar?'✎ Corregir pago del saldo':abono?'💵 Abono a la factura':'✅ Saldo pagado'} · ${reabastEsc(num)}`, `
     <div class="fg"><label class="fl">Fecha de pago</label><input class="inp" type="date" data-f value="${editar?(ant.fecha||''):ppIso(new Date())}"></div>
     <div class="fg"><label class="fl">Valor pagado US$</label><input class="inp" type="number" step="0.01" data-v value="${Math.round(p.usd*100)/100}"></div>
     <div class="fg"><label class="fl">Nota${editar?' (obligatoria al corregir)':''}</label><input class="inp" data-n value="${editar?reabastEsc(ant.nota||''):''}" placeholder="${editar?'¿Qué se corrige y por qué?':'Opcional'}"></div>`, async ov=>{
       const v = Number(ov.querySelector('[data-v]').value)||0; if(v<=0){ if(typeof toast==='function') toast('Escribe el valor pagado','wa'); return false; }
       if(editar && !ov.querySelector('[data-n]').value.trim()){ if(typeof toast==='function') toast('Escribe en la nota qué se corrige','wa'); return false; }
       const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {};
+      if(!editar && (abono || v < p.usd-0.5)){   // pago menor al saldo = ABONO: el saldo sigue abierto (no se crea un segundo saldo)
+        A.saldo = {...(A.saldo||{}), noPagado:false}; A.saldo.abonos = [...(A.saldo.abonos||[]), {fecha: ov.querySelector('[data-f]').value, usd:v, nota: ov.querySelector('[data-n]').value.trim()||null, por:(CU&&CU.nombre)||'', en:new Date().toISOString()}];
+        ppLog(num,'Registró un ABONO a la factura · US$'+v+' · '+ov.querySelector('[data-f]').value+(ov.querySelector('[data-n]').value.trim()?' · '+ov.querySelector('[data-n]').value.trim():''));
+        await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Abono registrado · el saldo queda con lo que resta','ok'); return;
+      }
       A.saldo = {...(A.saldo||{}), noPagado:false, pagado:{fecha: ov.querySelector('[data-f]').value, usd:v, nota: ov.querySelector('[data-n]').value.trim()||null, por:(CU&&CU.nombre)||'', en:new Date().toISOString()}};
       ppLog(num,(editar?'CORRIGIÓ el pago del saldo (antes US$'+ant.usd+' del '+ant.fecha+') → ':'Marcó el saldo como PAGADO · ')+'US$'+v+' · fecha de pago '+A.saldo.pagado.fecha+(A.saldo.pagado.nota?' · '+A.saldo.pagado.nota:''));
       await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Saldo marcado como pagado','ok');
     });
 }
-function ppDeshacerSaldo(num){
+async function ppDeshacerSaldo(num){
   const A0 = PP.ajustes[ceNum(num)] || {}; const pg = A0.saldo && A0.saldo.pagado;
+  if(!pg && A0.saldo && (A0.saldo.abonos||[]).length){ const u = A0.saldo.abonos[A0.saldo.abonos.length-1]; if(confirm('¿Quitar el último abono de US$ '+u.usd+' del '+(u.fecha||'—')+'? El saldo vuelve a subir en ese valor.')){ A0.saldo.abonos.pop(); ppLog(num,'QUITÓ un abono de US$'+u.usd+' del '+(u.fecha||'—')); await ppGuardarAjustes(); ppPintar(); } return; }
   if(!pg){
     ppModal(`↩︎ Quitar el "pagado" del saldo · ${reabastEsc(num)}`, `
       <div style="font-size:12px;margin-bottom:8px;">Este saldo figura pagado porque <b>Base compras (col. AT)</b> trae una fecha de pago. Si en realidad <b>no se ha pagado</b>, se marca como pendiente aquí (el Excel no se toca) y vuelve a proyectarse su fecha.</div>
@@ -13688,6 +13728,7 @@ function reabastAbrirDetalleOC(ocId){
         <button class="btn btn-bl btn-sm" onclick="reabastDescargarExcelOC('${ocId}')">📊 Excel (ILUMAX TRADING → proveedor)</button>
         <button class="btn btn-g btn-sm" onclick="reabastVerDocumentoOC('${ocId}','intercompania')">🖨️ Ver / imprimir OC intercompañía (ILUMAX SA → ILUMAX TRADING)</button>
         <button class="btn btn-g btn-sm" onclick="reabastDescargarExcelOC('${ocId}','intercompania')">📊 Excel intercompañía (ILUMAX SA → ILUMAX TRADING)</button>
+        ${(typeof ocParcPuede==='function' && ocParcPuede() && !['cancelada','completada'].includes(o.estado_general))?`<button class="btn btn-or btn-sm" title="Separar parte de esta orden en una orden parcial (OCI-n) con otra fecha de producción" onclick="ocParcAbrir('${ocId}')">✂️ Crear parcial</button>`:''}
         ${(reabastEsAdmin()||ocEsRama(o))?`<button class="btn btn-g btn-sm" style="color:var(--rd);margin-left:auto;" onclick="reabastEliminarOC('${ocId}')">🗑️ Eliminar esta OC${ocEsRama(o)?' parcial':''}</button>`:''}
       </div>
     </div>
@@ -17619,7 +17660,7 @@ async function ocMarcarEtapaCompleta(ocId, etapaId, extra){
     e.estado = 'completada';
     await ocActivarDependientes(ocId, etapas);
     const todasCompletas = etapas.every(x=>x.estado==='completada');
-    if(todasCompletas){ const oo = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId), abCE = oo ? ocAbiertaEnCE(oo) : ''; if(abCE){ if(typeof toast==='function') toast('🔒 La OC sigue abierta en Comercio Exterior ('+abCE+'): no se puede cerrar hasta que Comercio Exterior la dé por ingresada','wa'); } else await sbReabast.patch('ordenes_compra', 'id=eq.'+ocId, {estado_general:'completada'}); }
+    if(todasCompletas){ const oo = (REABAST.ordenesCompra||[]).find(x=>x.id===ocId), abCE = oo ? ocAbiertaEnCE(oo) : '', abPG = oo && !abCE ? await ocPagosCuadran(oo) : ''; if(abCE){ if(typeof toast==='function') toast('🔒 La OC sigue abierta en Comercio Exterior ('+abCE+'): no se puede cerrar hasta que Comercio Exterior la dé por ingresada','wa'); } else if(abPG){ if(typeof toast==='function') toast('🔒 No se puede cerrar la OC: '+abPG,'wa'); } else await sbReabast.patch('ordenes_compra', 'id=eq.'+ocId, {estado_general:'completada'}); }
     if(typeof toast==='function') toast('Etapa marcada como completa','ok');
     await cargarOC();
     const modalAbierto = document.getElementById('modal-oc-detalle')?.classList.contains('on');
