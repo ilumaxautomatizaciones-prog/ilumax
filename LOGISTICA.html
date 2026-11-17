@@ -476,6 +476,7 @@ function devPintar() {
   const rows = L.flatMap(d => (d.items && d.items.length ? d.items : [{}]).map(i => ({ ...d, ref: i.referencia || '', desc: i.descripcion || '', ud: i.cant_doc == null ? '' : Number(i.cant_doc), ur: d.estado === 'por_recibir' || i.cant_recibida == null ? '' : Number(i.cant_recibida), ei: i.estado_item === 'buena' ? 'Buena' : i.estado_item === 'mala' ? 'Mala' : '', bi: i.bodega || '', lote: i.lote || '', est: DVE[d.estado][0] })));
   xgInit('dev', [
     { k: 'cons', t: 'Nº', v: r => r.consecutivo, num: true, al: true, h: r => '<a class="lnk" href="#" onclick="devAbrir(\'' + r.id + '\');return false">' + esc(r.consecutivo) + '</a>' },
+    { k: 'acc', t: 'Acciones', v: r => '', h: r => '<button class="btn g sm" title="Editar" onclick="devAbrir(\'' + r.id + '\')">✏️</button>' + (devPuedeBorrar(r) ? ' <button class="btn r sm" title="Borrar" onclick="devBorrar(\'' + r.id + '\')">🗑</button>' : '') },
     { k: 'doc_adt', t: 'Doc. devolución', v: r => r.doc_adt || '', h: r => '<a class="lnk" href="#" onclick="devAbrir(\'' + r.id + '\');return false">' + esc(r.doc_adt || '(sin documento)') + '</a>' },
     { k: 'cliente', t: 'Cliente', v: r => r.cliente || '', wrap: true },
     { k: 'ref', t: 'Referencia', v: r => r.ref },
@@ -657,7 +658,7 @@ function devAbrir(id) {
     + (s === 'verificada' ? '<div class="f w" style="margin-top:10px"><label style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Nº de la nota crédito</label><input id="dvNc" style="width:100%;font:inherit;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px"></div>' : '')
     + (d.obs_verif && s !== 'recibida' ? '<div class="hint" style="padding:8px 0 0">Verificación: ' + esc(d.obs_verif) + '</div>' : '')
     + (aud.length ? '<div class="hint" style="padding:8px 0 0">' + aud.map(esc).join('<br>') + '</div>' : '') + '</div>'
-    + '<div class="mf">' + (d.id && D.admin ? '<button class="btn r" onclick="devBorrar()">🗑 Borrar</button>' : '') + '<button class="btn g" onclick="devImprimir()">🖨 Imprimir hoja</button>'
+    + '<div class="mf">' + (d.id && devPuedeBorrar(d) ? '<button class="btn r" onclick="devBorrar()">🗑 Borrar</button>' : '') + '<button class="btn g" onclick="devImprimir()">🖨 Imprimir hoja</button>'
     + (s === 'verificada' ? '<button class="btn g" onclick="devPaso(\'reabrir\')">↩ Devolver a revisión</button>' : '') + (s === 'nota_credito' && D.admin ? '<button class="btn g" onclick="devPaso(\'reabrir\')">↩ Reabrir (admin)</button>' : '')
     + (ro ? '' : '<button class="btn g" onclick="devGuardar()">' + (d.id ? 'Guardar cambios' : 'Guardar como recibida') + '</button>')
     + (s === 'por_recibir' ? '<span class="hint" style="padding:0;align-self:center;max-width:300px">Ya vienen las cantidades del documento como buenas: cambia solo lo que difiera.</span><button class="btn" onclick="devGuardar(\'recibir\')">📦 Marcar recibida</button>' : '') + (s === 'recibida' ? '<button class="btn" onclick="devGuardar(\'verificar\')">✔ Verificar</button>' : '') + (s === 'verificada' ? '<button class="btn" onclick="devGuardar(\'nc\')">🧾 Registrar nota crédito</button>' : '') + '</div></div>';
@@ -686,7 +687,9 @@ async function devGuardar0(paso) {
   $('ovDev').classList.remove('on'); devCargar();
 }
 async function devPaso(paso) { const j = await api({ accion: 'dev_paso', id: DV.cur.id, paso }); if (!j.ok) { alert(j.error || 'No se pudo'); return; } $('ovDev').classList.remove('on'); devCargar(); }
-async function devBorrar() { if (!confirm('¿Borrar esta devolución?')) return; const j = await api({ accion: 'dev_borrar', id: DV.cur.id }); if (!j.ok) { alert(j.error || 'No se pudo borrar'); return; } $('ovDev').classList.remove('on'); devCargar(); }
+// Borra el administrador, o quien la creó mientras siga sin verificar
+const devPuedeBorrar = d => D.admin || (d.creado_por === D.nombre && (d.estado === 'por_recibir' || d.estado === 'recibida'));
+async function devBorrar(id) { const x = id ? DV.l.find(v => v.id === id) : DV.cur; if (!x || !confirm('¿Borrar la devolución Nº ' + x.consecutivo + ' (' + (x.cliente || x.doc_adt || '') + ') con todos sus ítems? No se puede deshacer.')) return; const j = await api({ accion: 'dev_borrar', id: x.id }); if (!j.ok) { alert(j.error || 'No se pudo borrar'); return; } if ($('ovDev')) $('ovDev').classList.remove('on'); devCargar(); }
 function devImprimir() {
   const { dev, items } = devRecoger(), c = DV.cur || {};
   const w = window.open('', '_blank'); if (!w) { alert('El navegador bloqueó la ventana de impresión'); return; }
