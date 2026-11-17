@@ -599,6 +599,7 @@ async function ppeCargar() {
   // el recaudo se pide hasta 10 días después del cierre: un RC contabilizado en noviembre puede ser de una consignación de octubre
   const [r, fb] = await Promise.all([recApi({ accion: 'recaudo', desde: M.desde, hasta: ppeDias(M.hasta, 10), contadoDias: '1' }), fnApi({ accion: 'listar', desde: ppeDias(M.desde, -45) })]);
   PPE.fb = {}; ((fb && fb.rows) || []).forEach(x => { PPE.fb[String(x.consec)] = String(x.fecha_banco).slice(0, 10); }); PPE.pend = {};
+  try { PPE.ext = await extCargarMes(PPE.mes, true); PPE.extErr = ''; } catch (e) { PPE.ext = null; PPE.extErr = e.message || 'No se pudo cargar el extracto'; }
   PPE.cargando = false; PPE.r = (r && r.ok) ? r : { error: (r && r.error) || 'No se pudo traer el recaudo de Siesa' }; await ppeAutoPpto(M); ppeVista();
 }
 // Recibos del mes con su fecha efectiva: la del banco si Cartera la registró; si no, la contable de Siesa
@@ -613,13 +614,14 @@ function ppeSem(M, n, t) {
 }
 function ppeVista() {
   const c = $('cont'); if (!c) return; const M = PPE_DATA[PPE.mes] || PPE_DATA['2026-10'], meses = Object.keys(PPE_DATA).sort();
-  const bar = '<div class="bar"><select onchange="PPE.mes=this.value;PPE.r=null;ppeCargar()" style="padding:5px 8px;border-radius:7px;border:1px solid #cbd5e1;font-weight:700">' + meses.map(k => '<option value="' + k + '"' + (k === PPE.mes ? ' selected' : '') + '>' + esc((PPE_DATA[k] || {}).titulo || k) + '</option>').join('') + '</select><b style="font-size:12px">recaudo por ejecutivo y semana</b><button class="btn" onclick="ppeCargar()">🔄 Traer recaudo de Siesa</button><button class="btn" onclick="ppeCfgAbrir()">⚙ Presupuesto y semanas</button>' + (PPE.r && PPE.r.filas ? '<button class="btn" onclick="PPE.fbAb=!PPE.fbAb;ppeVista()">📅 Fechas del banco</button><button class="btn" onclick="ppeExcel()">⬇ Excel (con fórmulas)</button><button class="btn" onclick="ppeDetTodo()" title="Todos los recibos del mes con su semana y su movimiento del extracto">⬇ Detalle de RC + extracto</button>' : '') + '</div>';
+  const bar = '<div class="bar"><select onchange="PPE.mes=this.value;PPE.r=null;ppeCargar()" style="padding:5px 8px;border-radius:7px;border:1px solid #cbd5e1;font-weight:700">' + meses.map(k => '<option value="' + k + '"' + (k === PPE.mes ? ' selected' : '') + '>' + esc((PPE_DATA[k] || {}).titulo || k) + '</option>').join('') + '</select><b style="font-size:12px">recaudo por ejecutivo y semana</b><button class="btn" onclick="ppeCargar()">🔄 Traer recaudo de Siesa</button><button class="btn" onclick="ppeCfgAbrir()">⚙ Presupuesto y semanas</button><button class="btn" title="De dónde se arman las semanas" onclick="PPE.fuente=ppeUsaExt()?\'sie\':\'ext\';ppeVista()">' + (ppeUsaExt() ? '🏦 Fuente: extracto bancario' : '🧾 Fuente: Siesa') + '</button>' + (PPE.r && PPE.r.filas ? '<button class="btn" onclick="PPE.fbAb=!PPE.fbAb;ppeVista()">📅 Fechas del banco</button><button class="btn" onclick="ppeExcel()">⬇ Excel (con fórmulas)</button><button class="btn" onclick="ppeDetTodo()" title="Todos los movimientos (o recibos) del mes con su ejecutivo y su semana">⬇ Detalle por ejecutivo y semana</button>' : '') + '</div>';
   if (PPE.cargando) { c.innerHTML = bar + '<div class="card">Trayendo el recaudo de Siesa…</div>'; return; }
   if (!PPE.r) { c.innerHTML = bar + '<div class="card">Pulsa «Traer recaudo de Siesa» para calcular las semanas.</div>'; ppeCargar(); return; }
   if (PPE.r.error) { c.innerHTML = bar + '<div class="card" style="color:#b91c1c">' + esc(PPE.r.error) + '</div>'; return; }
   const filas = ppeFilas(M), nombres = Object.keys(M.f), idx = {}; nombres.forEach(n => idx[nz(n)] = n);
-  const T = {}; nombres.forEach(n => T[n] = { mes: 0, nh: 0, w: [0, 0, 0, 0] }); const otros = {};
-  filas.forEach(f => { const n = idx[nz(f.vendedor)]; if (!n) { otros[f.vendedor] = (otros[f.vendedor] || 0) + f.asignado; return; } if (ppeEsNH(f)) { T[n].nh += -f.asignado; return; } T[n].mes += f.asignado; const k = ppeSemIdx(M, f.fe); if (k >= 0) T[n].w[k] += f.asignado; });
+  const T = {}; nombres.forEach(n => T[n] = { mes: 0, nh: 0, w: [0, 0, 0, 0] }); const otros = {}; const EXT_ = ppeUsaExt() ? ppeExtFilas(M) : null;
+  if (EXT_) { EXT_.filas.forEach(x => { T[x.n].mes += x.monto; const k = ppeSemIdx(M, x.fe); if (k >= 0) T[x.n].w[k] += x.monto; }); Object.keys(EXT_.otros).forEach(k => otros[k] = EXT_.otros[k]); if (EXT_.sinId) otros['SIN IDENTIFICAR (' + EXT_.nSin + ' mov.)'] = EXT_.sinId; }
+  else filas.forEach(f => { const n = idx[nz(f.vendedor)]; if (!n) { otros[f.vendedor] = (otros[f.vendedor] || 0) + f.asignado; return; } if (ppeEsNH(f)) { T[n].nh += -f.asignado; return; } T[n].mes += f.asignado; const k = ppeSemIdx(M, f.fe); if (k >= 0) T[n].w[k] += f.asignado; });
   const tot = Array(12).fill(0);
   const rows = nombres.map(n => { const t = T[n], { pp, s1, s2, s3, s4, x4 } = ppeSem(M, n, t), ac = s1 + s2 + s3 + s4, pc = pp ? ac / pp : 0, dx = x4 == null ? 0 : s4 - x4;
     [pp, s1, s2, s3, s4, ac, pp - ac, t.w[3], t.mes, t.nh, x4 || 0, dx].forEach((v, i) => tot[i] += v);
@@ -629,10 +631,10 @@ function ppeVista() {
   const pT = tot[0] ? tot[5] / tot[0] : 0;
   const ot = Object.keys(otros).length ? '<div class="card" style="font-size:11.5px;color:#92400e;background:#fef3c7">Recaudo de Siesa con ejecutivo que no está en el presupuesto: ' + Object.keys(otros).map(k => esc(k) + ' ' + fm(otros[k])).join(' · ') + '</div>' : '';
   const sin = M.sem.map(w => w[0].slice(8) + '–' + w[1].slice(8)), nBanco = filas.filter(f => f.conBanco).length, nRC = new Set(filas.map(f => f.rc)).size;
-  const nota = M.manual ? 'Sem 1, 2 y 3: valores de tu Excel (fecha del banco). ' : 'Sem 1 a 3: recibos de Siesa por la fecha del banco que registró Cartera (si un RC no tiene fecha del banco, cuenta con la fecha contable de Siesa). ';
-  c.innerHTML = bar + '<div class="card"><h2>Presupuesto vs ejecución · recaudo ' + esc(M.titulo) + '</h2><div class="tw"><table><thead><tr><th style="text-align:left">Ejecutivo</th><th title="Escribe directo en la celda para cambiar el presupuesto">Ppto ✏️</th>' + [0, 1, 2].map(i => '<th style="cursor:pointer" title="Clic para editar las fechas de las semanas" onclick="ppeCfgAbrir()">Sem ' + (i + 1) + ' (' + sin[i] + ') ✏️</th>').join('') + '<th style="cursor:pointer" title="Clic para editar las fechas de las semanas" onclick="ppeCfgAbrir()">Sem 4 (' + sin[3] + ') cuadre ✏️</th><th title="Notas NH que cruzan facturas: se suman al recaudo del mes">NH sumadas</th><th title="Sem 4 calculada − Sem 4 de tu Excel">Dif. vs Excel sem 4</th><th>Acumulado</th><th>% vs ppto</th><th>Faltante</th></tr></thead><tbody>' + rows
+  const nota = EXT_ ? 'Sem 1 a 4: movimientos del extracto bancario que Cartera sube, por la fecha del banco y el ejecutivo asignado (lo identificado en un mes posterior cuenta en el mes en que se identificó). ' : M.manual ? 'Sem 1, 2 y 3: valores de tu Excel (fecha del banco). ' : 'Sem 1 a 3: recibos de Siesa por la fecha del banco que registró Cartera (si un RC no tiene fecha del banco, cuenta con la fecha contable de Siesa). ';
+  c.innerHTML = bar + '<div class="card"><h2>Presupuesto vs ejecución · recaudo ' + esc(M.titulo) + '</h2><div class="tw"><table><thead><tr><th style="text-align:left">Ejecutivo</th><th title="Escribe directo en la celda para cambiar el presupuesto">Ppto ✏️</th>' + [0, 1, 2].map(i => '<th style="cursor:pointer" title="Clic para editar las fechas de las semanas" onclick="ppeCfgAbrir()">Sem ' + (i + 1) + ' (' + sin[i] + ') ✏️</th>').join('') + '<th style="cursor:pointer" title="Clic para editar las fechas de las semanas" onclick="ppeCfgAbrir()">Sem 4 (' + sin[3] + ')' + (EXT_ ? '' : ' cuadre') + ' ✏️</th><th title="Notas NH que cruzan facturas: se suman al recaudo del mes">NH sumadas</th><th title="Sem 4 calculada − Sem 4 de tu Excel">Dif. vs Excel sem 4</th><th>Acumulado</th><th>% vs ppto</th><th>Faltante</th></tr></thead><tbody>' + rows
     + '<tr><td class="n" style="text-align:left"><b>TOTAL</b></td>' + [0, 1, 2, 3, 4].map(i => '<td><b>' + fm(tot[i]) + '</b></td>').join('') + '<td><b>' + fm(tot[9]) + '</b></td><td><b>' + (M.manual ? fm(tot[11]) : '—') + '</b></td><td><b>' + fm(tot[5]) + '</b></td><td><b>' + (pT * 100).toFixed(1) + '%</b></td><td><b>' + fm(Math.max(tot[0] - tot[5], 0)) + '</b></td></tr></tbody></table></div>'
-    + '<div style="font-size:11px;color:#64748b;margin-top:8px">' + nota + 'Sem 4: cuadre = recaudo total del mes en Siesa (' + fm(tot[8]) + ') + NH sumadas (' + fm(tot[9]) + ') − semanas 1, 2 y 3. Recibos del mes: ' + nRC + ' · con fecha del banco: ' + new Set(filas.filter(f => f.conBanco).map(f => f.rc)).size + '.</div></div>' + ot + (PPE.fbAb ? ppeFbHtml(M) : '');
+    + '<div style="font-size:11px;color:#64748b;margin-top:8px">' + nota + (EXT_ ? 'Total del mes en el extracto para estos ejecutivos: ' + fm(tot[8]) + ' · movimientos: ' + EXT_.filas.length + '.' : 'Sem 4: cuadre = recaudo total del mes en Siesa (' + fm(tot[8]) + ') + NH sumadas (' + fm(tot[9]) + ') − semanas 1, 2 y 3. Recibos del mes: ' + nRC + ' · con fecha del banco: ' + new Set(filas.filter(f => f.conBanco).map(f => f.rc)).size + '.') + (PPE.extErr ? ' <span style="color:#b91c1c">No pude leer el extracto (' + esc(PPE.extErr) + '): se muestra Siesa.</span>' : '') + '</div></div>' + ot + (PPE.fbAb ? ppeFbHtml(M) : '');
 }
 
 // ── Editar el ppto directo en la tabla y ver de dónde sale cada cifra (RC de Siesa + movimiento del extracto) ──
@@ -652,6 +654,7 @@ function ppeDetFilas(M, n, k) {
 }
 async function ppeDet(ix, k) {
   const M = PPE_DATA[PPE.mes], n = Object.keys(M.f)[ix]; if (!n || !PPE.r) return;
+  if (ppeUsaExt()) { PPE.det = { modo: 'ext', n, k, M, x: ppeExtFilas(M).filas.filter(x => x.n === n && (k === 'mes' || ppeSemIdx(M, x.fe) === k)).sort((a, b) => a.fe.localeCompare(b.fe) || a.r.id - b.r.id) }; ppeDetPintar(); return; }
   const d = ppeDetFilas(M, n, k);
   PPE.det = { n, k, M, rc: d.rc, nh: d.nh, ext: null, man: !!M.manual && k !== 'mes' && k < 3 };
   ppeDetPintar();
@@ -661,8 +664,22 @@ async function ppeDet(ix, k) {
 async function ppeExtDe(rcs) {
   const out = []; for (let i = 0; i < rcs.length; i += 150) { const r = await extApi({ accion: 'listar', rcs: rcs.slice(i, i + 150) }); if (r && r.filas) out.push(...r.filas); } return out;
 }
+function ppeDetPintarExt() {
+  const D0 = PPE.det; let m = $('ppe-det');
+  if (!m) { m = document.createElement('div'); m.id = 'ppe-det'; m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:3vh 12px;overflow:auto'; document.body.appendChild(m); }
+  const nom = D0.k === 'mes' ? 'todo el mes' : 'Sem ' + (D0.k + 1) + ' (' + D0.M.sem[D0.k][0].slice(5) + ' a ' + D0.M.sem[D0.k][1].slice(5) + ')', tot = D0.x.reduce((a, o) => a + o.monto, 0);
+  m.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:1100px;width:100%;padding:16px 18px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b style="font-size:15px">🏦 ' + esc(D0.n) + ' · ' + esc(nom) + ' · ' + esc(D0.M.titulo) + '</b><span><button class="btn" onclick="ppeDetExcel()">⬇ Excel de este detalle</button> <button class="btn" onclick="$(\'ppe-det\').remove();PPE.det=null">✕</button></span></div>'
+    + '<div style="font-size:12px;color:#64748b;margin:6px 0 10px">Movimientos del extracto bancario asignados a este ejecutivo. «Cuenta en» es la fecha que se usa para la semana (la del banco; si se identificó después, la de identificación). Total: <b>' + fm(tot) + '</b> en ' + D0.x.length + ' movimiento(s).</div>'
+    + '<div class="tw" style="max-height:62vh;overflow:auto"><table><thead><tr><th>Cuenta en</th><th>Fecha banco</th><th>Banco</th><th style="text-align:left">Descripción</th><th style="text-align:left">Cliente</th><th>RC</th><th>Monto</th></tr></thead><tbody>'
+    + (D0.x.length ? D0.x.map(o => '<tr><td>' + o.fe + '</td><td>' + String(o.r.fecha).slice(0, 10) + '</td><td>' + esc(o.r.banco || '') + '</td><td style="text-align:left;font-size:11px">' + esc(o.r.descripcion || '') + '</td><td style="text-align:left;font-size:11px">' + esc(o.r.cliente || '') + '</td><td>' + esc(o.r.rc || '') + '</td><td>' + fm(o.monto) + '</td></tr>').join('') : '<tr><td colspan="7" style="color:#64748b">Sin movimientos en este periodo.</td></tr>') + '</tbody></table></div></div>';
+}
+function ppeDetXlsxExt(nombre, L) {
+  const aoa = [['Ejecutivo', 'Semana', 'Cuenta en', 'Fecha banco', 'Banco', 'Descripción', 'Cliente', 'NIT', 'RC', 'Monto', 'Observación']];
+  L.forEach(o => aoa.push([o.n, o.sem, o.fe, String(o.r.fecha).slice(0, 10), o.r.banco || '', o.r.descripcion || '', o.r.cliente || '', o.r.nit || '', o.r.rc || '', o.monto, o.r.observacion || '']));
+  const wb = XLSX.utils.book_new(), ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [30, 10, 12, 12, 14, 40, 36, 14, 10, 14, 30].map(w => ({ wch: w })); XLSX.utils.book_append_sheet(wb, ws, 'Extracto por ejecutivo'); XLSX.writeFile(wb, nombre);
+}
 function ppeDetPintar() {
-  const D0 = PPE.det; if (!D0) return; let m = $('ppe-det');
+  const D0 = PPE.det; if (!D0) return; if (D0.modo === 'ext') { ppeDetPintarExt(); return; } let m = $('ppe-det');
   if (!m) { m = document.createElement('div'); m.id = 'ppe-det'; m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:3vh 12px;overflow:auto'; document.body.appendChild(m); }
   const ext = {}; (D0.ext || []).forEach(x => { (ext[String(x.rc)] = ext[String(x.rc)] || []).push(x); });
   const nom = D0.k === 'mes' ? 'todo el mes' : 'Sem ' + (D0.k + 1) + ' (' + D0.M.sem[D0.k][0].slice(5) + ' a ' + D0.M.sem[D0.k][1].slice(5) + ')';
@@ -686,15 +703,34 @@ function ppeDetXlsx(nombre, filas, ext) {
   const wb = XLSX.utils.book_new(), ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [30, 12, 8, 12, 14, 12, 38, 14, 14, 14, 6, 16, 12, 14, 40].map(w => ({ wch: w })); XLSX.utils.book_append_sheet(wb, ws, 'Detalle RC'); XLSX.writeFile(wb, nombre);
 }
 function ppeDetExcel() {
-  const D0 = PPE.det; if (!D0) return; const sem = D0.k === 'mes' ? 'Mes' : 'Sem ' + (D0.k + 1);
+  const D0 = PPE.det; if (!D0) return;
+  if (D0.modo === 'ext') { ppeDetXlsxExt('Extracto_' + D0.M.titulo.replace(/\W+/g, '_') + '_' + nz(D0.n).replace(/\W+/g, '_') + '_' + (D0.k === 'mes' ? 'Mes' : 'Sem' + (D0.k + 1)) + '.xlsx', D0.x.map(o => Object.assign({}, o, { sem: 'Sem ' + (ppeSemIdx(D0.M, o.fe) + 1) }))); return; }
+  const sem = D0.k === 'mes' ? 'Mes' : 'Sem ' + (D0.k + 1);
   ppeDetXlsx('Recaudo_' + D0.M.titulo.replace(/\W+/g, '_') + '_' + nz(D0.n).replace(/\W+/g, '_') + '_' + sem.replace(' ', '') + '.xlsx', D0.rc.concat(D0.nh).map(f => ({ n: D0.n, sem: ppeEsNH(f) ? 'NH' : (ppeSemIdx(D0.M, f.fe) >= 0 ? 'Sem ' + (ppeSemIdx(D0.M, f.fe) + 1) : 'Fuera'), f })), D0.ext || []);
 }
 async function ppeDetTodo() {
-  const M = PPE_DATA[PPE.mes]; if (!PPE.r) return; const idx = {}; Object.keys(M.f).forEach(n => idx[nz(n)] = n);
+  const M = PPE_DATA[PPE.mes]; if (!PPE.r) return;
+  if (ppeUsaExt()) { ppeDetXlsxExt('Extracto_por_ejecutivo_' + M.titulo.replace(/\W+/g, '_') + '.xlsx', ppeExtFilas(M).filas.map(o => Object.assign({}, o, { sem: ppeSemIdx(M, o.fe) >= 0 ? 'Sem ' + (ppeSemIdx(M, o.fe) + 1) : 'Fuera' })).sort((a, b) => a.n.localeCompare(b.n) || a.fe.localeCompare(b.fe))); return; } const idx = {}; Object.keys(M.f).forEach(n => idx[nz(n)] = n);
   const fl = ppeFilas(M).filter(f => idx[nz(f.vendedor)]); PPE.fbMsg = 'Armando el detalle con el extracto…'; ppeVistaSuave();
   const ext = await ppeExtDe([...new Set(fl.map(f => f.rc))]); PPE.fbMsg = '';
   ppeDetXlsx('Detalle_RC_extracto_' + M.titulo.replace(/\W+/g, '_') + '.xlsx', fl.map(f => ({ n: idx[nz(f.vendedor)], sem: ppeEsNH(f) ? 'NH' : (ppeSemIdx(M, f.fe) >= 0 ? 'Sem ' + (ppeSemIdx(M, f.fe) + 1) : 'Fuera'), f })).sort((a, b) => a.n.localeCompare(b.n) || a.sem.localeCompare(b.sem) || a.f.rc - b.f.rc), ext);
   ppeVistaSuave();
+}
+
+// ── Fuente de las semanas: EXTRACTO BANCARIO (lo que Cartera sube día a día) o Siesa ──
+const ppeUsaExt = () => PPE.fuente !== 'sie' && Array.isArray(PPE.ext);
+function ppeExtFilas(M) {
+  const idx = {}, out = [], otros = {}; Object.keys(M.f).forEach(n => idx[nz(n)] = n); let sinId = 0, nSin = 0;
+  (PPE.ext || []).forEach(r => {
+    const cod = String(r.ejecutivo || '').trim(), m = Number(r.monto) || 0;
+    if (!cod) { sinId += m; nSin++; return; }
+    const n = idx[ejNom(cod)];
+    if (!n) { if (!/^(TESORERIA|CONTABILIDAD)$/i.test(cod)) otros[cod] = (otros[cod] || 0) + m; return; }
+    const f = String(r.fecha).slice(0, 10), fi = r.fecha_ident ? String(r.fecha_ident).slice(0, 10) : '';
+    let fe = f; if (f < M.desde || f > M.hasta) fe = (fi >= M.desde && fi <= M.hasta) ? fi : (f < M.desde ? M.desde : M.hasta);
+    out.push({ n, fe, r, monto: m });
+  });
+  return { filas: out, otros, sinId, nSin };
 }
 // ── Fecha del banco por recibo (RC): Siesa solo trae la fecha contable ──
 function ppeFbHtml(M) {
