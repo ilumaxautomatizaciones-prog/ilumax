@@ -631,7 +631,7 @@ const DD_COLS = ['CONSECUTIVO DEVOL.', 'NOMBRE DEL CLIENTE', 'FECHA DE RECIBO DE
 const ddFecha = f => { const m = String(f || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? +m[3] + '/' + +m[2] + '/' + m[1] : ''; };
 const ddCreado = d => d.creado ? new Date(Date.parse(d.creado) - 5 * 3600000).toISOString().slice(0, 10) : '';
 // Devoluciones del día: las que se entregan a CIU ese día (si no tienen esa fecha, las creadas ese día)
-const ddDevs = dia => (DV.l || []).filter(d => d.fecha_entrega ? d.fecha_entrega === dia : ddCreado(d) === dia).sort((a, b) => Number(a.consecutivo) - Number(b.consecutivo));
+const ddDevs = dia => (DV.l || []).filter(d => d.fecha_entrega === dia || ddCreado(d) === dia).sort((a, b) => Number(a.consecutivo) - Number(b.consecutivo));
 function ddFilas(dia) {
   const R = []; ddDevs(dia).forEach(d => (d.items && d.items.length ? d.items : [{}]).forEach(i => {
     const mt = i.motivo || d.motivo || '', cod = (String(mt).match(/^\s*(\d{3,5})/) || [])[1] || String(mt);
@@ -640,10 +640,12 @@ function ddFilas(dia) {
 }
 function devDiaAbrir() {
   const o = dvOv('ovDia');
-  o.innerHTML = '<div class="mo" style="max-width:460px"><div class="mh">📅 Documento del día<button class="btn g" onclick="$(\'ovDia\').classList.remove(\'on\')">✕</button></div><div class="mb"><div class="f w"><label>Día (fecha de entrega a CIU)</label><input type="date" id="dd_f" value="' + D.hoy + '" onchange="devDiaCont()"></div><div class="hint" id="dd_c"></div></div><div class="mf"><button class="btn g" onclick="devDiaExcel()">⬇ Excel</button><button class="btn" onclick="devDiaPdf()">🖨 PDF / Imprimir</button></div></div>';
-  o.classList.add('on'); devDiaCont();
+  o.innerHTML = '<div class="mo" style="max-width:460px"><div class="mh">📅 Documento del día<button class="btn g" onclick="$(\'ovDia\').classList.remove(\'on\')">✕</button></div><div class="mb"><div class="f w"><label>Día (fecha de entrega a CIU o de creación)</label><input type="date" id="dd_f" value="' + D.hoy + '" onchange="devDiaCont()"></div><div class="hint" id="dd_c"></div></div><div class="mf"><button class="btn g" onclick="devDiaExcel()">⬇ Excel</button><button class="btn" onclick="devDiaPdf()">🖨 PDF / Imprimir</button></div></div>';
+  o.classList.add('on');
+  if (!ddDevs(D.hoy).length) { const f = (DV.l || []).map(d => d.fecha_entrega).filter(Boolean).sort().pop(); if (f) $('dd_f').value = f; }
+  devDiaCont();
 }
-function devDiaCont() { const dia = $('dd_f').value, n = ddDevs(dia).length, f = ddFilas(dia).length; $('dd_c').textContent = n ? n + ' devolución(es) · ' + f + ' línea(s) de referencia' : 'No hay devoluciones con entrega a CIU en ese día.'; }
+function devDiaCont() { const dia = $('dd_f').value, n = ddDevs(dia).length, f = ddFilas(dia).length; $('dd_c').textContent = n ? n + ' devolución(es) · ' + f + ' línea(s) de referencia' : 'No hay devoluciones creadas o con entrega a CIU en ese día.'; }
 async function devDiaExcel() {
   const dia = $('dd_f').value, R = ddFilas(dia); if (!R.length) { alert('No hay devoluciones ese día.'); return; }
   try { await cargaScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js', 'ExcelJS'); } catch (e) { alert('No se pudo cargar el generador de Excel. Revisa la conexión.'); return; }
