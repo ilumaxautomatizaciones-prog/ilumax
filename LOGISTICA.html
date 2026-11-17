@@ -472,19 +472,26 @@ function devPintar() {
   const kp = (l, e, s, f) => '<div class="kpi click' + (g.estv === f ? ' act' : '') + '" onclick="devFiltro(\'' + f + '\')" title="Clic para filtrar"><div class="l">' + l + '</div><div class="v">' + fm(n(e)) + '</div><div class="s">' + s + '</div></div>';
   const kpis = '<div class="kpis">' + kp('Por recibir', 'por_recibir', 'Documento de ADT, mercancía no ha llegado', 'dpr') + kp('Recibidas', 'recibida', 'Falta verificar (Valentina)', 'drc') + kp('Verificadas', 'verificada', 'Falta nota crédito (Tatiana)', 'dvf') + kp('Con nota crédito', 'nota_credito', 'Proceso terminado', 'dnc') + '</div>';
   const pill = e => '<span class="pill ' + DVE[e][1] + '">' + DVE[e][0] + '</span>';
-  const rows = L.map(d => ({ ...d, ud: devSum(d, 'cant_doc'), ur: d.estado === 'por_recibir' ? '' : devSum(d, 'cant_recibida'), est: DVE[d.estado][0] }));
+  // Una fila por referencia (como el comprobante de ADT): los datos de la devolución se repiten en cada ítem
+  const rows = L.flatMap(d => (d.items && d.items.length ? d.items : [{}]).map(i => ({ ...d, ref: i.referencia || '', desc: i.descripcion || '', ud: i.cant_doc == null ? '' : Number(i.cant_doc), ur: d.estado === 'por_recibir' || i.cant_recibida == null ? '' : Number(i.cant_recibida), ei: i.estado_item === 'buena' ? 'Buena' : i.estado_item === 'mala' ? 'Mala' : '', bi: i.bodega || '', lote: i.lote || '', est: DVE[d.estado][0] })));
   xgInit('dev', [
     { k: 'cons', t: 'Nº', v: r => r.consecutivo, num: true, al: true, h: r => '<a class="lnk" href="#" onclick="devAbrir(\'' + r.id + '\');return false">' + esc(r.consecutivo) + '</a>' },
     { k: 'doc_adt', t: 'Doc. devolución', v: r => r.doc_adt || '', h: r => '<a class="lnk" href="#" onclick="devAbrir(\'' + r.id + '\');return false">' + esc(r.doc_adt || '(sin documento)') + '</a>' },
-    { k: 'guia', t: 'Guía', v: r => r.guia || '' },
     { k: 'cliente', t: 'Cliente', v: r => r.cliente || '', wrap: true },
-    { k: 'ejecutivo', t: 'Ejecutivo', v: r => r.ejecutivo || '' },
-    { k: 'bodega', t: 'Bodega', v: r => r.bodega || '' },
+    { k: 'ref', t: 'Referencia', v: r => r.ref },
+    { k: 'desc', t: 'Descripción', v: r => r.desc, wrap: true },
+    { k: 'ud', t: 'Cant. doc.', v: r => r.ud, num: true, sum: true },
+    { k: 'ur', t: 'Cant. recibida', v: r => r.ur, num: true, sum: true },
+    { k: 'ei', t: 'Estado ítem', v: r => r.ei },
+    { k: 'bi', t: 'Bodega ítem', v: r => r.bi },
+    { k: 'lote', t: 'Lote', v: r => r.lote },
     { k: 'motivo', t: 'Motivo', v: r => r.motivo || '', wrap: true },
+    { k: 'bodega', t: 'Bodega', v: r => r.bodega || '' },
     { k: 'fecha_recibo', t: 'Recibido mercancía', v: r => r.fecha_recibo || '', date: true, al: true },
     { k: 'fecha_entrega', t: 'Entrega a CIU', v: r => r.fecha_entrega || '', date: true, al: true },
-    { k: 'ud', t: 'Und. documento', v: r => r.ud, num: true, sum: true },
-    { k: 'ur', t: 'Und. recibidas', v: r => r.ur, num: true, sum: true },
+    { k: 'ejecutivo', t: 'Ejecutivo', v: r => r.ejecutivo || '' },
+    { k: 'guia', t: 'Guía', v: r => r.guia || '' },
+    { k: 'factura_ref', t: 'Factura', v: r => r.factura_ref || '' },
     { k: 'estado', t: 'Estado', v: r => r.est, h: r => pill(r.estado) },
     { k: 'nc', t: 'Nota crédito', v: r => r.nc_numero || '' },
     { k: 'x', t: '', v: r => '', h: r => '<button class="btn sm' + (r.estado === 'nota_credito' ? ' g' : '') + '" onclick="' + (r.estado === 'nota_credito' ? 'devAbrir' : 'devRapido') + '(\'' + r.id + '\')">' + ({ por_recibir: '📦 Recibir', recibida: '✔ Verificar', verificada: '🧾 Nota crédito', nota_credito: 'Ver' })[r.estado] + '</button>' }
@@ -662,7 +669,10 @@ function devRecoger() {
   const items = [...document.querySelectorAll('#dvTb tr')].map(tr => { const k = tr.dataset.r, v = f => $('dvi_' + k + '_' + f).value.trim(); return { referencia: v('referencia'), descripcion: v('descripcion'), cant_doc: v('cant_doc'), cant_recibida: v('cant_recibida'), estado_item: v('estado_item'), bodega: v('bodega'), lote: v('lote') }; }).filter(i => i.referencia || i.descripcion);
   return { dev, items };
 }
-async function devGuardar(paso) {
+// Evita guardar dos veces si se toca el botón dos veces seguidas
+let DVBUSY = false;
+async function devGuardar(paso) { if (DVBUSY) return; DVBUSY = true; try { await devGuardar0(paso); } finally { DVBUSY = false; } }
+async function devGuardar0(paso) {
   const { dev, items } = devRecoger(); if (!dev.cliente && !dev.doc_adt && !dev.guia) { alert('Falta el cliente, el documento ADT o la guía'); return; }
   if (paso === 'recibir' || (!dev.id && dev.estado !== 'por_recibir')) items.forEach(i => { if (i.cant_recibida === '') i.cant_recibida = i.cant_doc; if (!i.estado_item) { i.estado_item = 'buena'; i.bodega = i.bodega || 'Disponible'; } });
   if (paso === 'verificar') { const f = items.filter(i => i.cant_recibida === '' || !i.estado_item); if (!items.length || f.length) { alert('Para verificar, cada ítem necesita cantidad recibida y estado (buena/mala).'); return; } }
