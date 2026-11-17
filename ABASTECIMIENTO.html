@@ -10989,6 +10989,7 @@ function ppPintarInterno(el){
     } else {
       if(p.tipo==='anticipo' && reg && reg.estado==='pagado' && tesoPuedePagar()) o.push(b('✎ Corregir',`tesoCorregirPago('${p.ocId}','${n}')`,'Corregir valor, fecha o TRM del pago'), b('↩︎ Devolver',`tesoDevolverPago('${p.ocId}','${n}')`,'Quitar el pago y dejar el anticipo como autorizado'));
       if(p.tipo==='saldo' && puede) o.push(b('✎ Corregir',`ppMarcarSaldo('${n}',true)`,'Corregir el pago del saldo'), b('↩︎',`ppDeshacerSaldo('${n}')`,'Deshacer'));
+      { const _sp = (((PP.ajustes||{})[ceNum(p.num)]||{}).saldo||{}).pagado; if(p.tipo==='saldo' && _sp && _sp.url) o.push(b('📎',`window.open('${reabastEsc(_sp.url)}','_blank','noopener')`,'Ver el comprobante del saldo')); }
     }
     o.push(b('🕘',`fcGestionar(${p._i})`,'Historial y ficha del pago'));
     return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start;">${o.join('')}</div>`;
@@ -11181,16 +11182,19 @@ function ppMarcarSaldo(num, editar, abono){
   ppModal(`${editar?'✎ Corregir pago del saldo':abono?'💵 Abono a la factura':'✅ Saldo pagado'} · ${reabastEsc(num)}`, `
     <div class="fg"><label class="fl">Fecha de pago</label><input class="inp" type="date" data-f value="${editar?(ant.fecha||''):ppIso(new Date())}"></div>
     <div class="fg"><label class="fl">Valor pagado US$</label><input class="inp" type="number" step="0.01" data-v value="${Math.round(p.usd*100)/100}"></div>
+    <div class="fg"><label class="fl">Soporte del pago (comprobante)${editar?' (opcional: solo si lo cambias)':' *'}</label><input class="inp" type="file" data-file accept="image/*,.pdf">${editar && ant.url?`<div style="font-size:11px;margin-top:3px;"><a href="${reabastEsc(ant.url)}" target="_blank" rel="noopener">📎 Ver comprobante actual</a></div>`:''}</div>
     <div class="fg"><label class="fl">Nota${editar?' (obligatoria al corregir)':''}</label><input class="inp" data-n value="${editar?reabastEsc(ant.nota||''):''}" placeholder="${editar?'¿Qué se corrige y por qué?':'Opcional'}"></div>`, async ov=>{
       const v = Number(ov.querySelector('[data-v]').value)||0; if(v<=0){ if(typeof toast==='function') toast('Escribe el valor pagado','wa'); return false; }
+      const fArch = ov.querySelector('[data-file]').files[0]; if(!editar && !fArch){ if(typeof toast==='function') toast('Adjunta el comprobante del pago','wa'); return false; }
+      let urlC = editar ? (ant.url||null) : null; if(fArch){ ov.querySelector('[data-ok]').disabled = true; if(typeof toast==='function') toast('⏳ Subiendo comprobante…','inf'); try{ urlC = await ocSubirAdjunto(fArch); }catch(e){ ov.querySelector('[data-ok]').disabled = false; throw e; } }
       if(editar && !ov.querySelector('[data-n]').value.trim()){ if(typeof toast==='function') toast('Escribe en la nota qué se corrige','wa'); return false; }
       const A = PP.ajustes[ceNum(num)] = PP.ajustes[ceNum(num)] || {};
       if(!editar && (abono || v < p.usd-0.5)){   // pago menor al saldo = ABONO: el saldo sigue abierto (no se crea un segundo saldo)
-        A.saldo = {...(A.saldo||{}), noPagado:false}; A.saldo.abonos = [...(A.saldo.abonos||[]), {fecha: ov.querySelector('[data-f]').value, usd:v, nota: ov.querySelector('[data-n]').value.trim()||null, por:(CU&&CU.nombre)||'', en:new Date().toISOString()}];
+        A.saldo = {...(A.saldo||{}), noPagado:false}; A.saldo.abonos = [...(A.saldo.abonos||[]), {fecha: ov.querySelector('[data-f]').value, usd:v, url:urlC, nota: ov.querySelector('[data-n]').value.trim()||null, por:(CU&&CU.nombre)||'', en:new Date().toISOString()}];
         ppLog(num,'Registró un ABONO a la factura · US$'+v+' · '+ov.querySelector('[data-f]').value+(ov.querySelector('[data-n]').value.trim()?' · '+ov.querySelector('[data-n]').value.trim():''));
         await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Abono registrado · el saldo queda con lo que resta','ok'); return;
       }
-      A.saldo = {...(A.saldo||{}), noPagado:false, pagado:{fecha: ov.querySelector('[data-f]').value, usd:v, nota: ov.querySelector('[data-n]').value.trim()||null, por:(CU&&CU.nombre)||'', en:new Date().toISOString()}};
+      A.saldo = {...(A.saldo||{}), noPagado:false, pagado:{fecha: ov.querySelector('[data-f]').value, usd:v, url:urlC, nota: ov.querySelector('[data-n]').value.trim()||null, por:(CU&&CU.nombre)||'', en:new Date().toISOString()}};
       ppLog(num,(editar?'CORRIGIÓ el pago del saldo (antes US$'+ant.usd+' del '+ant.fecha+') → ':'Marcó el saldo como PAGADO · ')+'US$'+v+' · fecha de pago '+A.saldo.pagado.fecha+(A.saldo.pagado.nota?' · '+A.saldo.pagado.nota:''));
       await ppGuardarAjustes(); ppPintar(); if(typeof toast==='function') toast('Saldo marcado como pagado','ok');
     });
