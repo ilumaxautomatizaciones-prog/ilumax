@@ -529,7 +529,15 @@ async function devRapGo(paso) {
 /* --- Escanear el lote con la cámara (OCR en el celular) --- */
 let TSC = null;
 function dvCargarOCR() { return TSC || (TSC = new Promise((ok, er) => { if (window.Tesseract) return ok(); const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'; sc.onload = ok; sc.onerror = () => { TSC = null; er(new Error('No se pudo cargar el lector (¿hay internet?)')); }; document.head.appendChild(sc); })); }
-const dvLoteDe = t => { const m = String(t || '').match(/lote\s*[:;.\-]?\s*([A-Z0-9][A-Z0-9\-]{5,})/i); return m ? m[1].toUpperCase() : ''; };
+// Del texto leído toma lo que sigue a "Lote:" y devuelve SOLO los 6 dígitos finales (ddmmyy). Las letras del prefijo no importan.
+// Si el lector solo vio parte de los dígitos (p. ej. 4) no se acepta: se reintenta con otra imagen.
+const dvLoteDe = t => {
+  const MAP = { O: '0', Q: '0', D: '0', I: '1', L: '1', '|': '1', S: '5', B: '8', Z: '2', G: '6' };
+  const m = String(t || '').match(/lote\s*[:;.\-]?\s*([A-Z0-9|][A-Z0-9|\- ]{4,24})/i); if (!m) return '';
+  const tk = m[1].toUpperCase().replace(/[^A-Z0-9|]/g, ''); if (tk.length < 6) return '';
+  const d = tk.slice(-6).split('').map(ch => MAP[ch] || ch).join(''); return /^\d{6}$/.test(d) ? d : '';
+};
+const dvLoteFecha = d => { const dd = +d.slice(0, 2), mm = +d.slice(2, 4); return dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12; };
 function dvScan(id, btn) {
   const f = document.createElement('input'); f.type = 'file'; f.accept = 'image/*'; f.setAttribute('capture', 'environment');
   f.onchange = async () => {
@@ -537,13 +545,15 @@ function dvScan(id, btn) {
     try {
       await dvCargarOCR();
       const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }), esc1 = Math.min(1, 1600 / Math.max(bmp.width, bmp.height)), w = Math.round(bmp.width * esc1), h = Math.round(bmp.height * esc1);
-      const wk = await Tesseract.createWorker('eng'); let lote = '';
-      for (const ang of [0, 90, 270, 180]) {
-        const c = document.createElement('canvas'), q = ang % 180; c.width = q ? h : w; c.height = q ? w : h; const x = c.getContext('2d'); x.translate(c.width / 2, c.height / 2); x.rotate(ang * Math.PI / 180); x.drawImage(bmp, -w / 2, -h / 2, w, h);
-        const r = await wk.recognize(c); lote = dvLoteDe(r.data.text); if (lote) break;
+      const wk = await Tesseract.createWorker('eng'); let lote = '', resp = '';
+      buscar: for (const ang of [0, 90, 270, 180]) for (const mej of [0, 1]) {
+        const k = mej ? Math.min(2, 2400 / Math.max(bmp.width, bmp.height)) : esc1, ww = Math.round(bmp.width * k), hh = Math.round(bmp.height * k);
+        const c = document.createElement('canvas'), q = ang % 180; c.width = q ? hh : ww; c.height = q ? ww : hh; const x = c.getContext('2d'); if (mej) x.filter = 'grayscale(1) contrast(1.7)'; x.translate(c.width / 2, c.height / 2); x.rotate(ang * Math.PI / 180); x.drawImage(bmp, -ww / 2, -hh / 2, ww, hh);
+        const r = await wk.recognize(c), d = dvLoteDe(r.data.text); if (d) { if (dvLoteFecha(d)) { lote = d; break buscar; } if (!resp) resp = d; }
       }
+      if (!lote) lote = resp;
       await wk.terminate();
-      if (lote) { $(id).value = lote; $(id).style.background = '#dcfce7'; } else alert('No pude leer el lote. Acerca la cámara, enfoca bien la línea "Lote:" y vuelve a intentar, o escríbelo.');
+      if (lote) { $(id).value = lote; $(id).style.background = '#dcfce7'; } else alert('No pude leer el lote. Acerca la cámara, enfoca bien la línea "Lote:" (se necesitan los 6 números del final) y vuelve a intentar, o escríbelo.');
     } catch (e) { alert(e.message || 'No se pudo leer la imagen'); }
     btn.disabled = false; btn.textContent = t0;
   };
