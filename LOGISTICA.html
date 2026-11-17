@@ -497,7 +497,7 @@ function devPintar() {
     { k: 'nc', t: 'Nota crédito', v: r => r.nc_numero || '' },
     { k: 'x', t: '', v: r => '', h: r => '<button class="btn sm' + (r.estado === 'nota_credito' ? ' g' : '') + '" onclick="' + (r.estado === 'nota_credito' ? 'devAbrir' : 'devRapido') + '(\'' + r.id + '\')">' + ({ por_recibir: '📦 Recibir', recibida: '✔ Verificar', verificada: '🧾 Nota crédito', nota_credito: 'Ver' })[r.estado] + '</button>' }
   ], { rows, nombre: 'Devoluciones', attr: r => r.estado === 'nota_credito' ? ' class="desp"' : '' });
-  return kpis + '<div class="card"><h2>↩️ Devoluciones</h2>' + xgBar('dev', '<button class="btn" onclick="devAbrir()">+ Nueva devolución</button><button class="btn g" onclick="devImpAbrir()">📥 Importar Excel de ADT</button>') + '<div class="tw" id="xg_dev"></div></div>'
+  return kpis + '<div class="card"><h2>↩️ Devoluciones</h2>' + xgBar('dev', '<button class="btn" onclick="devAbrir()">+ Nueva devolución</button><button class="btn g" onclick="devImpAbrir()">📥 Importar Excel de ADT</button><button class="btn g" onclick="devDiaAbrir()">📅 Documento del día</button>') + '<div class="tw" id="xg_dev"></div></div>'
     + '<div class="foot">Flujo: el ejecutivo la crea en Adatec (ADT) → Sebastián recibe la mercancía y arma la relación → Valentina la verifica con el soporte y la firma → Tatiana genera la nota crédito (le llega al cliente). Buena → bodega Disponible · Mala → Javería.</div>';
 }
 const dvOv = id => { let o = $(id); if (!o) { o = document.createElement('div'); o.id = id; o.className = 'ov'; document.body.appendChild(o); } return o; };
@@ -625,6 +625,42 @@ function dvBdg(v) {
 }
 function dvBdgPon(i) { const b = DV.bdg[i]; $('dv_bodega').value = b[1] ? b[0] + ' - ' + b[1] : b[0]; $('dvLstB').style.display = 'none'; }
 document.addEventListener('click', e => { const l = $('dvLstB'); if (l && e.target.id !== 'dv_bodega' && !l.contains(e.target)) l.style.display = 'none'; });
+/* --- Documento del día (formato DEVOLUCIONES 2026): Excel y PDF para imprimir --- */
+const DD_COLS = ['CONSECUTIVO DEVOL.', 'NOMBRE DEL CLIENTE', 'FECHA DE RECIBO DE MERCANCÍA', 'FECHA DE ENTREGA A CIU', 'No. GUÍA', 'No. FACT.', 'DOC. DEVOL. CLIENTE', 'BODEGA', 'COD.', 'DESCRIPCIÓN', 'LOTE', 'CANTIDAD RECIBIDA', 'MOTIVO O No.'];
+const ddFecha = f => { const m = String(f || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? +m[3] + '/' + +m[2] + '/' + m[1] : ''; };
+const ddCreado = d => d.creado ? new Date(Date.parse(d.creado) - 5 * 3600000).toISOString().slice(0, 10) : '';
+// Devoluciones del día: las que se entregan a CIU ese día (si no tienen esa fecha, las creadas ese día)
+const ddDevs = dia => (DV.l || []).filter(d => d.fecha_entrega ? d.fecha_entrega === dia : ddCreado(d) === dia).sort((a, b) => Number(a.consecutivo) - Number(b.consecutivo));
+function ddFilas(dia) {
+  const R = []; ddDevs(dia).forEach(d => (d.items && d.items.length ? d.items : [{}]).forEach(i => {
+    const cod = (String(d.motivo || '').match(/^\s*(\d{3,5})/) || [])[1] || String(d.motivo || '');
+    R.push([Number(d.consecutivo), d.cliente || '', ddFecha(d.fecha_recibo), ddFecha(d.fecha_entrega), d.guia || 'N/A', d.factura_ref || 'N/A', d.doc_adt || '', d.bodega || '', i.referencia || '', i.descripcion || '', i.lote || '', i.cant_recibida != null ? Number(i.cant_recibida) : (i.cant_doc != null ? Number(i.cant_doc) : ''), cod]);
+  })); return R;
+}
+function devDiaAbrir() {
+  const o = dvOv('ovDia');
+  o.innerHTML = '<div class="mo" style="max-width:460px"><div class="mh">📅 Documento del día<button class="btn g" onclick="$(\'ovDia\').classList.remove(\'on\')">✕</button></div><div class="mb"><div class="f w"><label>Día (fecha de entrega a CIU)</label><input type="date" id="dd_f" value="' + D.hoy + '" onchange="devDiaCont()"></div><div class="hint" id="dd_c"></div></div><div class="mf"><button class="btn g" onclick="devDiaExcel()">⬇ Excel</button><button class="btn" onclick="devDiaPdf()">🖨 PDF / Imprimir</button></div></div>';
+  o.classList.add('on'); devDiaCont();
+}
+function devDiaCont() { const dia = $('dd_f').value, n = ddDevs(dia).length, f = ddFilas(dia).length; $('dd_c').textContent = n ? n + ' devolución(es) · ' + f + ' línea(s) de referencia' : 'No hay devoluciones con entrega a CIU en ese día.'; }
+async function devDiaExcel() {
+  const dia = $('dd_f').value, R = ddFilas(dia); if (!R.length) { alert('No hay devoluciones ese día.'); return; }
+  try { await cargaScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js', 'ExcelJS'); } catch (e) { alert('No se pudo cargar el generador de Excel. Revisa la conexión.'); return; }
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX'; const ws = wb.addWorksheet('Devoluciones ' + dia, { views: [{ state: 'frozen', ySplit: 1 }], pageSetup: { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: .3, right: .3, top: .4, bottom: .4, header: .2, footer: .2 } } });
+  const bd = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+  ws.columns = [12, 30, 16, 16, 12, 12, 18, 10, 9, 42, 12, 12, 12].map(w => ({ width: w }));
+  const h = ws.addRow(DD_COLS); h.height = 36; h.eachCell(c => { c.font = { name: 'Arial', bold: true, color: { argb: 'FFFFFFFF' }, size: 11 }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF8B5A2B' } }; c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; c.border = bd; });
+  R.forEach((r, i) => { const x = ws.addRow(r); x.height = 32; x.eachCell({ includeEmpty: true }, (c, k) => { c.font = { name: 'Arial', size: 11, bold: k === 1 }; c.alignment = { horizontal: k === 2 || k === 10 ? 'left' : 'center', vertical: 'middle', wrapText: true }; c.border = bd; if (i % 2) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5EFE6' } }; }); });
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 13 } }; ws.pageSetup.printTitlesRow = '1:1';
+  const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'Devoluciones_' + dia + '.xlsx'; document.body.appendChild(a); a.click(); a.remove();
+}
+function devDiaPdf() {
+  const dia = $('dd_f').value, R = ddFilas(dia); if (!R.length) { alert('No hay devoluciones ese día.'); return; }
+  const w = window.open('', '_blank'); if (!w) { alert('El navegador bloqueó la ventana de impresión'); return; }
+  const th = DD_COLS.map(c => '<th>' + esc(c) + '</th>').join(''), tr = R.map((r, i) => '<tr' + (i % 2 ? ' class="z"' : '') + '>' + r.map((v, k) => '<td class="' + (k === 1 || k === 9 ? 'l' : '') + (k === 0 ? ' b' : '') + '">' + esc(v) + '</td>').join('') + '</tr>').join('');
+  w.document.write('<!DOCTYPE html><meta charset="utf-8"><title>Devoluciones ' + dia + '</title><style>@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}body{font:11pt Arial,sans-serif;margin:0;color:#000}h1{font-size:15pt;margin:0 0 6px}table{border-collapse:collapse;width:100%;table-layout:fixed}th,td{border:1px solid #333;padding:4px 3px;text-align:center;vertical-align:middle;word-wrap:break-word;font-size:9.5pt;line-height:1.2}th{background:#8b5a2b;color:#fff;font-size:8.5pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}thead{display:table-header-group}tr{page-break-inside:avoid}td.l{text-align:left}td.b{font-weight:700}tr.z td{background:#f5efe6;-webkit-print-color-adjust:exact;print-color-adjust:exact}col.c0{width:6%}col.c1{width:12%}col.c2{width:7%}col.c3{width:7%}col.c4{width:6%}col.c5{width:6%}col.c6{width:9%}col.c7{width:5%}col.c8{width:5%}col.c9{width:19%}col.c10{width:7%}col.c11{width:6%}col.c12{width:5%}</style><h1>ILUMAX · Formato de devoluciones · ' + esc(ddFecha(dia)) + '</h1><table><colgroup>' + DD_COLS.map((c, i) => '<col class="c' + i + '">').join('') + '</colgroup><thead><tr>' + th + '</tr></thead><tbody>' + tr + '</tbody></table>');
+  w.document.close(); w.focus(); setTimeout(() => w.print(), 500);
+}
 let DVT = 0;
 function dvCli(v) {
   clearTimeout(DVT); const l = $('dvLst'); if (v.trim().length < 3) { l.style.display = 'none'; return; }
