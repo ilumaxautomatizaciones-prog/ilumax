@@ -1452,18 +1452,26 @@ const DC = { fim: null, pagos: [], meses: {}, desde: '2025-10-01', msg: '' };
 const dcApi = async b => { try { const r = await fetch(DC_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
 const dcMsg = t => { DC.msg = t; const e = $('dcst'); if (e) e.innerHTML = t; };
 const dcClaves = n => { const o = [], re = /\b(OCI|OI)\s*-?\s*0*(\d{1,5})(?:\s*-\s*0*(\d{1,2}))?/gi; let m; while ((m = re.exec(String(n || '')))) { const t = m[1].toUpperCase(), b = String(Number(m[2])); if (m[3] && t === 'OI') o.push(t + b + String(Number(m[3]))); o.push(t + b); } return [...new Set(o)]; };
+const dcFacts = n => { const o = [], re = /(?<!OI)(?<!OCI)(?<![0-9])(17\d\d)(?![0-9])/gi; let m; while ((m = re.exec(String(n || '')))) o.push('F' + m[1]); return [...new Set(o)]; };
 function dcCalc() {
-  const P = {}; DC.pagos.forEach(p => { if (p.clave && Number(p.usd) > 0) (P[p.clave] = P[p.clave] || []).push({ f: p.fecha || '', egr: p.docto_egreso, usd: Number(p.usd), cop: Number(p.valor_cop), rem: Number(p.usd) }); });
-  Object.values(P).forEach(l => l.sort((a, b) => a.f.localeCompare(b.f)));
+  const P = {}, PN = {}, add = (M, k, l) => { if (k) (M[k] = M[k] || []).push(l); };
+  DC.pagos.forEach(p => {
+    if (!(Number(p.usd) > 0)) return;
+    const l = { f: p.fecha || '', egr: p.docto_egreso, usd: Number(p.usd), cop: Number(p.valor_cop), rem: Number(p.usd) };
+    const ks = new Set(); if (p.clave) ks.add(p.clave);
+    const m = /^\s*\d+-(\d{4})(?:-+\d+)*-+\d{6,}-/.exec(String(p.docto_sa || '')); if (m) ks.add('F' + m[1]);            // documento escrito como número de factura (001-1677-…)
+    ks.forEach(k => add(P, k, l)); dcFacts(p.notas).forEach(k => add(PN, k, l));                                           // factura mencionada en las notas del pago
+  });
+  [P, PN].forEach(M => Object.values(M).forEach(l => l.sort((a, b) => a.f.localeCompare(b.f))));
   return (DC.fim || []).map(f => {
-    const cl = dcClaves(f.notas), k = cl.find(c => P[c]), r = { ...f, clave: k || (cl[0] || ''), usdPag: 0, copPag: 0, ult: '', pis: [] };
-    if (k) { let need = f.usd; for (const l of P[k]) { if (need < 0.005) break; if (l.rem < 0.005) continue; const t = Math.min(l.rem, need); l.rem -= t; need -= t; r.usdPag += t; r.copPag += t * (l.cop / l.usd); r.pis.push(l.egr.replace(/^\d+-/, '') + ' ' + t.toFixed(2) + ' × ' + (l.cop / l.usd).toFixed(2)); if (l.f > r.ult) r.ult = l.f; } }
-    r.usdPag = Math.round(r.usdPag * 100) / 100; r.copPag = Math.round(r.copPag);
-    r.copFimPag = f.usd ? f.cop * Math.min(1, r.usdPag / f.usd) : 0;
-    r.dif = r.usdPag > 0 ? Math.round(r.copFimPag - r.copPag) : 0;
-    r.pend = Math.round((f.usd - r.usdPag) * 100) / 100;
-    r.estado = !k || r.usdPag < 0.005 ? 'Sin pago' : r.pend > 0.5 ? 'Parcial' : 'Pagada';
-    r.mes = DC.meses[f.doc] || (r.ult ? r.ult.slice(0, 7) : '');
+    const cl = dcClaves(f.notas), fa = dcFacts(f.notas), k = cl.find(c => P[c]) || fa.find(c => P[c]), L = k ? P[k] : (fa.map(c => PN[c]).find(x => x) || null);
+    const r = { ...f, clave: [cl[0], fa[0]].filter(Boolean).join(' · '), usdPag: 0, copPag: 0, antUsd: 0, antCop: 0, ult: '', pis: [] };
+    if (L) { let need = f.usd; for (const l of L) { if (need < 0.005) break; if (l.rem < 0.005) continue; const t = Math.min(l.rem, need), pe = t * (l.cop / l.usd), ant = !!(l.f && f.fecha && l.f < f.fecha); l.rem -= t; need -= t; r.usdPag += t; r.copPag += pe; if (ant) { r.antUsd += t; r.antCop += pe; } r.pis.push((ant ? 'ANTICIPO ' : 'PAGO ') + l.egr.replace(/^\d+-/, '') + ' ' + l.f + ' · ' + t.toFixed(2) + ' USD × ' + (l.cop / l.usd).toFixed(2)); if (l.f > r.ult) r.ult = l.f; } }
+    r.usdPag = Math.round(r.usdPag * 100) / 100; r.copPag = Math.round(r.copPag); r.antUsd = Math.round(r.antUsd * 100) / 100; r.antCop = Math.round(r.antCop);
+    r.pend = Math.max(0, Math.round((f.usd - r.usdPag) * 100) / 100);
+    r.estado = r.usdPag < 0.005 ? 'Sin pago' : r.pend > 0.5 ? (r.antUsd >= r.usdPag - 0.005 ? 'Solo anticipo' : 'Pago parcial') : 'Pagada';
+    r.dif = r.estado === 'Pagada' ? Math.round(f.cop - r.copPag) : 0;            // la diferencia se causa cuando la FIM queda pagada del todo
+    r.mes = DC.meses[f.doc] || (r.estado === 'Pagada' && r.ult ? r.ult.slice(0, 7) : '');
     r.tasa = f.usd ? f.cop / f.usd : 0;
     return r;
   });
@@ -1473,6 +1481,7 @@ const DC_COLS = [
   { k: 'notas', t: 'Notas Siesa', v: r => r.notas, wrap: true },
   { k: 'usd', t: 'USD FIM', v: r => r.usd, num: true, dec: true, sum: true, h: r => fm2(r.usd) }, { k: 'tasa', t: 'Tasa FIM', v: r => Math.round(r.tasa * 100) / 100, num: true, h: r => fm2(r.tasa) },
   { k: 'cop', t: 'Pesos FIM', v: r => r.cop, num: true, sum: true, h: r => fm(r.cop) },
+  { k: 'antUsd', t: 'USD anticipo previo', v: r => r.antUsd, num: true, dec: true, sum: true, h: r => fm2(r.antUsd) }, { k: 'antCop', t: 'Pesos anticipo previo', v: r => r.antCop, num: true, sum: true, h: r => fm(r.antCop) },
   { k: 'usdPag', t: 'USD pagado', v: r => r.usdPag, num: true, dec: true, sum: true, h: r => fm2(r.usdPag) },
   { k: 'copPag', t: 'Pesos pagados (USD × TRM PI)', v: r => r.copPag, num: true, sum: true, h: r => fm(r.copPag) },
   { k: 'dif', t: 'Diferencia en cambio', v: r => r.dif, num: true, sum: true, h: r => '<b style="color:' + (r.dif < 0 ? '#b91c1c' : '#15803d') + '">' + fm(r.dif) + '</b>' },
@@ -1503,10 +1512,10 @@ function dcPintar() {
   const R = dcCalc(), M = {}; R.forEach(r => { if (r.usdPag > 0 && r.mes) { const o = M[r.mes] = M[r.mes] || { n: 0, dif: 0 }; o.n++; o.dif += r.dif; } });
   const meses = Object.keys(M).sort(), sinCruce = R.filter(r => r.estado === 'Sin pago').length, tot = meses.reduce((s, m) => s + M[m].dif, 0);
   $('cont').innerHTML = '<div class="card"><h2>💱 Diferencia en cambio · FIM de ILUMAX TRADING vs pagos PI</h2><div style="padding:0 14px 14px;font-size:12px;color:#64748b">'
-    + 'Diferencia = pesos de la FIM (a la tasa con que se causó) − pesos pagados (USD de cada PI × su TRM). Positivo = ingreso; negativo = gasto. Cada FIM se cruza con los pagos PI de su orden (OI/OCI) en orden de fecha. El mes se toma del último pago y puedes cambiarlo en cada fila.</div>'
+    + 'Diferencia = pesos de la FIM (a la tasa con que se causó) − pesos pagados (USD de cada PI × su TRM). Positivo = ingreso; negativo = gasto. Cada FIM se cruza con los pagos PI por su orden (OI/OCI) o por el número de factura (17xx). Los pagos anteriores a la FIM se muestran como anticipo; la diferencia solo se causa cuando la FIM queda pagada del todo, en el mes del último pago (puedes cambiarlo en cada fila).</div>'
     + '<div class="bar" style="padding:0 14px 8px;gap:8px;flex-wrap:wrap"><label class="btn">📤 Cargar relación de pagos PI (Excel de Siesa)<input type="file" accept=".xlsx,.xls" style="display:none" onchange="dcSubir(this)"></label>'
     + '<button class="btn g" onclick="dcTraerFim()">🔄 Traer FIM de Siesa</button><span style="font-size:12px">Desde <input type="date" value="' + DC.desde + '" onchange="DC.desde=this.value" style="font-size:12px"></span><span id="dcst" style="font-size:12px">' + (DC.msg || '') + '</span></div>'
-    + '<div style="padding:0 14px 8px;font-size:12px">' + DC.pagos.length + ' líneas de pago PI cargadas · ' + R.length + ' FIM de Siesa · <b>' + sinCruce + '</b> sin pago cruzado</div>'
+    + '<div style="padding:0 14px 8px;font-size:12px">' + DC.pagos.length + ' líneas de pago PI cargadas · ' + R.length + ' FIM de Siesa · <b>' + sinCruce + '</b> sin pago cruzado · <b>' + R.filter(r => r.estado === 'Solo anticipo' || r.estado === 'Pago parcial').length + '</b> con anticipo o pago parcial</div>'
     + '<div class="tw" style="margin:0 14px 10px"><table><thead><tr><th>Mes</th><th style="text-align:right"># FIM</th><th style="text-align:right">Diferencia en cambio</th></tr></thead><tbody>' + (meses.map(m => '<tr><td>' + m + '</td><td style="text-align:right">' + M[m].n + '</td><td style="text-align:right;font-weight:700;color:' + (M[m].dif < 0 ? '#b91c1c' : '#15803d') + '">' + fm(M[m].dif) + '</td></tr>').join('') || '<tr><td colspan="3" class="empty">Carga la relación de pagos PI para calcular</td></tr>') + '</tbody><tfoot><tr class="tot"><td>Total</td><td></td><td style="text-align:right">' + fm(tot) + '</td></tr></tfoot></table></div>'
     + xgBar('dc') + '<div class="tw" id="xg_dc"></div></div>';
   xgInit('dc', DC_COLS, { rows: R, limit: 800, nombre: 'Diferencia_en_cambio_FIM' });
