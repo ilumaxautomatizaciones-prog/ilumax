@@ -19869,6 +19869,7 @@ function ivsPintar() {
   const sum = (L, k) => L.reduce((a, p) => a + p[k], 0), hay = !!(IVS.clasif && IVS.clasif.d);
   const tile = (v, l, c) => '<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'var(--tx)') + ';">' + v + '</div><div style="font-size:10.5px;color:var(--mu);">' + l + '</div></div>';
   const totDisp = sum(C.refs, 'valor'), totTr = C.tr.reduce((a, x) => a + x.cop, 0); { const kv = document.getElementById('inv-kpi-val'); if (kv) kv.textContent = ivsM(totDisp); const kt = document.getElementById('inv-kpi-tr'); if (kt) { kt.textContent = ivsM(totTr); const kl = document.getElementById('inv-kpi-tr-l'); if (kl) kl.textContent = 'En tránsito · TRM ' + ivsN(IVS.trmFijo || IVS.trm || 0) + ' × ' + ivsFac(); } }
+  setTimeout(ivsSnapGuardar, 1500);
   IVS._trVivo = totTr > 0 ? Math.round(totTr / 1e6) : null; IVS._vivo = hay ? { lin: Math.round(sum(reg, 'valor') / 1e6), des: Math.round(sum(des, 'valor') / 1e6) } : null;
   // 4) agotados regulares
   const CNb = (IVS.clasif && IVS.clasif.cn) || {}, cnNom = v => v === 'EXCLUSIVO' ? 'Home Center' : v.charAt(0) + v.slice(1).toLowerCase();
@@ -19891,6 +19892,7 @@ function ivsPintar() {
   const th = (t, r) => '<th' + (r ? ' style="text-align:right;"' : '') + '>' + t + '</th>';
   seg.innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">${tile(ivsM(totDisp), 'Inventario DISPONIBLE · bodegas ' + IVS.bodegas.join(', '), 'var(--bl)')}${tile(ivsM(totTr), 'En tránsito (ordenado sin ingresar) · USD × ' + ivsFac() + ' × TRM', '#b45309')}${tile(ivsM(totDisp + totTr), 'Disponible + tránsito')}${tile(ago.length + '', 'Regulares agotados', ago.length ? '#991b1b' : '#16a34a')}<div style="display:flex;flex-direction:column;gap:6px;justify-content:center;"><span class="arte-mu" style="font-size:10.5px;">${ivsTrmTxt()}</span></div><div style="display:flex;flex-direction:column;gap:6px;justify-content:center;">${par('TRM', IVS.trmFijo || '', IVS.trm ? 'Aplica a todas las órdenes · vacío = la de cada OC / última registrada (' + ivsE(IVS.trm) + ')' : 'Aplica a todas las órdenes', 'trm', '0.01')}${par('Factor import.', IVS.factor, 'Multiplica el valor FOB en USD (flete, seguro, aranceles…)', 'factor', '0.01')}</div></div>
   ${ivsGrafCard()}
+  ${ivsAveCard()}
   <div class="card" style="margin-bottom:12px;"><div class="ch"><div class="ct">2️⃣ Inventario disponible para la compañía</div><button class="btn btn-g btn-sm" onclick="IVS.bodOculto=!IVS.bodOculto;ivsPintar()">${IVS.bodOculto ? '👁 Mostrar bodegas' : '🙈 Ocultar bodegas'}</button></div><div class="cb" ${IVS.bodOculto ? 'style="display:none;"' : ''}>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><span class="arte-mu" style="font-size:11.5px;">Solo suman las bodegas:</span><input id="ivs-bod" class="inp" style="width:210px;font-size:12px;" value="${ivsE(IVS.bodegas.join(', '))}"><button class="btn btn-g btn-sm" onclick="ivsGuardarBodegas()">Guardar bodegas</button></div>
     <div class="tw"><table class="cbl-t"><thead><tr>${th('Bodega')}${th('Unidades', 1)}${th('Valor (costo prom.)', 1)}${th('% del total', 1)}</tr></thead><tbody>${Object.keys(C.bod).sort((a, b) => C.bod[b].v - C.bod[a].v).map(b => ivsBodFila(b, C.bod[b], totDisp)).join('')}<tr style="font-weight:800;background:var(--s1);"><td>TOTAL DISPONIBLE</td><td style="text-align:right;">${ivsN(sum(C.refs, 'disp'))}</td><td style="text-align:right;">${ivsM(totDisp)}</td><td></td></tr></tbody></table></div></div></div>
@@ -20290,6 +20292,16 @@ function ivsGrafLeyenda() {
     return '<div style="display:flex;gap:8px;align-items:flex-start;font-size:11px;line-height:1.35;' + (on ? '' : 'opacity:.45;') + '"><svg width="38" height="12" style="flex:none;margin-top:2px;"><line x1="2" x2="36" y1="6" y2="6" stroke="' + g[2] + '" stroke-width="3" stroke-linecap="round"' + (dash ? ' stroke-dasharray="6 4"' : '') + '/></svg><span><b>' + ivsE(d[0]) + '</b> · <span style="color:' + (dash ? '#0f766e' : '#1d4ed8') + ';font-weight:700;">' + (dash ? 'línea punteada · días' : 'línea continua · $ millones') + '</span><br><span class="arte-mu">' + ivsE(d[1]) + '</span></span></div>'; }).join('') + '</div>';
 }
 // ═══ Cuarentena + averías: serie de la gráfica y detalle al hacer clic ═══
+var IVS_SNAP = null, IVS_SNAP_T = 0, IVS_AVE_BOD = ['AG'];
+// Cada mes queda guardado solo: el valor del mes en curso se guarda en configuracion.inv_hist_mensual al abrir Seguimiento; al cambiar de mes queda como cierre
+function ivsSnapAplicar() { const H = IVS_HIST; if (!IVS_SNAP) return; H.m.forEach((m, i) => { const x = IVS_SNAP[m]; if (!x || m === H.vivoMes) return; ['lin', 'des', 'tr'].forEach(k => { if (x[k] != null) H[k][i] = x[k]; }); }); }
+function ivsSumaBod(rows, L) { return Math.round(rows.filter(r => L.includes(r.bodega)).reduce((a, r) => a + (+r.existencia || 0) * (+r.costo_prom || 0), 0) / 1e6); }
+async function ivsSnapGuardar() {
+  if (!IVS_SNAP || !IVS._vivo || !IVS_CUA || IVS_CUA === 'cargando' || Date.now() - IVS_SNAP_T < 300000) return; IVS_SNAP_T = Date.now();
+  const H = IVS_HIST, v = { lin: IVS._vivo.lin, des: IVS._vivo.des, tr: IVS._trVivo || 0, cua: ivsSumaBod(IVS_CUA.vivo, IVS_CUA_BOD), ave: ivsSumaBod(IVS_CUA.vivo, IVS_AVE_BOD), t: new Date().toISOString().slice(0, 10) }, a = IVS_SNAP[H.vivoMes];
+  if (a && a.lin === v.lin && a.des === v.des && a.tr === v.tr && a.cua === v.cua && a.ave === v.ave) return;
+  IVS_SNAP[H.vivoMes] = v; try { await sb.upsert('configuracion', { clave: 'inv_hist_mensual', valor: JSON.stringify(IVS_SNAP), tipo: 'json' }, 'clave'); } catch (e) { console.warn('No se guardó el histórico mensual:', e.message); }
+}
 var IVS_CUA_BOD = ['CU', 'AG'], IVS_CUA_NOM = { CU: 'Cuarentena', AG: 'Averías' }, IVS_CUA = null, IVS_CUA_MOT = {}, IVS_CUA_ST = { rows: [], ord: null, desc: false, f: {} };
 const IVS_MES3 = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
 function ivsCuaMes(f) { const d = new Date(f + 'T12:00:00'); d.setDate(d.getDate() - 5); return IVS_MES3[d.getMonth()] + '-' + String(d.getFullYear()).slice(2); }
@@ -20301,20 +20313,22 @@ async function ivsCuaCargar() {
     const cor = await sb.get('inventario_cortes', 'select=corte,referencia,descripcion,bodega,existencia,costo_prom&bodega=' + q + '&existencia=gt.0&limit=20000');
     let mot = {}; try { const c = await sb.get('configuracion', 'clave=eq.inv_motivos_cua'); if (c && c[0] && c[0].valor) mot = JSON.parse(c[0].valor) || {}; } catch (e) {}
     IVS_CUA_MOT = mot; IVS_CUA = { vivo: vivo || [], cor: cor || [] };
+    try { const h = await sb.get('configuracion', 'clave=eq.inv_hist_mensual'); IVS_SNAP = (h && h[0] && h[0].valor) ? (JSON.parse(h[0].valor) || {}) : {}; ivsSnapAplicar(); } catch (e) { IVS_SNAP = {}; }
   } catch (e) { console.warn('Cuarentena/averías:', e.message); IVS_CUA = { vivo: [], cor: [] }; }
   ivsGraf();
 }
-function ivsCuaFilas(i) {
+function ivsCuaFilas(i, bods) {
   const H = IVS_HIST, c = IVS_CUA; if (!c || c === 'cargando') return [];
-  if (i === H.m.length - 1) return c.vivo.map(r => ({ ...r, corte: 'En vivo' }));
-  const cs = c.cor.filter(r => ivsCuaMes(r.corte) === H.m[i]); if (!cs.length) return [];
+  const ok = r => !bods || bods.includes(r.bodega);
+  if (i === H.m.length - 1) return c.vivo.filter(ok).map(r => ({ ...r, corte: 'En vivo' }));
+  const cs = c.cor.filter(r => ivsCuaMes(r.corte) === H.m[i] && ok(r)); if (!cs.length) return [];
   const u = cs.map(r => r.corte).sort().pop(); return cs.filter(r => r.corte === u).map(r => ({ ...r, fecha_ult_entrada: null }));
 }
-function ivsCuaSerie() {
-  const n = IVS_HIST.m.length; if (!IVS_CUA) { ivsCuaCargar(); } return Array.from({ length: n }, (_, i) => { const f = ivsCuaFilas(i); return f.length ? Math.round(f.reduce((a, r) => a + (+r.existencia || 0) * (+r.costo_prom || 0), 0) / 1e6) : null; });
+function ivsCuaSerie(bods, key) {
+  const H = IVS_HIST, n = H.m.length; if (!IVS_CUA) { ivsCuaCargar(); } return Array.from({ length: n }, (_, i) => { const f = ivsCuaFilas(i, bods); if (f.length) return Math.round(f.reduce((a, r) => a + (+r.existencia || 0) * (+r.costo_prom || 0), 0) / 1e6); const x = IVS_SNAP && IVS_SNAP[H.m[i]]; return x && x[key || 'cua'] != null ? x[key || 'cua'] : null; });
 }
-function ivsCuaDet(i) {
-  const f = ivsCuaFilas(i); if (!f.length) { toast('Sin datos de cuarentena/averías para ' + IVS_HIST.m[i] + ' (se guardan con cada corte de inventario)', 'wa'); return; }
+function ivsCuaDet(i, bods) {
+  const f = ivsCuaFilas(i, bods); if (!f.length) { toast('Sin datos de cuarentena/averías para ' + IVS_HIST.m[i] + ' (se guardan con cada corte de inventario)', 'wa'); return; }
   IVS_CUA_ST = { rows: f.map(r => ({ ref: r.referencia, desc: r.descripcion || '', tipo: IVS_CUA_NOM[r.bodega] || r.bodega, bod: r.bodega, u: +r.existencia || 0, v: (+r.existencia || 0) * (+r.costo_prom || 0), ing: r.fecha_ult_entrada || '', mot: IVS_CUA_MOT[r.referencia + '|' + r.bodega] || '' })), ord: 'v', desc: true, f: {}, mes: IVS_HIST.m[i], vivo: i === IVS_HIST.m.length - 1, corte: f[0].corte };
   let mo = document.getElementById('mo-cua'); if (!mo) { mo = document.createElement('div'); mo.id = 'mo-cua'; mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:12px;'; document.body.appendChild(mo); }
   ivsCuaPintar();
@@ -20337,7 +20351,29 @@ function ivsCuaExcel() {
   const R = ivsCuaVista(), S = IVS_CUA_ST, d = [['Referencia', 'Descripción', 'Bodega', 'Cantidad', 'Valor', 'Fecha ingreso', 'Motivo']].concat(R.map(r => [r.ref, r.desc, r.tipo, r.u, Math.round(r.v), r.ing, r.mot]));
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(d), 'Cuarentena y averías'); XLSX.writeFile(wb, 'CUARENTENA_AVERIAS_' + S.mes + '.xlsx');
 }
-function ivsGraf() { const el = document.getElementById('ivs-gcard'); if (el) el.outerHTML = ivsGrafCard(); }
+// ═══ Gráfica: averías vs inventario ═══
+var IVS_AG = { hi: -1 };
+function ivsAveDatos() { const H = IVS_HIST, ave = ivsCuaSerie(IVS_AVE_BOD, 'ave'), tot = ivsGData('tot'), ix = H.m.map((m, i) => i).filter(i => ave[i] != null); return { ix, ave, tot, pct: ave.map((v, i) => v != null && tot[i] ? v / tot[i] * 100 : null) }; }
+function ivsAveCard() {
+  return `<div class="card" id="ivs-acard" style="margin-bottom:12px;"><div class="ch"><div class="ct">🛠️ Averías vs inventario</div><div class="arte-mu" style="font-size:11px;">Bodega ${IVS_AVE_BOD.join('/')} a costo promedio, millones COP · clic en un mes = detalle (referencias, cantidades, fecha de ingreso y motivo) · se va llenando mes a mes</div></div><div class="cb"><div id="ivs-agraf" style="position:relative;">${ivsAveSvg()}</div></div></div>`;
+}
+function ivsAHi(i) { if (IVS_AG.hi === i) return; IVS_AG.hi = i; const el = document.getElementById('ivs-agraf'); if (el) el.innerHTML = ivsAveSvg(); }
+function ivsAveSvg() {
+  const D = ivsAveDatos(), H = IVS_HIST; if (!D.ix.length) return '<div class="empty">Cargando averías… (si sigue vacío, aún no hay datos de la bodega ' + IVS_AVE_BOD.join('/') + ')</div>';
+  const idx = H.m.map((m, i) => i).slice(-12), n = idx.length, W = 1100, Ht = 300, L = 56, R = 52, T = 18, B = 30, pw = W - L - R, ph = Ht - T - B, f = v => Math.round(v).toLocaleString('es-CO');
+  const mx = Math.max(1, ...idx.map(i => Math.max(D.ave[i] || 0, D.tot[i] || 0))) * 1.1, px = Math.max(1, ...idx.map(i => D.pct[i] || 0)) * 1.2, X = k => L + pw * (k + .5) / n, Y = v => T + ph - ph * v / mx, YP = v => T + ph - ph * v / px;
+  let o = `<svg viewBox="0 0 ${W} ${Ht}" style="width:100%;height:auto;max-height:380px;font-family:inherit;" onmouseleave="ivsAHi(-1)">`;
+  for (let t = 0; t <= 4; t++) { const y = T + ph * t / 4; o += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="#e2e8f0"/><text x="${L - 6}" y="${y + 4}" text-anchor="end" font-size="10" fill="#64748b">${f(mx * (1 - t / 4))}</text><text x="${W - R + 6}" y="${y + 4}" font-size="10" fill="#64748b">${(px * (1 - t / 4)).toFixed(1)}%</text>`; }
+  idx.forEach((i, k) => { o += `<text x="${X(k)}" y="${Ht - 10}" text-anchor="middle" font-size="9.5" font-weight="${i === IVS_AG.hi ? 800 : 500}" fill="#334155">${H.m[i]}</text>`; });
+  const serie = (arr, col, dash, yf, lab) => { const pts = []; idx.forEach((i, k) => { if (arr[i] != null) pts.push([k, arr[i], i]); }); if (!pts.length) return; o += `<polyline fill="none" stroke="${col}" stroke-width="2.3" ${dash ? 'stroke-dasharray="6 4"' : ''} points="${pts.map(q => X(q[0]) + ',' + yf(q[1])).join(' ')}"/>`; pts.forEach(q => { o += `<circle cx="${X(q[0])}" cy="${yf(q[1])}" r="${q[2] === IVS_AG.hi ? 5.5 : 3.2}" fill="${col}" stroke="#fff" stroke-width="1.2"/>`; const t = lab(q[1]), w = t.length * 6 + 8; o += `<rect x="${X(q[0]) - w / 2}" y="${yf(q[1]) - 22}" width="${w}" height="14" rx="2" fill="${col}" opacity=".92"/><text x="${X(q[0])}" y="${yf(q[1]) - 12}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#fff">${t}</text>`; }); };
+  serie(D.tot, '#2563eb', false, Y, f); serie(D.ave, '#dc2626', false, Y, f); serie(D.pct, '#f59e0b', true, YP, v => v.toFixed(2) + '%');
+  idx.forEach((i, k) => { o += `<rect x="${X(k) - pw / n / 2}" y="${T}" width="${pw / n}" height="${ph}" fill="${i === IVS_AG.hi ? 'rgba(220,38,38,.07)' : 'transparent'}" onmouseenter="ivsAHi(${i})" onmousemove="ivsAHi(${i})" ontouchstart="ivsAHi(${i})" onclick="ivsCuaDet(${i}, IVS_AVE_BOD)" style="cursor:pointer;"/>`; });
+  o += '</svg><div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;margin-top:4px;"><span><b style="color:#2563eb">━</b> Inventario disponible (total)</span><span><b style="color:#dc2626">━</b> Averías $</span><span><b style="color:#f59e0b">┅</b> Averías / inventario % (eje derecho)</span></div>';
+  if (IVS_AG.hi >= 0) { const i = IVS_AG.hi, m = v => v == null ? 'sin dato' : '$ ' + Math.round(v * 1e6).toLocaleString('es-CO'), k = idx.indexOf(i), left = X(k) / W * 100;
+    o += `<div style="position:absolute;top:6px;${left > 55 ? 'right:' + (100 - left + 2) : 'left:' + (left + 2)}%;background:#0f172a;color:#fff;border-radius:8px;padding:8px 11px;font-size:12px;line-height:1.55;pointer-events:none;"><b>${H.m[i]}</b><br>Averías: <b>${m(D.ave[i])}</b><br>Inventario disponible: <b>${m(D.tot[i])}</b><br>Averías / inventario: <b>${D.pct[i] == null ? '—' : D.pct[i].toFixed(2) + '%'}</b></div>`; }
+  return o;
+}
+function ivsGraf() { const el = document.getElementById('ivs-gcard'); if (el) el.outerHTML = ivsGrafCard(); const a = document.getElementById('ivs-acard'); if (a) a.outerHTML = ivsAveCard(); }
 function ivsGrafSvg() {
   const H = IVS_HIST, n = H.m.length, W = 1100, Ht = 340, L = 56, R = 52, T = 18, B = 30, pw = W - L - R, ph = Ht - T - B;
   const act = IVS_GS.filter(g => IVS_G.on[g[0]]); if (!act.length) return '<div class="empty">Activa al menos una serie</div>';
