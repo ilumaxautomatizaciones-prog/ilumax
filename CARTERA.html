@@ -404,7 +404,8 @@ function conSig() {
   if (CON.id && CON_NUMS[CON.id] && CON_NUMS[CON.id].tipo === tp) return CON_NUMS[CON.id].num;
   return Math.max(conMaxSiesa(tp), ...Object.keys(CON_NUMS).filter(k => k !== CON.id && CON_NUMS[k].tipo === tp).map(k => CON_NUMS[k].num)) + 1;
 }
-function conVista() {
+const conVista = () => conVista0() + retVista();
+function conVista0() {
   return '<div class="card"><h2>🧮 Conciliación de pagos del cliente</h2><div style="padding:12px 14px"><div style="font-size:12px;color:#64748b;margin-bottom:8px">Sube el Excel o el PDF de pagos que envía el cliente (fecha, número de documento y monto). Se cruza con la cartera de Siesa y se calcula la diferencia: ICA y RTE IVA.</div>'
     + '<div class="bar"><input type="file" id="cfile" accept=".xlsx,.xls,.pdf" onchange="conFile(this)">'
     + '<label style="font-size:12px;white-space:nowrap">ICA ‰ <input type="number" step="0.01" value="' + CON.ica + '" style="flex:none;min-width:0;width:70px" onchange="CON.ica=+this.value||0;conCalc()"></label>'
@@ -1279,6 +1280,66 @@ async function conPlanoGen() {
   alert('Plano ' + tag + ' generado: ' + r.n + ' facturas por valor cartera ' + fm(r.car) + '\nBanco ' + fm(r.pag) + (mas.length ? ' · MAS ' + fm(-mas.reduce((s, m) => s + m.monto, 0)) : '') + (otros.length ? ' · Descuentos cliente ' + fm(-otros[0].monto) : '') + ' · ICA ' + fm(r.ica) + ' · RTE IVA ' + fm(r.rte) + (o.elab ? '\nVa con estado 0 (elaboración): revísalo y apruébalo en Siesa.' : '\nDébitos = créditos.') + (conPend().length ? '\nQuedan ' + conPend().length + ' pendiente(s) por ' + fm(conPend().reduce((a, x) => a + x.monto, 0)) + ' en la lista de pendientes.' : ''));
 }
 
+/* ===== Retenciones (ICA / RTE IVA) por valor bruto → plano AR para cualquier cliente ===== */
+const _retUlt = () => { const t = String(D.hoy || new Date().toISOString().slice(0, 10)).split('-'); const d = new Date(+t[0], +t[1] - 1, 0); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
+let RET = { rows: [], nombre: '', ica: 11.04, rt: 15, conIca: true, tipo: 'AR', cons: '', fecha: '', ctaIca: '13551821', ctaRte: '13551701' };
+function retVista() {
+  RET.fecha = RET.fecha || _retUlt();
+  const lb = (t, h) => '<label style="font-size:12px;white-space:nowrap">' + t + ' ' + h + '</label>';
+  return '<div class="card" style="margin-top:12px"><h2>🧾 Retenciones (ICA / RTE IVA) · plano AR para cualquier cliente</h2><div style="padding:12px 14px"><div style="font-size:12px;color:#64748b;margin-bottom:8px">Sube el Excel con los números de factura (columna «Numero»; si trae «VALOR BRUTO» e «IVA» se usan). Se busca el valor bruto en la cartera de Siesa, se calcula el RTE IVA (% del IVA) y el ICA (‰ del valor bruto) y se genera el plano para contabilizarlos: débito a las cuentas de retención y crédito a la cartera de cada factura.</div>'
+    + '<div class="bar"><input type="file" id="retfile" accept=".xlsx,.xls" onchange="retFile(this)">'
+    + lb('ICA ‰', '<input type="number" step="0.01" value="' + RET.ica + '" style="flex:none;min-width:0;width:70px" onchange="RET.ica=+this.value||0;retCalc()">') + lb('RTE IVA % del IVA', '<input type="number" step="0.5" value="' + RET.rt + '" style="flex:none;min-width:0;width:60px" onchange="RET.rt=+this.value||0;retCalc()">') + '<label style="font-size:12px"><input type="checkbox" ' + (RET.conIca ? 'checked' : '') + ' onchange="RET.conIca=this.checked;retCalc()"> Calcular ICA</label></div>'
+    + '<div class="bar" style="margin-top:8px"><b style="font-size:12px">Plano Siesa</b>' + lb('Tipo', '<input value="' + RET.tipo + '" style="flex:none;min-width:0;width:44px" onchange="RET.tipo=this.value">') + lb('Consec.', '<input type="number" placeholder="automático" title="Vacío: último consecutivo de ese tipo en Siesa + 1" value="' + RET.cons + '" style="flex:none;min-width:0;width:110px" onchange="RET.cons=this.value">') + lb('<b>Fecha del documento</b>', '<input type="date" value="' + RET.fecha + '" style="flex:none;min-width:0" onchange="RET.fecha=this.value">') + lb('Cta ICA', '<input value="' + RET.ctaIca + '" style="flex:none;min-width:0;width:90px" onchange="RET.ctaIca=this.value">') + lb('Cta RTE IVA', '<input value="' + RET.ctaRte + '" style="flex:none;min-width:0;width:90px" onchange="RET.ctaRte=this.value">') + '<button class="btn" onclick="retGenerar()">⬇ Generar plano</button></div>'
+    + '<div id="retRes" style="margin-top:10px"></div></div></div>';
+}
+async function retFile(inp) {
+  const f = inp.files && inp.files[0]; if (!f) return; const box = $('retRes'); box.innerHTML = '<div class="err">Leyendo ' + esc(f.name) + '…</div>';
+  try {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true }), rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true }), low = c => String(c == null ? '' : c).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+    const h = rows.findIndex(r => r.some(c => /^numero/.test(low(c)))); if (h < 0) { box.innerHTML = '<div class="err">No encontré la columna «Numero» en ese archivo.</div>'; return; }
+    const ci = re => rows[h].findIndex(c => re.test(low(c))), cn = ci(/^numero/), cb = ci(/valor bruto|^bruto/), cv = ci(/^iva$/), out = [];
+    rows.slice(h + 1).forEach(r => { const k = conKey(r[cn]); if (!k) return; const nb = cb >= 0 && typeof r[cb] === 'number' ? r[cb] : null, ni = cv >= 0 && typeof r[cv] === 'number' ? r[cv] : null; out.push({ num: k, bruto0: nb, iva0: ni }); });
+    if (!out.length) { box.innerHTML = '<div class="err">No encontré facturas (ej. VE-51366) en la columna «Numero».</div>'; return; }
+    RET.rows = out; RET.nombre = f.name; retCalc();
+  } catch (e) { box.innerHTML = '<div class="err">No pude leer el archivo: ' + esc(e.message) + '</div>'; }
+}
+function retCalc() {
+  if (!RET.rows.length) return; const idx = {}; (D.docsL || []).forEach(d => { (idx[d.tipo + '-' + d.consec] = idx[d.tipo + '-' + d.consec] || []).push(d); });
+  RET.rows.forEach(r => {
+    const ds = idx[r.num] || [], d = ds[0]; r.d = d || null; r.cli = d ? d.cli : ''; r.cartera = ds.reduce((s, x) => s + x.db, 0); const b = ds.find(x => x.bruto != null);
+    r.bruto = b ? b.bruto : r.bruto0; r.iva = r.iva0 != null && r.iva0 > 0 ? r.iva0 : (r.bruto != null ? Math.round(r.bruto * 0.19) : null);
+    r.rte = r.iva != null ? Math.round(r.iva * RET.rt / 100) : 0; r.ica = r.bruto != null && RET.conIca ? Math.round(r.bruto * RET.ica / 1000) : 0; r.tot = r.rte + r.ica;
+    r.est = !d ? 'No está en la cartera abierta' : r.bruto == null ? 'Sin valor bruto' : r.tot > r.cartera + 1 ? 'Retención mayor que el saldo' : 'OK';
+  });
+  const b = $('retRes'); if (!b) return;
+  b.innerHTML = '<div id="xg_ret"></div>';
+  xgInit('ret', [{ k: 'num', t: 'Factura', v: r => r.num }, { k: 'cli', t: 'Cliente', v: r => r.cli }, { k: 'bruto', t: 'Valor bruto', num: 1, sum: 1, v: r => r.bruto == null ? 0 : Math.round(r.bruto), h: r => r.bruto == null ? '–' : fm(r.bruto) }, { k: 'iva', t: 'IVA', num: 1, sum: 1, v: r => r.iva == null ? 0 : Math.round(r.iva), h: r => r.iva == null ? '–' : fm(r.iva) }, { k: 'rte', t: 'RTE IVA', num: 1, sum: 1, v: r => r.rte, h: r => fm(r.rte) }, { k: 'ica', t: 'ICA', num: 1, sum: 1, v: r => r.ica, h: r => fm(r.ica) }, { k: 'tot', t: 'Total retenciones', num: 1, sum: 1, v: r => r.tot, h: r => fm(r.tot) }, { k: 'cartera', t: 'Saldo cartera', num: 1, sum: 1, v: r => Math.round(r.cartera), h: r => fm(r.cartera) }, { k: 'est', t: 'Estado', v: r => r.est, h: r => r.est === 'OK' ? '✅ OK' : '⚠️ ' + esc(r.est) }], { rows: RET.rows, limit: 800, nombre: 'Retenciones_' + RET.nombre.replace(/\.[^.]+$/, '') });
+  xgPaint('ret');
+}
+// Plano de un documento: débito ICA y RTE IVA (con base) y crédito a la cartera de cada factura por sus retenciones
+function retPlano(its, o) {
+  const lines = []; let n = 2; lines.push(plCab(n++, o.tipo, o.cons, o.fecha, o.nit, o.notas, o.elab));
+  const sm = k => its.reduce((s, x) => s + (x[k] || 0), 0);
+  if (sm('ica') > 0) lines.push(plRet(n++, o.tipo, o.cons, o.ctaIca, o.nit, sm('ica'), its.filter(x => x.ica > 0).reduce((s, x) => s + x.bruto, 0), o.notas + ' - ICA'));
+  if (sm('rte') > 0) lines.push(plRet(n++, o.tipo, o.cons, o.ctaRte, o.nit, sm('rte'), its.filter(x => x.rte > 0).reduce((s, x) => s + x.iva, 0), o.notas + ' - RTE IVA'));
+  its.forEach(x => lines.push(plCart(n++, o.tipo, o.cons, x.d, o.nit, x.tot, o.notas)));
+  lines.push(plSeq(n) + '99990001001'); const chk = plCheck(lines.join('\r\n'));
+  return { chk, txt: ['000000100000001001'].concat(lines).join('\r\n') + '\r\n' };
+}
+function retGenerar() {
+  if (!RET.rows.length) { alert('Primero sube el archivo con las facturas.'); return; }
+  const ok = RET.rows.filter(r => r.est === 'OK' && r.tot > 0), mal = RET.rows.filter(r => r.est !== 'OK');
+  if (!ok.length) { alert('No hay facturas válidas para contabilizar.'); return; }
+  if (mal.length && !confirm(mal.length + ' factura(s) NO van en el plano (' + mal.map(r => r.num + ': ' + r.est).slice(0, 6).join(' · ') + (mal.length > 6 ? '…' : '') + ').\n¿Generar el plano con las ' + ok.length + ' restantes?')) return;
+  const tp = String(RET.tipo || 'AR').toUpperCase().replace(/\s/g, ''), g = {}; ok.forEach(r => (g[r.d.nit] = g[r.d.nit] || []).push(r));
+  let cons = RET.cons ? +RET.cons : conMaxSiesa(tp) + 1; const res = [];
+  Object.keys(g).forEach(nit => {
+    const its = g[nit], cli = its[0].cli || nit, o = { tipo: tp, cons, fecha: RET.fecha, nit, ctaIca: RET.ctaIca, ctaRte: RET.ctaRte, elab: true, notas: 'RETENCIONES ICA Y RTE IVA ' + String(cli).slice(0, 30) }, r = retPlano(its, o);
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([r.txt], { type: 'text/plain;charset=iso-8859-1' })); a.download = 'Plano_' + tp + '_RET_' + (String(cli).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 28) || cons) + '.txt'; document.body.appendChild(a); a.click(); a.remove();
+    res.push(tp + '-' + cons + ' · ' + cli + ': ' + its.length + ' facturas · RTE IVA ' + fm(its.reduce((s, x) => s + x.rte, 0)) + ' · ICA ' + fm(its.reduce((s, x) => s + x.ica, 0)) + (r.chk !== 0 ? ' ⚠ descuadrado ' + fm(r.chk) : '')); cons++;
+  });
+  RET.cons = ''; alert('Plano(s) generado(s) con estado 0 (elaboración), con fecha ' + RET.fecha + ':\n' + res.join('\n') + '\n\nRevísalo(s) y apruébalo(s) en Siesa.');
+}
 async function conApi(b) { try { const r = await fetch(API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } }
 async function conGuardar(callado) {
   const R = CON.rows; if (!R.length) { alert('Primero sube el archivo del cliente.'); return; }
