@@ -140,7 +140,7 @@ function pintar() {
   $('out').style.display = '';
   const pos = sumB(D.cls), venc = D.cls.reduce((s, c) => s + c.b[1] + c.b[2] + c.b[3] + c.b[4], 0), v90 = D.cls.reduce((s, c) => s + c.b[4], 0), fav = D.cls.reduce((s, c) => s + c.fav, 0);
   const rec30 = D.recs.filter(r => Date.parse(hoy) - Date.parse(r.fecha) < 30 * 864e5).reduce((s, r) => s + r.valor, 0);
-  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ppe', '📊 Ppto vs Ejecución'], ['ext', '🏦 Extracto bancario'], ['ct', '📦 Contados por despachar'], ['ofac', '🛡️ OFAC']].concat(GIR.ok ? [['gir', '🌏 Giros']] : []);
+  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ppe', '📊 Ppto vs Ejecución'], ['ext', '🏦 Extracto bancario'], ['ct', '📦 Contados por despachar'], ['ofac', '🛡️ OFAC']].concat(GIR.ok ? [['gir', '🌏 Giros'], ['dc', '💱 Dif. en cambio']] : []);
   if (GIR.ok === undefined) girCheck();
   $('app').innerHTML = '<div class="kpis">'
     + kpi('Cartera por cobrar', fmc(pos), D.cls.filter(c => c.tot > 0).length + ' clientes con saldo')
@@ -227,6 +227,8 @@ function vista(soloTabla) {
     ofacVista();
   } else if (TAB === 'gir' && GIR.ok) {
     girVista();
+  } else if (TAB === 'dc' && GIR.ok) {
+    dcVista();
   } else {
     if (REC) { recPintar(); return; }
     const q = Q.trim().toUpperCase(), L = D.recs.filter(r => !q || (r.cli + ' ' + r.nit + ' ' + r.doc).toUpperCase().includes(q));
@@ -1444,6 +1446,72 @@ function xgExcel(id) {
   XLSX.utils.book_append_sheet(wb, ws, 'VISTA'); XLSX.writeFile(wb, (g.nombre || id) + '.xlsx');
 }
 
+/* ===== Diferencia en cambio FIM vs pagos PI al exterior · solo con el PIN de giros (2281) ===== */
+const DC_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-difcambio';
+const DC = { fim: null, pagos: [], meses: {}, desde: '2025-10-01', msg: '' };
+const dcApi = async b => { try { const r = await fetch(DC_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
+const dcMsg = t => { DC.msg = t; const e = $('dcst'); if (e) e.innerHTML = t; };
+const dcClaves = n => { const o = [], re = /\b(OCI|OI)\s*-?\s*0*(\d{1,5})(?:\s*-\s*0*(\d{1,2}))?/gi; let m; while ((m = re.exec(String(n || '')))) { const t = m[1].toUpperCase(), b = String(Number(m[2])); if (m[3] && t === 'OI') o.push(t + b + String(Number(m[3]))); o.push(t + b); } return [...new Set(o)]; };
+function dcCalc() {
+  const P = {}; DC.pagos.forEach(p => { if (p.clave && Number(p.usd) > 0) (P[p.clave] = P[p.clave] || []).push({ f: p.fecha || '', egr: p.docto_egreso, usd: Number(p.usd), cop: Number(p.valor_cop), rem: Number(p.usd) }); });
+  Object.values(P).forEach(l => l.sort((a, b) => a.f.localeCompare(b.f)));
+  return (DC.fim || []).map(f => {
+    const cl = dcClaves(f.notas), k = cl.find(c => P[c]), r = { ...f, clave: k || (cl[0] || ''), usdPag: 0, copPag: 0, ult: '', pis: [] };
+    if (k) { let need = f.usd; for (const l of P[k]) { if (need < 0.005) break; if (l.rem < 0.005) continue; const t = Math.min(l.rem, need); l.rem -= t; need -= t; r.usdPag += t; r.copPag += t * (l.cop / l.usd); r.pis.push(l.egr.replace(/^\d+-/, '') + ' ' + t.toFixed(2) + ' × ' + (l.cop / l.usd).toFixed(2)); if (l.f > r.ult) r.ult = l.f; } }
+    r.usdPag = Math.round(r.usdPag * 100) / 100; r.copPag = Math.round(r.copPag);
+    r.copFimPag = f.usd ? f.cop * Math.min(1, r.usdPag / f.usd) : 0;
+    r.dif = r.usdPag > 0 ? Math.round(r.copFimPag - r.copPag) : 0;
+    r.pend = Math.round((f.usd - r.usdPag) * 100) / 100;
+    r.estado = !k || r.usdPag < 0.005 ? 'Sin pago' : r.pend > 0.5 ? 'Parcial' : 'Pagada';
+    r.mes = DC.meses[f.doc] || (r.ult ? r.ult.slice(0, 7) : '');
+    r.tasa = f.usd ? f.cop / f.usd : 0;
+    return r;
+  });
+}
+const DC_COLS = [
+  { k: 'doc', t: 'FIM', v: r => r.doc }, { k: 'fecha', t: 'Fecha FIM', v: r => r.fecha, date: true }, { k: 'clave', t: 'Orden (OI/OCI)', v: r => r.clave },
+  { k: 'notas', t: 'Notas Siesa', v: r => r.notas, wrap: true },
+  { k: 'usd', t: 'USD FIM', v: r => r.usd, num: true, dec: true, sum: true, h: r => fm2(r.usd) }, { k: 'tasa', t: 'Tasa FIM', v: r => Math.round(r.tasa * 100) / 100, num: true, h: r => fm2(r.tasa) },
+  { k: 'cop', t: 'Pesos FIM', v: r => r.cop, num: true, sum: true, h: r => fm(r.cop) },
+  { k: 'usdPag', t: 'USD pagado', v: r => r.usdPag, num: true, dec: true, sum: true, h: r => fm2(r.usdPag) },
+  { k: 'copPag', t: 'Pesos pagados (USD × TRM PI)', v: r => r.copPag, num: true, sum: true, h: r => fm(r.copPag) },
+  { k: 'dif', t: 'Diferencia en cambio', v: r => r.dif, num: true, sum: true, h: r => '<b style="color:' + (r.dif < 0 ? '#b91c1c' : '#15803d') + '">' + fm(r.dif) + '</b>' },
+  { k: 'pend', t: 'USD pendiente', v: r => r.pend, num: true, dec: true, sum: true, h: r => fm2(r.pend) },
+  { k: 'estado', t: 'Estado', v: r => r.estado }, { k: 'ult', t: 'Último pago', v: r => r.ult, date: true },
+  { k: 'mes', t: 'Mes contabilización', v: r => r.mes, h: r => '<input type="month" value="' + esc(r.mes) + '" onchange="dcMes(\'' + esc(r.doc) + '\',this.value)" style="font-size:11px">' },
+  { k: 'pis', t: 'Pagos PI aplicados', v: r => r.pis.join(' · '), wrap: true }
+];
+function dcVista() { if (DC.fim && DC.cargado) { dcPintar(); return; } DC.cargado = true; $('cont').innerHTML = '<div class="err">Cargando…</div>'; dcCargar(); }
+async function dcCargar() {
+  const [a, b, c] = await Promise.all([dcApi({ accion: 'pagos_listar' }), dcApi({ accion: 'meses_leer' }), DC.fim ? { ok: true, fim: DC.fim } : dcApi({ accion: 'fim', desde: DC.desde })]);
+  if (!a.ok || !c.ok) { $('cont').innerHTML = '<div class="err">' + esc((a && a.error) || (c && c.error) || 'No se pudo cargar') + '</div>'; DC.cargado = false; return; }
+  DC.pagos = a.pagos; DC.meses = (b && b.meses) || {}; DC.fim = c.fim; dcPintar();
+}
+async function dcTraerFim() { dcMsg('⏳ Trayendo FIM de Siesa…'); const j = await dcApi({ accion: 'fim', desde: DC.desde }); if (!j.ok) { dcMsg('<span style="color:#b91c1c">' + esc(j.error || 'Error') + '</span>'); return; } DC.fim = j.fim; dcPintar(); dcMsg('✅ ' + j.fim.length + ' FIM traídas de Siesa'); }
+async function dcMes(doc, mes) { DC.meses[doc] = mes; const r = await dcApi({ accion: 'meses_guardar', doc, mes }); dcMsg(r.ok ? '✅ Mes guardado para ' + esc(doc) : '<span style="color:#b91c1c">' + esc(r.error || 'No se pudo guardar') + '</span>'); dcPintar(); }
+async function dcSubir(inp) {
+  const f = inp.files && inp.files[0]; if (!f) return; dcMsg('⏳ Leyendo ' + esc(f.name) + '…');
+  try {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true }), L = [], iso = d => d instanceof Date ? new Date(d.getTime() + 12 * 3600e3).toISOString().slice(0, 10) : String(d || '').slice(0, 10);
+    wb.SheetNames.forEach(n => XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' }).forEach(r => { const eg = String(r[0] || '').trim(); if (!/PI-\d+/i.test(eg)) return; const doc = String(r[4] || '').trim(), cop = Number(r[5]), usd = Number(r[6]); if (!doc || !isFinite(cop) || !isFinite(usd) || !usd) return; L.push({ egreso: eg, fecha: iso(r[1]), tercero: String(r[3] || ''), doc_sa: doc, cop, usd, notas: String(r[9] || r[8] || '') }); }));
+    if (!L.length) { dcMsg('<span style="color:#b91c1c">No encontré filas de pagos PI en el archivo (columnas: Docto. egreso, Fecha, Tercero, Razón social, Docto. sa., Vlr. Egreso, Vlr. CxP Alterno).</span>'); return; }
+    const j = await dcApi({ accion: 'pagos_guardar', pagos: L }); if (!j.ok) { dcMsg('<span style="color:#b91c1c">' + esc(j.error || 'No se pudo guardar') + '</span>'); return; }
+    const a = await dcApi({ accion: 'pagos_listar' }); if (a.ok) DC.pagos = a.pagos; dcPintar(); dcMsg('✅ ' + j.guardados + ' líneas de ' + j.egresos + ' pagos PI guardadas');
+  } catch (e) { dcMsg('<span style="color:#b91c1c">No se pudo leer el Excel: ' + esc(e.message) + '</span>'); } inp.value = '';
+}
+function dcPintar() {
+  const R = dcCalc(), M = {}; R.forEach(r => { if (r.usdPag > 0 && r.mes) { const o = M[r.mes] = M[r.mes] || { n: 0, dif: 0 }; o.n++; o.dif += r.dif; } });
+  const meses = Object.keys(M).sort(), sinCruce = R.filter(r => r.estado === 'Sin pago').length, tot = meses.reduce((s, m) => s + M[m].dif, 0);
+  $('cont').innerHTML = '<div class="card"><h2>💱 Diferencia en cambio · FIM de ILUMAX TRADING vs pagos PI</h2><div style="padding:0 14px 14px;font-size:12px;color:#64748b">'
+    + 'Diferencia = pesos de la FIM (a la tasa con que se causó) − pesos pagados (USD de cada PI × su TRM). Positivo = ingreso; negativo = gasto. Cada FIM se cruza con los pagos PI de su orden (OI/OCI) en orden de fecha. El mes se toma del último pago y puedes cambiarlo en cada fila.</div>'
+    + '<div class="bar" style="padding:0 14px 8px;gap:8px;flex-wrap:wrap"><label class="btn">📤 Cargar relación de pagos PI (Excel de Siesa)<input type="file" accept=".xlsx,.xls" style="display:none" onchange="dcSubir(this)"></label>'
+    + '<button class="btn g" onclick="dcTraerFim()">🔄 Traer FIM de Siesa</button><span style="font-size:12px">Desde <input type="date" value="' + DC.desde + '" onchange="DC.desde=this.value" style="font-size:12px"></span><span id="dcst" style="font-size:12px">' + (DC.msg || '') + '</span></div>'
+    + '<div style="padding:0 14px 8px;font-size:12px">' + DC.pagos.length + ' líneas de pago PI cargadas · ' + R.length + ' FIM de Siesa · <b>' + sinCruce + '</b> sin pago cruzado</div>'
+    + '<div class="tw" style="margin:0 14px 10px"><table><thead><tr><th>Mes</th><th style="text-align:right"># FIM</th><th style="text-align:right">Diferencia en cambio</th></tr></thead><tbody>' + (meses.map(m => '<tr><td>' + m + '</td><td style="text-align:right">' + M[m].n + '</td><td style="text-align:right;font-weight:700;color:' + (M[m].dif < 0 ? '#b91c1c' : '#15803d') + '">' + fm(M[m].dif) + '</td></tr>').join('') || '<tr><td colspan="3" class="empty">Carga la relación de pagos PI para calcular</td></tr>') + '</tbody><tfoot><tr class="tot"><td>Total</td><td></td><td style="text-align:right">' + fm(tot) + '</td></tr></tfoot></table></div>'
+    + xgBar('dc') + '<div class="tw" id="xg_dc"></div></div>';
+  xgInit('dc', DC_COLS, { rows: R, limit: 800, nombre: 'Diferencia_en_cambio_FIM' });
+  xgPaint('dc');
+}
 /* ===== Giros al exterior (plano del banco HELBAM / Fedlink) · solo PIN con acceso a giros ===== */
 const GIR_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-giros', GIR_CTAS = { ilumax: '1040166330', trading: '1040166343' }, GIR_EMP = { ilumax: 'ILUMAX', trading: 'TRADING' };
 const GIR_PAISES = [["AF", "AFGHANISTAN"], ["AX", "ALAND ISLANDS"], ["AL", "ALBANIA"], ["DZ", "ALGERIA"], ["AS", "AMERICAN SAMOA"], ["AD", "ANDORRA"], ["AO", "ANGOLA"], ["AI", "ANGUILLA"], ["AQ", "ANTARCTICA"], ["AG", "ANTIGUA AND BARBUDA"], ["AR", "ARGENTINA"], ["AM", "ARMENIA"], ["AW", "ARUBA"], ["AU", "AUSTRALIA"], ["AT", "AUSTRIA"], ["AZ", "AZERBAIJAN"], ["BS", "BAHAMAS"], ["BH", "BAHRAIN"], ["BD", "BANGLADESH"], ["BB", "BARBADOS"], ["BY", "BELARUS"], ["BE", "BELGIUM"], ["BZ", "BELIZE"], ["BJ", "BENIN"], ["BM", "BERMUDA"], ["BT", "BHUTAN"], ["BO", "BOLIVIA"], ["BQ", "BONAIRE"], ["BA", "BOSNIA AND HERZEGOVINA"], ["BW", "BOTSWANA"], ["BV", "BOUVET ISLAND"], ["BR", "BRAZIL"], ["IO", "BRITISH INDIAN OCEAN TERRITORY"], ["BN", "BRUNEI DARUSSALAM"], ["BG", "BULGARIA"], ["BF", "BURKINA FASO"], ["BI", "BURUNDI"], ["KH", "CAMBODIA"], ["CM", "CAMEROON"], ["CA", "CANADA"], ["CV", "CAPE VERDE"], ["KY", "CAYMAN ISLANDS"], ["CF", "CENTRAL AFRICAN REPUBLIC"], ["TD", "CHAD"], ["CL", "CHILE"], ["CN", "CHINA"], ["CX", "CHRISTMAS ISLAND"], ["CC", "COCOS (KEELING) ISLANDS"], ["CO", "COLOMBIA"], ["KM", "COMOROS"], ["CG", "CONGO"], ["CD", "CONGO CD"], ["CK", "COOK ISLANDS"], ["CR", "COSTA RICA"], ["CI", "COTE DIVOIRE"], ["HR", "CROATIA"], ["CU", "CUBA"], ["CW", "CURACAO"], ["CY", "CYPRUS"], ["CZ", "CZECH REPUBLIC"], ["DK", "DENMARK"], ["DJ", "DJIBOUTI"], ["DM", "DOMINICA"], ["DO", "DOMINICAN REPUBLIC"], ["EC", "ECUADOR"], ["EG", "EGYPT"], ["SV", "EL SALVADOR"], ["GQ", "EQUATORIAL GUINEA"], ["ER", "ERITREA"], ["EE", "ESTONIA"], ["ET", "ETHIOPIA"], ["FK", "FALKLAND ISLANDS (MALVINAS)"], ["FO", "FAROE ISLANDS"], ["FJ", "FIJI"], ["FI", "FINLAND"], ["FR", "FRANCE"], ["GF", "FRENCH GUIANA"], ["PF", "FRENCH POLYNESIA"], ["TF", "FRENCH SOUTHERN TERRITORIES"], ["GA", "GABON"], ["GM", "GAMBIA"], ["GE", "GEORGIA"], ["DE", "GERMANY"], ["GH", "GHANA"], ["GI", "GIBRALTAR"], ["GR", "GREECE"], ["GL", "GREENLAND"], ["GD", "GRENADA"], ["GP", "GUADELOUPE"], ["GU", "GUAM"], ["GT", "GUATEMALA"], ["GG", "GUERNSEY"], ["GN", "GUINEA"], ["GW", "GUINEA-BISSAU"], ["GY", "GUYANA"], ["HT", "HAITI"], ["HM", "HEARD ISLAND AND MCDONALD ISLANDS"], ["VA", "HOLY SEE (VATICAN CITY STATE)"], ["HN", "HONDURAS"], ["HK", "HONG KONG"], ["HU", "HUNGARY"], ["IS", "ICELAND"], ["IN", "INDIA"], ["ID", "INDONESIA"], ["IR", "IRAN"], ["IQ", "IRAQ"], ["IE", "IRELAND"], ["IM", "ISLE OF MAN"], ["IL", "ISRAEL"], ["IT", "ITALY"], ["JM", "JAMAICA"], ["JP", "JAPAN"], ["JE", "JERSEY"], ["JO", "JORDAN"], ["KZ", "KAZAKHSTAN"], ["KE", "KENYA"], ["KI", "KIRIBATI"], ["KP", "KOREA, DEMOCRATIC PEOPLE'S REPUBLIC OF"], ["KR", "KOREA, REPUBLIC OF"], ["KW", "KUWAIT"], ["KG", "KYRGYZSTAN"], ["LA", "LAO PEOPLE'S DEMOCRATIC REPUBLIC"], ["LV", "LATVIA"], ["LB", "LEBANON"], ["LS", "LESOTHO"], ["LR", "LIBERIA"], ["LY", "LIBYA"], ["LI", "LIECHTENSTEIN"], ["LT", "LITHUANIA"], ["LU", "LUXEMBOURG"], ["MO", "MACAO"], ["MK", "MACEDONIA, THE FORMER YUGOSLAV REPUBLIC OF"], ["MG", "MADAGASCAR"], ["MW", "MALAWI"], ["MY", "MALAYSIA"], ["MV", "MALDIVES"], ["ML", "MALI"], ["MT", "MALTA"], ["MH", "MARSHALL ISLANDS"], ["MQ", "MARTINIQUE"], ["MR", "MAURITANIA"], ["MU", "MAURITIUS"], ["YT", "MAYOTTE"], ["MX", "MEXICO"], ["FM", "MICRONESIA, FEDERATED STATES OF"], ["MD", "MOLDOVA, REPUBLIC OF"], ["MC", "MONACO"], ["MN", "MONGOLIA"], ["ME", "MONTENEGRO"], ["MS", "MONTSERRAT"], ["MA", "MOROCCO"], ["MZ", "MOZAMBIQUE"], ["MM", "MYANMAR"], ["NA", "NAMIBIA"], ["NR", "NAURU"], ["NP", "NEPAL"], ["NL", "NETHERLANDS"], ["AN", "NETHERLANDS ANTILLES"], ["NC", "NEW CALEDONIA"], ["NZ", "NEW ZEALAND"], ["NI", "NICARAGUA"], ["NE", "NIGER"], ["NG", "NIGERIA"], ["NU", "NIUE"], ["NF", "NORFOLK ISLAND"], ["MP", "NORTHERN MARIANA ISLANDS"], ["NO", "NORWAY"], ["OM", "OMAN"], ["PK", "PAKISTAN"], ["PW", "PALAU"], ["PS", "PALESTINIAN TERRITORY, OCCUPIED"], ["PA", "PANAMA"], ["PG", "PAPUA NEW GUINEA"], ["PY", "PARAGUAY"], ["PE", "PERU"], ["PH", "PHILIPPINES"], ["PN", "PITCAIRN"], ["PL", "POLAND"], ["PT", "PORTUGAL"], ["PR", "PUERTO RICO"], ["QA", "QATAR"], ["RE", "REUNION"], ["RO", "ROMANIA"], ["RU", "RUSSIAN FEDERATION"], ["RW", "RWANDA"], ["BL", "SAINT BARTHELEMY"], ["SH", "SAINT HELENA"], ["KN", "SAINT KITTS AND NEVIS"], ["LC", "SAINT LUCIA"], ["MF", "SAINT MARTIN"], ["PM", "SAINT PIERRE AND MIQUELON"], ["VC", "SAINT VINCENT AND THE GRENADINES"], ["WS", "SAMOA"], ["SM", "SAN MARINO"], ["ST", "SAO TOME AND PRINCIPE"], ["SA", "SAUDI ARABIA"], ["SN", "SENEGAL"], ["RS", "SERBIA"], ["SC", "SEYCHELLES"], ["SL", "SIERRA LEONE"], ["SG", "SINGAPORE"], ["SX", "SINT MAARTEN (DUTCH PART)"], ["SK", "SLOVAKIA"], ["SI", "SLOVENIA"], ["SB", "SOLOMON ISLANDS"], ["SO", "SOMALIA"], ["ZA", "SOUTH AFRICA"], ["GS", "SOUTH GEORGIA AND THE SOUTH SANDWICH ISLANDS"], ["SS", "SOUTH SUDAN"], ["ES", "SPAIN"], ["LK", "SRI LANKA"], ["SD", "SUDAN"], ["SR", "SURINAME"], ["SJ", "SVALBARD AND JAN MAYEN"], ["SZ", "SWAZILAND"], ["SE", "SWEDEN"], ["CH", "SWITZERLAND"], ["SY", "SYRIAN"], ["TW", "TAIWAN, PROVINCE OF CHINA"], ["TJ", "TAJIKISTAN"], ["TZ", "TANZANIA, UNITED REPUBLIC OF"], ["TH", "THAILAND"], ["TL", "TIMOR-LESTE"], ["TG", "TOGO"], ["TK", "TOKELAU"], ["TO", "TONGA"], ["TT", "TRINIDAD AND TOBAGO"], ["TN", "TUNISIA"], ["TR", "TURKEY"], ["TM", "TURKMENISTAN"], ["TC", "TURKS AND CAICOS ISLANDS"], ["TV", "TUVALU"], ["UG", "UGANDA"], ["UA", "UKRAINE"], ["AE", "UNITED ARAB EMIRATES"], ["GB", "UNITED KINGDOM"], ["UK", "UNITED KINGDOM (UK)"], ["US", "UNITED STATES"], ["UM", "UNITED STATES MINOR OUTLYING ISLANDS"], ["UY", "URUGUAY"], ["UZ", "UZBEKISTAN"], ["VU", "VANUATU"], ["VE", "VENEZUELA"], ["VN", "VIET NAM"], ["VG", "VIRGIN ISLANDS, BRITISH"], ["VI", "VIRGIN ISLANDS, U.S."], ["WF", "WALLIS AND FUTUNA"], ["EH", "WESTERN SAHARA"], ["YE", "YEMEN"], ["ZM", "ZAMBIA"], ["ZW", "ZIMBABWE"]], GIR_MON = [["EUR", "EUROS"], ["AUD", "DOLARES AUTRALIANOS"], ["CAD", "DOLARES CANADIENSES"], ["CHF", "FRANCOS SUISOS"], ["DKK", "CORONAS DINAMARCA"], ["GBP", "LIBRAS ESTERLINAS"], ["HKD", "DOLARES HONG KONG"], ["JPY", "YENES JAPONESES"], ["MXN", "PESOS MEJICANOS"], ["NOK", "CORONAS NORUEGA"], ["NZD", "DOLARES NUEVA ZELANDA"], ["SEK", "CORONAS SUECIA"], ["SGD", "SINGAPUR DOLARES"], ["THB", "BAHT (MONEDA) TAILANDIA"], ["ZAR", "RAND (MONEDA) SUD AFRICA"]];
