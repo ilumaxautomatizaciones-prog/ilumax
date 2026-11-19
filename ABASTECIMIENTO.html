@@ -2235,6 +2235,17 @@ function renderInvVista() {
         <option value="nuevo">🆕 Solo nuevos (&lt;1 año)</option>
         <option value="antiguo">Solo antiguos (≥1 año)</option>
       </select>
+      <select class="inp" id="fil-inv-estado" style="width:170px;" onchange="filtrarInvMod()" title="Descontinuadas según la BASE DE PRODUCTO">
+        <option value="">Activas y descontinuadas</option>
+        <option value="activa">Solo activas</option>
+        <option value="desc">Solo descontinuadas</option>
+      </select>
+      <select class="inp" id="fil-inv-abc" style="width:120px;" onchange="filtrarInvMod()" title="Clasificación ABC por valor de ventas">
+        <option value="">ABC: todas</option><option value="A">Clase A</option><option value="B">Clase B</option><option value="C">Clase C</option><option value="-">Sin clase</option>
+      </select>
+      <select class="inp" id="fil-inv-canal" style="width:160px;" onchange="filtrarInvMod()">
+        <option value="">Todos los canales</option>
+      </select>
       <select class="inp" id="fil-inv-lista" style="width:180px;" onchange="INV_LISTA_SEL=this.value;filtrarInvMod()">
         <option value="">Sin precio de lista</option>
       </select>
@@ -2592,6 +2603,8 @@ async function filtrarInvMod() {
   const bod   = (document.getElementById('fil-inv-bod')||{value:''}).value;
   const stock = (document.getElementById('fil-inv-stock')||{value:'todos'}).value;
   const edad  = (document.getElementById('fil-inv-edad')||{value:''}).value;
+  const estado = (document.getElementById('fil-inv-estado')||{value:''}).value, fabc = (document.getElementById('fil-inv-abc')||{value:''}).value, fcanal = (document.getElementById('fil-inv-canal')||{value:''}).value;
+  invXCargar();
 
   // 1) Filtrar filas crudas (referencia+bodega) por texto y bodega seleccionada
   let filas = INV_DATA.filter(r => {
@@ -2648,19 +2661,14 @@ async function filtrarInvMod() {
   // 3a) Filtros de tránsito / agotados con orden en camino
   if(INV_FILTRO_CAM){
     const CAMF = (INV_FILTRO_CAM === 'ingresos' ? invIngresosMapa() : invCaminoMapa()) || {};
-    items = items.filter(r => { const c = CAMF[pvClaveRef(r.referencia)]; return c && c.length && (INV_FILTRO_CAM !== 'agotados' || !(r.existencia > 0)); });
+    items = items.filter(r => { const c = CAMF[pvClaveRef(r.referencia)]; return c && c.length && (INV_FILTRO_CAM !== 'agotados' || (!(r.existencia > 0) && !invEsDesc(r.referencia) && !invEsNuevo(r.referencia))); });
     items.forEach(r => { r._cam = CAMF[pvClaveRef(r.referencia)].reduce((a,x)=>a+x.pend,0); });
   }
-  // 3b) Filtro por antigüedad (fecha de creación): nuevo = menos de 1 año
-  if(edad){
-    const haceUnAnio = new Date(); haceUnAnio.setFullYear(haceUnAnio.getFullYear()-1);
-    const haceUnAnioISO = haceUnAnio.toISOString().slice(0,10);
-    items = items.filter(r => {
-      if(!r.fecha_creacion) return false; // sin fecha conocida, no entra en ninguno de los dos filtros
-      const esNuevo = r.fecha_creacion > haceUnAnioISO;
-      return edad === 'nuevo' ? esNuevo : !esNuevo;
-    });
-  }
+  // 3b) Nuevo (primera venta hace menos de 1 año o sin ventas) / antiguo, descontinuadas, clase ABC y canal
+  if(edad) items = items.filter(r => edad === 'nuevo' ? invEsNuevo(r.referencia) : !invEsNuevo(r.referencia));
+  if(estado) items = items.filter(r => estado === 'desc' ? invEsDesc(r.referencia) : !invEsDesc(r.referencia));
+  if(fabc) items = items.filter(r => fabc === '-' ? !invAbcDe(r.referencia) : invAbcDe(r.referencia) === fabc);
+  if(fcanal) items = items.filter(r => invCanalDe(pvClaveRef(r.referencia)).includes(fcanal));
 
   // Ordenar: primero las recién actualizadas por SIESA, luego por existencia desc
   items.sort((a,b) => {
@@ -2774,7 +2782,8 @@ function invVentaCelda(kc, exist){
   if(!INV_VPROM) return '<span style="color:var(--mu2)">'+(INV_VFALLO?'—':'…')+'</span>';
   const v = INV_VPROM[kc]; if(!v) return '<span style="color:var(--mu2)">Sin ventas</span>';
   const mes = exist > 0 ? exist / v : 0;
-  return '<b>'+Math.round(v).toLocaleString('es-CO')+'</b> <span style="color:var(--mu);font-size:10px;">und/mes</span>'; void mes;
+  const vv = (typeof INV_VPROM_V!=='undefined' && INV_VPROM_V) ? INV_VPROM_V[kc] : 0;
+  return '<b>'+Math.round(v).toLocaleString('es-CO')+'</b> <span style="color:var(--mu);font-size:10px;">und/mes</span>'+(vv ? '<div style="font-size:11px;font-weight:700;color:var(--gr);">$'+Math.round(vv).toLocaleString('es-CO')+' <span style="color:var(--mu);font-size:10px;font-weight:400;">/mes</span></div>' : ''); void mes;
 }
 async function invVentasCargar(){
   if(INV_VPROM || INV_VCARGANDO || INV_VFALLO) return; INV_VCARGANDO = true;
@@ -2794,6 +2803,43 @@ async function invVentasCargar(){
   INV_VCARGANDO = false;
   if(INV_VPROM && document.getElementById('tbody-inv-mod') && typeof filtrarInvMod==='function') filtrarInvMod();
   if(INV_VPROM && document.getElementById('inv-seg') && typeof ivsPintar==='function') ivsPintar(); try{ if(IVS.tab==='proy' && typeof ivsProyPintar==='function') ivsProyPintar(); }catch(e){} try{ if(IVS.tab==='jue' && typeof ivsJuegoPintar==='function') ivsJuegoPintar(); }catch(e){}
+}
+var INV_X = {cargado:false, cargando:false, nuevoIni:{}, abc:{}, clasif:null, dset:null, aset:null};
+async function invXCargar(){
+  if(INV_X.cargado || INV_X.cargando) return; INV_X.cargando = true;
+  try{
+    const [cfg, ini, rf, abc] = await Promise.all([
+      sb.get('configuracion','clave=in.(inv_clasif,inv_clasif_forzar)&select=clave,valor').catch(()=>[]),
+      sb.get('innov_ini','select=ref,ini&limit=5000').catch(()=>[]),
+      sb.get('innov_refs','select=ref,primera_venta&limit=3000').catch(()=>[]),
+      sb.get('ventas_abc','select=referencia,clase&limit=5000').catch(()=>[]),
+    ]);
+    const val = c => { const x = (cfg||[]).find(y=>y.clave===c); if(!x) return null; try{ return typeof x.valor==='string' ? JSON.parse(x.valor) : x.valor; }catch(e){ return null; } };
+    let cl = (typeof IVS!=='undefined' && IVS.clasif) || val('inv_clasif'); const F = (val('inv_clasif_forzar')||[]).map(x=>String(x).trim());
+    if(cl && cl.d){ const fs = new Set(F); INV_X.clasif = cl; INV_X.dset = new Set((cl.d||[]).filter(k=>!fs.has(k))); INV_X.aset = Array.isArray(cl.act) ? new Set(cl.act.concat(F)) : null; }
+    const mn = INV_X.nuevoIni; const put = (r,f) => { const k = pvClaveRef(r.ref), d = r[f]; if(k && d && (!mn[k] || d < mn[k])) mn[k] = String(d).slice(0,10); };
+    (ini||[]).forEach(r=>put(r,'ini')); (rf||[]).forEach(r=>put(r,'primera_venta'));
+    (abc||[]).forEach(r=>{ if(r.clase) INV_X.abc[pvClaveRef(r.referencia)] = r.clase; });
+    await invCanalesCargar();
+    const sel = document.getElementById('fil-inv-canal');
+    if(sel && sel.options.length < 2){ const cs = new Set(); Object.values(INV_CANALES_MAP||{}).forEach(a=>(a||[]).forEach(c=>cs.add(c))); Object.values(INV_CANAL_REF||{}).forEach(c=>c&&cs.add(c)); [...cs].sort().forEach(c=>{ const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o); }); }
+    INV_X.cargado = true;
+  }catch(e){ console.warn('Clasificación de inventario:', e); }
+  INV_X.cargando = false;
+  if(INV_X.cargado && document.getElementById('tbody-inv-mod')) filtrarInvMod();
+}
+function invEsDesc(ref){ const cl = INV_X.clasif; if(!cl || !INV_X.dset) return false; const t = String(ref==null?'':ref).trim(), k = cl.ex ? t : pvClaveRef(t); return INV_X.dset.has(k) || (INV_X.aset ? !INV_X.aset.has(k) : false); }
+function invAbcDe(ref){ return INV_X.abc[pvClaveRef(ref)] || ''; }
+// Nuevo = su primera venta (o inicio de innovación) fue hace menos de 1 año, o aún no tiene ventas. La 2480 no cuenta como nueva.
+function invEsNuevo(ref){
+  if(!INV_X.cargado) return false; const k = pvClaveRef(ref); if(k === '2480') return false;
+  const ini = INV_X.nuevoIni[k]; const h = new Date(); h.setFullYear(h.getFullYear()-1); const hISO = h.toISOString().slice(0,10);
+  if(ini) return ini > hISO;
+  return !INV_X.abc[k] && !(INV_VPROM && INV_VPROM[k]) && !invEsDesc(ref);
+}
+function invChipsRef(ref){
+  const a = invAbcDe(ref), col = {A:'#15803d',B:'#b45309',C:'#64748b'}[a] || '#64748b';
+  return (a ? ' <span title="Clasificación ABC por valor de ventas" style="background:'+col+';color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">'+a+'</span>' : '') + (invEsDesc(ref) ? ' <span title="Descontinuada según la BASE DE PRODUCTO" style="background:#b91c1c;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">DESC</span>' : '');
 }
 var INV_CAM_DIAS = 30, INV_FILTRO_CAM = '';
 function invDescRef(){ const m = {}; (typeof INV_DATA!=='undefined'?INV_DATA:[]).forEach(r => { const k = pvClaveRef(r.referencia); if(!m[k] || (!m[k].d && r.descripcion)) m[k] = {d:r.descripcion||'', ex:(m[k]?m[k].ex:0)}; if(invBodegaCuenta(r.bodega)) m[k].ex += parseFloat(r.existencia||0)||0; }); return m; }
@@ -2876,7 +2922,7 @@ function invVerCam(t, dias){
   } else {
     const M = invCaminoMapa() || {}; let L = [];
     Object.keys(M).forEach(k => M[k].forEach(x => L.push(Object.assign({k}, x))));
-    if(t === 'agotados'){ L = L.filter(x => !((D[x.k]||{}).ex > 0)); tit = '⛔ Agotados con orden en camino'; sub = 'SKU sin existencia en las bodegas que cuentan y lo que viene para ellos'; }
+    if(t === 'agotados'){ L = L.filter(x => !((D[x.k]||{}).ex > 0) && !invEsDesc(x.ref||x.k) && !invEsNuevo(x.ref||x.k)); tit = '⛔ Agotados con orden en camino'; sub = 'SKU sin existencia en las bodegas que cuentan y lo que viene para ellos'; }
     else { tit = '🚢 Inventario en tránsito'; sub = 'Lo ordenado que aún no ingresa, con fecha de llegada'; }
     L.sort((a,b)=>(a.fecha||8e15)-(b.fecha||8e15));
     cab = th('Llegada')+th('Orden')+th('Proveedor')+th('Referencia')+th('Descripción')+th('Existencia',1)+th('Unidades en camino',1);
@@ -2908,7 +2954,7 @@ function _renderFilasInv(mostrar, preciosMap) {
     const proyCelda = !PR ? '<span style="color:var(--mu2)">'+(INV_VFALLO?'—':'…')+'</span>' : (PR.v<=0 ? '<div style="font-size:11px;color:var(--mu);">Sin ventas</div>' : '<div style="font-size:11.5px;font-weight:700;color:'+(PR.quiebre>=0?'#b91c1c':'var(--gr)')+';">'+(PR.quiebre>=0?'⚠ Se agota en '+PR.meses[PR.quiebre].lbl:'✔ Alcanza 6 meses')+'</div><div style="font-size:10.5px;color:var(--mu);">Mes 6: '+fN2(PR.fin)+' und</div>') + (PR ? '<button class="btn btn-g btn-xs" data-proyb="'+kc+'" style="margin-top:3px;" onclick="invProyTog(\''+kc+'\')">'+(pAb?'▾':'▸')+' Proyección</button>' : '');
     const proyFila = PR ? `<tr data-det="1" data-proy="${kc}" style="display:${pAb?'':'none'};background:var(--bg);border-bottom:1px solid var(--b1);"><td colspan="15" style="padding:8px 12px 10px 48px;"><div style="font-size:10px;font-weight:700;color:var(--mu);text-transform:uppercase;margin-bottom:4px;">Proyección 6 meses · ${r.referencia} · ventas promedio ${fN2(PR.v)} und/mes</div><table style="font-size:11.5px;border-collapse:collapse;"><thead><tr><th style="text-align:left;padding:3px 16px 3px 0;color:var(--mu);">Mes</th><th style="text-align:right;padding:3px 16px 3px 0;color:var(--mu);">Inicio</th><th style="text-align:right;padding:3px 16px 3px 0;color:var(--mu);">Llegadas</th><th style="text-align:right;padding:3px 16px 3px 0;color:var(--mu);">Ventas</th><th style="text-align:right;padding:3px 16px 3px 0;color:var(--mu);">Final</th><th style="text-align:left;padding:3px 0;color:var(--mu);">Estado</th></tr></thead><tbody>${PR.meses.map(m=>`<tr><td style="padding:3px 16px 3px 0;font-weight:700;">${m.lbl}</td><td style="padding:3px 16px 3px 0;text-align:right;">${fN2(m.ini)}</td><td style="padding:3px 16px 3px 0;text-align:right;color:var(--bl);">${m.lleg?'+'+fN2(m.lleg)+' <span style="color:var(--mu);font-size:10px;">'+m.ocs.join(', ')+'</span>':'—'}</td><td style="padding:3px 16px 3px 0;text-align:right;">−${fN2(m.ven)}</td><td style="padding:3px 16px 3px 0;text-align:right;font-weight:700;">${fN2(m.fin)}</td><td style="padding:3px 0;color:${m.falt>0.5?'#b91c1c':'var(--gr)'};">${m.falt>0.5?'⚠ Faltan '+fN2(m.falt)+' und':'OK'}</td></tr>`).join('')}</tbody></table>${PR.sinFecha?'<div style="font-size:10.5px;color:var(--mu);margin-top:4px;">'+fN2(PR.sinFecha)+' und en camino sin fecha de llegada no están incluidas.</div>':''}</td></tr>` : '';
     return `<tr style="${rowStyle}" ${resaltada ? 'data-resaltada="1"' : ''}>
-      <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${wfoto(r.referencia)}${wlnk(r.referencia,r.referencia||'')}${resaltada?' <span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">SIESA</span>':''}${esItemNuevo(r.fecha_creacion)?' <span style="background:#0891b2;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">🆕 NUEVO</span>':''}</td>
+      <td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${wfoto(r.referencia)}${wlnk(r.referencia,r.referencia||'')}${resaltada?' <span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">SIESA</span>':''}${invEsNuevo(r.referencia)?' <span style="background:#0891b2;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;margin-left:4px;">🆕 NUEVO</span>':''}${invChipsRef(r.referencia)}</td>
       <td style="padding:9px 12px;max-width:220px;font-weight:600;font-size:11px;">${(r.descripcion||'').substring(0,50)}</td>
       <td style="padding:9px 12px;font-size:11px;color:var(--mu);">${r.subcategoria ? r.subcategoria : '<span style="color:#b91c1c;font-style:italic;">Sin subcategoría</span>'}</td>
       <td style="padding:9px 12px;text-align:right;${existColor}">${fmtN(exist)}</td>
