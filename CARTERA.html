@@ -140,7 +140,7 @@ function pintar() {
   $('out').style.display = '';
   const pos = sumB(D.cls), venc = D.cls.reduce((s, c) => s + c.b[1] + c.b[2] + c.b[3] + c.b[4], 0), v90 = D.cls.reduce((s, c) => s + c.b[4], 0), fav = D.cls.reduce((s, c) => s + c.fav, 0);
   const rec30 = D.recs.filter(r => Date.parse(hoy) - Date.parse(r.fecha) < 30 * 864e5).reduce((s, r) => s + r.valor, 0);
-  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ppe', '📊 Ppto vs Ejecución'], ['ext', '🏦 Extracto bancario'], ['ct', '📦 Contados por despachar'], ['ofac', '🛡️ OFAC']].concat(GIR.ok ? [['gir', '🌏 Giros'], ['dc', '💱 Dif. en cambio']] : []);
+  const tabs = [['cli', '👥 Saldo por cliente'], ['fac', '🧾 Facturas'], ['con', '🧮 Conciliación'], ['ven', '🧑‍💼 Vencidas por vendedor'], ['rec', '💵 Recaudos'], ['ppe', '📊 Ppto vs Ejecución'], ['ext', '🏦 Extracto bancario'], ['ct', '📦 Contados por despachar'], ['ccl', '🪪 Clientes'], ['ofac', '🛡️ OFAC']].concat(GIR.ok ? [['gir', '🌏 Giros'], ['dc', '💱 Dif. en cambio']] : []);
   if (GIR.ok === undefined) girCheck();
   $('app').innerHTML = '<div class="kpis">'
     + kpi('Cartera por cobrar', fmc(pos), D.cls.filter(c => c.tot > 0).length + ' clientes con saldo')
@@ -223,6 +223,8 @@ function vista(soloTabla) {
     ctVista();
   } else if (TAB === 'ext') {
     extVista();
+  } else if (TAB === 'ccl') {
+    cclVista();
   } else if (TAB === 'ofac') {
     ofacVista();
   } else if (TAB === 'gir' && GIR.ok) {
@@ -1682,6 +1684,52 @@ async function girFabOk(id) {
   $('gfbtn').disabled = true; const j = await girApi({ accion: 'guardar_fab', fab });
   if (!j || !j.ok) { $('gfbtn').disabled = false; $('gfmsg').textContent = /duplicate|23505|409/.test((j && j.error) || '') ? 'Ya existe un fabricante con ese nombre.' : ((j && j.error) || 'No se pudo guardar'); return; }
   extCerrar(); await girVista();
+}
+/* ===== Clientes: cupo, aprobado, bloqueos y reportados (Siesa API_v2_Clientes + cartera abierta) ===== */
+const CCL_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-clientes';
+let CCL = { rows: null, act: '', msg: '', cargando: false };
+const cclApi = async b => { try { const r = await fetch(CCL_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b || {}) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
+const cclBloq = r => [r.blq ? 'Bloqueado' : '', r.bcupo ? 'Bloqueo por cupo' : '', r.bmora ? 'Bloqueo por mora' : ''].filter(Boolean).join(' · ') || 'Sin bloqueo';
+const CCL_COLS = [
+  { k: 'nit', t: 'NIT', v: r => r.nit }, { k: 'nombre', t: 'Cliente', v: r => r.nombre }, { k: 'suc', t: 'Suc.', v: r => r.suc, h: r => esc(r.suc) + (r.dsuc ? ' <span class="n">' + esc(r.dsuc) + '</span>' : '') },
+  { k: 'cupo', t: 'Cupo aprobado', num: 1, sum: 1, v: r => Math.round(r.cupo), h: r => fm(r.cupo) },
+  { k: 'fcupo', t: 'Fecha cupo', date: 1, v: r => r.fcupo },
+  { k: 'saldo', t: 'Saldo cartera', num: 1, sum: 1, v: r => r.saldo, h: r => fm(r.saldo) },
+  { k: 'disp', t: 'Cupo disponible', num: 1, sum: 1, v: r => Math.round(r.cupo - r.saldo), h: r => '<b style="color:' + (r.cupo - r.saldo < 0 ? '#b91c1c' : '#15803d') + '">' + fm(r.cupo - r.saldo) + '</b>' },
+  { k: 'uso', t: '% cupo usado', num: 1, v: r => r.cupo > 0 ? Math.round(r.saldo / r.cupo * 100) : (r.saldo > 0 ? 999 : 0), h: r => r.cupo > 0 ? Math.round(r.saldo / r.cupo * 100) + '%' : (r.saldo > 0 ? 'Sin cupo' : '–') },
+  { k: 'venc', t: 'Vencido', num: 1, sum: 1, v: r => r.venc, h: r => r.venc ? '<span style="color:#b91c1c">' + fm(r.venc) + '</span>' : '–' },
+  { k: 'mora', t: 'Mora máx. (días)', num: 1, v: r => r.mora, h: r => r.mora ? r.mora : '–' },
+  { k: 'est', t: 'Estado', v: r => r.act ? 'Activo' : 'Inactivo' },
+  { k: 'bloq', t: 'Bloqueo', v: cclBloq, h: r => { const t = cclBloq(r); return t === 'Sin bloqueo' ? '<span class="n">' + t + '</span>' : '<b style="color:#b91c1c">' + esc(t) + '</b>' + (r.mot ? ' <span class="n">' + esc(r.mot) + '</span>' : ''); } },
+  { k: 'rep', t: 'Reportado', v: r => r.rep ? 'Sí' : 'No', h: r => '<span style="cursor:pointer" title="' + esc((r.orep || '') + (r.urep ? ' · ' + usrNom(r.urep) : '')) + '" onclick="cclRep(\'' + esc(r.nit) + '\')">' + (r.rep ? '<b style="color:#b91c1c">🚩 Sí</b>' : '<span class="n">No · marcar</span>') + '</span>' },
+  { k: 'frep', t: 'Fecha reporte', date: 1, v: r => r.frep },
+  { k: 'orep', t: 'Observación reporte', v: r => r.orep, wrap: 1 },
+  { k: 'cal', t: 'Calificación', v: r => r.cal }, { k: 'cp', t: 'Cond. pago', v: r => r.cp }, { k: 'dg', t: 'Días gracia', num: 1, v: r => r.dg },
+  { k: 'vend', t: 'Vendedor', v: r => r.vend || r.vcod }, { k: 'tipo', t: 'Tipo cliente', v: r => r.tipo }, { k: 'notas', t: 'Notas Siesa', v: r => r.notas, wrap: 1 }
+];
+async function cclVista() {
+  if (!CCL.rows && !CCL.cargando) { CCL.cargando = true; $('cont').innerHTML = '<div class="err">Cargando clientes…</div>'; const j = await cclApi({ accion: 'listar' }); CCL.cargando = false; if (j && j.ok) { CCL.rows = j.rows; CCL.act = j.actualizado || ''; } else { $('cont').innerHTML = '<div class="err">' + esc((j && j.error) || 'No se pudo cargar') + '</div>'; return; } }
+  cclPintar();
+}
+function cclPintar() {
+  const R = CCL.rows || [], un = new Set(R.map(r => r.nit)), sobre = R.filter(r => r.saldo > r.cupo && r.saldo > 0).length, blq = R.filter(r => r.blq || r.bcupo || r.bmora).length, rep = new Set(R.filter(r => r.rep).map(r => r.nit)).size;
+  const k = (v, l, c) => '<div class="kpi"><div class="l">' + l + '</div><div class="v" style="' + (c ? 'color:' + c : '') + '">' + v + '</div></div>';
+  $('cont').innerHTML = '<div class="card"><h2>🪪 Clientes · cupo aprobado, cartera y reportados</h2><div style="padding:0 14px 8px;font-size:12px;color:#64748b">Cupo, fecha de aprobación, calificación y bloqueos vienen del maestro de clientes de Siesa (una fila por cliente y sucursal). Cupo disponible = cupo aprobado − saldo de cartera. «Reportado» lo marcas tú (clic en la celda) y queda guardado con fecha y observación.</div>'
+    + '<div class="bar" style="padding:0 14px 8px;gap:8px;flex-wrap:wrap"><button class="btn" onclick="cclActualizar()">🔄 Actualizar desde Siesa</button><span id="cclmsg" style="font-size:12px">' + (CCL.msg || (CCL.act ? 'Datos de Siesa al ' + esc(CCL.act) : 'Aún no se han traído los clientes de Siesa: pulsa Actualizar.')) + '</span></div>'
+    + '<div class="kpis" style="padding:0 14px 8px">' + k(un.size, 'Clientes') + k(R.filter(r => r.cupo > 0).length, 'Con cupo') + k(sobre, 'Pasados del cupo', sobre ? '#b91c1c' : '') + k(blq, 'Bloqueados', blq ? '#b91c1c' : '') + k(rep, 'Reportados', rep ? '#b91c1c' : '') + '</div>'
+    + xgBar('ccl') + '<div class="tw" id="xg_ccl"></div></div>';
+  xgInit('ccl', CCL_COLS, { rows: R, limit: 800, nombre: 'Clientes_cupo' }); xgPaint('ccl');
+}
+async function cclActualizar() {
+  CCL.msg = 'Trayendo clientes de Siesa… (puede tardar hasta un minuto)'; cclPintar(); const j = await cclApi({ accion: 'actualizar' });
+  if (!j || !j.ok) { CCL.msg = 'No se pudo iniciar: ' + ((j && j.error) || ''); cclPintar(); return; }
+  const a0 = CCL.act; let t = 0; const iv = setInterval(async () => { t++; const x = await cclApi({ accion: 'listar' }); if (x && x.ok && (x.actualizado !== a0 || x.rows.length !== (CCL.rows || []).length || t > 12)) { clearInterval(iv); CCL.rows = x.rows; CCL.act = x.actualizado || ''; CCL.msg = t > 12 && x.actualizado === a0 ? 'Siesa no respondió a tiempo; vuelve a intentar.' : ''; if (TAB === 'ccl') cclPintar(); } }, 8000);
+}
+async function cclRep(nit) {
+  const r = (CCL.rows || []).find(x => x.nit === nit); if (!r) return;
+  if (r.rep) { const o = prompt('Este cliente figura como REPORTADO' + (r.frep ? ' (' + r.frep + ')' : '') + '.\nEscribe la observación para actualizarla, o escribe QUITAR para desmarcarlo:', r.orep || ''); if (o === null) return; const q = o.trim().toUpperCase() === 'QUITAR'; const j = await cclApi({ accion: 'reportar', nit, reportado: !q, fecha: q ? '' : (r.frep || D.hoy), obs: q ? '' : o }); if (!j || !j.ok) { alert((j && j.error) || 'No se pudo guardar'); return; } CCL.rows.forEach(x => { if (x.nit === nit) { x.rep = !q; x.orep = q ? '' : o; x.frep = q ? '' : (x.frep || D.hoy); x.urep = ''; } }); }
+  else { const o = prompt('Marcar a ' + (r.nombre || nit) + ' como REPORTADO.\nObservación (central de riesgo, motivo, etc.):', ''); if (o === null) return; const f = prompt('Fecha del reporte (AAAA-MM-DD):', D.hoy); if (f === null) return; const j = await cclApi({ accion: 'reportar', nit, reportado: true, fecha: f.trim(), obs: o }); if (!j || !j.ok) { alert((j && j.error) || 'No se pudo guardar'); return; } CCL.rows.forEach(x => { if (x.nit === nit) { x.rep = true; x.orep = o; x.frep = f.trim(); x.urep = ''; } }); }
+  cclPintar();
 }
 /* ===== Verificación OFAC (lista SDN y consolidada) ===== */
 const OFAC_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-ofac';
