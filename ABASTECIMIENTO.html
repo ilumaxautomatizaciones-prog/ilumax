@@ -19844,11 +19844,12 @@ const ivsM = n => '$ ' + ivsN(n);
 const ivsFd = d => d ? new Date(d).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 async function ivsCfg() {
   try {
-    const rows = await sb.get('configuracion', 'clave=in.(inv_bodegas_disp,inv_clasif,inv_clasif_forzar,teso_trm_fecha,inv_param)');
+    const rows = await sb.get('configuracion', 'clave=in.(inv_bodegas_disp,inv_clasif,inv_clasif_forzar,teso_trm_fecha,inv_param,inv_desc_abc)');
     (rows || []).forEach(r => {
       let v = r.valor; try { if (typeof v === 'string') v = JSON.parse(v); } catch (e) { }
       if (r.clave === 'inv_bodegas_disp' && Array.isArray(v) && v.length) IVS.bodegas = v.map(x => String(x).toUpperCase());
       if (r.clave === 'inv_param' && v) { IVS.trmFijo = Number(v.trm) > 0 ? Number(v.trm) : null; IVS.factor = Number(v.factor) > 0 ? Number(v.factor) : 1.15; }
+      if (r.clave === 'inv_desc_abc') IVS.dabc = v && v.m ? v : null;
       if (r.clave === 'inv_clasif') IVS.clasif = v && v.d ? v : null;
       if (r.clave === 'inv_clasif_forzar') IVS.forzarAct = Array.isArray(v) ? v.map(x => String(x).trim()).filter(Boolean) : [];
       if (r.clave === 'teso_trm_fecha' && v) { const ks = Object.keys(v).sort(); if (ks.length) { IVS.trmFecha = ks[ks.length - 1]; if (IVS.trm == null) IVS.trm = Number(v[IVS.trmFecha]) || null; } }
@@ -19918,7 +19919,7 @@ function ivsPintar() {
   const seg = document.getElementById('inv-seg'); if (!seg) return;
   if (typeof INV_VPROM !== 'undefined' && !INV_VPROM && !INV_VFALLO) invVentasCargar();
   if (!IVS.nuevas) ivsNuevasCargar();
-  const C = ivsCalc(), reg = C.refs.filter(p => !p.desc_), des = C.refs.filter(p => p.desc_);
+  const C = ivsCalc(); IVS._C = C; const reg = C.refs.filter(p => !p.desc_), des = C.refs.filter(p => p.desc_);
   const sum = (L, k) => L.reduce((a, p) => a + p[k], 0), hay = !!(IVS.clasif && IVS.clasif.d);
   const tile = (v, l, c) => '<div class="sc" style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'var(--tx)') + ';">' + v + '</div><div style="font-size:10.5px;color:var(--mu);">' + l + '</div></div>';
   const totDisp = sum(C.refs, 'valor'), totTr = C.tr.reduce((a, x) => a + x.cop, 0); { const kv = document.getElementById('inv-kpi-val'); if (kv) kv.textContent = ivsM(totDisp); const kt = document.getElementById('inv-kpi-tr'); if (kt) { kt.textContent = ivsM(totTr); const kl = document.getElementById('inv-kpi-tr-l'); if (kl) kl.textContent = 'En tránsito · TRM ' + ivsN(IVS.trmFijo || IVS.trm || 0) + ' × ' + ivsFac(); } }
@@ -19945,6 +19946,7 @@ function ivsPintar() {
   const th = (t, r) => '<th' + (r ? ' style="text-align:right;"' : '') + '>' + t + '</th>';
   seg.innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">${tile(ivsM(totDisp), 'Inventario DISPONIBLE · bodegas ' + IVS.bodegas.join(', '), 'var(--bl)')}${tile(ivsM(totTr), 'En tránsito (ordenado sin ingresar) · USD × ' + ivsFac() + ' × TRM', '#b45309')}${tile(ivsM(totDisp + totTr), 'Disponible + tránsito')}${tile(ago.length + '', 'Regulares agotados', ago.length ? '#991b1b' : '#16a34a')}<div style="display:flex;flex-direction:column;gap:6px;justify-content:center;"><span class="arte-mu" style="font-size:10.5px;">${ivsTrmTxt()}</span></div><div style="display:flex;flex-direction:column;gap:6px;justify-content:center;">${par('TRM', IVS.trmFijo || '', IVS.trm ? 'Aplica a todas las órdenes · vacío = la de cada OC / última registrada (' + ivsE(IVS.trm) + ')' : 'Aplica a todas las órdenes', 'trm', '0.01')}${par('Factor import.', IVS.factor, 'Multiplica el valor FOB en USD (flete, seguro, aranceles…)', 'factor', '0.01')}</div></div>
   ${ivsGrafCard()}
+  ${ivsDCard()}
   ${ivsAveCard()}
   <div class="card" style="margin-bottom:12px;"><div class="ch"><div class="ct">2️⃣ Inventario disponible para la compañía</div><button class="btn btn-g btn-sm" onclick="IVS.bodOculto=!IVS.bodOculto;ivsPintar()">${IVS.bodOculto ? '👁 Mostrar bodegas' : '🙈 Ocultar bodegas'}</button></div><div class="cb" ${IVS.bodOculto ? 'style="display:none;"' : ''}>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><span class="arte-mu" style="font-size:11.5px;">Solo suman las bodegas:</span><input id="ivs-bod" class="inp" style="width:210px;font-size:12px;" value="${ivsE(IVS.bodegas.join(', '))}"><button class="btn btn-g btn-sm" onclick="ivsGuardarBodegas()">Guardar bodegas</button></div>
@@ -20325,7 +20327,7 @@ const IVS_G = { on: { lin: 1, tot: 1, tr: 1, des: 1, db: 0, dt: 0, cua: 1 }, bar
 const IVS_GS = [['lin', 'Activo', '#6b7280', 'M', '#6b7280'], ['tot', 'Total inv. disponible', '#f5b800', 'M', '#2563eb'], ['tr', 'Tránsito', '#f97316', 'M', '#93b4e6'], ['des', 'Descontinuado', '#2563eb', 'M', '#4d9a2a'], ['db', 'Días en bodega', '#16a34a', 'D', '#16a34a'], ['dt', 'Días con tránsito', '#0891b2', 'D', '#0891b2'], ['cua', 'Cuarentena + averías', '#dc2626', 'M', '#dc2626']];
 function ivsGData(k) { const H = IVS_HIST, V = IVS._vivo; if (k === 'cua') return ivsCuaSerie(); if (V && (k === 'lin' || k === 'des')) return H[k].map((v, i) => i === H[k].length - 1 ? V[k] : v); if (k === 'tot') { const a = ivsGData('lin'), d = ivsGData('des'); return a.map((v, i) => v + d[i]); } if (k === 'tr') return H.tr.map((v, i) => i === H.tr.length - 1 && IVS._trVivo ? IVS._trVivo : v); return H[k]; }
 function ivsGrafCard() {
-  const chips = IVS_GS.map(g => `<span class="chip ${IVS_G.on[g[0]] ? 'on' : ''}" style="${IVS_G.on[g[0]] ? 'border-color:' + g[2] + ';' : ''}" onclick="IVS_G.on['${g[0]}']=IVS_G.on['${g[0]}']?0:1;ivsGraf()"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${g[2]};margin-right:5px;"></span>${g[1]}</span>`).join('');
+  const chips = IVS_GS.map(g => `<span class="chip ${IVS_G.on[g[0]] ? 'on' : ''}" style="${IVS_G.on[g[0]] ? 'border-color:' + g[2] + ';' : ''}" onclick="${g[0] === 'des' ? 'IVS_D.open=!IVS_D.open' : 'IVS_G.on[\'' + g[0] + '\']=IVS_G.on[\'' + g[0] + '\']?0:1'};ivsGraf()" ${g[0] === 'des' ? 'title="Clic: ver Descontinuado por clasificación A/B/C"' : ''}><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${g[2]};margin-right:5px;"></span>${g[1]}${g[0] === 'des' ? ' ▸ A/B/C' : ''}</span>`).join('');
   return `<div class="card" id="ivs-gcard" style="margin-bottom:12px;"><div class="ch"><div class="ct">1️⃣ Cómo se ha comportado el inventario</div><div class="arte-mu" style="font-size:11px;">Fuente: One Page Operaciones · millones COP y días · pasa el mouse sobre un mes</div></div><div class="cb">
   <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">${chips}<span style="flex:1"></span><button class="btn btn-g btn-sm" onclick="IVS_G.val=IVS_G.val?0:1;ivsGraf()">${IVS_G.val ? '🔢 Ocultar valores' : '🔢 Ver valores'}</button><button class="btn btn-g btn-sm" onclick="IVS_G.bar=IVS_G.bar?0:1;ivsGraf()">${IVS_G.bar ? '📈 Líneas' : '📊 Barras'}</button></div>
   ${ivsGrafLeyenda()}
@@ -20344,6 +20346,71 @@ function ivsGrafLeyenda() {
   return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px 18px;margin:2px 0 10px;padding:8px 10px;background:var(--s1);border:1px solid var(--b1);border-radius:10px;">' + IVS_GS.map(g => { const d = IVS_GDEF[g[0]] || [g[1], ''], dash = g[3] === 'D', on = IVS_G.on[g[0]];
     return '<div style="display:flex;gap:8px;align-items:flex-start;font-size:11px;line-height:1.35;' + (on ? '' : 'opacity:.45;') + '"><svg width="38" height="12" style="flex:none;margin-top:2px;"><line x1="2" x2="36" y1="6" y2="6" stroke="' + g[2] + '" stroke-width="3" stroke-linecap="round"' + (dash ? ' stroke-dasharray="6 4"' : '') + '/></svg><span><b>' + ivsE(d[0]) + '</b> · <span style="color:' + (dash ? '#0f766e' : '#1d4ed8') + ';font-weight:700;">' + (dash ? 'línea punteada · días' : 'línea continua · $ millones') + '</span><br><span class="arte-mu">' + ivsE(d[1]) + '</span></span></div>'; }).join('') + '</div>';
 }
+// ═══ Descontinuado por clasificación A/B/C (Excel CLASIFICACION_DESCONTINUADOS) ═══
+const IVS_DESC_HIST = {"m":["ENE-25","FEB-25","MAR-25","ABR-25","MAY-25","JUN-25","JUL-25","AGO-25","SEP-25","OCT-25","NOV-25","DIC-25","ENE-26","FEB-26","MAR-26","ABR-26","MAY-26"],"A":[518.27,453.55,405.83,359.44,344.68,311.42,287.42,277.9,256.58,227.78,207.4,181.73,168.62,153.45,148.08,141.0,116.19],"B":[796.75,747.09,698.82,660.92,621.58,608.57,564.42,538.68,502.78,439.83,412.52,378.91,358.07,330.59,310.47,296.0,278.05],"C":[1414.14,1349.96,1244.64,1188.24,1136.8,1072.69,1030.45,983.2,910.66,844.89,820.74,803.69,788.8,726.28,698.74,687.0,656.7],"X":[15.59,15.59,15.48,15.48,15.48,15.48,15.48,15.48,1.08,1.09,0.99,0.9,0.9,0.9,0.9,0.9,0.9],"S":[176.55,160.96,145.44,33.22,32.67,32.29,31.07,29.5,29.8,26.95,25.96,25.88,25.73,24.95,24.91,24.91,24.2],"T":[2921.0,2727.15,2510.21,2257.31,2151.22,2040.45,1928.84,1844.77,1700.9,1540.54,1467.62,1391.1,1342.12,1236.16,1183.09,1149.8,1076.03]};
+var IVS_D = { open: false, hi: -1, on: { A: 1, B: 1, C: 1, T: 1, X: 0, S: 0 }, rows: [], ord: 'v', desc: true, f: {}, cls: '', mes: '' };
+const IVS_DS = [['A', 'Fácil venta · tipo A', '#4d9a2a'], ['B', 'Regular venta · tipo B', '#f59e0b'], ['C', 'Difícil venta · tipo C', '#dc2626'], ['T', 'TOTAL', '#6b7280'], ['X', 'Accesorios', '#7c3aed'], ['S', 'Sin clasificar', '#0891b2']];
+function ivsDCls(ref) { const m = (IVS.dabc && IVS.dabc.m) || {}, k = String(ref).trim(); return m[k] || m[pvClaveRef(k)] || 'S'; }
+function ivsDVivo() { const C = IVS._C; if (!C) return null; const o = { A: 0, B: 0, C: 0, X: 0, S: 0, T: 0 }; C.refs.filter(p => p.desc_).forEach(p => { const c = ivsDCls(p.ref); o[c] += p.valor; o.T += p.valor; }); Object.keys(o).forEach(k => o[k] = Math.round(o[k] / 1e6)); return o; }
+function ivsDDatos() {
+  const H = IVS_HIST, D = IVS_DESC_HIST, i0 = Math.max(0, H.m.indexOf('JUN-25')), ms = H.m.slice(i0), out = { m: ms }, viv = ivsDVivo();
+  ['A', 'B', 'C', 'X', 'S', 'T'].forEach(k => { out[k] = ms.map(m => { const j = D.m.indexOf(m); if (j >= 0) return D[k][j]; if (m === H.vivoMes) return viv ? viv[k] : null; const s = IVS_SNAP && IVS_SNAP[m]; return s && s['d' + k] != null ? s['d' + k] : null; }); });
+  return out;
+}
+function ivsDCard() {
+  if (!IVS_D.open) return '<div id="ivs-dcard"></div>';
+  const chips = IVS_DS.map(g => `<span class="chip ${IVS_D.on[g[0]] ? 'on' : ''}" style="${IVS_D.on[g[0]] ? 'border-color:' + g[2] + ';' : ''}" onclick="IVS_D.on['${g[0]}']=IVS_D.on['${g[0]}']?0:1;ivsGraf()"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${g[2]};margin-right:5px;"></span>${g[1]}</span>`).join('');
+  return `<div class="card" id="ivs-dcard" style="margin-bottom:12px;border:2px solid #4d9a2a;"><div class="ch"><div class="ct">🗂️ Descontinuado por clasificación (fácil · regular · difícil de vender)</div><div style="display:flex;gap:6px;align-items:center;"><button class="btn btn-g btn-sm" onclick="ivsDDet(IVS_HIST.m.length-1)">📋 Ver detalle actual</button><button class="btn btn-g btn-sm" onclick="IVS_D.open=false;ivsGraf()">✖ Cerrar</button></div></div><div class="cb">
+  <div class="arte-mu" style="font-size:11px;margin-bottom:6px;">Millones de pesos a costo promedio · clasificación del Excel ${ivsE((IVS.dabc && IVS.dabc.archivo) || '')} (A/B/C) · jun-25 a may-26 vienen del Excel; los meses siguientes se guardan solos con cada corte. <b>Haz clic en un mes</b> para ver el detalle por referencia.</div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">${chips}</div><div style="position:relative;" id="ivs-dsvg">${ivsDSvg()}</div></div></div>`;
+}
+function ivsDSvg() {
+  const D = ivsDDatos(), act = IVS_DS.filter(g => IVS_D.on[g[0]]), n = D.m.length, W = 1100, Ht = 340, L = 56, R = 30, T = 24, B = 30, pw = W - L - R, ph = Ht - T - B, f = v => Math.round(v).toLocaleString('es-CO');
+  if (!act.length) return '<div class="empty">Activa al menos una serie</div>';
+  const mx = Math.max(1, ...act.flatMap(g => D[g[0]].filter(v => v != null))) * 1.12, X = i => L + pw * (i + .5) / n, Y = v => T + ph - ph * v / mx;
+  let o = `<svg viewBox="0 0 ${W} ${Ht}" style="width:100%;height:auto;max-height:420px;font-family:inherit;" onmouseleave="ivsDHi(-1)">`;
+  for (let t = 0; t <= 4; t++) { const y = T + ph * t / 4; o += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="#e2e8f0"/><text x="${L - 6}" y="${y + 4}" text-anchor="end" font-size="10" fill="#64748b">${f(mx * (1 - t / 4))}</text>`; }
+  D.m.forEach((m, i) => { o += `<text x="${X(i)}" y="${Ht - 10}" text-anchor="middle" font-size="9.5" font-weight="${i === IVS_D.hi ? 800 : 500}" fill="#334155">${m}</text>`; });
+  act.forEach(g => { const pts = []; D[g[0]].forEach((v, i) => { if (v != null) pts.push([i, v]); }); if (!pts.length) return;
+    o += `<polyline fill="none" stroke="${g[2]}" stroke-width="2.6" points="${pts.map(q => X(q[0]) + ',' + Y(q[1])).join(' ')}"/>`;
+    pts.forEach(q => { o += `<circle cx="${X(q[0])}" cy="${Y(q[1])}" r="3.6" fill="${g[2]}"/><text x="${X(q[0])}" y="${Y(q[1]) - 8}" text-anchor="middle" font-size="9.5" font-weight="700" fill="${g[2]}">$ ${f(q[1])}</text>`; }); });
+  D.m.forEach((m, i) => { o += `<rect x="${X(i) - pw / n / 2}" y="${T}" width="${pw / n}" height="${ph}" fill="${i === IVS_D.hi ? 'rgba(77,154,42,.10)' : 'transparent'}" onmouseenter="ivsDHi(${i})" onclick="ivsDDet(${IVS_HIST.m.indexOf(m)})" style="cursor:pointer;"/>`; });
+  return o + '</svg>';
+}
+function ivsDHi(i) { IVS_D.hi = i; const e = document.getElementById('ivs-dsvg'); if (e) e.innerHTML = ivsDSvg(); }
+async function ivsDDet(i) {
+  const H = IVS_HIST, mes = H.m[i], vivo = i === H.m.length - 1; let rows = [], corte = '';
+  if (vivo) { const C = IVS._C; if (!C) { toast('Aún cargando inventario', 'wa'); return; } rows = C.refs.filter(p => p.desc_ && p.disp > 0).map(p => ({ ref: p.ref, desc: p.desc || '', cls: ivsDCls(p.ref), u: p.disp, v: p.valor })); corte = 'En vivo'; }
+  else { try {
+    const [mm, yy] = mes.split('-'), mi = IVS_MES3.indexOf(mm), y = 2000 + +yy, a = new Date(Date.UTC(y, mi, 6)).toISOString().slice(0, 10), b = new Date(Date.UTC(y, mi + 1, 6)).toISOString().slice(0, 10);
+    const cor = await sb.get('inventario_cortes', 'select=corte,referencia,descripcion,bodega,existencia,costo_prom&corte=gte.' + a + '&corte=lt.' + b + '&existencia=gt.0&bodega=in.(' + IVS.bodegas.join(',') + ')&limit=30000') || [];
+    if (!cor.length) { toast('No hay corte de inventario guardado para ' + mes + ': solo hay el total mensual del Excel', 'wa'); return; }
+    const u = cor.map(r => r.corte).sort().pop(), cl = IVS.clasif || {}, ds = new Set(cl.d || []), g = {}; corte = u;
+    cor.filter(r => r.corte === u && (ds.has(pvClaveRef(r.referencia)) || ds.has(String(r.referencia).trim()))).forEach(r => { const k = r.referencia; (g[k] = g[k] || { ref: k, desc: r.descripcion || '', cls: ivsDCls(k), u: 0, v: 0 }); g[k].u += +r.existencia || 0; g[k].v += (+r.existencia || 0) * (+r.costo_prom || 0); });
+    rows = Object.values(g); } catch (e) { toast('No se pudo cargar el corte: ' + e.message, 'er'); return; } }
+  IVS_D.rows = rows; IVS_D.mes = mes; IVS_D.corte = corte; IVS_D.ord = 'v'; IVS_D.desc = true; IVS_D.f = {}; IVS_D.cls = '';
+  let mo = document.getElementById('mo-dabc'); if (!mo) { mo = document.createElement('div'); mo.id = 'mo-dabc'; mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:12px;'; document.body.appendChild(mo); }
+  ivsDPintar();
+}
+const IVS_DNOM = { A: 'A · Fácil', B: 'B · Regular', C: 'C · Difícil', X: 'Accesorios', S: 'Sin clasificar' };
+function ivsDVista() { const S = IVS_D; let r = S.rows.filter(x => (!S.cls || x.cls === S.cls) && Object.keys(S.f).every(k => !S.f[k] || String(k === 'cls' ? IVS_DNOM[x.cls] : x[k]).toLowerCase().includes(S.f[k].toLowerCase()))); if (S.ord) r = r.slice().sort((a, b) => { const A = a[S.ord], B = b[S.ord], c = typeof A === 'number' ? A - B : String(A).localeCompare(String(B)); return S.desc ? -c : c; }); return r; }
+function ivsDPintar() {
+  const S = IVS_D, mo = document.getElementById('mo-dabc'); if (!mo) return; const R = ivsDVista(), E = ivsE, $ = v => '$' + Math.round(v).toLocaleString('es-CO'), col = [['ref', 'Referencia'], ['desc', 'Descripción'], ['cls', 'Clasificación'], ['u', 'Cantidad'], ['v', 'Valor']];
+  const tot = {}; S.rows.forEach(r => tot[r.cls] = (tot[r.cls] || 0) + r.v);
+  const chips = ['A', 'B', 'C', 'X', 'S'].map(c => `<span class="chip ${S.cls === c ? 'on' : ''}" onclick="IVS_D.cls=IVS_D.cls==='${c}'?'':'${c}';ivsDPintar()">${IVS_DNOM[c]} · ${$(tot[c] || 0)}</span>`).join('');
+  const th = col.map(c => `<th style="background:#0f172a;color:#fff;position:sticky;top:0;cursor:pointer;white-space:nowrap;text-align:${c[0] === 'u' || c[0] === 'v' ? 'right' : 'left'};" onclick="IVS_D.desc=IVS_D.ord==='${c[0]}'?!IVS_D.desc:false;IVS_D.ord='${c[0]}';ivsDPintar()">${c[1]}${S.ord === c[0] ? (S.desc ? ' ↓' : ' ↑') : ''}</th>`).join('');
+  const fl = col.map(c => `<th style="position:sticky;top:30px;background:#e2e8f0;"><input class="inp" style="width:100%;min-width:60px;font-size:11px;padding:2px 5px;" placeholder="Filtrar" value="${E(S.f[c[0]] || '')}" id="dabc-f-${c[0]}" oninput="IVS_D.f['${c[0]}']=this.value;clearTimeout(window._dabcT);window._dabcT=setTimeout(()=>{ivsDPintar();var e=document.getElementById('dabc-f-${c[0]}');if(e){e.focus();e.setSelectionRange(1e3,1e3)}},250)"></th>`).join('');
+  const cc = { A: '#4d9a2a', B: '#f59e0b', C: '#dc2626', X: '#7c3aed', S: '#0891b2' };
+  const body = R.slice(0, 800).map((r, i) => `<tr style="background:${i % 2 ? '#fff' : '#eff6ff'}"><td><b>${E(r.ref)}</b></td><td>${E(r.desc)}</td><td><b style="color:${cc[r.cls]}">${IVS_DNOM[r.cls]}</b></td><td style="text-align:right;">${Math.round(r.u).toLocaleString('es-CO')}</td><td style="text-align:right;">${$(r.v)}</td></tr>`).join('');
+  const sU = R.reduce((a, r) => a + r.u, 0), sV = R.reduce((a, r) => a + r.v, 0);
+  mo.innerHTML = `<div style="background:var(--w);border-radius:14px;width:100%;max-width:1000px;max-height:92vh;display:flex;flex-direction:column;"><div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><b style="font-size:14px;">🗂️ Descontinuado por clasificación · ${E(S.mes)}</b><span class="arte-mu" style="font-size:11px;">${S.corte === 'En vivo' ? 'Inventario en vivo' : 'Corte ' + E(S.corte)} · bodegas ${IVS.bodegas.join(', ')} · solo con existencia</span><span style="flex:1"></span><button class="btn btn-g btn-sm" onclick="IVS_D.f={};IVS_D.cls='';IVS_D.ord='v';IVS_D.desc=true;ivsDPintar()">✖ Quitar filtros</button><button class="btn btn-g btn-sm" onclick="ivsDExcel()">⬇ Excel de esta vista</button><button class="btn btn-g btn-sm" onclick="document.getElementById('mo-dabc').remove()">✕</button></div>
+  <div style="padding:8px 16px;display:flex;gap:6px;flex-wrap:wrap;">${chips}</div>
+  <div style="overflow:auto;padding:0 16px 12px;"><table class="cbl-t" style="width:100%;"><thead><tr>${th}</tr><tr>${fl}</tr></thead><tbody>${body}</tbody><tfoot><tr style="background:#0f172a;color:#fff;font-weight:800;position:sticky;bottom:0;"><td>${R.length} filas</td><td></td><td></td><td style="text-align:right;">${Math.round(sU).toLocaleString('es-CO')}</td><td style="text-align:right;">${$(sV)}</td></tr></tfoot></table>${R.length > 800 ? '<div class="arte-mu" style="font-size:11px;">Se muestran 800 de ' + R.length + '; filtra para ver el resto (el Excel trae todas).</div>' : ''}</div></div>`;
+}
+function ivsDExcel() {
+  const R = ivsDVista(), d = [['Referencia', 'Descripción', 'Clasificación', 'Cantidad', 'Valor']].concat(R.map(r => [r.ref, r.desc, IVS_DNOM[r.cls], r.u, Math.round(r.v)]));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(d), 'Descontinuado ABC'); XLSX.writeFile(wb, 'DESCONTINUADO_ABC_' + IVS_D.mes + '.xlsx');
+}
 // ═══ Cuarentena + averías: serie de la gráfica y detalle al hacer clic ═══
 var IVS_SNAP = null, IVS_SNAP_T = 0, IVS_AVE_BOD = ['AG'];
 // Cada mes queda guardado solo: el valor del mes en curso se guarda en configuracion.inv_hist_mensual al abrir Seguimiento; al cambiar de mes queda como cierre
@@ -20351,8 +20418,8 @@ function ivsSnapAplicar() { const H = IVS_HIST; if (!IVS_SNAP) return; H.m.forEa
 function ivsSumaBod(rows, L) { return Math.round(rows.filter(r => L.includes(r.bodega)).reduce((a, r) => a + (+r.existencia || 0) * (+r.costo_prom || 0), 0) / 1e6); }
 async function ivsSnapGuardar() {
   if (!IVS_SNAP || !IVS._vivo || !IVS_CUA || IVS_CUA === 'cargando' || Date.now() - IVS_SNAP_T < 300000) return; IVS_SNAP_T = Date.now();
-  const H = IVS_HIST, v = { lin: IVS._vivo.lin, des: IVS._vivo.des, tr: IVS._trVivo || 0, cua: ivsSumaBod(IVS_CUA.vivo, IVS_CUA_BOD), ave: ivsSumaBod(IVS_CUA.vivo, IVS_AVE_BOD), t: new Date().toISOString().slice(0, 10) }, a = IVS_SNAP[H.vivoMes];
-  if (a && a.lin === v.lin && a.des === v.des && a.tr === v.tr && a.cua === v.cua && a.ave === v.ave) return;
+  const H = IVS_HIST, v = { lin: IVS._vivo.lin, des: IVS._vivo.des, tr: IVS._trVivo || 0, cua: ivsSumaBod(IVS_CUA.vivo, IVS_CUA_BOD), ave: ivsSumaBod(IVS_CUA.vivo, IVS_AVE_BOD), t: new Date().toISOString().slice(0, 10) }, a = IVS_SNAP[H.vivoMes], dv = ivsDVivo(); if (dv) Object.keys(dv).forEach(k => v['d' + k] = dv[k]);
+  if (a && a.lin === v.lin && a.des === v.des && a.tr === v.tr && a.cua === v.cua && a.ave === v.ave && a.dT === v.dT && a.dA === v.dA) return;
   IVS_SNAP[H.vivoMes] = v; try { await sb.upsert('configuracion', { clave: 'inv_hist_mensual', valor: JSON.stringify(IVS_SNAP), tipo: 'json' }, 'clave'); } catch (e) { console.warn('No se guardó el histórico mensual:', e.message); }
 }
 var IVS_CUA_BOD = ['CU', 'AG'], IVS_CUA_NOM = { CU: 'Cuarentena', AG: 'Averías' }, IVS_CUA = null, IVS_CUA_MOT = {}, IVS_CUA_ST = { rows: [], ord: null, desc: false, f: {} };
@@ -20427,7 +20494,7 @@ function ivsAveSvg() {
     o += `<div style="position:absolute;top:6px;${left > 55 ? 'right:' + (100 - left + 2) : 'left:' + (left + 2)}%;background:#0f172a;color:#fff;border-radius:8px;padding:8px 11px;font-size:12px;line-height:1.55;pointer-events:none;"><b>${H.m[i]}</b><br>Averías: <b>${m(D.ave[i])}</b><br>Inventario disponible: <b>${m(D.tot[i])}</b><br>Averías / inventario: <b>${D.pct[i] == null ? '—' : D.pct[i].toFixed(2) + '%'}</b></div>`; }
   return o;
 }
-function ivsGraf() { const el = document.getElementById('ivs-gcard'); if (el) el.outerHTML = ivsGrafCard(); const a = document.getElementById('ivs-acard'); if (a) a.outerHTML = ivsAveCard(); }
+function ivsGraf() { const el = document.getElementById('ivs-gcard'); if (el) el.outerHTML = ivsGrafCard(); const dc = document.getElementById('ivs-dcard'); if (dc) dc.outerHTML = ivsDCard(); const a = document.getElementById('ivs-acard'); if (a) a.outerHTML = ivsAveCard(); }
 function ivsGrafSvg() {
   const H = IVS_HIST, n = H.m.length, W = 1100, Ht = 340, L = 56, R = 52, T = 18, B = 30, pw = W - L - R, ph = Ht - T - B;
   const act = IVS_GS.filter(g => IVS_G.on[g[0]]); if (!act.length) return '<div class="empty">Activa al menos una serie</div>';
