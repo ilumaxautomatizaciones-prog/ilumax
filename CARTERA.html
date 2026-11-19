@@ -1691,6 +1691,7 @@ let CCL = { rows: null, act: '', msg: '', cargando: false, q: '', fk: '' };
 const cclApi = async b => { try { const r = await fetch(CCL_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b || {}) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
 const cclBloq = r => [r.blq ? 'Bloqueado' : '', r.bcupo ? 'Bloqueo por cupo' : '', r.bmora ? 'Bloqueo por mora' : ''].filter(Boolean).join(' · ') || 'Sin bloqueo';
 const CCL_COLS = [
+  { k: 'cx', t: 'Cruce Cesce', v: cclCx, h: r => { const t = cclCx(r); const st = { 'NIT sin dígito verif.': 'background:#fde047;color:#713f12', 'Por nombre': 'background:#fb923c;color:#fff', 'Sin cruce Siesa': 'background:#ef4444;color:#fff', 'NIT exacto': 'background:#dcfce7;color:#166534' }[t]; return st ? '<span style="' + st + ';padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap">' + (t === 'NIT sin dígito verif.' ? '✎ ' : t === 'Por nombre' ? '✎ ' : '') + t + '</span>' : '<span class="n">–</span>'; } },
   { k: 'nit', t: 'NIT', v: r => r.nit }, { k: 'nombre', t: 'Cliente', v: r => r.nombre }, { k: 'suc', t: 'Suc.', v: r => r.suc, h: r => esc(r.suc) + (r.dsuc ? ' <span class="n">' + esc(r.dsuc) + '</span>' : '') },
   { k: 'cupo', t: 'Cupo aprobado', num: 1, sum: 1, v: r => Math.round(r.cupo), h: r => fm(r.cupo) },
   { k: 'fcupo', t: 'Fecha cupo', date: 1, v: r => r.fcupo },
@@ -1699,38 +1700,79 @@ const CCL_COLS = [
   { k: 'uso', t: '% cupo usado', num: 1, v: r => r.cupo > 0 ? Math.round(r.saldo / r.cupo * 100) : (r.saldo > 0 ? 999 : 0), h: r => r.cupo > 0 ? Math.round(r.saldo / r.cupo * 100) + '%' : (r.saldo > 0 ? 'Sin cupo' : '–') },
   { k: 'venc', t: 'Vencido', num: 1, sum: 1, v: r => r.venc, h: r => r.venc ? '<span style="color:#b91c1c">' + fm(r.venc) + '</span>' : '–' },
   { k: 'mora', t: 'Mora máx. (días)', num: 1, v: r => r.mora, h: r => r.mora ? r.mora : '–' },
-  { k: 'est', t: 'Estado', v: r => r.act ? 'Activo' : 'Inactivo' },
+  { k: 'est', t: 'Estado', v: r => r._solo ? '—' : (r.act ? 'Activo' : 'Inactivo') },
   { k: 'bloq', t: 'Bloqueo', v: cclBloq, h: r => { const t = cclBloq(r); return t === 'Sin bloqueo' ? '<span class="n">' + t + '</span>' : '<b style="color:#b91c1c">' + esc(t) + '</b>' + (r.mot ? ' <span class="n">' + esc(r.mot) + '</span>' : ''); } },
   { k: 'rep', t: 'Reportado', v: r => r.rep ? 'Sí' : 'No', h: r => '<span style="cursor:pointer" title="' + esc((r.orep || '') + (r.urep ? ' · ' + usrNom(r.urep) : '')) + '" onclick="cclRep(\'' + esc(r.nit) + '\')">' + (r.rep ? '<b style="color:#b91c1c">🚩 Sí</b>' : '<span class="n">No · marcar</span>') + '</span>' },
   { k: 'frep', t: 'Fecha reporte', date: 1, v: r => r.frep },
   { k: 'orep', t: 'Observación reporte', v: r => r.orep, wrap: 1 },
+  { k: 'cenit', t: 'NIT en Cesce', v: r => r.ce ? r.ce.id_cesce : '' },
+  { k: 'ceest', t: 'Cesce estado', v: r => r.ce ? r.ce.estado : '' },
+  { k: 'ceimp', t: 'Cesce concedido', num: 1, v: r => r.ce ? Math.round(r.ce.importe) : '', h: r => r.ce ? fm(r.ce.importe) : '–' },
+  { k: 'cedif', t: 'Siesa − Cesce', num: 1, v: r => r.ce && !r._solo ? Math.round(r.cupo - r.ce.importe) : '', h: r => r.ce && !r._solo ? (Math.round(r.cupo - r.ce.importe) ? '<span style="color:#b45309">' + fm(r.cupo - r.ce.importe) + '</span>' : '<span class="n">igual</span>') : '–' },
+  { k: 'cefv', t: 'Cesce vence', date: 1, v: r => r.ce ? (r.ce.f_vence || '') : '' },
+  { k: 'cecp', t: 'Pago Cesce', v: r => r.ce ? r.ce.cond_pago : '' },
+  { k: 'cecob', t: 'Cobertura', v: r => r.ce ? r.ce.cobertura : '' },
+  { k: 'ceimv', t: 'Impagos vivos', v: r => r.ce ? (r.ce.impagos ? 'Sí' : 'No') : '', h: r => r.ce && r.ce.impagos ? '<b style="color:#b91c1c">Sí</b>' : (r.ce ? 'No' : '–') },
+  { k: 'cevta', t: 'Ventas declaradas año', num: 1, v: r => r.ce ? Math.round(r.ce.ventas) : '', h: r => r.ce ? fm(r.ce.ventas) : '–' },
   { k: 'cal', t: 'Calificación', v: r => r.cal }, { k: 'cp', t: 'Cond. pago', v: r => r.cp }, { k: 'dg', t: 'Días gracia', num: 1, v: r => r.dg },
   { k: 'vend', t: 'Vendedor', v: r => r.vend || r.vcod }, { k: 'tipo', t: 'Tipo cliente', v: r => r.tipo }, { k: 'notas', t: 'Notas Siesa', v: r => r.notas, wrap: 1 }
 ];
 async function cclVista() {
-  if (!CCL.rows && !CCL.cargando) { CCL.cargando = true; $('cont').innerHTML = '<div class="err">Cargando clientes…</div>'; const j = await cclApi({ accion: 'listar' }); CCL.cargando = false; if (j && j.ok) { CCL.rows = j.rows; CCL.act = j.actualizado || ''; } else { $('cont').innerHTML = '<div class="err">' + esc((j && j.error) || 'No se pudo cargar') + '</div>'; return; } }
+  if (!CCL.rows && !CCL.cargando) { CCL.cargando = true; $('cont').innerHTML = '<div class="err">Cargando clientes…</div>'; const j = await cclApi({ accion: 'listar' }); CCL.cargando = false; if (j && j.ok) { CCL.rows = j.rows; CCL.act = j.actualizado || ''; await cclCesLeer(); } else { $('cont').innerHTML = '<div class="err">' + esc((j && j.error) || 'No se pudo cargar') + '</div>'; return; } }
   cclPintar();
 }
 const cclSobre = r => r.saldo > r.cupo && r.saldo > 0, cclBlq = r => !!(r.blq || r.bcupo || r.bmora);
-const CCL_FILT = { cupo: r => r.cupo > 0, sobre: cclSobre, blq: cclBlq, rep: r => !!r.rep };
+const cclCx = r => r._solo ? 'Sin cruce Siesa' : !r.ce ? 'Sin Cesce' : ({ exacto: 'NIT exacto', dv: 'NIT sin dígito verif.', nombre: 'Por nombre' }[r.ce.tipo_match] || 'NIT exacto');
+const CCL_FILT = { cupo: r => r.cupo > 0, sobre: cclSobre, blq: cclBlq, rep: r => !!r.rep, cev: r => !!(r.ce && r.ce.estado === 'En vigor'), cmod: r => !!(r.ce && (r.ce.tipo_match === 'dv' || r.ce.tipo_match === 'nombre')) };
+function cclUnir() {
+  const m = new Map(); (CCL.cesce || []).forEach(c => { if (c.nit) { (m.get(c.nit) || m.set(c.nit, []).get(c.nit)).push(c); } });
+  (CCL.rows || []).forEach(r => { const l = m.get(r.nit); r.ce = l ? (l.find(x => x.estado === 'En vigor') || l[0]) : null; });
+  CCL.solo = (CCL.cesce || []).filter(c => !c.nit).map(c => ({ _solo: 1, ce: c, nit: c.id_cesce, suc: '', nombre: c.nombre, dsuc: '', cupo: 0, fcupo: '', saldo: 0, venc: 0, mora: 0, blq: false, bcupo: false, bmora: false, act: false, rep: false, cal: '', cp: '', dg: 0, vend: '', vcod: '', tipo: '', notas: '' }));
+}
 function cclFilas() {
-  let R = CCL.rows || [];
+  let R = CCL.fk === 'sinx' ? (CCL.solo || []) : (CCL.rows || []);
   if (CCL.fk && CCL_FILT[CCL.fk]) R = R.filter(CCL_FILT[CCL.fk]);
   const q = (CCL.q || '').trim().toLowerCase();
-  if (q) R = R.filter(r => [r.nit, r.nombre, r.suc, r.dsuc, r.vend, r.vcod].join(' ').toLowerCase().includes(q));
+  if (q) R = R.filter(r => [r.nit, r.nombre, r.suc, r.dsuc, r.vend, r.vcod, r.ce && r.ce.id_cesce, r.ce && r.ce.nombre].join(' ').toLowerCase().includes(q));
   return R;
 }
 function cclKpis() {
   const R = CCL.rows || [], un = new Set(R.map(r => r.nit)), sobre = R.filter(cclSobre).length, blq = R.filter(cclBlq).length, rep = new Set(R.filter(r => r.rep).map(r => r.nit)).size;
   const k = (v, l, f, c) => '<div class="kpi" onclick="cclFk(\'' + f + '\')" style="cursor:pointer;' + (CCL.fk === f ? 'outline:2px solid #f5c518;background:#fffbeb' : '') + '" title="Clic para filtrar la tabla"><div class="l">' + l + '</div><div class="v" style="' + (c ? 'color:' + c : '') + '">' + v + '</div></div>';
-  const e = $('cclk'); if (e) e.innerHTML = k(un.size, 'Clientes', '') + k(R.filter(CCL_FILT.cupo).length, 'Con cupo', 'cupo') + k(sobre, 'Pasados del cupo', 'sobre', sobre ? '#b91c1c' : '') + k(blq, 'Bloqueados', 'blq', blq ? '#b91c1c' : '') + k(rep, 'Reportados', 'rep', rep ? '#b91c1c' : '');
+  const hayC = (CCL.cesce || []).length > 0, cev = R.filter(CCL_FILT.cev).length, cmod = R.filter(CCL_FILT.cmod).length, sinx = (CCL.solo || []).length;
+  const e = $('cclk'); if (e) e.innerHTML = k(un.size, 'Clientes', '') + k(R.filter(CCL_FILT.cupo).length, 'Con cupo', 'cupo') + k(sobre, 'Pasados del cupo', 'sobre', sobre ? '#b91c1c' : '') + k(blq, 'Bloqueados', 'blq', blq ? '#b91c1c' : '') + k(rep, 'Reportados', 'rep', rep ? '#b91c1c' : '')
+    + (hayC ? k(cev, 'Cesce en vigor', 'cev') + k(cmod, '✎ Cruce modificado', 'cmod', cmod ? '#b45309' : '') + k(sinx, 'Cesce sin cruce Siesa', 'sinx', sinx ? '#b91c1c' : '') : '');
 }
 function cclFk(f) { CCL.fk = (CCL.fk === f || !f) ? '' : f; cclRefrescar(); }
 function cclBuscar(v) { CCL.q = v; cclRefrescar(); }
-function cclRefrescar() { cclKpis(); xgInit('ccl', CCL_COLS, { rows: cclFilas(), limit: 800, nombre: 'Clientes_cupo' }); xgPaint('ccl'); }
+function cclRefrescar() { cclKpis(); xgInit('ccl', CCL_COLS, { rows: cclFilas(), limit: 800, nombre: 'Clientes_cupo', attr: r => { const t = cclCx(r); return t === 'Sin cruce Siesa' ? ' style="background:#fee2e2"' : (t === 'NIT sin dígito verif.' || t === 'Por nombre') ? ' style="background:#fef9c3"' : ''; } }); xgPaint('ccl'); }
+const CES_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-cesce';
+const cesApi = async b => { try { const r = await fetch(CES_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b || {}) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
+async function cclCesLeer() { const j = await cesApi({ accion: 'listar' }); if (j && j.ok) { CCL.cesce = j.rows; CCL.cesAct = j.actualizado || ''; cclUnir(); } }
+const cesNum = v => { if (typeof v === 'number') return v; const t = String(v == null ? '' : v).trim(); return t ? (parseFloat(t.replace(/\./g, '').replace(',', '.')) || 0) : 0; };
+const cesFec = v => { if (v instanceof Date) return v.toISOString().slice(0, 10); const m = String(v || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); return m ? m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0') : ''; };
+async function cclCesSubir(inp) {
+  const f = inp.files && inp.files[0]; inp.value = ''; if (!f) return;
+  CCL.msg = 'Leyendo ' + f.name + '…'; const m0 = $('cclmsg'); if (m0) m0.textContent = CCL.msg;
+  try {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true }), A = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+    const nz = x => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim(), H = (A[0] || []).map(nz), ix = n => H.indexOf(nz(n));
+    const c = { id: ix('Nº Id'), nombre: ix('Nombre'), estado: ix('Estado'), importe: ix('Imp. Concedido'), sol: ix('Imp. solicitado'), fef: ix('Fecha efecto'), fve: ix('Fecha vencimiento'), fan: ix('Fecha anulación'), cp: ix('Condición pago concedida'), cob: ix('% Cobertura RC'), imp: ix('Impagos vivos'), vta: ix('Ventas declaradas año actual'), mot: ix('Detalle del motivo de clasificación'), mov: ix('Tipo de movimiento'), fmov: ix('Fecha de movimiento') };
+    if (c.id < 0 || c.nombre < 0 || c.importe < 0) throw new Error('No encuentro las columnas «Nº Id», «Nombre» e «Imp. Concedido». ¿Es el fichero de la totalidad de la cartera?');
+    const g = (r, i) => i < 0 ? '' : r[i];
+    const rows = A.slice(1).filter(r => String(g(r, c.id)).trim()).map(r => ({ id: String(g(r, c.id)).trim(), nombre: String(g(r, c.nombre)).trim(), estado: String(g(r, c.estado)).trim(), importe: cesNum(g(r, c.importe)), importe_sol: cesNum(g(r, c.sol)), f_efecto: cesFec(g(r, c.fef)), f_vence: cesFec(g(r, c.fve)), f_anula: cesFec(g(r, c.fan)), cond_pago: String(g(r, c.cp)).trim(), cobertura: String(g(r, c.cob)).trim(), impagos: /^s/i.test(String(g(r, c.imp)).trim()), ventas: cesNum(g(r, c.vta)), motivo: String(g(r, c.mot)).trim(), tipo_mov: String(g(r, c.mov)).trim(), f_mov: cesFec(g(r, c.fmov)) }));
+    if (!rows.length) throw new Error('El archivo no trae filas');
+    CCL.msg = 'Cruzando ' + rows.length + ' clientes de Cesce con Siesa…'; if ($('cclmsg')) $('cclmsg').textContent = CCL.msg;
+    const j = await cesApi({ accion: 'cargar', rows });
+    if (!j || !j.ok) throw new Error((j && j.error) || 'No se pudo guardar');
+    const x = j.resumen; await cclCesLeer();
+    CCL.msg = '✔ Cesce cargado: ' + x.filas + ' clientes · ' + x.exacto + ' por NIT, ' + x.dv + ' sin dígito de verificación, ' + x.nombre + ' por nombre, ' + x.sin + ' sin cruce con Siesa';
+  } catch (e) { CCL.msg = '⚠ ' + (e.message || e); }
+  cclPintar();
+}
 function cclPintar() {
-  $('cont').innerHTML = '<div class="card"><h2>🪪 Clientes · cupo aprobado, cartera y reportados</h2><div style="padding:0 14px 8px;font-size:12px;color:#64748b">Cupo, fecha de aprobación, calificación y bloqueos vienen del maestro de clientes de Siesa (una fila por cliente y sucursal). Cupo disponible = cupo aprobado − saldo de cartera. «Reportado» lo marcas tú (clic en la celda) y queda guardado con fecha y observación. Clic en un cuadro de abajo para ver solo esos clientes (otro clic lo quita).</div>'
-    + '<div class="bar" style="padding:0 14px 8px;gap:8px;flex-wrap:wrap"><input id="cclq" type="search" placeholder="🔍 Buscar NIT, cliente, sucursal o vendedor…" value="' + esc(CCL.q || '') + '" oninput="cclBuscar(this.value)" style="min-width:280px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit"><button class="btn" onclick="cclActualizar()">🔄 Actualizar desde Siesa</button><span id="cclmsg" style="font-size:12px">' + (CCL.msg || (CCL.act ? 'Datos de Siesa al ' + esc(CCL.act) : 'Aún no se han traído los clientes de Siesa: pulsa Actualizar.')) + '</span></div>'
+  $('cont').innerHTML = '<div class="card"><h2>🪪 Clientes · cupo aprobado, cartera y reportados</h2><div style="padding:0 14px 8px;font-size:12px;color:#64748b">Cupo, fecha de aprobación, calificación y bloqueos vienen del maestro de clientes de Siesa (una fila por cliente y sucursal). Cupo disponible = cupo aprobado − saldo de cartera. «Reportado» lo marcas tú (clic en la celda) y queda guardado con fecha y observación. Clic en un cuadro de abajo para ver solo esos clientes (otro clic lo quita). El Excel de Cesce (cartera asegurada) se sube cada semana: se cruza por NIT, sin el dígito de verificación o por nombre, y lo que cambió de NIT queda marcado en amarillo/naranja.</div>'
+    + '<div class="bar" style="padding:0 14px 8px;gap:8px;flex-wrap:wrap"><input id="cclq" type="search" placeholder="🔍 Buscar NIT, cliente, sucursal o vendedor…" value="' + esc(CCL.q || '') + '" oninput="cclBuscar(this.value)" style="min-width:280px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit"><button class="btn" onclick="cclActualizar()">🔄 Actualizar desde Siesa</button><button class="btn" onclick="document.getElementById(\'cclfile\').click()" title="Excel «Portfolio» (totalidad de la cartera) de Cesce">📥 Subir Excel de Cesce</button><input type="file" id="cclfile" accept=".xlsx,.xls" style="display:none" onchange="cclCesSubir(this)"><span id="cclmsg" style="font-size:12px">' + (CCL.msg || ((CCL.act ? 'Datos de Siesa al ' + esc(CCL.act) : 'Aún no se han traído los clientes de Siesa: pulsa Actualizar.') + (CCL.cesAct ? ' · Cesce cargado el ' + esc(CCL.cesAct.split(' ')[0].slice(0, 10)) : ''))) + '</span></div>'
     + '<div class="kpis" id="cclk" style="padding:0 14px 8px"></div>'
     + xgBar('ccl') + '<div class="tw" id="xg_ccl"></div></div>';
   cclRefrescar();
