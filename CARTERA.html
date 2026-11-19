@@ -1687,7 +1687,7 @@ async function girFabOk(id) {
 }
 /* ===== Clientes: cupo, aprobado, bloqueos y reportados (Siesa API_v2_Clientes + cartera abierta) ===== */
 const CCL_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-clientes';
-let CCL = { rows: null, act: '', msg: '', cargando: false };
+let CCL = { rows: null, act: '', msg: '', cargando: false, q: '', fk: '' };
 const cclApi = async b => { try { const r = await fetch(CCL_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b || {}) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
 const cclBloq = r => [r.blq ? 'Bloqueado' : '', r.bcupo ? 'Bloqueo por cupo' : '', r.bmora ? 'Bloqueo por mora' : ''].filter(Boolean).join(' · ') || 'Sin bloqueo';
 const CCL_COLS = [
@@ -1711,14 +1711,29 @@ async function cclVista() {
   if (!CCL.rows && !CCL.cargando) { CCL.cargando = true; $('cont').innerHTML = '<div class="err">Cargando clientes…</div>'; const j = await cclApi({ accion: 'listar' }); CCL.cargando = false; if (j && j.ok) { CCL.rows = j.rows; CCL.act = j.actualizado || ''; } else { $('cont').innerHTML = '<div class="err">' + esc((j && j.error) || 'No se pudo cargar') + '</div>'; return; } }
   cclPintar();
 }
+const cclSobre = r => r.saldo > r.cupo && r.saldo > 0, cclBlq = r => !!(r.blq || r.bcupo || r.bmora);
+const CCL_FILT = { cupo: r => r.cupo > 0, sobre: cclSobre, blq: cclBlq, rep: r => !!r.rep };
+function cclFilas() {
+  let R = CCL.rows || [];
+  if (CCL.fk && CCL_FILT[CCL.fk]) R = R.filter(CCL_FILT[CCL.fk]);
+  const q = (CCL.q || '').trim().toLowerCase();
+  if (q) R = R.filter(r => [r.nit, r.nombre, r.suc, r.dsuc, r.vend, r.vcod].join(' ').toLowerCase().includes(q));
+  return R;
+}
+function cclKpis() {
+  const R = CCL.rows || [], un = new Set(R.map(r => r.nit)), sobre = R.filter(cclSobre).length, blq = R.filter(cclBlq).length, rep = new Set(R.filter(r => r.rep).map(r => r.nit)).size;
+  const k = (v, l, f, c) => '<div class="kpi" onclick="cclFk(\'' + f + '\')" style="cursor:pointer;' + (CCL.fk === f ? 'outline:2px solid #f5c518;background:#fffbeb' : '') + '" title="Clic para filtrar la tabla"><div class="l">' + l + '</div><div class="v" style="' + (c ? 'color:' + c : '') + '">' + v + '</div></div>';
+  const e = $('cclk'); if (e) e.innerHTML = k(un.size, 'Clientes', '') + k(R.filter(CCL_FILT.cupo).length, 'Con cupo', 'cupo') + k(sobre, 'Pasados del cupo', 'sobre', sobre ? '#b91c1c' : '') + k(blq, 'Bloqueados', 'blq', blq ? '#b91c1c' : '') + k(rep, 'Reportados', 'rep', rep ? '#b91c1c' : '');
+}
+function cclFk(f) { CCL.fk = (CCL.fk === f || !f) ? '' : f; cclRefrescar(); }
+function cclBuscar(v) { CCL.q = v; cclRefrescar(); }
+function cclRefrescar() { cclKpis(); xgInit('ccl', CCL_COLS, { rows: cclFilas(), limit: 800, nombre: 'Clientes_cupo' }); xgPaint('ccl'); }
 function cclPintar() {
-  const R = CCL.rows || [], un = new Set(R.map(r => r.nit)), sobre = R.filter(r => r.saldo > r.cupo && r.saldo > 0).length, blq = R.filter(r => r.blq || r.bcupo || r.bmora).length, rep = new Set(R.filter(r => r.rep).map(r => r.nit)).size;
-  const k = (v, l, c) => '<div class="kpi"><div class="l">' + l + '</div><div class="v" style="' + (c ? 'color:' + c : '') + '">' + v + '</div></div>';
-  $('cont').innerHTML = '<div class="card"><h2>🪪 Clientes · cupo aprobado, cartera y reportados</h2><div style="padding:0 14px 8px;font-size:12px;color:#64748b">Cupo, fecha de aprobación, calificación y bloqueos vienen del maestro de clientes de Siesa (una fila por cliente y sucursal). Cupo disponible = cupo aprobado − saldo de cartera. «Reportado» lo marcas tú (clic en la celda) y queda guardado con fecha y observación.</div>'
-    + '<div class="bar" style="padding:0 14px 8px;gap:8px;flex-wrap:wrap"><button class="btn" onclick="cclActualizar()">🔄 Actualizar desde Siesa</button><span id="cclmsg" style="font-size:12px">' + (CCL.msg || (CCL.act ? 'Datos de Siesa al ' + esc(CCL.act) : 'Aún no se han traído los clientes de Siesa: pulsa Actualizar.')) + '</span></div>'
-    + '<div class="kpis" style="padding:0 14px 8px">' + k(un.size, 'Clientes') + k(R.filter(r => r.cupo > 0).length, 'Con cupo') + k(sobre, 'Pasados del cupo', sobre ? '#b91c1c' : '') + k(blq, 'Bloqueados', blq ? '#b91c1c' : '') + k(rep, 'Reportados', rep ? '#b91c1c' : '') + '</div>'
+  $('cont').innerHTML = '<div class="card"><h2>🪪 Clientes · cupo aprobado, cartera y reportados</h2><div style="padding:0 14px 8px;font-size:12px;color:#64748b">Cupo, fecha de aprobación, calificación y bloqueos vienen del maestro de clientes de Siesa (una fila por cliente y sucursal). Cupo disponible = cupo aprobado − saldo de cartera. «Reportado» lo marcas tú (clic en la celda) y queda guardado con fecha y observación. Clic en un cuadro de abajo para ver solo esos clientes (otro clic lo quita).</div>'
+    + '<div class="bar" style="padding:0 14px 8px;gap:8px;flex-wrap:wrap"><input id="cclq" type="search" placeholder="🔍 Buscar NIT, cliente, sucursal o vendedor…" value="' + esc(CCL.q || '') + '" oninput="cclBuscar(this.value)" style="min-width:280px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit"><button class="btn" onclick="cclActualizar()">🔄 Actualizar desde Siesa</button><span id="cclmsg" style="font-size:12px">' + (CCL.msg || (CCL.act ? 'Datos de Siesa al ' + esc(CCL.act) : 'Aún no se han traído los clientes de Siesa: pulsa Actualizar.')) + '</span></div>'
+    + '<div class="kpis" id="cclk" style="padding:0 14px 8px"></div>'
     + xgBar('ccl') + '<div class="tw" id="xg_ccl"></div></div>';
-  xgInit('ccl', CCL_COLS, { rows: R, limit: 800, nombre: 'Clientes_cupo' }); xgPaint('ccl');
+  cclRefrescar();
 }
 async function cclActualizar() {
   CCL.msg = 'Trayendo clientes de Siesa… (puede tardar hasta un minuto)'; cclPintar(); const j = await cclApi({ accion: 'actualizar' });
