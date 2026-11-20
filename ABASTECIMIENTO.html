@@ -663,6 +663,7 @@ body:not(.sync-manual) [data-sync-manual]{display:none!important;}
 .xgm input:not([type=checkbox]){display:block;width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:2px}
 .xgm .li{max-height:210px;overflow:auto;border:1px solid #e2e8f0;border-radius:6px;margin:6px 0;padding:4px 6px}.xgm label{display:flex;gap:6px;align-items:center;padding:2px 0;cursor:pointer}
 #hx_hc table{width:100%;font-size:11.5px}#hx_hc th,#hx_hc td{padding:5px 6px!important;line-height:1.25}#hx_hc th{font-size:10.5px!important}#hx_hc .xgb{margin-left:2px;padding:1px 3px}#hx_hc td{white-space:nowrap}#hx_hc th{position:sticky;top:0;z-index:2;background:#0f172a;color:#fff}#hx_hc tr.tot td{font-weight:800;background:#0f172a;color:#fff;position:sticky;bottom:0}
+#hx_siesa table{width:100%;font-size:11.5px}#hx_siesa th,#hx_siesa td{padding:5px 6px!important;line-height:1.25}#hx_siesa th{font-size:10.5px!important}#hx_siesa .xgb{margin-left:2px;padding:1px 3px}#hx_siesa td{white-space:nowrap}#hx_siesa th{position:sticky;top:0;z-index:2;background:#0f172a;color:#fff}#hx_siesa tr.tot td{font-weight:800;background:#0f172a;color:#fff;position:sticky;bottom:0}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
@@ -5991,11 +5992,13 @@ function hcCalcular(){
 const HC_SEM = {verde:['#16a34a','0-7 días'], amarillo:['#eab308','8-21 días'], naranja:['#f97316','22-45 días'], rojo:['#dc2626','Más de 45 días'], gris:['#94a3b8','Sin fecha']};
 const hcDot = s => `<span title="${HC_SEM[s][1]}" style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${HC_SEM[s][0]};vertical-align:middle;margin-right:5px;"></span>`;
 function hcFiltrar(F){ const q = (HC.q||'').toLowerCase().trim(); return F.filter(r=>(!HC.est || r.grupo===HC.est) && (!q || [r.cod,r.ref,r.ean,r.desc].join(' ').toLowerCase().includes(q))); }
-const HX = { vista:'',  rows: [], cols: [], sort: null, f: {}, hide: new Set(), limit: 800 };
+const HX = { vista:'',  rows: [], cols: [], sort: null, f: {}, hide: new Set(), limit: 800, box:'hx_hc', xl:'Homecenter_vista', defSort:1 };
+const HXS = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), limit: 800, box:'hx_siesa', xl:'Siesa_CxP_Trading' };
+let HXA = HX;
 const hxNz = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
 const hxV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
 function hxView() {
-  const g = HX; let R = g.rows.filter(r => g.cols.every(c => {
+  const g = HXA; let R = g.rows.filter(r => g.cols.every(c => {
     const f = g.f[c.k]; if (!f) return true; const v = hxV(c, r);
     if (f.sel && !f.sel.has(String(v))) return false;
     if (c.num || c.date) {
@@ -6005,12 +6008,12 @@ function hxView() {
     return true;
   }));
   if (g.sort) { const c = g.cols.find(x => x.k === g.sort.k), d = g.sort.dir; if (c) R = R.map((r, i) => [r, i]).sort((a, b) => { const x = hxV(c, a[0]), y = hxV(c, b[0]); let o; if (c.num) o = (x === '' ? -Infinity : Number(x)) - (y === '' ? -Infinity : Number(y)); else o = String(x).localeCompare(String(y), 'es', { numeric: true }); return (o || a[1] - b[1]) * (o ? d : 1); }).map(x => x[0]); }
-  else R = R.map((r, i) => [r, i]).sort((a, b) => (a[0].stock === b[0].stock ? 0 : a[0].stock === 'agotada' ? -1 : 1) || ((a[0].total||0) - (b[0].total||0)) || (a[1] - b[1])).map(x => x[0]);
+  else if (g.defSort) R = R.map((r, i) => [r, i]).sort((a, b) => (a[0].stock === b[0].stock ? 0 : a[0].stock === 'agotada' ? -1 : 1) || ((a[0].total||0) - (b[0].total||0)) || (a[1] - b[1])).map(x => x[0]);
   return R;
 }
 const hxOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !== '' && f.max != null));
 function hxPaint() {
-  const g = HX, box = document.getElementById('hx_hc'); if (!box) return; const V = hxView(), cols = g.cols.filter(c => !g.hide.has(c.k));
+  const g = HXA, box = document.getElementById(g.box); if (!box) return; const V = hxView(), cols = g.cols.filter(c => !g.hide.has(c.k));
   const al = c => c.num ? 'right' : 'left';
   const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="xgh" style="text-align:' + al(c) + '"><span style="cursor:pointer" onclick="hxSort(\'' + c.k + '\')">' + reabastEsc(c.t) + s + '</span><button class="xgb' + (hxOn(g.f[c.k]) ? ' on' : '') + '" onclick="hxMenu(event,\'' + c.k + '\')">▾</button></th>'; }).join('');
   const rows = V.slice(0, g.limit).map((r, i) => '<tr style="background:' + (i % 2 ? '#eff6ff' : '#fff') + '">' + cols.map(c => '<td style="text-align:' + al(c) + (c.mono ? ';font-family:monospace' : '') + (c.wrap ? ';white-space:normal;min-width:150px;max-width:230px' : '') + '">' + (c.h ? c.h(r) : reabastEsc(String(hxV(c, r)))) + '</td>').join('') + '</tr>').join('');
@@ -6018,20 +6021,20 @@ function hxPaint() {
   box.innerHTML = '<table><thead><tr>' + th + '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + cols.length + '" style="text-align:center;padding:20px;color:#64748b">Sin resultados</td></tr>') + '</tbody><tfoot>' + tot + '</tfoot></table>' + (V.length > g.limit ? '<div class="foot">Se muestran ' + g.limit + ' de ' + V.length + '; filtra para ver el resto (el Excel trae todas).</div>' : '');
   
 }
-function hxSort(k) { const g = HX; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; hxPaint(); }
-function hxLimpiar() { HX.f = {}; HX.sort = null; hxPaint(); }
+function hxSort(k) { const g = HXA; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; hxPaint(); }
+function hxLimpiar() { HXA.f = {}; HXA.sort = null; hxPaint(); }
 function hxCerrar() { const m = document.getElementById('xgm'); if (m) m.remove(); }
 document.addEventListener('click', hxCerrar);
 function hxPos(d, ev) { const b = ev.currentTarget.getBoundingClientRect(); d.style.top = Math.max(8, Math.min(b.bottom + 4, innerHeight - 440)) + 'px'; d.style.left = Math.max(8, Math.min(b.left - 120, innerWidth - 280)) + 'px'; }
 function hxCols(ev) {
-  ev.stopPropagation(); hxCerrar(); const g = HX, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); hxPos(d, ev);
+  ev.stopPropagation(); hxCerrar(); const g = HXA, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); hxPos(d, ev);
   d.innerHTML = '<b>Columnas visibles</b><div class="li" style="max-height:300px">' + g.cols.map((c, i) => '<label><input type="checkbox" ' + (g.hide.has(c.k) ? '' : 'checked') + ' onchange="hxToggle(' + i + ',this.checked)"> ' + reabastEsc(c.t) + '</label>').join('') + '</div>';
   document.body.appendChild(d);
 }
-function hxToggle(i, on) { const g = HX, k = g.cols[i].k; if (on) g.hide.delete(k); else g.hide.add(k); hxPaint(); }
+function hxToggle(i, on) { const g = HXA, k = g.cols[i].k; if (on) g.hide.delete(k); else g.hide.add(k); hxPaint(); }
 
 function hxMenu(ev, k) {
-  ev.stopPropagation(); hxCerrar(); const g = HX, c = g.cols.find(x => x.k === k), f = g.f[k] || {}, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); hxPos(d, ev);
+  ev.stopPropagation(); hxCerrar(); const g = HXA, c = g.cols.find(x => x.k === k), f = g.f[k] || {}, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); hxPos(d, ev);
   const vals = c.num || c.date ? null : [...new Set(g.rows.map(r => String(hxV(c, r))))].sort((a, b) => a.localeCompare(b, 'es', { numeric: true })).slice(0, 600);
   HXM = { k, vals };
   const num = c.num ? 'menor a mayor' : 'A → Z', num2 = c.num ? 'mayor a menor' : 'Z → A';
@@ -6042,16 +6045,16 @@ function hxMenu(ev, k) {
     + '<div style="display:flex;gap:6px;margin-top:8px"><button class="btn" style="flex:1" onclick="hxAplicar()">Aplicar</button><button class="btn" style="flex:1" onclick="hxQuitar()">Quitar filtro</button></div>';
   document.body.appendChild(d);
 }
-function hxOrden(dir) { HX.sort = { k: HXM.k, dir }; hxCerrar(); hxPaint(); }
+function hxOrden(dir) { HXA.sort = { k: HXM.k, dir }; hxCerrar(); hxPaint(); }
 function hxBuscar(t) { const q = hxNz(t); document.querySelectorAll('#xgLi label').forEach(l => { const ok = !q || l.dataset.t.includes(q); l.style.display = ok ? '' : 'none'; l.querySelector('input').checked = ok; }); const a = document.getElementById('xgAll'); if (a) a.checked = true; }
 function hxTodos(on) { document.querySelectorAll('#xgLi label').forEach(l => { if (l.style.display !== 'none') l.querySelector('input').checked = on; }); }
 function hxAplicar() {
-  const g = HX, c = g.cols.find(x => x.k === HXM.k), f = {};
+  const g = HXA, c = g.cols.find(x => x.k === HXM.k), f = {};
   if (c.num || c.date) { const mn = document.getElementById('xgMin').value.trim().replace(',', '.'), mx = document.getElementById('xgMax').value.trim().replace(',', '.'); f.min = mn; f.max = mx; if (c.num && ((mn !== '' && isNaN(+mn)) || (mx !== '' && isNaN(+mx)))) { alert('Escribe números válidos.'); return; } }
   if (HXM.vals) { const chk = [...document.querySelectorAll('.xgc')], on = chk.filter(x => x.checked).map(x => HXM.vals[+x.dataset.i]); if (on.length < chk.length) f.sel = new Set(on); }
   if (hxOn(f)) g.f[HXM.k] = f; else delete g.f[HXM.k]; hxCerrar(); hxPaint();
 }
-function hxQuitar() { delete HX.f[HXM.k]; hxCerrar(); hxPaint(); }
+function hxQuitar() { delete HXA.f[HXM.k]; hxCerrar(); hxPaint(); }
 const homDot = s => '<span title="' + HOM_SEM[s][1] + '" style="display:inline-block;width:11px;height:11px;border-radius:50%;background:' + HOM_SEM[s][0] + ';vertical-align:middle;margin-right:5px"></span>';
 const HX_COLS = [
   { k: 'cod', t: 'Código', v: r => r.cod, mono: 1 }, { k: 'ref', t: 'Ref.', v: r => r.ref, mono: 1 }, { k: 'desc', t: 'Descripción', v: r => String(r.desc || ''), wrap: 1 },
@@ -6063,13 +6066,13 @@ const HX_COLS = [
   { k: 'dias', t: 'Días', v: r => r.dias == null ? '' : r.dias, num: 1 },
   { k: 'unds', t: 'Unds', v: r => r.prox ? r.prox.unds : '', num: 1, sum: 1, h: r => r.prox ? cblN(r.prox.unds) + (r.nLL>1?' <span title="Hay '+r.nLL+' llegadas; en camino total '+cblN(r.camino)+' unds" style="color:var(--mu);">(+'+(r.nLL-1)+')</span>':'') : '—' }];
 function hcTabla(F){
-  HX.rows = F; HX.cols = HX_COLS; if(HX.vista !== HC.vista){ HX.vista = HC.vista; HX.f = {}; HX.sort = null; }
+  HXA = HX; HX.rows = F; HX.cols = HX_COLS; if(HX.vista !== HC.vista){ HX.vista = HC.vista; HX.f = {}; HX.sort = null; }
   setTimeout(hxPaint, 0); return '<div class="tw" id="hx_hc" style="max-height:calc(100vh - 260px);overflow:auto;"></div>';
 }
 function hxExcel(){
-  const V = hxView(), wb = XLSX.utils.book_new(), cols = HX.cols.filter(c=>!HX.hide.has(c.k));
+  const V = hxView(), wb = XLSX.utils.book_new(), cols = HXA.cols.filter(c=>!HXA.hide.has(c.k));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(V.map(r=>{ const o = {}; cols.forEach(c=>{ o[c.t] = hxV(c, r); }); return o; })), 'Vista actual');
-  XLSX.writeFile(wb, 'Homecenter_vista_' + new Date().toISOString().slice(0,10) + '.xlsx');
+  XLSX.writeFile(wb, HXA.xl + '_' + new Date().toISOString().slice(0,10) + '.xlsx');
 }
 function hcResumenHtml(R){
   const pull = R.filter(r=>r.rep==='PULL'), ag = pull.filter(r=>r.stock==='agotada'), act = pull.filter(r=>r.grupo==='Activo'), agAct = ag.filter(r=>r.grupo==='Activo'), prox = pull.filter(r=>r.stock==='proxima');
@@ -9012,11 +9015,16 @@ function tcxpSiesaHtml(){
   if(!TCXP.verSiesa) return '';
   const E = reabastEsc, T = TCXP.siesa && TCXP.siesa.todas;
   if(!T) return '<div class="alert" style="margin-bottom:10px;">Siesa no respondió; no hay datos para mostrar.</div>';
-  const n = v => v ? Number(v).toLocaleString('es-CO',{maximumFractionDigits:2}) : '', tr = T.slice().sort((a,b)=>a.cuenta.localeCompare(b.cuenta)||a.vence.localeCompare(b.vence));
-  return `<div class="card" style="margin-bottom:10px;"><div class="ch"><div class="ct">Lo que devuelve Siesa (consulta API_v2_CxP_General, NIT ${TCXP_NIT}) · ${T.length} filas</div><button class="btn btn-g btn-xs" onclick="TCXP.verSiesa=false;comprasPintar()">✖ Cerrar</button></div><div class="cb">
-  <div style="font-size:11px;color:var(--mu);margin-bottom:6px;">Campos que trae Siesa: cuenta (f253_id), fechas, nota, total débito y total crédito, todo en pesos. No trae columna en dólares; los US$ salen del PDF (o aprox. con la TRM implícita).</div>
-  <div class="tw" style="max-height:340px;overflow:auto;"><table style="width:100%;font-size:11.5px;"><thead><tr><th>Cuenta</th><th>Fecha</th><th>Vence</th><th>Nota</th><th style="text-align:right;">Débito COP</th><th style="text-align:right;">Crédito COP</th><th style="text-align:right;">Saldo COP</th><th style="text-align:right;">US$</th><th>US$ de</th></tr></thead><tbody>${tr.map(x=>`<tr><td>${E(x.cuenta)}</td><td>${E(x.fecha)}</td><td>${E(x.vence)}</td><td>${E(x.nota)}</td><td style="text-align:right;">${n(x.db)}</td><td style="text-align:right;">${n(x.cr)}</td><td style="text-align:right;font-weight:700;">${n(x.cr-x.db)}</td><td style="text-align:right;">${n(x.usd)}</td><td>${E(x.usdTipo)}</td></tr>`).join('')}</tbody></table></div></div></div>`;
+  HXS.rows = T.slice().sort((a,b)=>a.cuenta.localeCompare(b.cuenta)||a.vence.localeCompare(b.vence)); HXS.cols = TCXP_SCOLS; HXA = HXS; setTimeout(hxPaint,0);
+  return `<div class="card" style="margin-bottom:10px;"><div class="ch"><div class="ct">Lo que devuelve Siesa (consulta API_v2_CxP_General, NIT ${TCXP_NIT}) · ${T.length} filas</div><div><button class="btn btn-g btn-sm" onclick="HXA=HXS;hxCols(event)">▦ Columnas</button> <button class="btn btn-g btn-sm" onclick="HXA=HXS;hxLimpiar()">✖ Quitar filtros y orden</button> <button class="btn btn-g btn-sm" onclick="HXA=HXS;hxExcel()">⬇ Excel de esta vista</button> <button class="btn btn-g btn-xs" onclick="TCXP.verSiesa=false;comprasPintar()">✖ Cerrar</button></div></div><div class="cb">
+  <div style="font-size:11px;color:var(--mu);margin-bottom:6px;">Campos que trae Siesa: cuenta (f253_id), fechas, nota, total débito y total crédito, todo en pesos. No trae columna en dólares; los US$ salen del PDF (o aprox. con la TRM implícita). Cuenta 2210… = por pagar a la Trading; 13300510 = anticipos.</div>
+  <div class="tw" id="hx_siesa" style="max-height:340px;overflow:auto;"></div></div></div>`;
 }
+const TCXP_SCOLS = [
+  { k:'cuenta', t:'Cuenta', v:r=>r.cuenta, mono:1 }, { k:'fecha', t:'Fecha', v:r=>r.fecha, date:1 }, { k:'vence', t:'Vence', v:r=>r.vence, date:1 },
+  { k:'nota', t:'Nota', v:r=>r.nota, wrap:1 }, { k:'db', t:'Débito COP', v:r=>Math.round(r.db), num:1, sum:1 }, { k:'cr', t:'Crédito COP', v:r=>Math.round(r.cr), num:1, sum:1 },
+  { k:'sal', t:'Saldo COP', v:r=>Math.round(r.cr-r.db), num:1, sum:1, h:r=>'<b>'+Math.round(r.cr-r.db).toLocaleString('es-CO')+'</b>' },
+  { k:'usd', t:'US$', v:r=>r.usd==null?'':Math.round(r.usd*100)/100, num:1, sum:1 }, { k:'ut', t:'US$ de', v:r=>r.usdTipo||'' }];
 function tcxpHtml(){
   const E = reabastEsc;
   if(!TCXP.cargado){ tcxpCargar(); return '<div class="empty"><div class="empty-t">Cargando…</div></div>'; }
