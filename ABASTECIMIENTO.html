@@ -8904,7 +8904,7 @@ function comprasResumenOC(o){
   return {fob, inter, cant, pct, extra, dep, saldo:inter+extra-dep, det};
 }
 /* ───────── Pagos Trading: calendario de pagos de la CxP a ILUMAX TRADING (reporte «Estado de cuentas CxP» de contabilidad, en USD) ───────── */
-const TCXP = {cfg:null, vista:'semana', q:'', sort:{k:'vence',d:1}, cargado:false, trm:(function(){ try{ return Number(localStorage.getItem('tcxp_trm'))||0; }catch(e){ return 0; } })()};
+const TCXP = {open:{}, cfg:null, vista:'semana', q:'', sort:{k:'vence',d:1}, cargado:false, trm:(function(){ try{ return Number(localStorage.getItem('tcxp_trm'))||0; }catch(e){ return 0; } })()};
 const tcxpIso = s => { const m = String(s||'').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0') : ''; };
 const tcxpUsd = n => (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 function tcxpHoy(){ const d = new Date(); d.setHours(12,0,0,0); return d; }
@@ -8945,6 +8945,8 @@ function tcxpGrupo(F, clave){
   return Object.values(g).sort((a,b)=>a.k.localeCompare(b.k));
 }
 function tcxpSet(k,v){ TCXP[k] = v; comprasPintar(); }
+function tcxpAbrir(k){ TCXP.open[k] = !TCXP.open[k]; comprasPintar(); }
+function tcxpSub(g, cols){ return g.docs.slice().sort((a,b)=>a.vence.localeCompare(b.vence)||a.doc.localeCompare(b.doc)).map(x=>`<tr style="background:#f8fafc;font-size:11.5px;"><td colspan="${cols}" style="padding:3px 6px 3px 34px;"><span style="font-family:monospace;">${reabastEsc(x.doc)}</span> · ${reabastEsc(x.nota||x.oc)} · vence ${reabastEsc(x.vence)} (${x.dias<0?'vencida '+(-x.dias)+' d':x.dias===0?'hoy':'en '+x.dias+' d'}) · <b>US$ ${tcxpUsd(x.saldo)}</b>${TCXP.trm?' · $ '+Math.round(x.saldo*TCXP.trm).toLocaleString('es-CO'):''}</td></tr>`).join(''); }
 function tcxpOrden(k){ TCXP.sort = TCXP.sort.k===k ? {k, d:-TCXP.sort.d} : {k, d:1}; comprasPintar(); }
 function tcxpHtml(){
   const E = reabastEsc;
@@ -8963,10 +8965,10 @@ function tcxpHtml(){
   if(TCXP.vista==='semana' || TCXP.vista==='mes'){
     const esS = TCXP.vista==='semana', G = tcxpGrupo(F, x=> x.dias<0 ? '0000 Vencido' : (esS ? tcxpLunes(x.vence) : x.vence.slice(0,7))), mx = Math.max(...G.map(g=>g.v),1); let acum = 0;
     const lbl = k => k.startsWith('0000') ? '🔴 Vencido (por pagar ya)' : esS ? 'Semana del '+new Date(k+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short'}) : new Date(k+'-15T12:00:00').toLocaleDateString('es-CO',{month:'long',year:'numeric'});
-    cuerpo = `<div class="tw"><table><thead><tr><th>${esS?'Semana (vencimiento)':'Mes (vencimiento)'}</th><th style="text-align:right;">Facturas</th><th style="text-align:right;">A pagar US$</th>${trm?'<th style="text-align:right;">A pagar COP</th>':''}<th></th><th style="text-align:right;">Acumulado US$</th><th style="text-align:right;">% del total</th></tr></thead><tbody>${G.map(g=>{ acum += g.v; return `<tr><td><b>${E(lbl(g.k))}</b></td><td style="text-align:right;">${g.n}</td><td style="text-align:right;font-weight:700;">${tcxpUsd(g.v)}</td>${cop(g.v)}<td>${barra(g.v,mx)}</td><td style="text-align:right;">${tcxpUsd(acum)}</td><td style="text-align:right;">${tot?Math.round(g.v/tot*1000)/10:0}%</td></tr>`; }).join('')}</tbody><tfoot><tr class="tot" style="font-weight:800;background:#0f172a;color:#fff;"><td>Total</td><td style="text-align:right;">${F.length}</td><td style="text-align:right;">${tcxpUsd(tot)}</td>${trm?'<td style="text-align:right;">$ '+Math.round(tot*trm).toLocaleString('es-CO')+'</td>':''}<td></td><td></td><td></td></tr></tfoot></table></div>`;
+    cuerpo = `<div class="tw"><table><thead><tr><th>${esS?'Semana (vencimiento)':'Mes (vencimiento)'}</th><th style="text-align:right;">Facturas</th><th style="text-align:right;">A pagar US$</th>${trm?'<th style="text-align:right;">A pagar COP</th>':''}<th></th><th style="text-align:right;">Acumulado US$</th><th style="text-align:right;">% del total</th></tr></thead><tbody>${G.map(g=>{ acum += g.v; const kk = TCXP.vista+g.k, op = !!TCXP.open[kk]; return `<tr style="cursor:pointer;" onclick="tcxpAbrir('${kk}')" title="Clic para ver las facturas"><td><b>${op?'▼':'▶'} ${E(lbl(g.k))}</b></td><td style="text-align:right;">${g.n}</td><td style="text-align:right;font-weight:700;">${tcxpUsd(g.v)}</td>${cop(g.v)}<td>${barra(g.v,mx)}</td><td style="text-align:right;">${tcxpUsd(acum)}</td><td style="text-align:right;">${tot?Math.round(g.v/tot*1000)/10:0}%</td></tr>`+(op?tcxpSub(g,7):''); }).join('')}</tbody><tfoot><tr class="tot" style="font-weight:800;background:#0f172a;color:#fff;"><td>Total</td><td style="text-align:right;">${F.length}</td><td style="text-align:right;">${tcxpUsd(tot)}</td>${trm?'<td style="text-align:right;">$ '+Math.round(tot*trm).toLocaleString('es-CO')+'</td>':''}<td></td><td></td><td></td></tr></tfoot></table></div>`;
   } else if(TCXP.vista==='ventana'){
     const G = tcxpGrupo(F, x=>tcxpBucket(x.dias).join(' ')), mx = Math.max(...G.map(g=>g.v),1);
-    cuerpo = `<div class="tw"><table><thead><tr><th>Ventana (desde hoy)</th><th style="text-align:right;">Facturas</th><th style="text-align:right;">A pagar US$</th>${trm?'<th style="text-align:right;">COP</th>':''}<th></th></tr></thead><tbody>${G.map(g=>`<tr><td><b>${E(g.k.slice(2))}</b></td><td style="text-align:right;">${g.n}</td><td style="text-align:right;font-weight:700;">${tcxpUsd(g.v)}</td>${cop(g.v)}<td>${barra(g.v,mx)}</td></tr>`).join('')}</tbody></table></div>`;
+    cuerpo = `<div class="tw"><table><thead><tr><th>Ventana (desde hoy)</th><th style="text-align:right;">Facturas</th><th style="text-align:right;">A pagar US$</th>${trm?'<th style="text-align:right;">COP</th>':''}<th></th></tr></thead><tbody>${G.map(g=>{ const kk = 'v'+g.k, op = !!TCXP.open[kk]; return `<tr style="cursor:pointer;" onclick="tcxpAbrir('${kk}')" title="Clic para ver las facturas"><td><b>${op?'▼':'▶'} ${E(g.k.slice(2))}</b></td><td style="text-align:right;">${g.n}</td><td style="text-align:right;font-weight:700;">${tcxpUsd(g.v)}</td>${cop(g.v)}<td>${barra(g.v,mx)}</td></tr>`+(op?tcxpSub(g,5):''); }).join('')}</tbody></table></div>`;
   } else {
     const s = TCXP.sort, val = (x,k)=> k==='vence'||k==='fecha'?x[k] : k==='saldo'||k==='dias'?x[k] : String(x[k]||'');
     const L = F.slice().sort((a,b)=>{ const A = val(a,s.k), B = val(b,s.k); return (A<B?-1:A>B?1:0)*s.d || a.doc.localeCompare(b.doc); });
@@ -8975,16 +8977,57 @@ function tcxpHtml(){
   }
   return `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">${up}<input class="inp" placeholder="🔎 Documento, OC…" value="${E(TCXP.q)}" style="width:190px;" oninput="TCXP.q=this.value;clearTimeout(TCXP._t);TCXP._t=setTimeout(()=>{comprasPintar();const i=document.querySelector('#compras-mod input[placeholder^=\\'🔎 Documento\\']');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},300)">
     <label style="font-size:12px;">TRM <input class="inp" type="number" style="width:90px;" value="${trm||''}" placeholder="opcional" onchange="TCXP.trm=Number(this.value)||0;try{localStorage.setItem('tcxp_trm',TCXP.trm)}catch(e){};comprasPintar()"></label>
-    <button class="btn btn-g btn-sm" onclick="tcxpExcel()">⬇ Excel</button><span style="font-size:11px;color:var(--mu);">Reporte: ${E(C.archivo||'')} · cargado ${E(C.fecha||'')} ${E(C.quien||'')}</span></div>
+    <button class="btn btn-bl btn-sm" onclick="tcxpExcel()" title="Excel con Resumen, semanas, meses, ventanas, vencido y detalle con fórmulas">📊 Informe Excel</button><span style="font-size:11px;color:var(--mu);">Reporte: ${E(C.archivo||'')} · cargado ${E(C.fecha||'')} ${E(C.quien||'')}</span></div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">${kp('US$ '+tcxpUsd(tot),'Total por pagar a la Trading ('+F.length+' facturas)')}${kp('US$ '+tcxpUsd(venT),'Vencido ('+ven.length+' facturas)','#dc2626')}${kp('US$ '+tcxpUsd(s7),'Vence en los próximos 7 días','#ea580c')}${kp('US$ '+tcxpUsd(s30),'Vence en los próximos 30 días')}</div>
   <div style="display:inline-flex;border:1px solid var(--b2);border-radius:8px;overflow:hidden;margin-bottom:10px;">${bt('semana','📅 Por semana')}${bt('mes','🗓️ Por mes')}${bt('ventana','⏱️ Ventanas')}${bt('detalle','📋 Detalle')}</div>${cuerpo}
   <div style="font-size:11px;color:var(--mu);margin-top:8px;">Fecha de pago = fecha de vencimiento de cada factura. «Vencido» = ya pasó la fecha. Días calculados contra hoy. Solo incluye lo que trae el reporte de contabilidad; para actualizar, sube el PDF nuevo.</div>`;
 }
 async function tcxpExcel(){
-  if(!TCXP.cfg) return; const R = TCXP.cfg.filas.map(x=>({...x, dias:tcxpDias(x.vence)})), wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(R.map(x=>({Documento:x.doc, 'OC / nota':x.nota, 'Fecha factura':x.fecha, Vence:x.vence, 'Días hoy':x.dias, 'Saldo US$':x.saldo, 'Semana (lunes)':x.dias<0?'Vencido':tcxpLunes(x.vence)}))), 'Detalle');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tcxpGrupo(R, x=>x.dias<0?'Vencido':tcxpLunes(x.vence)).map(g=>({'Semana (lunes)':g.k, Facturas:g.n, 'A pagar US$':Math.round(g.v*100)/100}))), 'Por semana');
-  XLSX.writeFile(wb, 'Pagos_Trading_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  if(!TCXP.cfg) return;
+  try{
+    await comprasCargarExcelJS();
+    const trm = TCXP.trm, hoy = tcxpHoy(), R = TCXP.cfg.filas.map(x=>({...x, dias:tcxpDias(x.vence)})).sort((a,b)=>a.vence.localeCompare(b.vence)||a.doc.localeCompare(b.doc));
+    const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX';
+    const AZ = 'FF0F172A', hdr = (ws,n)=>{ const r = ws.getRow(n); r.eachCell(c=>{ c.font = {bold:true, color:{argb:'FFFFFFFF'}, name:'Arial', size:10}; c.fill = {type:'pattern', pattern:'solid', fgColor:{argb:AZ}}; c.alignment = {vertical:'middle', horizontal:'center', wrapText:true}; }); r.height = 24; };
+    const dt = iso => new Date(iso+'T12:00:00'), semK = x => x.dias<0 ? 'Vencido' : 'Sem. '+tcxpLunes(x.vence), mesK = x => x.dias<0 ? 'Vencido' : x.vence.slice(0,7), venK = x => tcxpBucket(x.dias)[1];
+    // Detalle
+    const D = wb.addWorksheet('Detalle'), n = R.length, ult = n+1;
+    D.addRow(['Documento','OC / nota','Fecha factura','Vence','Días (hoy)','Saldo US$','Semana','Mes','Ventana'].concat(trm?['Saldo COP']:[]));
+    hdr(D,1);
+    R.forEach((x,i)=>{ const r = i+2, w = D.addRow([x.doc, x.nota||x.oc, dt(x.fecha), dt(x.vence), {formula:`D${r}-TODAY()`}, x.saldo, semK(x), mesK(x), venK(x)].concat(trm?[{formula:`F${r}*Resumen!$B$3`}]:[]));
+      w.getCell(3).numFmt = 'dd/mm/yyyy'; w.getCell(4).numFmt = 'dd/mm/yyyy'; w.getCell(5).numFmt = '0'; w.getCell(6).numFmt = '#,##0.00'; if(trm) w.getCell(10).numFmt = '#,##0';
+      if(x.dias<0) w.getCell(5).font = {color:{argb:'FFDC2626'}, bold:true}; else if(x.dias<=7) w.getCell(5).font = {color:{argb:'FFEA580C'}, bold:true}; });
+    const tr = D.addRow(['Total','','','','',{formula:`SUBTOTAL(9,F2:F${ult})`}].concat(['','','']).concat(trm?[{formula:`SUBTOTAL(9,J2:J${ult})`}]:[]));
+    tr.eachCell(c=>{ c.font = {bold:true, color:{argb:'FFFFFFFF'}}; c.fill = {type:'pattern', pattern:'solid', fgColor:{argb:AZ}}; }); tr.getCell(6).numFmt = '#,##0.00'; if(trm) tr.getCell(10).numFmt = '#,##0';
+    [22,34,13,13,11,16,16,11,16,16].forEach((w,i)=>D.getColumn(i+1).width = w); D.views = [{state:'frozen', ySplit:1}]; D.autoFilter = {from:'A1', to:String.fromCharCode(64+(trm?10:9))+'1'};
+    // Resumen
+    const S = wb.addWorksheet('Resumen', {views:[{showGridLines:false}]}); S.getColumn(1).width = 42; S.getColumn(2).width = 20; S.getColumn(3).width = 14;
+    S.addRow(['Pagos a ILUMAX TRADING CORP (CxP en US$)']); S.getRow(1).font = {bold:true, size:14};
+    S.addRow(['Reporte de contabilidad', (TCXP.cfg.archivo||'')+' · '+(TCXP.cfg.fecha||'')]);
+    S.addRow(['TRM (COP por US$, editable)', trm||0]); S.getCell('B3').fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FFFFFF00'}}; S.getCell('B3').font = {color:{argb:'FF0000FF'}, bold:true}; S.getCell('B3').numFmt = '#,##0.00';
+    S.addRow([]);
+    const K = [['Total por pagar US$', `SUM(Detalle!F2:F${ult})`], ['Total por pagar COP', `B5*B3`], ['Vencido US$', `SUMIFS(Detalle!F2:F${ult},Detalle!E2:E${ult},"<0")`], ['Vence en 7 días US$', `SUMIFS(Detalle!F2:F${ult},Detalle!E2:E${ult},">=0",Detalle!E2:E${ult},"<=7")`], ['Vence en 30 días US$', `SUMIFS(Detalle!F2:F${ult},Detalle!E2:E${ult},">=0",Detalle!E2:E${ult},"<=30")`], ['Facturas', `COUNTA(Detalle!A2:A${ult})`]];
+    K.forEach((k,i)=>{ const r = S.addRow([k[0], {formula:k[1]}]); r.getCell(1).font = {bold:true}; r.getCell(2).numFmt = i===5 ? '0' : '#,##0.00'; });
+    S.addRow([]);
+    const tabla = (titulo, claves, colD)=>{
+      S.addRow([titulo]).getCell(1).font = {bold:true, size:12}; const h = S.addRow([titulo.replace(/^Por /,'').replace(/^./,c=>c.toUpperCase()),'A pagar US$','Facturas'].concat(trm?['A pagar COP']:[]).concat(['% del total','Acumulado US$'])); hdr(S,h.number);
+      const ini = h.number+1; claves.forEach((k,i)=>{ const r = ini+i, w = S.addRow([k, {formula:`SUMIFS(Detalle!$F$2:$F$${ult},Detalle!$${colD}$2:$${colD}$${ult},A${r})`}, {formula:`COUNTIFS(Detalle!$${colD}$2:$${colD}$${ult},A${r})`}].concat(trm?[{formula:`B${r}*$B$3`}]:[]).concat([{formula:`B${r}/$B$5`}, {formula:`SUM($B$${ini}:B${r})`}]));
+        w.getCell(2).numFmt = '#,##0.00'; const c0 = trm?5:4; if(trm) w.getCell(4).numFmt = '#,##0'; w.getCell(c0).numFmt = '0.0%'; w.getCell(c0+1).numFmt = '#,##0.00'; });
+      const fin = ini+claves.length-1, t = S.addRow(['Total',{formula:`SUM(B${ini}:B${fin})`},{formula:`SUM(C${ini}:C${fin})`}].concat(trm?[{formula:`SUM(D${ini}:D${fin})`}]:[])); t.eachCell(c=>{ c.font = {bold:true, color:{argb:'FFFFFFFF'}}; c.fill = {type:'pattern', pattern:'solid', fgColor:{argb:AZ}}; }); t.getCell(2).numFmt = '#,##0.00'; S.addRow([]);
+    };
+    const uniq = f => [...new Set(R.map(f))].sort();
+    tabla('Por semana de vencimiento', uniq(semK), 'G'); tabla('Por mes de vencimiento', uniq(mesK), 'H'); tabla('Por ventana desde hoy', ['Vencido','0-7 días','8-14 días','15-30 días','31-60 días','Más de 60 días'].filter(v=>R.some(x=>venK(x)===v)), 'I');
+    for(let c=4;c<=6;c++) S.getColumn(c).width = 16;
+    S.addRow(['Nota: fecha de pago = fecha de vencimiento de cada factura. Los días se recalculan con HOY() al abrir el Excel; Semana/Mes/Ventana quedan fijos a la fecha de descarga ('+hoy.toISOString().slice(0,10)+').']).getCell(1).font = {italic:true, size:9};
+    // Vencido
+    const V = wb.addWorksheet('Vencido'); V.addRow(['Documento','OC / nota','Vence','Días vencida','Saldo US$']); hdr(V,1);
+    R.filter(x=>x.dias<0).forEach(x=>{ const w = V.addRow([x.doc, x.nota||x.oc, dt(x.vence), -x.dias, x.saldo]); w.getCell(3).numFmt = 'dd/mm/yyyy'; w.getCell(5).numFmt = '#,##0.00'; });
+    const vn = R.filter(x=>x.dias<0).length; if(vn){ const t = V.addRow(['Total','','','',{formula:`SUM(E2:E${vn+1})`}]); t.eachCell(c=>{ c.font = {bold:true}; }); t.getCell(5).numFmt = '#,##0.00'; }
+    [22,34,13,13,16].forEach((w,i)=>V.getColumn(i+1).width = w); V.views = [{state:'frozen', ySplit:1}];
+    wb.views = [{activeTab:1}];
+    const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})); a.download = 'Pagos_Trading_'+hoy.toISOString().slice(0,10)+'.xlsx'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+  }catch(e){ console.warn(e); toast('No se pudo generar el Excel: '+e.message,'er'); }
 }
 function comprasPintar(){
   const el = document.getElementById('compras-mod'); if(!el) return;
