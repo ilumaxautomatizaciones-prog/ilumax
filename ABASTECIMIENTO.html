@@ -8944,18 +8944,28 @@ async function tcxpCargarSistema(){
   try{
     if(!REABAST.ordenesCompra || !REABAST.ordenesCompra.length || !REABAST._ocCargadasEn || Date.now()-REABAST._ocCargadasEn>30000){ await cargarOC(); REABAST._ocCargadasEn = Date.now(); }
     await Promise.all([ppCargarAjustes(true), typeof tesoCargar==='function' ? tesoCargar(true).catch(()=>{}) : null, typeof ceCargarResumen==='function' ? ceCargarResumen() : null]);
-    const m = {}; ppConstruir().forEach(p=>{ if(p.estado==='pagado' || !p.fecha || isNaN(p.fecha) || !(p.usd>0.004)) return; (m[ceNum(p.num)] = m[ceNum(p.num)] || []).push({fecha:ppIso(p.fecha), usd:p.usd, tipo:p.tipo, origen:p.origen||''}); });
-    Object.values(m).forEach(l=>l.sort((a,b)=>a.fecha.localeCompare(b.fecha))); TCXP.sis = m;
+    const m = {}, L = []; ppConstruir().forEach(p=>{ if(p.estado==='pagado' || !p.fecha || isNaN(p.fecha) || !(p.usd>0.004)) return; const q = {num:ceNum(p.num), fecha:ppIso(p.fecha), usd:p.usd, tipo:p.tipo, origen:p.origen||''}; L.push(q); (m[q.num] = m[q.num] || []).push(q); });
+    Object.values(m).forEach(l=>l.sort((a,b)=>a.fecha.localeCompare(b.fecha))); TCXP.sis = m; TCXP.sisL = L;
   }catch(e){ console.warn('Pagos Trading: no se pudo leer la programación de pagos', e); TCXP.sis = TCXP.sis || {}; }
 }
 // Facturas del reporte + fecha de pago: la del sistema si la OC la tiene; si no, la del vencimiento del PDF
+const TCXP_MARKUP = 1.015; // la factura de la Trading = valor de la OC (FOB) × 1,015
+function tcxpFam(n){ return String(n||'').split('-')[0]; }
 function tcxpFilas(){
-  const base = ((TCXP.cfg && TCXP.cfg.filas) || []).map(x=>({...x, vencePdf:x.vence, fuenteF:'PDF'})), sis = TCXP.sis || {}, porOC = {};
-  base.forEach(x=>{ const k = x.oc ? ceNum(x.oc) : ''; if(k) (porOC[k] = porOC[k] || []).push(x); });
-  Object.entries(porOC).forEach(([k,l])=>{ const sl = sis[k]; if(!sl || !sl.length) return;
-    l.sort((a,b)=>a.vencePdf.localeCompare(b.vencePdf)||a.doc.localeCompare(b.doc));
-    l.forEach((x,i)=>{ const p = sl.length===l.length ? sl[i] : sl[0]; x.fsis = p.fecha; x.sisInfo = sl.map(q=>q.fecha+' US$ '+tcxpUsd(q.usd)+' ('+q.tipo+')').join(' · '); x.aprox = sl.length!==l.length; }); });
-  return base.map(x=>{ if(TCXP.fuente==='sistema' && x.fsis){ x.vence = x.fsis; x.fuenteF = x.aprox ? 'Sistema (aprox.)' : 'Sistema'; } return x; });
+  const base = ((TCXP.cfg && TCXP.cfg.filas) || []).map(x=>({...x, vencePdf:x.vence, fuenteF:'PDF'})), L = (TCXP.sisL || []).map(p=>({...p, usada:false}));
+  const info = (p,x)=>{ x.fsis = p.fecha; x.sisOC = p.num; x.sisInfo = p.num+' · '+p.fecha+' · US$ '+tcxpUsd(p.usd)+' ×'+TCXP_MARKUP+' = '+tcxpUsd(p.usd*TCXP_MARKUP)+' ('+p.tipo+')'; p.usada = true; };
+  const orden = base.slice().sort((a,b)=>b.saldo-a.saldo);
+  // 1) por monto: saldo de la factura ÷ 1,015 = pago pendiente de la OC (misma OC o de su familia: OI1887-3 puede ser OI1887-21 en el sistema)
+  orden.forEach(x=>{ if(x.saldo < 1) return; const k = x.oc ? ceNum(x.oc) : '', tol = Math.max(1, x.saldo*0.002);
+    const c = L.filter(p=>!p.usada && Math.abs(p.usd*TCXP_MARKUP - x.saldo) <= tol && (!k || tcxpFam(p.num)===tcxpFam(k))).sort((a,b)=>(b.num===k)-(a.num===k) || Math.abs(a.usd*TCXP_MARKUP-x.saldo)-Math.abs(b.usd*TCXP_MARKUP-x.saldo))[0];
+    if(c){ info(c,x); x.porMonto = true; } });
+  // 1b) facturas sin OC clara (p. ej. CONSOL): monto casi exacto contra cualquier pago pendiente
+  orden.forEach(x=>{ if(x.fsis || x.saldo < 50) return; const c = L.filter(p=>!p.usada && Math.abs(p.usd*TCXP_MARKUP - x.saldo) <= 0.5).sort((a,b)=>Math.abs(a.usd*TCXP_MARKUP-x.saldo)-Math.abs(b.usd*TCXP_MARKUP-x.saldo))[0]; if(c){ info(c,x); x.porMonto = true; } });
+  // 2) lo que no cuadró por monto: misma OC, en orden de fecha (aproximado)
+  const porOC = {}; base.forEach(x=>{ if(x.fsis || !x.oc) return; (porOC[ceNum(x.oc)] = porOC[ceNum(x.oc)] || []).push(x); });
+  Object.entries(porOC).forEach(([k,l])=>{ const sl = L.filter(p=>!p.usada && p.num===k).sort((a,b)=>a.fecha.localeCompare(b.fecha)); if(!sl.length) return;
+    l.sort((a,b)=>a.vencePdf.localeCompare(b.vencePdf)||a.doc.localeCompare(b.doc)); l.forEach((x,i)=>{ const p = sl.length===l.length ? sl[i] : sl[0]; info(p,x); x.aprox = true; p.usada = false; }); });
+  return base.map(x=>{ if(TCXP.fuente==='sistema' && x.fsis){ x.vence = x.fsis; x.fuenteF = (x.aprox ? 'Sistema (aprox.)' : 'Sistema') + (x.sisOC && ceNum(x.oc||'')!==x.sisOC ? ' · '+x.sisOC : ''); } return x; });
 }
 function tcxpBucket(d){ return d<0 ? ['0','Vencido'] : d<=7 ? ['1','0-7 días'] : d<=14 ? ['2','8-14 días'] : d<=30 ? ['3','15-30 días'] : d<=60 ? ['4','31-60 días'] : ['5','Más de 60 días']; }
 function tcxpGrupo(F, clave){
@@ -8999,7 +9009,7 @@ function tcxpHtml(){
     <button class="btn btn-bl btn-sm" onclick="tcxpExcel()" title="Excel con Resumen, semanas, meses, ventanas, vencido y detalle con fórmulas">📊 Informe Excel</button><span style="font-size:11px;color:var(--mu);">Reporte: ${E(C.archivo||'')} · cargado ${E(C.fecha||'')} ${E(C.quien||'')}</span></div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">${kp('US$ '+tcxpUsd(tot),'Total por pagar a la Trading ('+F.length+' facturas)')}${kp('US$ '+tcxpUsd(venT),'Vencido ('+ven.length+' facturas)','#dc2626')}${kp('US$ '+tcxpUsd(s7),'Vence en los próximos 7 días','#ea580c')}${kp('US$ '+tcxpUsd(s30),'Vence en los próximos 30 días')}${kp(F.filter(x=>x.fuenteF.startsWith('Sistema')).length+' de '+F.length,'facturas con fecha del sistema'+(TCXP.sis?'':' (cargando…)'))}</div>
   <div style="display:inline-flex;border:1px solid var(--b2);border-radius:8px;overflow:hidden;margin-bottom:10px;">${bt('semana','📅 Por semana')}${bt('mes','🗓️ Por mes')}${bt('ventana','⏱️ Ventanas')}${bt('detalle','📋 Detalle')}</div>${cuerpo}
-  <div style="font-size:11px;color:var(--mu);margin-top:8px;">Fecha de pago = la que tiene el sistema en Programación de pagos para la OC de cada factura; si la OC no tiene fecha pendiente, se usa el vencimiento del PDF (columna «Fuente»; «aprox.» = la OC tiene distinto número de pagos que de facturas). «Vencido» = ya pasó la fecha. Días calculados contra hoy. Solo incluye lo que trae el reporte de contabilidad; para actualizar, sube el PDF nuevo.</div>`;
+  <div style="font-size:11px;color:var(--mu);margin-top:8px;">Fecha de pago = la que tiene el sistema en Programación de pagos para la OC de cada factura; si la OC no tiene fecha pendiente, se usa el vencimiento del PDF (columna «Fuente»; las facturas incluyen el 1,015 de la Trading: se cruzan con el pago de la OC dividiendo entre 1,015; «aprox.» = no cuadró el monto y se tomó la fecha de la OC). «Vencido» = ya pasó la fecha. Días calculados contra hoy. Solo incluye lo que trae el reporte de contabilidad; para actualizar, sube el PDF nuevo.</div>`;
 }
 async function tcxpExcel(){
   if(!TCXP.cfg) return;
