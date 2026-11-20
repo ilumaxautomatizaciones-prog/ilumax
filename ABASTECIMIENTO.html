@@ -5963,8 +5963,9 @@ async function hcCargar(forzar){
 }
 function hcIso(d){ if(!d) return ''; if(typeof d==='string') return d.slice(0,10); try{ return d.toISOString().slice(0,10); }catch(e){ return ''; } }
 // llegadas por referencia: BL en camino (Embarque/Tránsito/Nacionalización, con su fecha a planta/ETA) + lo que sigue en producción en cada OC activa
+function hcKey(s){ return ceRefKey(s).replace(/^0+(?=\d)/,''); }   // «00094» e «94» son la misma referencia
 function hcLlegadas(){
-  const L = {}, add = (ref, x)=>{ const k = ceRefKey(ref); (L[k] = L[k] || []).push(x); };
+  const L = {}, add = (ref, x)=>{ const k = hcKey(ref); (L[k] = L[k] || []).push(x); };
   (CBL.bls||[]).forEach(b=>(b.items||[]).forEach(it=>{ const f = ceFaseLinea(it.estado||'','').fase; if(f===9 || f===-1) return;
     add(it.ref, {estado:(CBL_FASE_TXT[f]||it.estado||'Embarque').toUpperCase().replace('INGRESO A BODEGA','INGRESADA'), fecha:hcIso(it.planta||b.planta||b.eta), unds:Number(it.cant)||0, oc:it.oc, bl:b.bl}); }));
   (REABAST.ordenesCompra||[]).filter(o=>(o.estado_general||'activa')==='activa').forEach(o=>{
@@ -5974,9 +5975,9 @@ function hcLlegadas(){
   return L;
 }
 function hcCalcular(){
-  const items = (HC.cfg && HC.cfg.items) || [], inv = {}; (reabastInventarioPorReferencia()||[]).forEach(g=>{ inv[ceRefKey(g.referencia)] = (inv[ceRefKey(g.referencia)]||0) + (Number(g.existencia)||0); });
+  const items = (HC.cfg && HC.cfg.items) || [], inv = {}; (reabastInventarioPorReferencia()||[]).forEach(g=>{ inv[hcKey(g.referencia)] = (inv[hcKey(g.referencia)]||0) + (Number(g.existencia)||0); });
   const LL = hcLlegadas(), hoy = new Date(); hoy.setHours(12,0,0,0);
-  return items.map(p=>{ const k = ceRefKey(p.ref), tot = inv[k]||0, ll = (LL[k]||[]).slice().sort((a,b)=>(a.fecha||'9999').localeCompare(b.fecha||'9999')), prox = ll[0] || null;
+  return items.map(p=>{ const k = hcKey(p.ref), tot = inv[k]||0, ll = (LL[k]||[]).slice().sort((a,b)=>(a.fecha||'9999').localeCompare(b.fecha||'9999')), prox = ll[0] || null;
     const dias = prox && prox.fecha ? Math.round((new Date(prox.fecha+'T12:00:00')-hoy)/86400000) : null;
     const sem = !prox || !prox.fecha ? 'gris' : dias<=7 ? 'verde' : dias<=21 ? 'amarillo' : dias<=45 ? 'naranja' : 'rojo';
     return {...p, grupo:hcGrupo(p.estado), rep:hcRep(p.rep), total:tot, prox, dias, sem, camino:ll.reduce((a,x)=>a+x.unds,0), nLL:ll.length,
