@@ -1416,8 +1416,8 @@ const XG = {};
 function xgInit(id, cols, opt) { const g = XG[id] || (XG[id] = { sort: null, f: {}, hide: new Set(), rows: [], limit: 600 }); g.cols = cols; Object.assign(g, opt || {}); return g; }
 const xgV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
 function xgView(id) {
-  const g = XG[id];
-  let R = g.rows.filter(r => g.cols.every(c => {
+  const g = XG[id], q = g.q ? g.q.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim() : '';
+  let R = g.rows.filter(r => (!q || g.cols.some(c => String(xgV(c, r)).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().includes(q))) && g.cols.every(c => {
     const f = g.f[c.k]; if (!f) return true; const v = xgV(c, r);
     if (f.sel && !f.sel.has(String(v))) return false;
     if (c.num || c.date) {
@@ -1430,7 +1430,8 @@ function xgView(id) {
   return R;
 }
 const xgOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !== '' && f.max != null));
-function xgBar(id) { return '<div class="bar" style="padding:0 14px"><button class="btn g" onclick="xgCols(event,\'' + id + '\')">▦ Columnas</button><button class="btn g" onclick="xgLimpiar(\'' + id + '\')">✖ Quitar filtros y orden</button><button class="btn g" onclick="xgExcel(\'' + id + '\')">⬇ Excel de esta vista</button></div>'; }
+function xgQ(id, v) { XG[id].q = v; xgPaint(id); }
+function xgBar(id) { return '<div class="bar" style="padding:0 14px"><input id="xgq_' + id + '" placeholder="🔎 Buscar en la tabla…" value="' + esc((XG[id] && XG[id].q) || '') + '" oninput="xgQ(\'' + id + '\',this.value)" style="min-width:240px"><button class="btn g" onclick="xgCols(event,\'' + id + '\')">▦ Columnas</button><button class="btn g" onclick="xgLimpiar(\'' + id + '\')">✖ Quitar filtros y orden</button><button class="btn g" onclick="xgExcel(\'' + id + '\')">⬇ Excel de esta vista</button></div>'; }
 function xgPaint(id) {
   const g = XG[id], box = $('xg_' + id); if (!box) return; const V = xgView(id), cols = g.cols.filter(c => !g.hide.has(c.k));
   const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="xgh" style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '"><span style="cursor:pointer" onclick="xgSort(\'' + id + '\',\'' + c.k + '\')">' + esc(c.t) + s + '</span><button class="xgb' + (xgOn(g.f[c.k]) ? ' on' : '') + '" onclick="xgMenu(event,\'' + id + '\',\'' + c.k + '\')">▾</button></th>'; }).join('');
@@ -1440,7 +1441,7 @@ function xgPaint(id) {
   if (g.after) g.after(box);
 }
 function xgSort(id, k) { const g = XG[id]; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; xgPaint(id); }
-function xgLimpiar(id) { const g = XG[id]; g.f = {}; g.sort = null; xgPaint(id); }
+function xgLimpiar(id) { const g = XG[id]; g.f = {}; g.sort = null; g.q = ''; const i = $('xgq_' + id); if (i) i.value = ''; xgPaint(id); }
 function xgCerrar() { const m = $('xgm'); if (m) m.remove(); }
 document.addEventListener('click', xgCerrar);
 function xgPos(d, ev) { const b = ev.currentTarget.getBoundingClientRect(); d.style.top = Math.max(8, Math.min(b.bottom + 4, innerHeight - 440)) + 'px'; d.style.left = Math.max(8, Math.min(b.left - 120, innerWidth - 280)) + 'px'; }
@@ -1590,6 +1591,7 @@ async function girVista() {
 }
 function girPintar() {
   const c = $('cont'), tots = {}, F = new Map(GIR.fabs.map(f => [f.id, f])); GIR.lote.forEach(p => tots[p.mon || 'USD'] = (tots[p.mon || 'USD'] || 0) + p.monto); const tot = Object.entries(tots).map(([k, v]) => k + ' ' + girUsd(v)).join(' · ') || '0.00';
+  xgInit('gpl', GPL_COLS, { rows: GIR.lote.map((p, i) => { const f = F.get(p.fid) || {}; return { i, nombre: f.nombre || p.nombre, banco: f.banco, swift: f.swift, cuenta: f.cuenta, monto: p.monto, mon: p.mon || 'USD', obs: p.obs }; }), limit: 800, nombre: 'Giros_plano_' + GIR_EMP[girEmp()] });
   c.innerHTML = '<div class="bar" style="margin-bottom:8px">' + Object.keys(GIR_CTAS).map(e => '<button class="btn' + (e === girEmp() ? '' : ' g') + '" onclick="girCambiaEmp(\'' + e + '\')">🏢 ' + GIR_EMP[e] + ' · cuenta ' + GIR_CTAS[e] + '</button>').join('') + '</div>'
     + '<div class="card"><h2>🌏 Giros al exterior · <span style="color:#b45309">' + GIR_EMP[girEmp()] + '</span> · crear pago</h2><div style="padding:0 14px 14px">'
     + '<div style="font-size:12px;color:#64748b;margin-bottom:8px">1) Elige el fabricante · 2) Escribe el valor en dólares y la observación (facturas) · 3) Agrégalo al plano. Cuando tengas todos, descarga el plano y súbelo al banco.</div>'
@@ -1599,11 +1601,25 @@ function girPintar() {
     + '<div id="ginfo" style="font-size:12px;color:#475569;margin:6px 0"></div>'
     + '<div class="bar"><button class="btn g" onclick="girFabModal(0)">🆕 Nuevo fabricante</button><button class="btn g" onclick="girFabLista()">📒 Ver / editar fabricantes (' + GIR.fabs.length + ')</button><button class="btn g" onclick="girHist()">🕘 Historial</button></div></div></div>'
     + '<div class="card" style="margin-top:12px"><h2>Pagos del plano (' + GIR.lote.length + ') · Total ' + tot + ' · sale de la cuenta ' + GIR_EMP[girEmp()] + ' ' + GIR_CTAS[girEmp()] + '</h2>'
-    + (GIR.lote.length ? '<div class="tw"><table><thead><tr><th>#</th><th>Fabricante</th><th>Banco</th><th>SWIFT</th><th>Cuenta</th><th style="text-align:right">Valor</th><th>Moneda</th><th>Observación</th><th></th></tr></thead><tbody>'
-      + GIR.lote.map((p, i) => { const f = F.get(p.fid) || {}; return '<tr><td>' + (i + 1) + '</td><td>' + esc(f.nombre || p.nombre) + '</td><td>' + esc(f.banco) + '</td><td>' + esc(f.swift) + '</td><td style="font-family:monospace">' + esc(f.cuenta) + '</td><td style="text-align:right"><b>' + girUsd(p.monto) + '</b></td><td>' + esc(p.mon || 'USD') + '</td><td>' + esc(p.obs) + '</td><td style="white-space:nowrap"><button class="btn g" title="Editar" onclick="girEditar(' + i + ')">✏️</button> <button class="btn g" title="Quitar" onclick="girQuitar(' + i + ')">✕</button></td></tr>'; }).join('') + '</tbody></table></div>'
+    + (GIR.lote.length ? xgBar('gpl') + '<div class="tw" id="xg_gpl"></div>'
       + '<div class="bar" style="padding:10px 14px"><button class="btn" onclick="girDescargar()">⬇ Descargar plano para el banco</button><button class="btn g" onclick="if(confirm(\'¿Vaciar todos los pagos del plano?\')){GIR.lote=[];girGuardaLote();girPintar()}">🗑 Vaciar</button></div>'
       : '<div style="padding:14px;color:#64748b">Aún no has agregado pagos.</div>') + '</div><div id="ghist"></div>';
+  if (GIR.lote.length) xgPaint('gpl');
 }
+const GPL_COLS = [
+  { k: 'i', t: '#', num: 1, al: 1, v: r => r.i + 1 }, { k: 'nombre', t: 'Fabricante', v: r => r.nombre }, { k: 'banco', t: 'Banco', v: r => r.banco }, { k: 'swift', t: 'SWIFT', v: r => r.swift },
+  { k: 'cuenta', t: 'Cuenta', v: r => r.cuenta, h: r => '<span style="font-family:monospace">' + esc(r.cuenta) + '</span>' },
+  { k: 'monto', t: 'Valor', num: 1, v: r => r.monto, h: r => '<b>' + girUsd(r.monto) + '</b>', totf: V => { const t = {}; V.forEach(r => t[r.mon] = (t[r.mon] || 0) + r.monto); return Object.entries(t).map(([k, v]) => k + ' ' + girUsd(v)).join(' · '); } },
+  { k: 'mon', t: 'Moneda', v: r => r.mon }, { k: 'obs', t: 'Observación', v: r => r.obs },
+  { k: 'acc', t: '', v: r => '', h: r => '<span style="white-space:nowrap"><button class="btn g" title="Editar" onclick="girEditar(' + r.i + ')">✏️</button> <button class="btn g" title="Quitar" onclick="girQuitar(' + r.i + ')">✕</button></span>' }];
+const GFB_COLS = [
+  { k: 'nombre', t: 'Fabricante', v: r => r.nombre }, { k: 'banco', t: 'Banco', v: r => r.banco }, { k: 'swift', t: 'SWIFT', v: r => r.swift }, { k: 'cuenta', t: 'Cuenta', v: r => r.cuenta },
+  { k: 'acc', t: '', v: r => '', h: r => '<button class="btn g" onclick="extCerrar();girFabModal(' + r.id + ')">✏️ Editar</button>' }];
+const GHI_COLS = [
+  { k: 'lote', t: 'Fecha del plano', v: r => String(r.lote).slice(0, 16) }, { k: 'fabricante', t: 'Fabricante', v: r => r.fabricante },
+  { k: 'banco', t: 'Banco', v: r => (girFabN(r.fabricante) || {}).banco }, { k: 'swift', t: 'SWIFT', v: r => (girFabN(r.fabricante) || {}).swift }, { k: 'cuenta', t: 'Cuenta', v: r => (girFabN(r.fabricante) || {}).cuenta, h: r => '<span style="font-family:monospace">' + esc((girFabN(r.fabricante) || {}).cuenta) + '</span>' },
+  { k: 'monto', t: 'Valor', num: 1, v: r => r.monto, h: r => girUsd(r.monto) }, { k: 'moneda', t: 'Moneda', v: r => r.moneda }, { k: 'observacion', t: 'Observación', v: r => r.observacion }, { k: 'usuario', t: 'Usuario', v: r => r.usuario }];
+const girFabN = n => GIR.fabs.find(x => girUp(x.nombre) === girUp(n));
 function girBuscar() { const v = girUp($('gfab').value); return GIR.fabs.find(f => girUp(f.nombre) === v) || null; }
 function girSel() { const f = girBuscar(), i = $('ginfo'); i.innerHTML = f ? '🏦 <b>' + esc(f.banco) + '</b> · SWIFT ' + esc(f.swift) + ' · cuenta ' + esc(f.cuenta) + ' · país ' + esc(f.pais_benef) + (f.interm_banco ? ' · intermediario ' + esc(f.interm_banco) : '') : ''; }
 // Estilo colombiano: punto = miles, coma = decimales (20.000,50). Un solo punto con 1-2 decimales (20.5) se toma como decimal
@@ -1647,14 +1663,14 @@ async function girDescargar() {
 async function girHist() {
   const h = $('ghist'); h.innerHTML = cargaHtml('Cargando'); const j = await girApi({ accion: 'historial' });
   if (!j || !j.ok) { h.innerHTML = '<div class="err">' + esc((j && j.error) || 'Error') + '</div>'; return; }
-  h.innerHTML = '<div class="card" style="margin-top:12px"><h2>🕘 Historial de planos descargados</h2><div class="tw" style="max-height:50vh;overflow:auto"><table><thead><tr><th>Fecha del plano</th><th>Fabricante</th><th>Banco</th><th>SWIFT</th><th>Cuenta</th><th style="text-align:right">Valor</th><th>Moneda</th><th>Observación</th><th>Usuario</th></tr></thead><tbody>' + j.pagos.map(p => '<tr><td>' + esc(String(p.lote).slice(0, 16)) + '</td><td>' + esc(p.fabricante) + '</td>' + (f => '<td>' + esc(f.banco) + '</td><td>' + esc(f.swift) + '</td><td style="font-family:monospace">' + esc(f.cuenta) + '</td>')(GIR.fabs.find(x => girUp(x.nombre) === girUp(p.fabricante)) || {}) + '<td style="text-align:right">' + girUsd(p.monto) + '</td><td>' + esc(p.moneda) + '</td><td>' + esc(p.observacion) + '</td><td>' + esc(p.usuario) + '</td></tr>').join('') + '</tbody></table></div></div>';
+  xgInit('ghi', GHI_COLS, { rows: j.pagos, limit: 800, nombre: 'Giros_historial' });
+  h.innerHTML = '<div class="card" style="margin-top:12px"><h2>🕘 Historial de planos descargados</h2>' + xgBar('ghi') + '<div class="tw" id="xg_ghi" style="max-height:50vh;overflow:auto"></div></div>'; xgPaint('ghi');
 }
 function girFabLista() {
   const old = $('xwrap'); if (old) old.remove(); const d = document.createElement('div'); d.id = 'xwrap';
-  d.innerHTML = '<div class="ov on"><div class="mo" style="max-width:900px"><div class="mh"><span>📒 Fabricantes (' + GIR.fabs.length + ')</span><button class="btn g" onclick="extCerrar()">✕</button></div><div style="padding:14px"><div class="bar"><input id="gfq" placeholder="Buscar por nombre, banco o SWIFT…" oninput="girFabFiltra()"><button class="btn" onclick="extCerrar();girFabModal(0)">🆕 Nuevo</button></div><div class="tw" style="max-height:60vh;overflow:auto"><table><thead><tr><th>Fabricante</th><th>Banco</th><th>SWIFT</th><th>Cuenta</th><th></th></tr></thead><tbody id="gfb"></tbody></table></div></div></div></div>';
-  document.body.appendChild(d); girFabFiltra();
+  d.innerHTML = '<div class="ov on"><div class="mo" style="max-width:900px"><div class="mh"><span>📒 Fabricantes (' + GIR.fabs.length + ')</span><button class="btn g" onclick="extCerrar()">✕</button></div><div style="padding:14px"><div class="bar"><button class="btn" onclick="extCerrar();girFabModal(0)">🆕 Nuevo</button></div>' + xgBar('gfb') + '<div class="tw" id="xg_gfb" style="max-height:60vh;overflow:auto"></div></div></div></div>';
+  xgInit('gfb', GFB_COLS, { rows: GIR.fabs, limit: 800, nombre: 'Fabricantes_giros' }); document.body.appendChild(d); xgPaint('gfb');
 }
-function girFabFiltra() { const q = girUp($('gfq').value); $('gfb').innerHTML = GIR.fabs.filter(f => !q || girUp([f.nombre, f.banco, f.swift].join(' ')).includes(q)).map(f => '<tr><td>' + esc(f.nombre) + '</td><td>' + esc(f.banco) + '</td><td>' + esc(f.swift) + '</td><td>' + esc(f.cuenta) + '</td><td><button class="btn g" onclick="extCerrar();girFabModal(' + f.id + ')">✏️ Editar</button></td></tr>').join(''); }
 // Solo letras, números y espacio (sin tildes ni símbolos como & , . -); en mayúsculas y sin pasar del máximo
 function girLim(el, max, sinEsp) {
   const pos = el.selectionStart, ant = el.value.slice(0, pos);
