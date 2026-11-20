@@ -8904,7 +8904,7 @@ function comprasResumenOC(o){
   return {fob, inter, cant, pct, extra, dep, saldo:inter+extra-dep, det};
 }
 /* ───────── Pagos Trading: calendario de pagos de la CxP a ILUMAX TRADING (reporte «Estado de cuentas CxP» de contabilidad, en USD) ───────── */
-const TCXP = {open:{}, cfg:null, vista:'semana', q:'', sort:{k:'vence',d:1}, cargado:false, trm:(function(){ try{ return Number(localStorage.getItem('tcxp_trm'))||0; }catch(e){ return 0; } })()};
+const TCXP = {open:{}, fuente:'sistema', sis:null, cfg:null, vista:'semana', q:'', sort:{k:'vence',d:1}, cargado:false, trm:(function(){ try{ return Number(localStorage.getItem('tcxp_trm'))||0; }catch(e){ return 0; } })()};
 const tcxpIso = s => { const m = String(s||'').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0') : ''; };
 const tcxpUsd = n => (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 function tcxpHoy(){ const d = new Date(); d.setHours(12,0,0,0); return d; }
@@ -8937,7 +8937,25 @@ async function tcxpSubir(inp){
 async function tcxpCargar(){
   TCXP.cargado = true;
   try{ const r = await sb.get('configuracion','clave=eq.trading_cxp'); const v = r && r[0] ? r[0].valor : null; TCXP.cfg = typeof v==='string' ? JSON.parse(v) : v; }catch(e){ console.warn(e); }
-  comprasPintar();
+  comprasPintar(); await tcxpCargarSistema(); comprasPintar();
+}
+// Fechas de pago que tiene el sistema (Programación de pagos), por OC: se toman los pagos pendientes de la OC (anticipo/saldo), de la fecha más cercana a la más lejana
+async function tcxpCargarSistema(){
+  try{
+    if(!REABAST.ordenesCompra || !REABAST.ordenesCompra.length || !REABAST._ocCargadasEn || Date.now()-REABAST._ocCargadasEn>30000){ await cargarOC(); REABAST._ocCargadasEn = Date.now(); }
+    await Promise.all([ppCargarAjustes(true), typeof tesoCargar==='function' ? tesoCargar(true).catch(()=>{}) : null, typeof ceCargarResumen==='function' ? ceCargarResumen() : null]);
+    const m = {}; ppConstruir().forEach(p=>{ if(p.estado==='pagado' || !p.fecha || isNaN(p.fecha) || !(p.usd>0.004)) return; (m[ceNum(p.num)] = m[ceNum(p.num)] || []).push({fecha:ppIso(p.fecha), usd:p.usd, tipo:p.tipo, origen:p.origen||''}); });
+    Object.values(m).forEach(l=>l.sort((a,b)=>a.fecha.localeCompare(b.fecha))); TCXP.sis = m;
+  }catch(e){ console.warn('Pagos Trading: no se pudo leer la programación de pagos', e); TCXP.sis = TCXP.sis || {}; }
+}
+// Facturas del reporte + fecha de pago: la del sistema si la OC la tiene; si no, la del vencimiento del PDF
+function tcxpFilas(){
+  const base = ((TCXP.cfg && TCXP.cfg.filas) || []).map(x=>({...x, vencePdf:x.vence, fuenteF:'PDF'})), sis = TCXP.sis || {}, porOC = {};
+  base.forEach(x=>{ const k = x.oc ? ceNum(x.oc) : ''; if(k) (porOC[k] = porOC[k] || []).push(x); });
+  Object.entries(porOC).forEach(([k,l])=>{ const sl = sis[k]; if(!sl || !sl.length) return;
+    l.sort((a,b)=>a.vencePdf.localeCompare(b.vencePdf)||a.doc.localeCompare(b.doc));
+    l.forEach((x,i)=>{ const p = sl.length===l.length ? sl[i] : sl[0]; x.fsis = p.fecha; x.sisInfo = sl.map(q=>q.fecha+' US$ '+tcxpUsd(q.usd)+' ('+q.tipo+')').join(' · '); x.aprox = sl.length!==l.length; }); });
+  return base.map(x=>{ if(TCXP.fuente==='sistema' && x.fsis){ x.vence = x.fsis; x.fuenteF = x.aprox ? 'Sistema (aprox.)' : 'Sistema'; } return x; });
 }
 function tcxpBucket(d){ return d<0 ? ['0','Vencido'] : d<=7 ? ['1','0-7 días'] : d<=14 ? ['2','8-14 días'] : d<=30 ? ['3','15-30 días'] : d<=60 ? ['4','31-60 días'] : ['5','Más de 60 días']; }
 function tcxpGrupo(F, clave){
@@ -8946,7 +8964,7 @@ function tcxpGrupo(F, clave){
 }
 function tcxpSet(k,v){ TCXP[k] = v; comprasPintar(); }
 function tcxpAbrir(k){ TCXP.open[k] = !TCXP.open[k]; comprasPintar(); }
-function tcxpSub(g, cols){ return g.docs.slice().sort((a,b)=>a.vence.localeCompare(b.vence)||a.doc.localeCompare(b.doc)).map(x=>`<tr style="background:#f8fafc;font-size:11.5px;"><td colspan="${cols}" style="padding:3px 6px 3px 34px;"><span style="font-family:monospace;">${reabastEsc(x.doc)}</span> · ${reabastEsc(x.nota||x.oc)} · vence ${reabastEsc(x.vence)} (${x.dias<0?'vencida '+(-x.dias)+' d':x.dias===0?'hoy':'en '+x.dias+' d'}) · <b>US$ ${tcxpUsd(x.saldo)}</b>${TCXP.trm?' · $ '+Math.round(x.saldo*TCXP.trm).toLocaleString('es-CO'):''}</td></tr>`).join(''); }
+function tcxpSub(g, cols){ return g.docs.slice().sort((a,b)=>a.vence.localeCompare(b.vence)||a.doc.localeCompare(b.doc)).map(x=>`<tr style="background:#f8fafc;font-size:11.5px;"><td colspan="${cols}" style="padding:3px 6px 3px 34px;"><span style="font-family:monospace;">${reabastEsc(x.doc)}</span> · ${reabastEsc(x.nota||x.oc)} · pago ${reabastEsc(x.vence)} · ${reabastEsc(x.fuenteF)} (${x.dias<0?'vencida '+(-x.dias)+' d':x.dias===0?'hoy':'en '+x.dias+' d'}) · <b>US$ ${tcxpUsd(x.saldo)}</b>${TCXP.trm?' · $ '+Math.round(x.saldo*TCXP.trm).toLocaleString('es-CO'):''}</td></tr>`).join(''); }
 function tcxpOrden(k){ TCXP.sort = TCXP.sort.k===k ? {k, d:-TCXP.sort.d} : {k, d:1}; comprasPintar(); }
 function tcxpHtml(){
   const E = reabastEsc;
@@ -8954,7 +8972,7 @@ function tcxpHtml(){
   const up = `<label class="btn btn-p btn-sm" style="cursor:pointer;">📥 Subir PDF «Estado de cuentas CxP»<input type="file" accept="application/pdf" style="display:none;" onchange="tcxpSubir(this)"></label>`;
   if(!TCXP.cfg || !(TCXP.cfg.filas||[]).length) return `<div class="empty"><div class="empty-t">Aún no hay reporte de la Trading cargado</div><div style="font-size:12px;color:var(--mu);margin:6px 0 10px;">Sube el PDF que saca contabilidad («Reporte de estado de cuentas CxP», ILUMAX TRADING CORP, en dólares). Solo cuenta las facturas que trae el reporte.</div>${up}</div>`;
   const C = TCXP.cfg, q = TCXP.q.toLowerCase().trim(), trm = TCXP.trm;
-  const R = C.filas.map(x=>({...x, dias:tcxpDias(x.vence)})).filter(x=>x.saldo>=0.5 || true);
+  const R = tcxpFilas().map(x=>({...x, dias:tcxpDias(x.vence)}));
   const F = R.filter(x=>!q || [x.doc,x.oc,x.nota,x.vence].join(' ').toLowerCase().includes(q));
   const tot = F.reduce((a,x)=>a+x.saldo,0), ven = F.filter(x=>x.dias<0), venT = ven.reduce((a,x)=>a+x.saldo,0), s7 = F.filter(x=>x.dias>=0&&x.dias<=7).reduce((a,x)=>a+x.saldo,0), s30 = F.filter(x=>x.dias>=0&&x.dias<=30).reduce((a,x)=>a+x.saldo,0);
   const cop = v => trm ? '<td style="text-align:right;color:var(--mu);">$ '+Math.round(v*trm).toLocaleString('es-CO')+'</td>' : '';
@@ -8973,33 +8991,34 @@ function tcxpHtml(){
     const s = TCXP.sort, val = (x,k)=> k==='vence'||k==='fecha'?x[k] : k==='saldo'||k==='dias'?x[k] : String(x[k]||'');
     const L = F.slice().sort((a,b)=>{ const A = val(a,s.k), B = val(b,s.k); return (A<B?-1:A>B?1:0)*s.d || a.doc.localeCompare(b.doc); });
     const th = (k,t,r)=>`<th style="cursor:pointer;${r?'text-align:right;':''}" onclick="tcxpOrden('${k}')">${t}${s.k===k?(s.d>0?' ▲':' ▼'):''}</th>`;
-    cuerpo = `<div class="tw"><table><thead><tr>${th('doc','Documento')}${th('oc','OC / nota')}${th('fecha','Fecha factura')}${th('vence','Vence')}${th('dias','Días (hoy)',1)}${th('saldo','Saldo US$',1)}${trm?'<th style="text-align:right;">COP</th>':''}</tr></thead><tbody>${L.map(x=>`<tr><td style="font-family:monospace;">${E(x.doc)}</td><td>${E(x.nota||x.oc)}</td><td>${E(x.fecha)}</td><td>${E(x.vence)}</td><td style="text-align:right;font-weight:700;color:${x.dias<0?'#dc2626':x.dias<=7?'#ea580c':'inherit'};">${x.dias<0?'vencida '+(-x.dias)+' d':x.dias===0?'hoy':'en '+x.dias+' d'}</td><td style="text-align:right;">${tcxpUsd(x.saldo)}</td>${cop(x.saldo)}</tr>`).join('')}</tbody><tfoot><tr class="tot" style="font-weight:800;background:#0f172a;color:#fff;"><td>${L.length} facturas</td><td></td><td></td><td></td><td></td><td style="text-align:right;">${tcxpUsd(tot)}</td>${trm?'<td style="text-align:right;">$ '+Math.round(tot*trm).toLocaleString('es-CO')+'</td>':''}</tr></tfoot></table></div>`;
+    cuerpo = `<div class="tw"><table><thead><tr>${th('doc','Documento')}${th('oc','OC / nota')}${th('fecha','Fecha factura')}${th('vence','Fecha de pago')}<th>Fuente</th>${th('dias','Días (hoy)',1)}${th('saldo','Saldo US$',1)}${trm?'<th style="text-align:right;">COP</th>':''}</tr></thead><tbody>${L.map(x=>`<tr><td style="font-family:monospace;">${E(x.doc)}</td><td>${E(x.nota||x.oc)}</td><td>${E(x.fecha)}</td><td>${E(x.vence)}</td><td style="font-size:10.5px;color:var(--mu);" title="${E(x.fuenteF.startsWith('Sistema') ? 'Sistema: '+(x.sisInfo||'')+' · Vence en el PDF: '+x.vencePdf : 'Sin fecha en el sistema para esta OC · vence en el PDF: '+x.vencePdf)}">${E(x.fuenteF)}${x.vencePdf!==x.vence?' · PDF '+E(x.vencePdf):''}</td><td style="text-align:right;font-weight:700;color:${x.dias<0?'#dc2626':x.dias<=7?'#ea580c':'inherit'};">${x.dias<0?'vencida '+(-x.dias)+' d':x.dias===0?'hoy':'en '+x.dias+' d'}</td><td style="text-align:right;">${tcxpUsd(x.saldo)}</td>${cop(x.saldo)}</tr>`).join('')}</tbody><tfoot><tr class="tot" style="font-weight:800;background:#0f172a;color:#fff;"><td>${L.length} facturas</td><td></td><td></td><td></td><td></td><td></td><td style="text-align:right;">${tcxpUsd(tot)}</td>${trm?'<td style="text-align:right;">$ '+Math.round(tot*trm).toLocaleString('es-CO')+'</td>':''}</tr></tfoot></table></div>`;
   }
   return `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">${up}<input class="inp" placeholder="🔎 Documento, OC…" value="${E(TCXP.q)}" style="width:190px;" oninput="TCXP.q=this.value;clearTimeout(TCXP._t);TCXP._t=setTimeout(()=>{comprasPintar();const i=document.querySelector('#compras-mod input[placeholder^=\\'🔎 Documento\\']');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},300)">
+    <label style="font-size:12px;">Fecha de pago <select class="inp" style="width:auto;" onchange="tcxpSet('fuente',this.value)"><option value="sistema" ${TCXP.fuente==='sistema'?'selected':''}>Del sistema (OC)</option><option value="pdf" ${TCXP.fuente==='pdf'?'selected':''}>Del PDF (vencimiento)</option></select></label>
     <label style="font-size:12px;">TRM <input class="inp" type="number" style="width:90px;" value="${trm||''}" placeholder="opcional" onchange="TCXP.trm=Number(this.value)||0;try{localStorage.setItem('tcxp_trm',TCXP.trm)}catch(e){};comprasPintar()"></label>
     <button class="btn btn-bl btn-sm" onclick="tcxpExcel()" title="Excel con Resumen, semanas, meses, ventanas, vencido y detalle con fórmulas">📊 Informe Excel</button><span style="font-size:11px;color:var(--mu);">Reporte: ${E(C.archivo||'')} · cargado ${E(C.fecha||'')} ${E(C.quien||'')}</span></div>
-  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">${kp('US$ '+tcxpUsd(tot),'Total por pagar a la Trading ('+F.length+' facturas)')}${kp('US$ '+tcxpUsd(venT),'Vencido ('+ven.length+' facturas)','#dc2626')}${kp('US$ '+tcxpUsd(s7),'Vence en los próximos 7 días','#ea580c')}${kp('US$ '+tcxpUsd(s30),'Vence en los próximos 30 días')}</div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">${kp('US$ '+tcxpUsd(tot),'Total por pagar a la Trading ('+F.length+' facturas)')}${kp('US$ '+tcxpUsd(venT),'Vencido ('+ven.length+' facturas)','#dc2626')}${kp('US$ '+tcxpUsd(s7),'Vence en los próximos 7 días','#ea580c')}${kp('US$ '+tcxpUsd(s30),'Vence en los próximos 30 días')}${kp(F.filter(x=>x.fuenteF.startsWith('Sistema')).length+' de '+F.length,'facturas con fecha del sistema'+(TCXP.sis?'':' (cargando…)'))}</div>
   <div style="display:inline-flex;border:1px solid var(--b2);border-radius:8px;overflow:hidden;margin-bottom:10px;">${bt('semana','📅 Por semana')}${bt('mes','🗓️ Por mes')}${bt('ventana','⏱️ Ventanas')}${bt('detalle','📋 Detalle')}</div>${cuerpo}
-  <div style="font-size:11px;color:var(--mu);margin-top:8px;">Fecha de pago = fecha de vencimiento de cada factura. «Vencido» = ya pasó la fecha. Días calculados contra hoy. Solo incluye lo que trae el reporte de contabilidad; para actualizar, sube el PDF nuevo.</div>`;
+  <div style="font-size:11px;color:var(--mu);margin-top:8px;">Fecha de pago = la que tiene el sistema en Programación de pagos para la OC de cada factura; si la OC no tiene fecha pendiente, se usa el vencimiento del PDF (columna «Fuente»; «aprox.» = la OC tiene distinto número de pagos que de facturas). «Vencido» = ya pasó la fecha. Días calculados contra hoy. Solo incluye lo que trae el reporte de contabilidad; para actualizar, sube el PDF nuevo.</div>`;
 }
 async function tcxpExcel(){
   if(!TCXP.cfg) return;
   try{
     await comprasCargarExcelJS();
-    const trm = TCXP.trm, hoy = tcxpHoy(), R = TCXP.cfg.filas.map(x=>({...x, dias:tcxpDias(x.vence)})).sort((a,b)=>a.vence.localeCompare(b.vence)||a.doc.localeCompare(b.doc));
+    const trm = TCXP.trm, hoy = tcxpHoy(), R = tcxpFilas().map(x=>({...x, dias:tcxpDias(x.vence)})).sort((a,b)=>a.vence.localeCompare(b.vence)||a.doc.localeCompare(b.doc));
     const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX';
     const AZ = 'FF0F172A', hdr = (ws,n)=>{ const r = ws.getRow(n); r.eachCell(c=>{ c.font = {bold:true, color:{argb:'FFFFFFFF'}, name:'Arial', size:10}; c.fill = {type:'pattern', pattern:'solid', fgColor:{argb:AZ}}; c.alignment = {vertical:'middle', horizontal:'center', wrapText:true}; }); r.height = 24; };
     const dt = iso => new Date(iso+'T12:00:00'), semK = x => x.dias<0 ? 'Vencido' : 'Sem. '+tcxpLunes(x.vence), mesK = x => x.dias<0 ? 'Vencido' : x.vence.slice(0,7), venK = x => tcxpBucket(x.dias)[1];
     // Detalle
     const D = wb.addWorksheet('Detalle'), n = R.length, ult = n+1;
-    D.addRow(['Documento','OC / nota','Fecha factura','Vence','Días (hoy)','Saldo US$','Semana','Mes','Ventana'].concat(trm?['Saldo COP']:[]));
+    D.addRow(['Documento','OC / nota','Fecha factura','Fecha de pago','Días (hoy)','Saldo US$','Semana','Mes','Ventana'].concat(trm?['Saldo COP']:[]).concat(['Fuente','Vence en PDF']));
     hdr(D,1);
-    R.forEach((x,i)=>{ const r = i+2, w = D.addRow([x.doc, x.nota||x.oc, dt(x.fecha), dt(x.vence), {formula:`D${r}-TODAY()`}, x.saldo, semK(x), mesK(x), venK(x)].concat(trm?[{formula:`F${r}*Resumen!$B$3`}]:[]));
-      w.getCell(3).numFmt = 'dd/mm/yyyy'; w.getCell(4).numFmt = 'dd/mm/yyyy'; w.getCell(5).numFmt = '0'; w.getCell(6).numFmt = '#,##0.00'; if(trm) w.getCell(10).numFmt = '#,##0';
+    R.forEach((x,i)=>{ const r = i+2, w = D.addRow([x.doc, x.nota||x.oc, dt(x.fecha), dt(x.vence), {formula:`D${r}-TODAY()`}, x.saldo, semK(x), mesK(x), venK(x)].concat(trm?[{formula:`F${r}*Resumen!$B$3`}]:[]).concat([x.fuenteF, dt(x.vencePdf)]));
+      w.getCell(3).numFmt = 'dd/mm/yyyy'; w.getCell(4).numFmt = 'dd/mm/yyyy'; w.getCell(5).numFmt = '0'; w.getCell(6).numFmt = '#,##0.00'; if(trm) w.getCell(10).numFmt = '#,##0'; w.getCell(trm?12:11).numFmt = 'dd/mm/yyyy';
       if(x.dias<0) w.getCell(5).font = {color:{argb:'FFDC2626'}, bold:true}; else if(x.dias<=7) w.getCell(5).font = {color:{argb:'FFEA580C'}, bold:true}; });
-    const tr = D.addRow(['Total','','','','',{formula:`SUBTOTAL(9,F2:F${ult})`}].concat(['','','']).concat(trm?[{formula:`SUBTOTAL(9,J2:J${ult})`}]:[]));
+    const tr = D.addRow(['Total','','','','',{formula:`SUBTOTAL(9,F2:F${ult})`}].concat(['','','']).concat(trm?[{formula:`SUBTOTAL(9,J2:J${ult})`}]:[]).concat(['','']));
     tr.eachCell(c=>{ c.font = {bold:true, color:{argb:'FFFFFFFF'}}; c.fill = {type:'pattern', pattern:'solid', fgColor:{argb:AZ}}; }); tr.getCell(6).numFmt = '#,##0.00'; if(trm) tr.getCell(10).numFmt = '#,##0';
-    [22,34,13,13,11,16,16,11,16,16].forEach((w,i)=>D.getColumn(i+1).width = w); D.views = [{state:'frozen', ySplit:1}]; D.autoFilter = {from:'A1', to:String.fromCharCode(64+(trm?10:9))+'1'};
+    [22,34,13,13,11,16,16,11,16,16,18,13].forEach((w,i)=>D.getColumn(i+1).width = w); D.views = [{state:'frozen', ySplit:1}]; D.autoFilter = {from:'A1', to:String.fromCharCode(64+(trm?12:11))+'1'};
     // Resumen
     const S = wb.addWorksheet('Resumen', {views:[{showGridLines:false}]}); S.getColumn(1).width = 42; S.getColumn(2).width = 20; S.getColumn(3).width = 14;
     S.addRow(['Pagos a ILUMAX TRADING CORP (CxP en US$)']); S.getRow(1).font = {bold:true, size:14};
@@ -9018,7 +9037,7 @@ async function tcxpExcel(){
     const uniq = f => [...new Set(R.map(f))].sort();
     tabla('Por semana de vencimiento', uniq(semK), 'G'); tabla('Por mes de vencimiento', uniq(mesK), 'H'); tabla('Por ventana desde hoy', ['Vencido','0-7 días','8-14 días','15-30 días','31-60 días','Más de 60 días'].filter(v=>R.some(x=>venK(x)===v)), 'I');
     for(let c=4;c<=6;c++) S.getColumn(c).width = 16;
-    S.addRow(['Nota: fecha de pago = fecha de vencimiento de cada factura. Los días se recalculan con HOY() al abrir el Excel; Semana/Mes/Ventana quedan fijos a la fecha de descarga ('+hoy.toISOString().slice(0,10)+').']).getCell(1).font = {italic:true, size:9};
+    S.addRow(['Nota: fecha de pago = la de Programación de pagos del sistema para la OC (columna Fuente); si no tiene, la del vencimiento del PDF. Los días se recalculan con HOY() al abrir el Excel; Semana/Mes/Ventana quedan fijos a la fecha de descarga ('+hoy.toISOString().slice(0,10)+').']).getCell(1).font = {italic:true, size:9};
     // Vencido
     const V = wb.addWorksheet('Vencido'); V.addRow(['Documento','OC / nota','Vence','Días vencida','Saldo US$']); hdr(V,1);
     R.filter(x=>x.dias<0).forEach(x=>{ const w = V.addRow([x.doc, x.nota||x.oc, dt(x.vence), -x.dias, x.saldo]); w.getCell(3).numFmt = 'dd/mm/yyyy'; w.getCell(5).numFmt = '#,##0.00'; });
