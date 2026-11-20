@@ -1630,7 +1630,21 @@ const GFB_COLS = [
 const GHI_COLS = [
   { k: 'lote', t: 'Fecha del plano', v: r => String(r.lote).slice(0, 16) }, { k: 'fabricante', t: 'Fabricante', v: r => r.fabricante },
   { k: 'banco', t: 'Banco', v: r => (girFabN(r.fabricante) || {}).banco }, { k: 'swift', t: 'SWIFT', v: r => (girFabN(r.fabricante) || {}).swift }, { k: 'cuenta', t: 'Cuenta', v: r => (girFabN(r.fabricante) || {}).cuenta, h: r => '<span style="font-family:monospace">' + esc((girFabN(r.fabricante) || {}).cuenta) + '</span>' },
-  { k: 'monto', t: 'Valor', num: 1, v: r => r.monto, h: r => girUsd(r.monto) }, { k: 'moneda', t: 'Moneda', v: r => r.moneda }, { k: 'observacion', t: 'Observación', v: r => r.observacion }, { k: 'usuario', t: 'Usuario', v: r => r.usuario }];
+  { k: 'monto', t: 'Valor', num: 1, v: r => r.monto, h: r => girUsd(r.monto) }, { k: 'moneda', t: 'Moneda', v: r => r.moneda }, { k: 'observacion', t: 'Observación', v: r => r.observacion }, { k: 'usuario', t: 'Usuario', v: r => r.usuario },
+  { k: 'acc', t: '', v: r => '', h: r => '<span style="white-space:nowrap"><button class="btn g" title="Editar" onclick="girHistEdit(' + r.id + ')">✏️</button> <button class="btn g" title="Eliminar" onclick="girHistDel(' + r.id + ')">🗑</button></span>' }];
+async function girHistEdit(id) {
+  const r = XG.ghi.rows.find(x => x.id === id); if (!r) return;
+  const m = prompt('Valor de ' + r.fabricante + ' (' + r.moneda + '):', girUsd(r.monto)); if (m == null) return; const v = girNum(m); if (!(v > 0)) { alert('Valor no válido.'); return; }
+  const mo = prompt('Moneda (USD, EUR…):', r.moneda); if (mo == null) return;
+  const ob = prompt('Observación (máx. 140):', r.observacion || ''); if (ob == null) return;
+  const j = await girNubeApi({ accion: 'hist_editar', id, monto: v, moneda: mo.trim().toUpperCase(), observacion: ob });
+  if (!j || !j.ok) { alert((j && j.error) || 'No se pudo editar'); return; } girHist();
+}
+async function girHistDel(id) {
+  const r = XG.ghi.rows.find(x => x.id === id); if (!r) return;
+  if (!confirm('¿Eliminar del historial el pago a ' + r.fabricante + ' por ' + r.moneda + ' ' + girUsd(r.monto) + '?\nNo se puede deshacer.')) return;
+  const j = await girNubeApi({ accion: 'hist_eliminar', id }); if (!j || !j.ok) { alert((j && j.error) || 'No se pudo eliminar'); return; } girHist();
+}
 const girFabN = n => GIR.fabs.find(x => girUp(x.nombre) === girUp(n));
 function girBuscar() { const v = girUp($('gfab').value); return GIR.fabs.find(f => girUp(f.nombre) === v) || null; }
 function girSel() { const f = girBuscar(), i = $('ginfo'); i.innerHTML = f ? '🏦 <b>' + esc(f.banco) + '</b> · SWIFT ' + esc(f.swift) + ' · cuenta ' + esc(f.cuenta) + ' · país ' + esc(f.pais_benef) + (f.interm_banco ? ' · intermediario ' + esc(f.interm_banco) : '') : ''; }
@@ -1673,7 +1687,7 @@ async function girDescargar() {
   else if (confirm('Plano descargado (' + L.length + ' pagos). ¿Vaciar la lista para empezar otro plano?')) { GIR.lote = []; girGuardaLote(); girPintar(); }
 }
 async function girHist() {
-  const h = $('ghist'); h.innerHTML = cargaHtml('Cargando'); const j = await girApi({ accion: 'historial' });
+  const h = $('ghist'); h.innerHTML = cargaHtml('Cargando'); const j = await girNubeApi({ accion: 'hist_listar' });
   if (!j || !j.ok) { h.innerHTML = '<div class="err">' + esc((j && j.error) || 'Error') + '</div>'; return; }
   xgInit('ghi', GHI_COLS, { rows: j.pagos, limit: 800, nombre: 'Giros_historial' });
   h.innerHTML = '<div class="card" style="margin-top:12px"><h2>🕘 Historial de planos descargados</h2>' + xgBar('ghi') + '<div class="tw" id="xg_ghi" style="max-height:50vh;overflow:auto"></div></div>'; xgPaint('ghi');
