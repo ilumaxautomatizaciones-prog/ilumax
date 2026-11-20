@@ -8828,17 +8828,100 @@ function comprasResumenOC(o){
   const pct = o.deposito_pct!=null ? Number(o.deposito_pct) : 0, extra = Number(o.costo_extra_usd)||0, dep = (fob+extra)*pct;
   return {fob, inter, cant, pct, extra, dep, saldo:inter+extra-dep, det};
 }
+/* ───────── Pagos Trading: calendario de pagos de la CxP a ILUMAX TRADING (reporte «Estado de cuentas CxP» de contabilidad, en USD) ───────── */
+const TCXP = {cfg:null, vista:'semana', q:'', sort:{k:'vence',d:1}, cargado:false, trm:(function(){ try{ return Number(localStorage.getItem('tcxp_trm'))||0; }catch(e){ return 0; } })()};
+const tcxpIso = s => { const m = String(s||'').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0') : ''; };
+const tcxpUsd = n => (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+function tcxpHoy(){ const d = new Date(); d.setHours(12,0,0,0); return d; }
+function tcxpDias(iso){ return Math.round((new Date(iso+'T12:00:00')-tcxpHoy())/86400000); }
+function tcxpLunes(iso){ const d = new Date(iso+'T12:00:00'), w = (d.getDay()+6)%7; d.setDate(d.getDate()-w); return d.toISOString().slice(0,10); }
+function tcxpParsear(texto){
+  const filas = []; const re = /^(\*?)\s*(\d{3}-[\w-]+)\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d+)\s+(-?\d+)\s*(.*?)\s*US\s?-?[\d,.]+\s+US\s?-?[\d,.]+\s+US\s?-?[\d,.]+\s+US\s?(-?[\d,]+\.\d+)\s*$/;
+  texto.split('\n').forEach(l=>{ const m = l.trim().match(re); if(!m) return;
+    const nota = m[7].trim(), oc = (nota.match(/\b(OCI?\d+(?:-\d+)?|OI\d+(?:-\d+)?|CONSOL\w*)/i)||[])[1] || '';
+    filas.push({doc:m[2], fecha:tcxpIso(m[3]), vence:tcxpIso(m[4]), plazo:+m[5], nota, oc, marca:!!m[1], saldo:Number(m[8].replace(/,/g,''))}); });
+  return filas;
+}
+async function tcxpLeerPdf(f){
+  const lib = await ocpPdfjs(), pdf = await lib.getDocument({data: await f.arrayBuffer()}).promise; let out = [];
+  for(let p=1;p<=pdf.numPages;p++){ const pg = await pdf.getPage(p), tc = await pg.getTextContent(), rows = {};
+    tc.items.forEach(it=>{ if(!it.str || !it.str.trim()) return; const y = Math.round(it.transform[5]/3); (rows[y] = rows[y] || []).push({x:it.transform[4], s:it.str}); });
+    Object.keys(rows).map(Number).sort((a,b)=>b-a).forEach(y=>out.push(rows[y].sort((a,b)=>a.x-b.x).map(i=>i.s.trim()).join(' '))); }
+  return out.join('\n');
+}
+async function tcxpSubir(inp){
+  const f = inp.files && inp.files[0]; if(!f) return;
+  try{
+    const filas = tcxpParsear(await tcxpLeerPdf(f));
+    if(!filas.length){ toast('No encontré facturas en el PDF (¿es el «Estado de cuentas CxP»?)','er'); return; }
+    TCXP.cfg = {filas, archivo:f.name, fecha:new Date().toISOString().slice(0,10), quien:(CU&&CU.nombre)||'', total:filas.reduce((a,x)=>a+x.saldo,0)};
+    await sb.upsert('configuracion', {clave:'trading_cxp', valor:JSON.stringify(TCXP.cfg), tipo:'json'}, 'clave');
+    toast('Pagos Trading cargados: '+filas.length+' documentos · US$ '+tcxpUsd(TCXP.cfg.total),'ok'); comprasPintar();
+  }catch(e){ console.warn(e); toast('No se pudo leer el PDF: '+e.message,'er'); } finally { inp.value = ''; }
+}
+async function tcxpCargar(){
+  TCXP.cargado = true;
+  try{ const r = await sb.get('configuracion','clave=eq.trading_cxp'); const v = r && r[0] ? r[0].valor : null; TCXP.cfg = typeof v==='string' ? JSON.parse(v) : v; }catch(e){ console.warn(e); }
+  comprasPintar();
+}
+function tcxpBucket(d){ return d<0 ? ['0','Vencido'] : d<=7 ? ['1','0-7 días'] : d<=14 ? ['2','8-14 días'] : d<=30 ? ['3','15-30 días'] : d<=60 ? ['4','31-60 días'] : ['5','Más de 60 días']; }
+function tcxpGrupo(F, clave){
+  const g = {}; F.forEach(x=>{ const k = clave(x); (g[k] = g[k] || {k, n:0, v:0, docs:[]}); g[k].n++; g[k].v += x.saldo; g[k].docs.push(x); });
+  return Object.values(g).sort((a,b)=>a.k.localeCompare(b.k));
+}
+function tcxpSet(k,v){ TCXP[k] = v; comprasPintar(); }
+function tcxpOrden(k){ TCXP.sort = TCXP.sort.k===k ? {k, d:-TCXP.sort.d} : {k, d:1}; comprasPintar(); }
+function tcxpHtml(){
+  const E = reabastEsc;
+  if(!TCXP.cargado){ tcxpCargar(); return '<div class="empty"><div class="empty-t">Cargando…</div></div>'; }
+  const up = `<label class="btn btn-p btn-sm" style="cursor:pointer;">📥 Subir PDF «Estado de cuentas CxP»<input type="file" accept="application/pdf" style="display:none;" onchange="tcxpSubir(this)"></label>`;
+  if(!TCXP.cfg || !(TCXP.cfg.filas||[]).length) return `<div class="empty"><div class="empty-t">Aún no hay reporte de la Trading cargado</div><div style="font-size:12px;color:var(--mu);margin:6px 0 10px;">Sube el PDF que saca contabilidad («Reporte de estado de cuentas CxP», ILUMAX TRADING CORP, en dólares). Solo cuenta las facturas que trae el reporte.</div>${up}</div>`;
+  const C = TCXP.cfg, q = TCXP.q.toLowerCase().trim(), trm = TCXP.trm;
+  const R = C.filas.map(x=>({...x, dias:tcxpDias(x.vence)})).filter(x=>x.saldo>=0.5 || true);
+  const F = R.filter(x=>!q || [x.doc,x.oc,x.nota,x.vence].join(' ').toLowerCase().includes(q));
+  const tot = F.reduce((a,x)=>a+x.saldo,0), ven = F.filter(x=>x.dias<0), venT = ven.reduce((a,x)=>a+x.saldo,0), s7 = F.filter(x=>x.dias>=0&&x.dias<=7).reduce((a,x)=>a+x.saldo,0), s30 = F.filter(x=>x.dias>=0&&x.dias<=30).reduce((a,x)=>a+x.saldo,0);
+  const cop = v => trm ? '<td style="text-align:right;color:var(--mu);">$ '+Math.round(v*trm).toLocaleString('es-CO')+'</td>' : '';
+  const kp = (v,l,c)=>`<div style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:10px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:${c||'inherit'};">${v}</div><div style="font-size:11px;color:var(--mu);">${l}</div></div>`;
+  const bt = (id,t)=>`<button class="btn btn-sm ${TCXP.vista===id?'btn-bl':'btn-g'}" style="border-radius:0;" onclick="tcxpSet('vista','${id}')">${t}</button>`;
+  const barra = (v,m)=>`<div style="background:#e2e8f0;border-radius:4px;height:10px;min-width:120px;"><div style="width:${m?Math.max(2,v/m*100):0}%;background:#2563eb;height:10px;border-radius:4px;"></div></div>`;
+  let cuerpo = '';
+  if(TCXP.vista==='semana' || TCXP.vista==='mes'){
+    const esS = TCXP.vista==='semana', G = tcxpGrupo(F, x=> x.dias<0 ? '0000 Vencido' : (esS ? tcxpLunes(x.vence) : x.vence.slice(0,7))), mx = Math.max(...G.map(g=>g.v),1); let acum = 0;
+    const lbl = k => k.startsWith('0000') ? '🔴 Vencido (por pagar ya)' : esS ? 'Semana del '+new Date(k+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short'}) : new Date(k+'-15T12:00:00').toLocaleDateString('es-CO',{month:'long',year:'numeric'});
+    cuerpo = `<div class="tw"><table><thead><tr><th>${esS?'Semana (vencimiento)':'Mes (vencimiento)'}</th><th style="text-align:right;">Facturas</th><th style="text-align:right;">A pagar US$</th>${trm?'<th style="text-align:right;">A pagar COP</th>':''}<th></th><th style="text-align:right;">Acumulado US$</th><th style="text-align:right;">% del total</th></tr></thead><tbody>${G.map(g=>{ acum += g.v; return `<tr><td><b>${E(lbl(g.k))}</b></td><td style="text-align:right;">${g.n}</td><td style="text-align:right;font-weight:700;">${tcxpUsd(g.v)}</td>${cop(g.v)}<td>${barra(g.v,mx)}</td><td style="text-align:right;">${tcxpUsd(acum)}</td><td style="text-align:right;">${tot?Math.round(g.v/tot*1000)/10:0}%</td></tr>`; }).join('')}</tbody><tfoot><tr class="tot" style="font-weight:800;background:#0f172a;color:#fff;"><td>Total</td><td style="text-align:right;">${F.length}</td><td style="text-align:right;">${tcxpUsd(tot)}</td>${trm?'<td style="text-align:right;">$ '+Math.round(tot*trm).toLocaleString('es-CO')+'</td>':''}<td></td><td></td><td></td></tr></tfoot></table></div>`;
+  } else if(TCXP.vista==='ventana'){
+    const G = tcxpGrupo(F, x=>tcxpBucket(x.dias).join(' ')), mx = Math.max(...G.map(g=>g.v),1);
+    cuerpo = `<div class="tw"><table><thead><tr><th>Ventana (desde hoy)</th><th style="text-align:right;">Facturas</th><th style="text-align:right;">A pagar US$</th>${trm?'<th style="text-align:right;">COP</th>':''}<th></th></tr></thead><tbody>${G.map(g=>`<tr><td><b>${E(g.k.slice(2))}</b></td><td style="text-align:right;">${g.n}</td><td style="text-align:right;font-weight:700;">${tcxpUsd(g.v)}</td>${cop(g.v)}<td>${barra(g.v,mx)}</td></tr>`).join('')}</tbody></table></div>`;
+  } else {
+    const s = TCXP.sort, val = (x,k)=> k==='vence'||k==='fecha'?x[k] : k==='saldo'||k==='dias'?x[k] : String(x[k]||'');
+    const L = F.slice().sort((a,b)=>{ const A = val(a,s.k), B = val(b,s.k); return (A<B?-1:A>B?1:0)*s.d || a.doc.localeCompare(b.doc); });
+    const th = (k,t,r)=>`<th style="cursor:pointer;${r?'text-align:right;':''}" onclick="tcxpOrden('${k}')">${t}${s.k===k?(s.d>0?' ▲':' ▼'):''}</th>`;
+    cuerpo = `<div class="tw"><table><thead><tr>${th('doc','Documento')}${th('oc','OC / nota')}${th('fecha','Fecha factura')}${th('vence','Vence')}${th('dias','Días (hoy)',1)}${th('saldo','Saldo US$',1)}${trm?'<th style="text-align:right;">COP</th>':''}</tr></thead><tbody>${L.map(x=>`<tr><td style="font-family:monospace;">${E(x.doc)}</td><td>${E(x.nota||x.oc)}</td><td>${E(x.fecha)}</td><td>${E(x.vence)}</td><td style="text-align:right;font-weight:700;color:${x.dias<0?'#dc2626':x.dias<=7?'#ea580c':'inherit'};">${x.dias<0?'vencida '+(-x.dias)+' d':x.dias===0?'hoy':'en '+x.dias+' d'}</td><td style="text-align:right;">${tcxpUsd(x.saldo)}</td>${cop(x.saldo)}</tr>`).join('')}</tbody><tfoot><tr class="tot" style="font-weight:800;background:#0f172a;color:#fff;"><td>${L.length} facturas</td><td></td><td></td><td></td><td></td><td style="text-align:right;">${tcxpUsd(tot)}</td>${trm?'<td style="text-align:right;">$ '+Math.round(tot*trm).toLocaleString('es-CO')+'</td>':''}</tr></tfoot></table></div>`;
+  }
+  return `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">${up}<input class="inp" placeholder="🔎 Documento, OC…" value="${E(TCXP.q)}" style="width:190px;" oninput="TCXP.q=this.value;clearTimeout(TCXP._t);TCXP._t=setTimeout(()=>{comprasPintar();const i=document.querySelector('#compras-mod input[placeholder^=\\'🔎 Documento\\']');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},300)">
+    <label style="font-size:12px;">TRM <input class="inp" type="number" style="width:90px;" value="${trm||''}" placeholder="opcional" onchange="TCXP.trm=Number(this.value)||0;try{localStorage.setItem('tcxp_trm',TCXP.trm)}catch(e){};comprasPintar()"></label>
+    <button class="btn btn-g btn-sm" onclick="tcxpExcel()">⬇ Excel</button><span style="font-size:11px;color:var(--mu);">Reporte: ${E(C.archivo||'')} · cargado ${E(C.fecha||'')} ${E(C.quien||'')}</span></div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">${kp('US$ '+tcxpUsd(tot),'Total por pagar a la Trading ('+F.length+' facturas)')}${kp('US$ '+tcxpUsd(venT),'Vencido ('+ven.length+' facturas)','#dc2626')}${kp('US$ '+tcxpUsd(s7),'Vence en los próximos 7 días','#ea580c')}${kp('US$ '+tcxpUsd(s30),'Vence en los próximos 30 días')}</div>
+  <div style="display:inline-flex;border:1px solid var(--b2);border-radius:8px;overflow:hidden;margin-bottom:10px;">${bt('semana','📅 Por semana')}${bt('mes','🗓️ Por mes')}${bt('ventana','⏱️ Ventanas')}${bt('detalle','📋 Detalle')}</div>${cuerpo}
+  <div style="font-size:11px;color:var(--mu);margin-top:8px;">Fecha de pago = fecha de vencimiento de cada factura. «Vencido» = ya pasó la fecha. Días calculados contra hoy. Solo incluye lo que trae el reporte de contabilidad; para actualizar, sube el PDF nuevo.</div>`;
+}
+async function tcxpExcel(){
+  if(!TCXP.cfg) return; const R = TCXP.cfg.filas.map(x=>({...x, dias:tcxpDias(x.vence)})), wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(R.map(x=>({Documento:x.doc, 'OC / nota':x.nota, 'Fecha factura':x.fecha, Vence:x.vence, 'Días hoy':x.dias, 'Saldo US$':x.saldo, 'Semana (lunes)':x.dias<0?'Vencido':tcxpLunes(x.vence)}))), 'Detalle');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tcxpGrupo(R, x=>x.dias<0?'Vencido':tcxpLunes(x.vence)).map(g=>({'Semana (lunes)':g.k, Facturas:g.n, 'A pagar US$':Math.round(g.v*100)/100}))), 'Por semana');
+  XLSX.writeFile(wb, 'Pagos_Trading_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
 function comprasPintar(){
   const el = document.getElementById('compras-mod'); if(!el) return;
   const E = reabastEsc, T = COMP.tab, L0 = comprasOCs(), kT = COMP_TABK[T], soloP = !!kT && !COMP.todas[T], L1 = soloP ? L0.filter(o=>!comprasListo(o,kT)) : L0, L = (COMP.venc && T==='produccion') ? L1.filter(comprasVencida) : L1, bt = (id,t)=>`<button class="btn btn-sm ${T===id?'btn-bl':'btn-g'}" style="border-radius:0;" onclick="COMP.tab='${id}';comprasPintar()">${t}</button>`;
   let body = '';
-  const tabF = LL => T==='pi' ? comprasTabPI(LL) : T==='artes' ? comprasTabArtes(LL) : T==='produccion' ? comprasTabProduccion(LL) : T==='embarque' ? comprasTabEmbarque(LL) : T==='inspeccion' ? comprasTabInspeccion(LL) : T==='trading' ? comprasTabTrading(LL) : T==='anticipos' ? comprasTabAnticipos(LL) : comprasTabOrdenes(LL);
+  const tabF = LL => T==='pi' ? comprasTabPI(LL) : T==='artes' ? comprasTabArtes(LL) : T==='produccion' ? comprasTabProduccion(LL) : T==='embarque' ? comprasTabEmbarque(LL) : T==='inspeccion' ? comprasTabInspeccion(LL) : T==='trading' ? comprasTabTrading(LL) : T==='pagostrading' ? tcxpHtml() : T==='anticipos' ? comprasTabAnticipos(LL) : comprasTabOrdenes(LL);
   const fo = COMP.foco ? (REABAST.ordenesCompra||[]).find(x=>String(x.id)===String(COMP.foco)) : null, Lr = fo ? L.filter(o=>o.id!==fo.id) : L;
   body = (fo ? `<div style="border:2px solid var(--acc);background:#fffbeb;border-radius:12px;padding:10px;margin-bottom:14px;"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;"><span style="font-size:14px;">🎯 Estás trabajando en <b>${E(fo.numero_oc)}</b></span><span class="arte-mu">${E(fo.proveedor||'')}</span><button class="btn btn-g btn-xs" style="margin-left:auto;" onclick="comprasFoco(null)">✕ Dejar de trabajar en esta</button></div>${tabF([fo])}</div>`+(Lr.length?'<div class="arte-mu" style="margin:4px 2px 8px;font-weight:700;">Demás órdenes</div>':'') : '') + (Lr.length ? tabF(Lr) : (fo ? '' : tabF(L)));
   el.innerHTML = `<div style="padding:14px;">
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
       <div style="font-weight:800;font-size:16px;">🛒 Módulo de compras</div>
-      <div style="display:inline-flex;border:1px solid var(--b2);border-radius:8px;overflow:hidden;flex-wrap:wrap;">${bt('ordenes','📝 Órdenes')}${bt('pi','📑 PI')}${bt('artes','🎨 Artes')}${bt('anticipos','💸 Anticipos')}${bt('produccion','🏭 Producción')}${bt('inspeccion','🔍 Inspección')}${bt('embarque','🚢 Embarque')}${bt('trading','🏷️ Factura trading')}</div>
+      <div style="display:inline-flex;border:1px solid var(--b2);border-radius:8px;overflow:hidden;flex-wrap:wrap;">${bt('ordenes','📝 Órdenes')}${bt('pi','📑 PI')}${bt('artes','🎨 Artes')}${bt('anticipos','💸 Anticipos')}${bt('produccion','🏭 Producción')}${bt('inspeccion','🔍 Inspección')}${bt('embarque','🚢 Embarque')}${bt('trading','🏷️ Factura trading')}${bt('pagostrading','💵 Pagos Trading')}</div>
       <input class="inp" id="comp-q" placeholder="🔎 Buscar OC, proveedor o referencia…" value="${E(COMP.q)}" style="flex:1;min-width:220px;max-width:380px;" oninput="COMP.q=this.value;clearTimeout(COMP._t);COMP._t=setTimeout(()=>{comprasPintar();const i=document.getElementById('comp-q');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},300)">
       ${reabastEsAdmin()?'<button class="btn btn-bl btn-sm" onclick="abrirModalOC()">+ Nueva OC</button>':''}
       ${comprasFiltroUI()}
