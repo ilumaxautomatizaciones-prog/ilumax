@@ -8952,19 +8952,22 @@ async function tcxpCargarSiesa(){
       const j = JSON.parse(t), it = (j.detalle && (j.detalle.Table || j.detalle.table)) || []; filas.push(...it); if(it.length<100) break;
     }
     const d10 = x => { const q = String(x||'').slice(0,10); return /^\d{4}-\d{2}-\d{2}$/.test(q) ? q : ''; };
+    const TODAS = filas.map(x=>({cuenta:String(x.f253_id||''), fecha:d10(x.f353_fecha), vence:d10(x.f353_fecha_vcto), db:Number(x.f353_total_db)||0, cr:Number(x.f353_total_cr)||0, nota:String(x.f353_notas||'').trim(), usd:null, usdTipo:''}));
     const S = filas.filter(x=>/^2210/.test(String(x.f253_id||''))).map(x=>({fecha:d10(x.f353_fecha), vence:d10(x.f353_fecha_vcto), cop:(Number(x.f353_total_cr)||0)-(Number(x.f353_total_db)||0), nota:String(x.f353_notas||'').trim()}));
     if(!S.length) throw new Error('Siesa no devolvió facturas');
     const pdf = ((TCXP.cfg && TCXP.cfg.filas) || []).map(x=>({...x, usada:false}));
+    S.forEach(x=>{ x.t = TODAS.find(t=>!t.ligada && /^2210/.test(t.cuenta) && t.vence===x.vence && t.fecha===x.fecha && t.nota===x.nota && Math.abs((t.cr-t.db)-x.cop)<0.01); if(x.t) x.t.ligada = true; });
     const pos = S.filter(x=>x.cop>0), sumC = pos.reduce((a,x)=>a+x.cop,0), sumU = pdf.reduce((a,x)=>a+x.saldo,0), R = sumU>0 ? sumC/sumU : (TCXP.trm||3100);
     const rows = []; let sinUsd = 0, aFavor = 0;
     S.slice().sort((a,b)=>b.cop-a.cop).forEach(x=>{
       if(x.cop<=0){ aFavor++; return; }
       const c = pdf.filter(p=>!p.usada && p.vence===x.vence && Math.abs(x.cop/Math.max(p.saldo,0.01)-R)/R <= 0.08 || (!p.usada && p.vence===x.vence && p.saldo<1 && x.cop<2000)).sort((a,b)=>Math.abs(x.cop/Math.max(a.saldo,0.01)-R)-Math.abs(x.cop/Math.max(b.saldo,0.01)-R))[0];
       const oc = (x.nota.match(/\b(OCI?\d+(?:-\d+)?|OI\d+(?:-\d+)?|CONSOL\w*)/i)||[])[1] || (c && c.oc) || '';
+      if(x.t){ x.t.usd = c ? c.saldo : Math.round(x.cop/R*100)/100; x.t.usdTipo = c ? 'PDF' : 'aprox.'; }
       if(c){ c.usada = true; rows.push({doc:c.doc, fecha:x.fecha||c.fecha, vence:x.vence, nota:x.nota||c.nota, oc: oc || c.oc, saldo:c.saldo, cop:x.cop, marca:c.marca, plazo:c.plazo, deSiesa:true}); }
       else { sinUsd++; rows.push({doc:'Siesa '+(x.nota.match(/FACT\.?\s*(\d+)/i)||[])[1], fecha:x.fecha, vence:x.vence, nota:x.nota, oc, saldo:Math.round(x.cop/R*100)/100, cop:x.cop, usdAprox:true, deSiesa:true}); }
     });
-    TCXP.siesa = {rows, at:new Date(), sinUsd, aFavor, pdfSinSiesa:pdf.filter(p=>!p.usada).length, trmImpl:R};
+    TCXP.siesa = {rows, todas:TODAS, at:new Date(), sinUsd, aFavor, pdfSinSiesa:pdf.filter(p=>!p.usada).length, trmImpl:R};
     TCXP.siesaMsg = '✅ Siesa '+new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'})+' · '+rows.length+' facturas abiertas'+(sinUsd?' · '+sinUsd+' sin US$ del PDF (US$ aprox. con TRM '+Math.round(R)+')':'')+(TCXP.siesa.pdfSinSiesa?' · '+TCXP.siesa.pdfSinSiesa+' del PDF ya no están abiertas en Siesa':'');
   }catch(e){ console.warn('Pagos Trading: Siesa', e); TCXP.siesa = null; TCXP.siesaMsg = '⚠️ No pude leer Siesa ('+e.message+'); se muestra el PDF'; }
 }
@@ -9005,6 +9008,15 @@ function tcxpSet(k,v){ TCXP[k] = v; comprasPintar(); }
 function tcxpAbrir(k){ TCXP.open[k] = !TCXP.open[k]; comprasPintar(); }
 function tcxpSub(g, cols){ return g.docs.slice().sort((a,b)=>a.vence.localeCompare(b.vence)||a.doc.localeCompare(b.doc)).map(x=>`<tr style="background:#f8fafc;font-size:11.5px;"><td colspan="${cols}" style="padding:3px 6px 3px 34px;"><span style="font-family:monospace;">${reabastEsc(x.doc)}</span> · ${reabastEsc(x.nota||x.oc)} · pago ${reabastEsc(x.vence)} · ${reabastEsc(x.fuenteF)} (${x.dias<0?'vencida '+(-x.dias)+' d':x.dias===0?'hoy':'en '+x.dias+' d'}) · <b>US$ ${tcxpUsd(x.saldo)}</b>${TCXP.trm?' · $ '+Math.round(x.saldo*TCXP.trm).toLocaleString('es-CO'):''}</td></tr>`).join(''); }
 function tcxpOrden(k){ TCXP.sort = TCXP.sort.k===k ? {k, d:-TCXP.sort.d} : {k, d:1}; comprasPintar(); }
+function tcxpSiesaHtml(){
+  if(!TCXP.verSiesa) return '';
+  const E = reabastEsc, T = TCXP.siesa && TCXP.siesa.todas;
+  if(!T) return '<div class="alert" style="margin-bottom:10px;">Siesa no respondió; no hay datos para mostrar.</div>';
+  const n = v => v ? Number(v).toLocaleString('es-CO',{maximumFractionDigits:2}) : '', tr = T.slice().sort((a,b)=>a.cuenta.localeCompare(b.cuenta)||a.vence.localeCompare(b.vence));
+  return `<div class="card" style="margin-bottom:10px;"><div class="ch"><div class="ct">Lo que devuelve Siesa (consulta API_v2_CxP_General, NIT ${TCXP_NIT}) · ${T.length} filas</div><button class="btn btn-g btn-xs" onclick="TCXP.verSiesa=false;comprasPintar()">✖ Cerrar</button></div><div class="cb">
+  <div style="font-size:11px;color:var(--mu);margin-bottom:6px;">Campos que trae Siesa: cuenta (f253_id), fechas, nota, total débito y total crédito, todo en pesos. No trae columna en dólares; los US$ salen del PDF (o aprox. con la TRM implícita).</div>
+  <div class="tw" style="max-height:340px;overflow:auto;"><table style="width:100%;font-size:11.5px;"><thead><tr><th>Cuenta</th><th>Fecha</th><th>Vence</th><th>Nota</th><th style="text-align:right;">Débito COP</th><th style="text-align:right;">Crédito COP</th><th style="text-align:right;">Saldo COP</th><th style="text-align:right;">US$</th><th>US$ de</th></tr></thead><tbody>${tr.map(x=>`<tr><td>${E(x.cuenta)}</td><td>${E(x.fecha)}</td><td>${E(x.vence)}</td><td>${E(x.nota)}</td><td style="text-align:right;">${n(x.db)}</td><td style="text-align:right;">${n(x.cr)}</td><td style="text-align:right;font-weight:700;">${n(x.cr-x.db)}</td><td style="text-align:right;">${n(x.usd)}</td><td>${E(x.usdTipo)}</td></tr>`).join('')}</tbody></table></div></div></div>`;
+}
 function tcxpHtml(){
   const E = reabastEsc;
   if(!TCXP.cargado){ tcxpCargar(); return '<div class="empty"><div class="empty-t">Cargando…</div></div>'; }
@@ -9035,9 +9047,11 @@ function tcxpHtml(){
   return `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">${up}<input class="inp" placeholder="🔎 Documento, OC…" value="${E(TCXP.q)}" style="width:190px;" oninput="TCXP.q=this.value;clearTimeout(TCXP._t);TCXP._t=setTimeout(()=>{comprasPintar();const i=document.querySelector('#compras-mod input[placeholder^=\\'🔎 Documento\\']');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},300)">
     <label style="font-size:12px;">Fecha de pago <select class="inp" style="width:auto;" onchange="tcxpSet('fuente',this.value)"><option value="sistema" ${TCXP.fuente==='sistema'?'selected':''}>Del sistema (OC)</option><option value="pdf" ${TCXP.fuente==='pdf'?'selected':''}>Del PDF (vencimiento)</option></select></label>
     <label style="font-size:12px;">TRM <input class="inp" type="number" style="width:90px;" value="${trm||''}" placeholder="opcional" onchange="TCXP.trm=Number(this.value)||0;try{localStorage.setItem('tcxp_trm',TCXP.trm)}catch(e){};comprasPintar()"></label>
+    <button class="btn btn-bl btn-sm" onclick="TCXP.verSiesa=!TCXP.verSiesa;comprasPintar()" title="Muestra tal cual lo que devuelve Siesa">🔎 Ver datos de Siesa</button>
     <button class="btn btn-g btn-sm" onclick="TCXP.cargado=false;TCXP.siesa=null;comprasPintar()" title="Vuelve a leer las facturas abiertas y vencimientos desde Siesa">🔄 Actualizar desde Siesa</button>
     <button class="btn btn-bl btn-sm" onclick="tcxpExcel()" title="Excel con Resumen, semanas, meses, ventanas, vencido y detalle con fórmulas">📊 Informe Excel</button><span style="font-size:11px;color:var(--mu);">${E(TCXP.siesaMsg||'')} · US$ del reporte: ${E(C.archivo||'')} · cargado ${E(C.fecha||'')} ${E(C.quien||'')}</span></div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">${kp('US$ '+tcxpUsd(tot),'Total por pagar a la Trading ('+F.length+' facturas)')}${kp('US$ '+tcxpUsd(venT),'Vencido ('+ven.length+' facturas)','#dc2626')}${kp('US$ '+tcxpUsd(s7),'Vence en los próximos 7 días','#ea580c')}${kp('US$ '+tcxpUsd(s30),'Vence en los próximos 30 días')}${kp(F.filter(x=>x.fuenteF.startsWith('Sistema')).length+' de '+F.length,'facturas con fecha del sistema'+(TCXP.sis?'':' (cargando…)'))}</div>
+  ${tcxpSiesaHtml()}
   <div style="display:inline-flex;border:1px solid var(--b2);border-radius:8px;overflow:hidden;margin-bottom:10px;">${bt('semana','📅 Por semana')}${bt('mes','🗓️ Por mes')}${bt('ventana','⏱️ Ventanas')}${bt('detalle','📋 Detalle')}</div>${cuerpo}
   <div style="font-size:11px;color:var(--mu);margin-top:8px;">Las facturas abiertas y su vencimiento se leen de Siesa (en vivo); los US$ salen del último PDF cargado. Fecha de pago = la que tiene el sistema en Programación de pagos para la OC de cada factura; si la OC no tiene fecha pendiente, se usa el vencimiento del PDF (columna «Fuente»; las facturas incluyen el 1,015 de la Trading: se cruzan con el pago de la OC dividiendo entre 1,015; «aprox.» = no cuadró el monto y se tomó la fecha de la OC). «Vencido» = ya pasó la fecha. Días calculados contra hoy. Solo incluye lo que trae el reporte de contabilidad; para actualizar, sube el PDF nuevo.</div>`;
 }
