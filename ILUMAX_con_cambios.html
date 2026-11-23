@@ -35221,7 +35221,7 @@ async function renderCtFacturas(el) {
   const kp = (v, t, c) => '<div style="background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:10px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'inherit') + '">' + v + '</div><div style="font-size:11px;color:var(--mu)">' + t + '</div></div>';
   el.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
     + '<select class="inp" style="width:auto;max-width:320px" onchange="FP.prov=this.value;renderCtFacturas(document.getElementById(\'ct-tab-content\'))">' + '<option value="__todos"' + (todos ? ' selected' : '') + '>Todos los proveedores</option>' + provs.map(p => '<option value="' + reabastEsc(p) + '"' + (p === FP.prov ? ' selected' : '') + '>' + reabastEsc(p) + '</option>').join('') + '</select>'
-    + '<button class="btn btn-p btn-sm" onclick="fpUAbrir()">📤 Subir facturas</button><button class="btn btn-g btn-sm" onclick="fpForm(\'\')">➕ Nueva factura</button>'
+    + '<button class="btn btn-p btn-sm" onclick="fpUAbrir()">📤 Subir facturas</button><button class="btn btn-g btn-sm" onclick="fpGAbrir()">📊 Gráfico</button><button class="btn btn-g btn-sm" onclick="fpForm(\'\')">➕ Nueva factura</button>'
     + '<button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxLimpiar()">✖ Quitar filtros y orden</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxExcel()">⬇ Excel de esta vista</button></div>'
     + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
     + (ult ? kp(fpCOP(ult.total), 'Última factura · ' + fpMesTxt(ult.mes)) + kp(fpVar(ult._var) + (ult._pct == null ? '' : ' (' + (ult._pct > 0 ? '+' : '') + ult._pct.toFixed(1) + '%)'), 'Contra el mes anterior', ult._var > 0 ? '#b91c1c' : ult._var < 0 ? '#166534' : '') + kp(fpCOP(prom), 'Promedio (últimos ' + Math.min(F.length, 12) + ' meses)') : '')
@@ -35422,6 +35422,62 @@ async function fpUGuardar(aprobar) {
   if (err.length) alert('Algunas no se guardaron:\n' + err.join('\n'));
   fpCerrar(); await renderCtFacturas(document.getElementById('ct-tab-content'));
   if (typeof toast === 'function') toast(nu + ' facturas nuevas (' + ap + ' aprobadas)' + (comp ? ' · ' + comp + ' completadas' : '') + (omit ? ' · ' + omit + ' omitidas' : ''), 'ok');
+}
+/* ===== Gráfico de gasto en facturas (torta / barras) ===== */
+const FPG = { tipo: 'barras', por: 'mes', desde: '', hasta: '', est: 'todas', sel: null };
+const FPG_COL = ['#2563eb', '#f59e0b', '#16a34a', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#475569', '#0d9488', '#a16207'];
+const fpGM = m => ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'][+m.slice(5, 7) - 1] + ' ' + m.slice(2, 4);
+const fpGAb = n => n >= 1e6 ? '$' + (n / 1e6).toFixed(1).replace('.', ',') + ' M' : fpCOP(n);
+const fpGProvs = () => [...new Set(FP.rows.map(r => r.proveedor))].sort();
+function fpGAbrir() {
+  const meses = [...new Set(FP.rows.map(r => r.mes))].sort();
+  if (!meses.length) { alert('Todavía no hay facturas cargadas.'); return; }
+  if (!FPG.desde || !FPG.hasta) { FPG.desde = meses[Math.max(0, meses.length - 12)]; FPG.hasta = meses[meses.length - 1]; }
+  if (!FPG.sel) FPG.sel = new Set(fpGProvs());
+  const op = (v, t, a) => '<option value="' + v + '"' + (a === v ? ' selected' : '') + '>' + t + '</option>';
+  const pv = fpGProvs().map(p => '<label style="display:flex;gap:4px;align-items:center;font-size:12px;white-space:nowrap"><input type="checkbox" value="' + reabastEsc(p) + '"' + (FPG.sel.has(p) ? ' checked' : '') + ' onchange="fpGTog(this)"><span style="width:10px;height:10px;border-radius:2px;background:' + FPG_COL[fpGProvs().indexOf(p) % FPG_COL.length] + '"></span>' + reabastEsc(p) + '</label>').join('');
+  fpModal('<div class="mh"><span class="mt">📊 Gasto en facturas</span><button class="mx" onclick="fpCerrar()">✕</button></div><div class="mb">'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px">'
+    + '<div class="fg" style="margin:0"><label class="fl">Gráfico</label><select class="inp" onchange="FPG.tipo=this.value;fpGPaint()">' + op('barras', '📊 Barras', FPG.tipo) + op('torta', '🥧 Torta', FPG.tipo) + '</select></div>'
+    + '<div class="fg" style="margin:0"><label class="fl">Agrupar por</label><select class="inp" onchange="FPG.por=this.value;fpGPaint()">' + op('mes', 'Mes (mes a mes)', FPG.por) + op('prov', 'Proveedor', FPG.por) + '</select></div>'
+    + '<div class="fg" style="margin:0"><label class="fl">Desde</label><input class="inp" type="month" value="' + FPG.desde + '" onchange="FPG.desde=this.value||FPG.desde;fpGPaint()"></div>'
+    + '<div class="fg" style="margin:0"><label class="fl">Hasta</label><input class="inp" type="month" value="' + FPG.hasta + '" onchange="FPG.hasta=this.value||FPG.hasta;fpGPaint()"></div>'
+    + '<div class="fg" style="margin:0"><label class="fl">Estado</label><select class="inp" onchange="FPG.est=this.value;fpGPaint()">' + op('todas', 'Todas', FPG.est) + op('aprobada', '✅ Aprobadas', FPG.est) + op('pendiente', '⏳ Pendientes', FPG.est) + op('devuelta', '↩ Devueltas', FPG.est) + '</select></div></div>'
+    + '<div style="border:1px solid var(--b1);border-radius:10px;padding:6px 8px;margin-bottom:8px"><div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;font-size:12px"><b>Proveedores</b><button class="btn btn-g btn-xs" onclick="fpGTodos(true)">Todos</button><button class="btn btn-g btn-xs" onclick="fpGTodos(false)">Ninguno</button></div><div id="fpg-pv" style="display:flex;flex-wrap:wrap;gap:4px 14px;max-height:92px;overflow:auto">' + pv + '</div></div>'
+    + '<div id="fpg-ch"></div></div><div class="mf"><button class="btn btn-g btn-sm" onclick="fpCerrar()">Cerrar</button></div>');
+  fpGPaint();
+}
+function fpGTog(cb) { if (cb.checked) FPG.sel.add(cb.value); else FPG.sel.delete(cb.value); fpGPaint(); }
+function fpGTodos(v) { FPG.sel = v ? new Set(fpGProvs()) : new Set(); document.querySelectorAll('#fpg-pv input').forEach(c => c.checked = v); fpGPaint(); }
+function fpGPaint() {
+  const box = document.getElementById('fpg-ch'); if (!box) return;
+  if (FPG.desde > FPG.hasta) { const t = FPG.desde; FPG.desde = FPG.hasta; FPG.hasta = t; }
+  const rows = FP.rows.filter(r => r.mes >= FPG.desde && r.mes <= FPG.hasta && FPG.sel.has(r.proveedor) && (FPG.est === 'todas' || r.estado === FPG.est));
+  if (!rows.length) { box.innerHTML = '<div class="empty">No hay facturas con esos filtros.</div>'; return; }
+  const meses = []; for (let y = +FPG.desde.slice(0, 4), m = +FPG.desde.slice(5, 7); (y + '-' + String(m).padStart(2, '0')) <= FPG.hasta; m++) { if (m > 12) { m = 1; y++; } meses.push(y + '-' + String(m).padStart(2, '0')); if (meses.length > 120) break; }
+  const provs = fpGProvs(), col = p => FPG_COL[provs.indexOf(p) % FPG_COL.length], tot = rows.reduce((s, r) => s + Number(r.total), 0);
+  const porMes = {}, porProv = {}; rows.forEach(r => { (porMes[r.mes] = porMes[r.mes] || {})[r.proveedor] = (porMes[r.mes][r.proveedor] || 0) + Number(r.total); porProv[r.proveedor] = (porProv[r.proveedor] || 0) + Number(r.total); });
+  const sumMes = m => Object.values(porMes[m] || {}).reduce((s, v) => s + v, 0);
+  let svg = '', leg = [];
+  if (FPG.tipo === 'barras' && FPG.por === 'mes') {
+    const W = 880, H = 320, L = 64, R = 12, T = 22, B = 36, mx = Math.max(...meses.map(sumMes), 1), step = Math.pow(10, Math.floor(Math.log10(mx))), top = Math.ceil(mx / step) * step, bw = Math.min(60, (W - L - R) / meses.length * 0.7), pw = (W - L - R) / meses.length;
+    svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-width:' + W + 'px;height:auto;font-family:inherit">';
+    for (let i = 0; i <= 4; i++) { const v = top * i / 4, y = T + (H - T - B) * (1 - i / 4); svg += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y + '" y2="' + y + '" stroke="#e2e8f0"/><text x="' + (L - 6) + '" y="' + (y + 4) + '" text-anchor="end" font-size="10" fill="#64748b">' + fpGAb(v) + '</text>'; }
+    meses.forEach((m, i) => { const cx = L + pw * i + pw / 2; let y = H - B; Object.keys(porMes[m] || {}).sort().forEach(p => { const v = porMes[m][p], h = (H - T - B) * v / top; y -= h; svg += '<rect x="' + (cx - bw / 2) + '" y="' + y + '" width="' + bw + '" height="' + Math.max(h, 0.5) + '" fill="' + col(p) + '"><title>' + reabastEsc(p) + ' · ' + fpGM(m) + ': ' + fpCOP(v) + '</title></rect>'; }); const t = sumMes(m); svg += '<text x="' + cx + '" y="' + (t ? y - 4 : H - B - 4) + '" text-anchor="middle" font-size="10" font-weight="700" fill="#0f172a">' + (t ? fpGAb(t) : '—') + '</text><text x="' + cx + '" y="' + (H - B + 14) + '" text-anchor="middle" font-size="11" fill="#475569">' + fpGM(m) + '</text>'; });
+    svg += '</svg>'; leg = Object.keys(porProv).sort((a, b) => porProv[b] - porProv[a]).map(p => [p, porProv[p], col(p)]);
+  } else if (FPG.tipo === 'barras') {
+    const it = Object.keys(porProv).sort((a, b) => porProv[b] - porProv[a]), W = 880, rh = 30, H = it.length * rh + 14, L = 270, R = 90, mx = Math.max(...it.map(p => porProv[p]), 1);
+    svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-width:' + W + 'px;height:auto;font-family:inherit">' + it.map((p, i) => { const w = (W - L - R) * porProv[p] / mx, y = 6 + i * rh; return '<text x="' + (L - 8) + '" y="' + (y + 17) + '" text-anchor="end" font-size="11" fill="#334155">' + reabastEsc(p.length > 42 ? p.slice(0, 41) + '…' : p) + '</text><rect x="' + L + '" y="' + y + '" width="' + Math.max(w, 1) + '" height="22" rx="3" fill="' + col(p) + '"><title>' + reabastEsc(p) + ': ' + fpCOP(porProv[p]) + '</title></rect><text x="' + (L + w + 6) + '" y="' + (y + 16) + '" font-size="11" font-weight="700" fill="#0f172a">' + fpGAb(porProv[p]) + '</text>'; }).join('') + '</svg>';
+    leg = it.map(p => [p, porProv[p], col(p)]);
+  } else {
+    const it = (FPG.por === 'mes' ? meses.filter(m => sumMes(m) > 0).map(m => [fpGM(m), sumMes(m), FPG_COL[meses.indexOf(m) % FPG_COL.length]]) : Object.keys(porProv).sort((a, b) => porProv[b] - porProv[a]).map(p => [p, porProv[p], col(p)]));
+    const cx = 150, cy = 150, r = 138; let a0 = -Math.PI / 2;
+    svg = '<svg viewBox="0 0 300 300" style="width:300px;max-width:100%;height:auto">' + (it.length === 1 ? '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + it[0][2] + '"><title>' + reabastEsc(it[0][0]) + ': ' + fpCOP(it[0][1]) + '</title></circle>' : it.map(x => { const f = x[1] / tot, a1 = a0 + f * 2 * Math.PI, p = 'M' + cx + ' ' + cy + ' L' + (cx + r * Math.cos(a0)) + ' ' + (cy + r * Math.sin(a0)) + ' A' + r + ' ' + r + ' 0 ' + (f > 0.5 ? 1 : 0) + ' 1 ' + (cx + r * Math.cos(a1)) + ' ' + (cy + r * Math.sin(a1)) + ' Z'; a0 = a1; return '<path d="' + p + '" fill="' + x[2] + '" stroke="#fff" stroke-width="1.5"><title>' + reabastEsc(x[0]) + ': ' + fpCOP(x[1]) + ' (' + (f * 100).toFixed(1) + '%)</title></path>'; }).join('')) + '</svg>';
+    leg = it;
+  }
+  const lg = '<div style="flex:1;min-width:260px">' + leg.map(x => '<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:3px 0;border-bottom:1px solid #f1f5f9"><span style="width:12px;height:12px;border-radius:3px;background:' + x[2] + ';flex:none"></span><span style="flex:1">' + reabastEsc(x[0]) + '</span><b>' + fpCOP(x[1]) + '</b><span style="width:48px;text-align:right;color:#64748b">' + (x[1] / tot * 100).toFixed(1) + '%</span></div>').join('') + '</div>';
+  const nm = meses.filter(m => sumMes(m) > 0).length;
+  box.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;font-size:12.5px"><span><b>Total del período:</b> ' + fpCOP(tot) + '</span><span><b>Facturas:</b> ' + rows.length + '</span><span><b>Promedio por mes:</b> ' + fpCOP(tot / Math.max(nm, 1)) + '</span></div><div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div style="flex:2;min-width:300px">' + svg + '</div>' + lg + '</div>';
 }
 async function fpEliminar(id) {
   const r = FP.rows.find(x => x.id === id); if (!r || !confirm('¿Eliminar la factura de ' + r.proveedor + ' de ' + fpMesTxt(r.mes) + '?\nNo se puede deshacer.')) return;
