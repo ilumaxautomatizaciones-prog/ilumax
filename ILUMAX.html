@@ -36091,6 +36091,7 @@ function fpUProv(nit, desc, notas) {
   if (nit === '900578416') return 'NOVOTECHNO · Alquiler de computadores';
   if (nit === '900505107') return 'COMPUELITE · Alquiler de portátiles';
   if (nit === '900092385') return 'UNE / TIGO · Internet dedicado';
+  if (nit === '830078515') return 'LIBERTY · Internet (Rental Charges)';
   return null;
 }
 function fpUMes(r, prov, notas, emision) {
@@ -36115,7 +36116,7 @@ function fpUDatos(r) {
   const desc = lineas[0] ? lineas[0].d : '';
   let prov = fpUProv(nit, desc, notas); if (!prov) prov = (nom || 'Proveedor ' + nit) + ' · ' + (desc || 'Facturas').slice(0, 40);
   const mes = fpUMes(r, prov, notas, emision);
-  return { nit, nom, prov, mes, numero: fpTx(r, 'ID'), emision, vence, payable, subtotal, iva, rete, total: Math.round((payable - rete) * 100) / 100, lineas, notas, desc };
+  return { nit, nom, prov, mes, numero: fpTx(r, 'ID'), emision, vence, payable, subtotal, iva, rete, total: Math.round((payable - rete) * 100) / 100, lineas, notas: notas.slice(0, 400), desc, pini: fpTx(r, 'InvoicePeriod/StartDate'), pfin: fpTx(r, 'InvoicePeriod/EndDate') };
 }
 async function fpULeer(files) {
   const res = document.getElementById('fpu-res'); if (!res) return; res.innerHTML = cargaHtml('Leyendo facturas');
@@ -36186,7 +36187,7 @@ async function fpUGuardar(aprobar) {
       if (it.res === 'dup') { await sb.patch('facturas_proveedor', 'id=eq.' + it.ex.id, { datos, vence: it.ex.vence || it.vence || null, numero: it.ex.numero || it.numero, actualizado: ahora }); comp++; continue; }
       const ok = aprobar && it.res === 'igual', conc = (it.prev && it.prev.concepto) || it.desc.slice(0, 60);
       const nota = 'Subtotal ' + fpCOP(it.subtotal) + ' · IVA ' + fpCOP(it.iva) + (it.rete ? ' · retención −' + fpCOP(it.rete) : '') + ' · leída del XML (' + it.arch + ')';
-      await sb.upsert('facturas_proveedor', { proveedor: it.prov, mes: it.mes, numero: it.numero, periodo: it.notas.slice(0, 80), vence: it.vence || null, concepto: conc, total: it.total, estado: ok ? 'aprobada' : 'pendiente', aprobado_por: ok ? quien : null, aprobado_en: ok ? ahora : null, notas: nota, lineas: [], datos, actualizado: ahora }, 'proveedor,mes');
+      await sb.upsert('facturas_proveedor', { proveedor: it.prov, mes: it.mes, numero: it.numero, periodo: (it.notas.match(/Periodo\s+\d{4}\s+\d{2}\s+\d{2}\s+al\s+\d{4}\s+\d{2}\s+\d{2}/i) || [''])[0] || (it.pini ? it.pini + ' a ' + it.pfin : ''), vence: it.vence || null, concepto: conc, total: it.total, estado: ok ? 'aprobada' : 'pendiente', aprobado_por: ok ? quien : null, aprobado_en: ok ? ahora : null, notas: nota, lineas: [], datos, actualizado: ahora }, 'proveedor,mes');
       nu++; if (ok) ap++;
     } catch (e) { err.push(it.numero + ': ' + e.message); }
   }
