@@ -658,6 +658,9 @@ input:checked+.sw-sl:before{transform:translateX(16px);}
 
 /* Carga/sincronización manual de inventario y precios: oculta porque ahora corre automática. Para volver a mostrarla: SYNC_MANUAL_VISIBLE = true */
 body:not(.sync-manual) [data-sync-manual]{display:none!important;}
+#fgx_fp table,#fgx_fpl table{width:100%;font-size:12px;border-collapse:collapse}#fgx_fp th,#fgx_fp td,#fgx_fpl th,#fgx_fpl td{padding:5px 8px;line-height:1.25;border-bottom:1px solid #e2e8f0}#fgx_fp th,#fgx_fpl th{font-size:10.5px;position:sticky;top:0;z-index:2;background:#0f172a;color:#fff;text-align:left}#fgx_fp td,#fgx_fpl td{white-space:nowrap}#fgx_fp td[style*="white-space:normal"],#fgx_fpl td[style*="white-space:normal"]{white-space:normal}#fgx_fp tr.tot td,#fgx_fpl tr.tot td{font-weight:800;background:#0f172a;color:#fff;position:sticky;bottom:0}
+.xgh{white-space:nowrap}.xgb{border:0;background:#ffffff26;color:#fff;border-radius:5px;margin-left:5px;cursor:pointer;font-size:10px;padding:2px 5px}.xgb.on{background:#f5c518;color:#0f172a}
+.xgm{position:fixed;z-index:10000;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 12px 32px #0004;width:264px;padding:10px;font-size:12px;color:#0f172a}.xgm input:not([type=checkbox]){display:block;width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:2px}.xgm .li{max-height:210px;overflow:auto;border:1px solid #e2e8f0;border-radius:6px;margin:6px 0;padding:4px 6px}.xgm label{display:flex;gap:6px;align-items:center;padding:2px 0;cursor:pointer}.xgm .btn{font-size:12px;padding:5px 8px}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
@@ -34200,6 +34203,7 @@ function renderCentroShell(el) {
       <button id="ct-tab-reporte"   class="flt"    onclick="ctTab('reporte')"   style="font-size:11px;padding:7px 14px;">📊 Reporte Diario</button>
       <button id="ct-tab-comisiones" class="flt"  onclick="ctTab('comisiones')" style="font-size:11px;padding:7px 14px;">💰 Comisiones</button>
       <button id="ct-tab-zona" class="flt" onclick="ctTab('zona')" style="font-size:11px;padding:7px 14px;">📍 Ventas por zona</button>
+      <button id="ct-tab-facturas" class="flt"  onclick="ctTab('facturas')" style="font-size:11px;padding:7px 14px;">🧾 Facturas</button>
       <button id="ct-tab-consumo" class="flt"  onclick="ctTab('consumo')" style="font-size:11px;padding:7px 14px;">📊 Consumo de datos</button>
     </div>
 
@@ -34859,7 +34863,7 @@ async function cmExcel(){
 // ── TABS ──────────────────────────────────────────────────────────────
 function ctTab(tab) {
   CT.tabActivo = tab;
-  ['tareas','funciones','manuales','contactos','tramites','briefing','reporte','comisiones','zona','consumo'].forEach(t => {
+  ['tareas','funciones','manuales','contactos','tramites','briefing','reporte','comisiones','zona','facturas','consumo'].forEach(t => {
     const btn = document.getElementById('ct-tab-'+t);
     if(btn) btn.classList.toggle('on', t===tab);
   });
@@ -34874,6 +34878,7 @@ function ctTab(tab) {
   if(tab==='reporte')   renderCtReporte(el);
   if(tab==='comisiones'){ CM.dest = null; renderCtComisiones(el); }
   if(tab==='zona')      renderCtZona(el);
+  if(tab==='facturas')  renderCtFacturas(el);
   if(tab==='consumo')   renderCtConsumo(el);
 }
 
@@ -35879,6 +35884,186 @@ function rzvExcel(){
 }
 
 // ── TAB CONSUMO DE DATOS (estimado de la salida de Supabase: plan gratis = 5 GB por ciclo, del 14 al 14) ──
+// ══════════════════════════════════════════════════════════════════════
+// 🧾 FACTURAS DE PROVEEDORES (Centro de Trabajo): control mes a mes. Una fila por proveedor y mes en `facturas_proveedor`
+// (total, estado pendiente/aprobada/devuelta, detalle por línea en `lineas`). Variación contra el mes anterior del mismo proveedor.
+// ══════════════════════════════════════════════════════════════════════
+let FGXM = null, FGXA = null;
+const FGX = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), limit: 800, box: 'fgx_fp', xl: 'Facturas_proveedores' };
+const FGXL = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), limit: 800, box: 'fgx_fpl', xl: 'Detalle_factura' };
+const fgxNz = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+const fgxV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
+function fgxView() {
+  const g = FGXA; let R = g.rows.filter(r => g.cols.every(c => {
+    const f = g.f[c.k]; if (!f) return true; const v = fgxV(c, r);
+    if (f.sel && !f.sel.has(String(v))) return false;
+    if (c.num || c.date) {
+      if (f.min !== '' && f.min != null) { if (v === '') return false; if (c.num ? Number(v) < Number(f.min) : String(v) < f.min) return false; }
+      if (f.max !== '' && f.max != null) { if (v === '') return false; if (c.num ? Number(v) > Number(f.max) : String(v) > f.max) return false; }
+    }
+    return true;
+  }));
+  if (g.sort) { const c = g.cols.find(x => x.k === g.sort.k), d = g.sort.dir; if (c) R = R.map((r, i) => [r, i]).sort((a, b) => { const x = fgxV(c, a[0]), y = fgxV(c, b[0]); let o; if (c.num) o = (x === '' ? -Infinity : Number(x)) - (y === '' ? -Infinity : Number(y)); else o = String(x).localeCompare(String(y), 'es', { numeric: true }); return (o || a[1] - b[1]) * (o ? d : 1); }).map(x => x[0]); }
+  return R;
+}
+const fgxOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !== '' && f.max != null));
+function fgxPaint() {
+  const g = FGXA, box = document.getElementById(g.box); if (!box) return; const V = fgxView(), cols = g.cols.filter(c => !g.hide.has(c.k));
+  const al = c => c.num ? 'right' : 'left';
+  const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="xgh" style="text-align:' + al(c) + '"><span style="cursor:pointer" onclick="fgxSort(\'' + c.k + '\')">' + reabastEsc(c.t) + s + '</span><button class="xgb' + (fgxOn(g.f[c.k]) ? ' on' : '') + '" onclick="fgxMenu(event,\'' + c.k + '\')">▾</button></th>'; }).join('');
+  const rows = V.slice(0, g.limit).map((r, i) => '<tr style="background:' + (i % 2 ? '#eff6ff' : '#fff') + '">' + cols.map(c => '<td style="text-align:' + al(c) + (c.mono ? ';font-family:monospace' : '') + (c.wrap ? ';white-space:normal;min-width:150px;max-width:230px' : '') + '">' + (c.h ? c.h(r) : reabastEsc(String(fgxV(c, r)))) + '</td>').join('') + '</tr>').join('');
+  const tot = '<tr class="tot">' + cols.map((c, i) => '<td style="text-align:' + al(c) + '">' + (i === 0 ? V.length + ' filas' : c.sum ? V.reduce((s, r) => s + (Number(fgxV(c, r)) || 0), 0).toLocaleString('es-CO') : '') + '</td>').join('') + '</tr>';
+  box.innerHTML = '<table><thead><tr>' + th + '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + cols.length + '" style="text-align:center;padding:20px;color:#64748b">Sin resultados</td></tr>') + '</tbody><tfoot>' + tot + '</tfoot></table>' + (V.length > g.limit ? '<div class="foot">Se muestran ' + g.limit + ' de ' + V.length + '; filtra para ver el resto (el Excel trae todas).</div>' : '');
+  
+}
+function fgxSort(k) { const g = FGXA; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; fgxPaint(); }
+function fgxLimpiar() { FGXA.f = {}; FGXA.sort = null; fgxPaint(); }
+function fgxCerrar() { const m = document.getElementById('xgm'); if (m) m.remove(); }
+document.addEventListener('click', fgxCerrar);
+function fgxPos(d, ev) { const b = ev.currentTarget.getBoundingClientRect(); d.style.top = Math.max(8, Math.min(b.bottom + 4, innerHeight - 440)) + 'px'; d.style.left = Math.max(8, Math.min(b.left - 120, innerWidth - 280)) + 'px'; }
+function fgxCols(ev) {
+  ev.stopPropagation(); fgxCerrar(); const g = FGXA, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); fgxPos(d, ev);
+  d.innerHTML = '<b>Columnas visibles</b><div class="li" style="max-height:300px">' + g.cols.map((c, i) => '<label><input type="checkbox" ' + (g.hide.has(c.k) ? '' : 'checked') + ' onchange="fgxToggle(' + i + ',this.checked)"> ' + reabastEsc(c.t) + '</label>').join('') + '</div>';
+  document.body.appendChild(d);
+}
+function fgxToggle(i, on) { const g = FGXA, k = g.cols[i].k; if (on) g.hide.delete(k); else g.hide.add(k); fgxPaint(); }
+
+function fgxMenu(ev, k) {
+  ev.stopPropagation(); fgxCerrar(); const g = FGXA, c = g.cols.find(x => x.k === k), f = g.f[k] || {}, d = document.createElement('div'); d.id = 'xgm'; d.className = 'xgm'; d.onclick = e => e.stopPropagation(); fgxPos(d, ev);
+  const vals = c.num || c.date ? null : [...new Set(g.rows.map(r => String(fgxV(c, r))))].sort((a, b) => a.localeCompare(b, 'es', { numeric: true })).slice(0, 600);
+  FGXM = { k, vals };
+  const num = c.num ? 'menor a mayor' : 'A → Z', num2 = c.num ? 'mayor a menor' : 'Z → A';
+  d.innerHTML = '<button class="btn" style="width:100%;margin-bottom:4px" onclick="fgxOrden(1)">↑ Ordenar ' + num + '</button><button class="btn" style="width:100%" onclick="fgxOrden(-1)">↓ Ordenar ' + num2 + '</button>'
+    + (c.num ? '<div style="margin-top:8px">Mayor o igual a<input id="xgMin" value="' + reabastEsc(f.min == null ? '' : f.min) + '"></div><div>Menor o igual a<input id="xgMax" value="' + reabastEsc(f.max == null ? '' : f.max) + '"></div>' : '')
+    + (c.date ? '<div style="margin-top:8px">Desde<input type="date" id="xgMin" value="' + reabastEsc(f.min || '') + '"></div><div>Hasta<input type="date" id="xgMax" value="' + reabastEsc(f.max || '') + '"></div>' : '')
+    + (vals ? '<input id="xgBus" placeholder="Buscar…" style="margin-top:8px" oninput="fgxBuscar(this.value)"><label style="margin-top:4px"><input type="checkbox" id="xgAll" ' + (!f.sel ? 'checked' : '') + ' onchange="fgxTodos(this.checked)"> <b>(Seleccionar visibles)</b></label><div class="li" id="xgLi">' + vals.map((v, i) => '<label data-t="' + reabastEsc(fgxNz(v)) + '"><input type="checkbox" class="xgc" data-i="' + i + '" ' + (!f.sel || f.sel.has(v) ? 'checked' : '') + '> ' + (v === '' ? '(vacío)' : reabastEsc(v)) + '</label>').join('') + '</div>' : '')
+    + '<div style="display:flex;gap:6px;margin-top:8px"><button class="btn" style="flex:1" onclick="fgxAplicar()">Aplicar</button><button class="btn" style="flex:1" onclick="fgxQuitar()">Quitar filtro</button></div>';
+  document.body.appendChild(d);
+}
+function fgxOrden(dir) { FGXA.sort = { k: FGXM.k, dir }; fgxCerrar(); fgxPaint(); }
+function fgxBuscar(t) { const q = fgxNz(t); document.querySelectorAll('#xgLi label').forEach(l => { const ok = !q || l.dataset.t.includes(q); l.style.display = ok ? '' : 'none'; l.querySelector('input').checked = ok; }); const a = document.getElementById('xgAll'); if (a) a.checked = true; }
+function fgxTodos(on) { document.querySelectorAll('#xgLi label').forEach(l => { if (l.style.display !== 'none') l.querySelector('input').checked = on; }); }
+function fgxAplicar() {
+  const g = FGXA, c = g.cols.find(x => x.k === FGXM.k), f = {};
+  if (c.num || c.date) { const mn = document.getElementById('xgMin').value.trim().replace(',', '.'), mx = document.getElementById('xgMax').value.trim().replace(',', '.'); f.min = mn; f.max = mx; if (c.num && ((mn !== '' && isNaN(+mn)) || (mx !== '' && isNaN(+mx)))) { alert('Escribe números válidos.'); return; } }
+  if (FGXM.vals) { const chk = [...document.querySelectorAll('.xgc')], on = chk.filter(x => x.checked).map(x => FGXM.vals[+x.dataset.i]); if (on.length < chk.length) f.sel = new Set(on); }
+  if (fgxOn(f)) g.f[FGXM.k] = f; else delete g.f[FGXM.k]; fgxCerrar(); fgxPaint();
+}
+function fgxQuitar() { delete FGXA.f[FGXM.k]; fgxCerrar(); fgxPaint(); }
+
+function fgxExcel(){
+  const V = fgxView(), cols = FGXA.cols.filter(c => !FGXA.hide.has(c.k) && c.t), wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(V.map(r => { const o = {}; cols.forEach(c => { o[c.t] = fgxV(c, r); }); return o; })), 'Vista actual');
+  XLSX.writeFile(wb, FGXA.xl + '_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+}
+const FP = { rows: [], cargado: false, prov: '', q: '' };
+const fpMesTxt = m => { const M = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']; return m ? M[+m.slice(5, 7) - 1] + ' ' + m.slice(0, 4) : ''; };
+const fpCOP = n => (n < 0 ? '-' : '') + '$' + Math.abs(Math.round(n || 0)).toLocaleString('es-CO');
+const fpVar = n => n == null ? '—' : (n > 0 ? '+' : n < 0 ? '−' : '') + '$' + Math.abs(Math.round(n)).toLocaleString('es-CO');
+const fpEstCol = { pendiente: ['#fef3c7', '#b45309', '⏳ Pendiente'], aprobada: ['#dcfce7', '#166534', '✅ Aprobada'], devuelta: ['#fee2e2', '#b91c1c', '↩ Devuelta'] };
+async function fpCargar() {
+  try { FP.rows = await sb.get('facturas_proveedor', 'order=mes.desc,proveedor.asc&limit=1000') || []; FP.cargado = true; }
+  catch (e) { FP.rows = []; FP.err = e.message; }
+  // variación contra el mes anterior del mismo proveedor
+  const por = {}; FP.rows.forEach(r => (por[r.proveedor] = por[r.proveedor] || []).push(r));
+  Object.values(por).forEach(L => { L.sort((a, b) => a.mes.localeCompare(b.mes)); L.forEach((r, i) => { const p = L[i - 1]; r._ant = p || null; r._var = p ? Number(r.total) - Number(p.total) : null; r._pct = p && Number(p.total) ? (Number(r.total) - Number(p.total)) / Number(p.total) * 100 : null; }); });
+}
+const FP_COLS = [
+  { k: 'proveedor', t: 'Proveedor', v: r => r.proveedor },
+  { k: 'mes', t: 'Mes', v: r => r.mes, h: r => '<b>' + fpMesTxt(r.mes) + '</b>' + (r.periodo ? '<div style="font-size:10px;color:#64748b">' + reabastEsc(r.periodo) + '</div>' : '') },
+  { k: 'numero', t: 'N.º factura', v: r => r.numero || '' },
+  { k: 'total', t: 'Total', num: 1, v: r => Math.round(Number(r.total)), h: r => '<b>' + fpCOP(r.total) + '</b>' },
+  { k: 'var', t: 'Variación $', num: 1, v: r => r._var == null ? '' : Math.round(r._var), h: r => '<span style="font-weight:700;color:' + (r._var > 0 ? '#b91c1c' : r._var < 0 ? '#166534' : '#64748b') + '">' + fpVar(r._var) + '</span>' },
+  { k: 'pct', t: 'Variación %', num: 1, v: r => r._pct == null ? '' : Math.round(r._pct * 10) / 10, h: r => r._pct == null ? '—' : (r._pct > 0 ? '+' : '') + r._pct.toFixed(1) + '%' },
+  { k: 'estado', t: 'Estado', v: r => (fpEstCol[r.estado] || [0, 0, r.estado])[2], h: r => { const c = fpEstCol[r.estado] || ['#e2e8f0', '#334155', r.estado]; return '<span style="background:' + c[0] + ';color:' + c[1] + ';padding:2px 8px;border-radius:99px;font-weight:700;font-size:11px">' + c[2] + '</span>'; } },
+  { k: 'aprob', t: 'Aprobó', v: r => r.aprobado_por || '' },
+  { k: 'notas', t: 'Notas', v: r => r.notas || '', wrap: 1 },
+  { k: 'acc', t: '', v: r => '', h: r => '<span style="white-space:nowrap"><button class="btn btn-g btn-xs" onclick="fpDetalle(\'' + r.id + '\')">🔍 Detalle</button> <button class="btn btn-g btn-xs" title="Editar" onclick="fpForm(\'' + r.id + '\')">✏️</button></span>' }];
+async function renderCtFacturas(el) {
+  el.innerHTML = cargaHtml('Cargando facturas');
+  await fpCargar();
+  if (FP.err) { el.innerHTML = '<div class="empty">No se pudo leer: ' + reabastEsc(FP.err) + '</div>'; return; }
+  const provs = [...new Set(FP.rows.map(r => r.proveedor))].sort();
+  if (!FP.prov || !provs.includes(FP.prov)) FP.prov = provs[0] || '';
+  const F = FP.rows.filter(r => !FP.prov || r.proveedor === FP.prov), ult = F[0], pen = FP.rows.filter(r => r.estado === 'pendiente').length;
+  const tot12 = F.slice(0, 12).reduce((s, r) => s + Number(r.total), 0), prom = F.length ? tot12 / Math.min(F.length, 12) : 0;
+  const kp = (v, t, c) => '<div style="background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:10px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'inherit') + '">' + v + '</div><div style="font-size:11px;color:var(--mu)">' + t + '</div></div>';
+  el.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
+    + '<select class="inp" style="width:auto;max-width:320px" onchange="FP.prov=this.value;renderCtFacturas(document.getElementById(\'ct-tab-content\'))">' + provs.map(p => '<option value="' + reabastEsc(p) + '"' + (p === FP.prov ? ' selected' : '') + '>' + reabastEsc(p) + '</option>').join('') + '</select>'
+    + '<button class="btn btn-p btn-sm" onclick="fpForm(\'\')">➕ Nueva factura</button>'
+    + '<button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxLimpiar()">✖ Quitar filtros y orden</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxExcel()">⬇ Excel de esta vista</button></div>'
+    + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
+    + (ult ? kp(fpCOP(ult.total), 'Última factura · ' + fpMesTxt(ult.mes)) + kp(fpVar(ult._var) + (ult._pct == null ? '' : ' (' + (ult._pct > 0 ? '+' : '') + ult._pct.toFixed(1) + '%)'), 'Contra el mes anterior', ult._var > 0 ? '#b91c1c' : ult._var < 0 ? '#166534' : '') + kp(fpCOP(prom), 'Promedio (últimos ' + Math.min(F.length, 12) + ' meses)') : '')
+    + kp(String(pen), 'Facturas pendientes de aprobar (todas)', pen ? '#b45309' : '') + '</div>'
+    + '<div class="tw" id="fgx_fp" style="max-height:60vh;overflow:auto;"></div>'
+    + '<div style="font-size:11px;color:var(--mu);margin-top:6px;">Rojo = subió contra el mes anterior (revisar); verde = bajó. «Detalle» muestra cada línea contra el mes anterior.</div>';
+  FGX.rows = F; FGX.cols = FP_COLS; FGXA = FGX; fgxPaint();
+}
+function fpCerrar() { const m = document.getElementById('fp-modal'); if (m) m.remove(); }
+function fpModal(html) { fpCerrar(); const d = document.createElement('div'); d.id = 'fp-modal'; d.className = 'ov on'; d.onclick = e => { if (e.target === d) fpCerrar(); }; d.innerHTML = '<div class="mo" style="max-width:980px;width:96vw">' + html + '</div>'; document.body.appendChild(d); }
+function fpDetalle(id) {
+  const r = FP.rows.find(x => x.id === id); if (!r) return;
+  const ant = {}; ((r._ant && r._ant.lineas) || []).forEach(l => ant[l.cel] = l);
+  const act = {}; (r.lineas || []).forEach(l => act[l.cel] = l);
+  const filas = (r.lineas || []).map(l => { const a = ant[l.cel]; return { cel: l.cel, nom: l.nom, cc: l.cc, val: Number(l.val), ant: a ? Number(a.val) : null, nueva: r._ant ? !a : false, dif: a ? Number(l.val) - Number(a.val) : (r._ant ? Number(l.val) : null) }; });
+  Object.values(ant).forEach(a => { if (!act[a.cel]) filas.push({ cel: a.cel, nom: a.nom, cc: a.cc, val: 0, ant: Number(a.val), retirada: true, dif: -Number(a.val) }); });
+  FGXL.rows = filas; FGXA = FGXL;
+  FGXL.cols = [
+    { k: 'cel', t: 'Línea', v: r => r.cel, mono: 1 }, { k: 'nom', t: 'Empleado / área', v: r => r.nom, wrap: 1 }, { k: 'cc', t: 'Centro de costo', v: r => r.cc },
+    { k: 'val', t: 'Valor del mes', num: 1, sum: 1, v: r => r.val, h: r => fpCOP(r.val) }, { k: 'ant', t: 'Mes anterior', num: 1, sum: 1, v: r => r.ant == null ? '' : r.ant, h: r => r.ant == null ? '—' : fpCOP(r.ant) },
+    { k: 'dif', t: 'Variación', num: 1, sum: 1, v: r => r.dif == null ? '' : r.dif, h: r => '<span style="font-weight:700;color:' + (r.dif > 0 ? '#b91c1c' : r.dif < 0 ? '#166534' : '#64748b') + '">' + fpVar(r.dif) + '</span>' },
+    { k: 'obs', t: 'Observación', v: r => r.nueva ? 'Línea nueva' : r.retirada ? 'Línea retirada' : r.dif ? 'Cambió' : '' }];
+  const sumaL = (r.lineas || []).reduce((s, l) => s + Number(l.val), 0), cuadra = Math.abs(sumaL - Number(r.total)) < 2;
+  const c = fpEstCol[r.estado] || fpEstCol.pendiente;
+  fpModal('<div class="mh"><span class="mt">🧾 ' + reabastEsc(r.proveedor) + ' · ' + fpMesTxt(r.mes) + '</span><button class="mx" onclick="fpCerrar()">✕</button></div><div class="mb">'
+    + '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:12.5px;"><span><b>Total:</b> ' + fpCOP(r.total) + '</span>' + (r._ant ? '<span><b>Mes anterior:</b> ' + fpCOP(r._ant.total) + ' (' + fpVar(r._var) + ')</span>' : '') + (r.numero ? '<span><b>N.º:</b> ' + reabastEsc(r.numero) + '</span>' : '') + '<span style="background:' + c[0] + ';color:' + c[1] + ';padding:2px 8px;border-radius:99px;font-weight:700">' + c[2] + '</span>'
+    + ((r.lineas || []).length ? '<span style="color:' + (cuadra ? '#166534' : '#b91c1c') + '">' + (cuadra ? '✔ Las líneas suman el total' : '⚠ Las líneas suman ' + fpCOP(sumaL) + ' (' + fpVar(sumaL - Number(r.total)) + ' contra el total)') + '</span>' : '<span style="color:#b45309">Sin detalle por línea</span>') + '</div>'
+    + (r.notas ? '<div style="font-size:12px;color:#475569;margin-bottom:8px;">' + reabastEsc(r.notas) + '</div>' : '')
+    + ((r.lineas || []).length ? '<div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"><button class="btn btn-g btn-sm" onclick="FGXA=FGXL;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGXL;fgxLimpiar()">✖ Quitar filtros</button><button class="btn btn-g btn-sm" onclick="FGXA=FGXL;fgxExcel()">⬇ Excel</button></div><div class="tw" id="fgx_fpl" style="max-height:48vh;overflow:auto;"></div>' : '')
+    + '</div><div class="mf">' + (r.estado !== 'aprobada' ? '<button class="btn btn-gr btn-sm" onclick="fpEstado(\'' + r.id + '\',\'aprobada\')">✅ Aprobar</button>' : '') + (r.estado !== 'devuelta' ? '<button class="btn btn-rd btn-sm" onclick="fpEstado(\'' + r.id + '\',\'devuelta\')">↩ Devolver</button>' : '') + (r.estado !== 'pendiente' ? '<button class="btn btn-g btn-sm" onclick="fpEstado(\'' + r.id + '\',\'pendiente\')">⏳ Dejar pendiente</button>' : '') + '<button class="btn btn-g btn-sm" onclick="fpCerrar()">Cerrar</button></div>');
+  if ((r.lineas || []).length) fgxPaint();
+}
+async function fpEstado(id, est) {
+  const r = FP.rows.find(x => x.id === id); if (!r) return;
+  let nota = r.notas || '';
+  if (est === 'devuelta') { const m = prompt('Motivo de la devolución (queda en las notas):', ''); if (m == null) return; if (m.trim()) nota = (nota ? nota + ' · ' : '') + 'Devuelta: ' + m.trim(); }
+  const quien = (CU && (CU.nombre || CU.email)) || '';
+  try { await sb.patch('facturas_proveedor', 'id=eq.' + id, { estado: est, aprobado_por: est === 'pendiente' ? null : quien, aprobado_en: est === 'pendiente' ? null : new Date().toISOString(), notas: nota, actualizado: new Date().toISOString() }); }
+  catch (e) { alert('No se pudo guardar: ' + e.message); return; }
+  fpCerrar(); renderCtFacturas(document.getElementById('ct-tab-content'));
+}
+function fpForm(id) {
+  const r = id ? FP.rows.find(x => x.id === id) : null, v = (k, d) => reabastEsc(r ? (r[k] == null ? '' : r[k]) : (d || ''));
+  const provs = [...new Set(FP.rows.map(x => x.proveedor))];
+  const lin = r && (r.lineas || []).length ? (r.lineas.map(l => [l.cel, l.nom, l.cc, l.val].join('\t')).join('\n')) : '';
+  fpModal('<div class="mh"><span class="mt">' + (r ? '✏️ Editar factura' : '➕ Nueva factura') + '</span><button class="mx" onclick="fpCerrar()">✕</button></div><div class="mb">'
+    + '<div class="fg2"><div class="fg"><label class="fl">Proveedor</label><input class="inp" id="fpf-prov" list="fpf-pl" value="' + (r ? v('proveedor') : reabastEsc(FP.prov)) + '"><datalist id="fpf-pl">' + provs.map(p => '<option value="' + reabastEsc(p) + '">').join('') + '</datalist></div>'
+    + '<div class="fg"><label class="fl">Mes (el de la hoja del Excel)</label><input class="inp" type="month" id="fpf-mes" value="' + v('mes') + '"></div></div>'
+    + '<div class="fg2"><div class="fg"><label class="fl">N.º de factura</label><input class="inp" id="fpf-num" value="' + v('numero') + '"></div><div class="fg"><label class="fl">Período facturado</label><input class="inp" id="fpf-per" placeholder="ej. 15-Ago a 14-Sep 2026" value="' + v('periodo') + '"></div></div>'
+    + '<div class="fg2"><div class="fg"><label class="fl">Total de la factura ($, IVA incluido)</label><input class="inp" id="fpf-tot" inputmode="decimal" value="' + v('total') + '" placeholder="vacío = suma de las líneas"></div><div class="fg"><label class="fl">Estado</label><select class="inp" id="fpf-est">' + ['pendiente', 'aprobada', 'devuelta'].map(e => '<option value="' + e + '"' + ((r ? r.estado : 'pendiente') === e ? ' selected' : '') + '>' + fpEstCol[e][2] + '</option>').join('') + '</select></div></div>'
+    + '<div class="fg"><label class="fl">Notas</label><input class="inp" id="fpf-not" value="' + v('notas') + '"></div>'
+    + '<div class="fg"><label class="fl">Detalle por línea (opcional): pega desde Excel, una línea por renglón con 4 columnas: celular, empleado/área, centro de costo, valor factura</label><textarea class="inp" id="fpf-lin" rows="8" style="font-family:monospace;font-size:11px">' + reabastEsc(lin) + '</textarea></div>'
+    + '</div><div class="mf">' + (r ? '<button class="btn btn-rd btn-sm" style="margin-right:auto" onclick="fpEliminar(\'' + r.id + '\')">🗑 Eliminar</button>' : '') + '<button class="btn btn-g btn-sm" onclick="fpCerrar()">Cancelar</button><button class="btn btn-p btn-sm" onclick="fpGuardar(\'' + (r ? r.id : '') + '\')">💾 Guardar</button></div>');
+}
+function fpNum(t) { let s = String(t == null ? '' : t).replace(/[$\s]/g, ''); if (/,/.test(s) && /\./.test(s)) s = s.replace(/\./g, '').replace(',', '.'); else if (/,/.test(s)) s = /,\d{1,2}$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, ''); else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, ''); const n = Number(s); return isFinite(n) ? n : NaN; }
+async function fpGuardar(id) {
+  const g = x => document.getElementById(x).value.trim(), prov = g('fpf-prov'), mes = g('fpf-mes');
+  if (!prov || !/^\d{4}-\d{2}$/.test(mes)) { alert('Falta el proveedor o el mes.'); return; }
+  const lineas = []; for (const ln of g('fpf-lin').split('\n').map(x => x.trim()).filter(Boolean)) { const c = ln.split('\t'); if (c.length < 4) { alert('Línea mal formada (necesita 4 columnas separadas por tabulador, copiadas de Excel):\n' + ln.slice(0, 80)); return; } const val = fpNum(c[3]); if (isNaN(val)) { alert('Valor no válido en: ' + ln.slice(0, 80)); return; } lineas.push({ cel: c[0].trim(), nom: c[1].trim(), cc: c[2].trim(), val }); }
+  let total = g('fpf-tot') === '' ? lineas.reduce((s, l) => s + l.val, 0) : fpNum(g('fpf-tot')); if (isNaN(total)) { alert('Total no válido.'); return; }
+  const est = g('fpf-est'), prev = id ? FP.rows.find(x => x.id === id) : null, quien = (CU && (CU.nombre || CU.email)) || '';
+  const fila = { proveedor: prov, mes, numero: g('fpf-num'), periodo: g('fpf-per'), total, estado: est, notas: g('fpf-not'), lineas: lineas.length ? lineas : (prev ? prev.lineas : []), actualizado: new Date().toISOString() };
+  if (est !== 'pendiente' && (!prev || prev.estado !== est)) { fila.aprobado_por = quien; fila.aprobado_en = new Date().toISOString(); } else if (est === 'pendiente') { fila.aprobado_por = null; fila.aprobado_en = null; }
+  try { if (id) await sb.patch('facturas_proveedor', 'id=eq.' + id, fila); else await sb.upsert('facturas_proveedor', fila, 'proveedor,mes'); }
+  catch (e) { alert('No se pudo guardar: ' + e.message); return; }
+  FP.prov = prov; fpCerrar(); renderCtFacturas(document.getElementById('ct-tab-content'));
+}
+async function fpEliminar(id) {
+  const r = FP.rows.find(x => x.id === id); if (!r || !confirm('¿Eliminar la factura de ' + r.proveedor + ' de ' + fpMesTxt(r.mes) + '?\nNo se puede deshacer.')) return;
+  try { await sb.delete('facturas_proveedor', 'id=eq.' + id); } catch (e) { alert('No se pudo eliminar: ' + e.message); return; }
+  fpCerrar(); renderCtFacturas(document.getElementById('ct-tab-content'));
+}
+
 async function renderCtConsumo(el){
   el.innerHTML = cargaHtml('Calculando consumo');
   const hoy = new Date(Date.now()-5*3600e3), ini = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth() - (hoy.getUTCDate()>=14?0:1), 14)).toISOString().slice(0,10);
