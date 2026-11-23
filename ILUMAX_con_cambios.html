@@ -35196,19 +35196,28 @@ async function fpCargar() {
   const por = {}; FP.rows.forEach(r => (por[r.proveedor] = por[r.proveedor] || []).push(r));
   Object.values(por).forEach(L => { L.sort((a, b) => a.mes.localeCompare(b.mes)); L.forEach((r, i) => { const p = L[i - 1]; r._ant = p || null; r._var = p ? Number(r.total) - Number(p.total) : null; r._pct = p && Number(p.total) ? (Number(r.total) - Number(p.total)) / Number(p.total) * 100 : null; }); });
 }
+const FP_SHORT = { 'CLARO / COMCEL · Celulares corporativos': 'Claro · Celulares', 'CLARO / COMCEL · Claro Cloud (datos)': 'Claro · Cloud', 'CLARO / COMCEL · Telefonía fija (voz)': 'Claro · Tel. fija', 'SIESA · Facturación electrónica': 'Siesa · Fact. electr.', 'SIESA · Siesa Cloud + WASolutions (cuota)': 'Siesa · Cloud + WA', 'NOVOTECHNO · Alquiler de computadores': 'Novotechno · PCs', 'COMPUELITE · Alquiler de portátiles': 'Compuelite · Portátiles', 'UNE / TIGO · Internet dedicado': 'Tigo · Internet', 'LIBERTY · Internet (Rental Charges)': 'Liberty · Internet' };
+const fpCorto = p => FP_SHORT[p] || (p.length > 24 ? p.slice(0, 23) + '…' : p);
+const fpFec = f => f ? f.slice(8, 10) + '/' + f.slice(5, 7) + '/' + f.slice(2, 4) : '—';
+const fpTrunc = (t, n, w) => { t = String(t || ''); return t ? '<span title="' + reabastEsc(t) + '" style="display:inline-block;max-width:' + (w || 200) + 'px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom">' + reabastEsc(t) + '</span>' : ''; };
 const FP_COLS = [
-  { k: 'proveedor', t: 'Proveedor', v: r => r.proveedor },
-  { k: 'mes', t: 'Mes', v: r => r.mes, h: r => '<b>' + fpMesTxt(r.mes) + '</b>' + (r.periodo ? '<div style="font-size:10px;color:#64748b">' + reabastEsc(r.periodo) + '</div>' : '') },
-  { k: 'concepto', t: 'Concepto', v: r => r.concepto || '', wrap: 1 },
+  { k: 'proveedor', t: 'Proveedor', v: r => r.proveedor, h: r => '<span title="' + reabastEsc(r.proveedor) + '"><b>' + reabastEsc(fpCorto(r.proveedor)) + '</b></span>' },
+  { k: 'mes', t: 'Mes', v: r => r.mes, h: r => '<span title="' + reabastEsc(fpMesTxt(r.mes) + (r.periodo ? ' · ' + r.periodo : '')) + '"><b>' + fpGM(r.mes) + '</b></span>' },
+  { k: 'concepto', t: 'Concepto', v: r => r.concepto || '', h: r => fpTrunc(r.concepto, 0, 150) },
   { k: 'numero', t: 'N.º factura', v: r => r.numero || '' },
-  { k: 'vence', t: 'Vence', date: 1, v: r => r.vence || '', h: r => { if (!r.vence) return '—'; const hoy = new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10), d = Math.round((new Date(r.vence + 'T12:00:00') - new Date(hoy + 'T12:00:00')) / 864e5), f = r.vence.slice(8, 10) + '/' + r.vence.slice(5, 7) + '/' + r.vence.slice(2, 4); const c = r.estado === 'pendiente' ? (d < 0 ? '#b91c1c' : d <= 7 ? '#c2410c' : '') : ''; return '<span style="' + (c ? 'color:' + c + ';font-weight:700' : '') + '">' + f + '</span>' + (r.estado === 'pendiente' && d < 0 ? '<div style="font-size:10px;color:#b91c1c">vencida hace ' + (-d) + ' d</div>' : r.estado === 'pendiente' && d <= 7 ? '<div style="font-size:10px;color:#c2410c">' + (d === 0 ? 'vence hoy' : 'en ' + d + ' d') + '</div>' : ''); } },
-  { k: 'total', t: 'Total', num: 1, v: r => Math.round(Number(r.total)), h: r => '<b>' + fpCOP(r.total) + '</b>' },
-  { k: 'var', t: 'Variación $', num: 1, v: r => r._var == null ? '' : Math.round(r._var), h: r => '<span style="font-weight:700;color:' + (r._var > 0 ? '#b91c1c' : r._var < 0 ? '#166534' : '#64748b') + '">' + fpVar(r._var) + '</span>' },
-  { k: 'pct', t: 'Variación %', num: 1, v: r => r._pct == null ? '' : Math.round(r._pct * 10) / 10, h: r => r._pct == null ? '—' : (r._pct > 0 ? '+' : '') + r._pct.toFixed(1) + '%' },
-  { k: 'estado', t: 'Estado', v: r => (fpEstCol[r.estado] || [0, 0, r.estado])[2], h: r => { const c = fpEstCol[r.estado] || ['#e2e8f0', '#334155', r.estado]; return '<span style="background:' + c[0] + ';color:' + c[1] + ';padding:2px 8px;border-radius:99px;font-weight:700;font-size:11px">' + c[2] + '</span>'; } },
-  { k: 'aprob', t: 'Aprobó', v: r => r.aprobado_por || '' },
-  { k: 'notas', t: 'Notas', v: r => r.notas || '', wrap: 1 },
-  { k: 'acc', t: '', v: r => '', h: r => '<span style="white-space:nowrap"><button class="btn btn-g btn-xs" onclick="fpDetalle(\'' + r.id + '\')">🔍 Detalle</button> <button class="btn btn-g btn-xs" title="Editar" onclick="fpForm(\'' + r.id + '\')">✏️</button>' + (r.estado === 'aprobada' ? ' <button class="btn btn-g btn-xs" title="Correo de aprobación" onclick="fpCorreo([\'' + r.id + '\'])">✉️</button>' : '') + '</span>' }];
+  { k: 'emision', t: 'Emisión', date: 1, v: r => (r.datos && r.datos.emision) || '', h: r => fpFec(r.datos && r.datos.emision) },
+  { k: 'vence', t: 'Vence', date: 1, v: r => r.vence || '', h: r => { if (!r.vence) return '—'; const hoy = new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10), d = Math.round((new Date(r.vence + 'T12:00:00') - new Date(hoy + 'T12:00:00')) / 864e5), c = r.estado === 'pendiente' ? (d < 0 ? '#b91c1c' : d <= 7 ? '#c2410c' : '') : ''; return '<span style="' + (c ? 'color:' + c + ';font-weight:700' : '') + '" title="' + (r.estado === 'pendiente' ? (d < 0 ? 'vencida hace ' + (-d) + ' d' : d === 0 ? 'vence hoy' : 'faltan ' + d + ' d') : '') + '">' + fpFec(r.vence) + '</span>'; } },
+  { k: 'sub', t: 'Subtotal', num: 1, sum: 1, v: r => r.datos && r.datos.subtotal != null ? Math.round(r.datos.subtotal) : '', h: r => r.datos && r.datos.subtotal != null ? fpCOP(r.datos.subtotal) : '—' },
+  { k: 'iva', t: 'IVA', num: 1, sum: 1, v: r => r.datos && r.datos.subtotal != null ? Math.round(r.datos.iva || 0) : '', h: r => r.datos && r.datos.subtotal != null ? fpCOP(r.datos.iva || 0) : '—' },
+  { k: 'inc', t: 'Impoconsumo', num: 1, sum: 1, v: r => r.datos && r.datos.inc ? Math.round(r.datos.inc) : '', h: r => r.datos && r.datos.inc ? fpCOP(r.datos.inc) : '—' },
+  { k: 'ret', t: 'Retención', num: 1, sum: 1, v: r => r.datos && r.datos.rete ? Math.round(r.datos.rete) : '', h: r => r.datos && r.datos.rete ? '−' + fpCOP(r.datos.rete) : '—' },
+  { k: 'total', t: 'A pagar', num: 1, sum: 1, v: r => Math.round(Number(r.total)), h: r => '<b>' + fpCOP(r.total) + '</b>' },
+  { k: 'var', t: 'Var. $', num: 1, v: r => r._var == null ? '' : Math.round(r._var), h: r => '<span style="font-weight:700;color:' + (r._var > 0 ? '#b91c1c' : r._var < 0 ? '#166534' : '#64748b') + '">' + fpVar(r._var) + '</span>' },
+  { k: 'pct', t: 'Var. %', num: 1, v: r => r._pct == null ? '' : Math.round(r._pct * 10) / 10, h: r => r._pct == null ? '—' : '<span style="color:' + (r._pct > 0 ? '#b91c1c' : r._pct < 0 ? '#166534' : '#64748b') + '">' + (r._pct > 0 ? '+' : '') + r._pct.toFixed(1) + '%</span>' },
+  { k: 'estado', t: 'Estado', v: r => (fpEstCol[r.estado] || [0, 0, r.estado])[2], h: r => { const c = fpEstCol[r.estado] || ['#e2e8f0', '#334155', r.estado]; return '<span style="background:' + c[0] + ';color:' + c[1] + ';padding:1px 7px;border-radius:99px;font-weight:700;font-size:10.5px;white-space:nowrap">' + c[2] + '</span>'; } },
+  { k: 'aprob', t: 'Aprobó', v: r => r.aprobado_por || '', h: r => reabastEsc((r.aprobado_por || '').split(' ')[0]) },
+  { k: 'notas', t: 'Notas', v: r => r.notas || '', h: r => fpTrunc(r.notas, 0, 190) },
+  { k: 'acc', t: '', v: r => '', h: r => '<span style="white-space:nowrap"><button class="btn btn-g btn-xs" title="Detalle: qué te facturan" onclick="fpDetalle(\'' + r.id + '\')">🔍</button> <button class="btn btn-g btn-xs" title="Editar" onclick="fpForm(\'' + r.id + '\')">✏️</button>' + (r.estado === 'aprobada' ? ' <button class="btn btn-g btn-xs" title="Correo de aprobación" onclick="fpCorreo([\'' + r.id + '\'])">✉️</button>' : '') + '</span>' }];
 async function renderCtFacturas(el) {
   el.innerHTML = cargaHtml('Cargando facturas');
   await fpCargar();
@@ -35227,8 +35236,8 @@ async function renderCtFacturas(el) {
     + (ult ? kp(fpCOP(ult.total), 'Última factura · ' + fpMesTxt(ult.mes), '', "fpDetalle('" + ult.id + "')") + kp(fpVar(ult._var) + (ult._pct == null ? '' : ' (' + (ult._pct > 0 ? '+' : '') + ult._pct.toFixed(1) + '%)'), 'Contra el mes anterior', ult._var > 0 ? '#b91c1c' : ult._var < 0 ? '#166534' : '', "fpDetalle('" + ult.id + "')") + kp(fpCOP(prom), 'Promedio (últimos ' + Math.min(F.length, 12) + ' meses)', '', "FPG.sel=new Set([FP.prov]);fpGAbrir()") : '')
     + (() => { const hoyK = fpHoy(), aK = hoyK.slice(0, 4), mK = hoyK.slice(0, 7), AP = FP.rows.filter(r => r.estado === 'aprobada'), sm = a => a.reduce((s, r) => s + Number(r.total), 0), aM = AP.filter(r => r.mes === mK), aA = AP.filter(r => r.mes.slice(0, 4) === aK); return kp(aM.length + ' · ' + fpCOP(sm(aM)), '✅ Aprobadas en ' + fpMesTxt(mK), '#166534', "fpKpi('mesA')") + kp(aA.length + ' · ' + fpCOP(sm(aA)), '✅ Aprobadas en el año ' + aK, '#166534', "fpKpi('anioA')"); })()
     + kp(fpCOP(sumF(PEN)), 'Por pagar · ' + PEN.length + ' pendientes de aprobar', PEN.length ? '#b45309' : '', "fpKpi('pen')") + kp(VEN.length + ' · ' + fpCOP(sumF(VEN)), 'Vencidas sin aprobar/pagar', VEN.length ? '#b91c1c' : '', "fpKpi('ven')") + kp(SEM.length + ' · ' + fpCOP(sumF(SEM)), 'Vencen en los próximos 7 días', SEM.length ? '#c2410c' : '', "fpKpi('sem')") + '</div>'
-    + '<div class="tw" id="fgx_fp" style="max-height:60vh;overflow:auto;"></div>'
-    + '<div style="font-size:11px;color:var(--mu);margin-top:6px;">Rojo = subió contra el mes anterior (revisar); verde = bajó. «Detalle» muestra cada línea contra el mes anterior.</div>';
+    + '<style>#fgx_fp table{font-size:12px;width:100%}#fgx_fp th,#fgx_fp td{padding:5px 7px!important}#fgx_fp th{font-size:11.5px}#fgx_fp .btn-xs{padding:1px 5px}</style><div class="tw" id="fgx_fp" style="max-height:62vh;overflow:auto;"></div>'
+    + '<div style="font-size:11px;color:var(--mu);margin-top:6px;">Rojo = subió contra el mes anterior (revisar); verde = bajó. Pasa el mouse sobre un nombre o nota para verlo completo; 🔍 muestra qué te facturan. «⬇ Excel de esta vista» baja exactamente lo que ves.</div>';
   FGX.rows = F; FGX.cols = FP_COLS; FGXA = FGX; fgxPaint();
 }
 function fpCerrar() { const m = document.getElementById('fp-modal'); if (m) m.remove(); }
