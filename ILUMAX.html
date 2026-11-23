@@ -35990,6 +35990,12 @@ const FP_COLS = [
   { k: 'aprob', t: 'Aprobó', v: r => r.aprobado_por || '', h: r => reabastEsc((r.aprobado_por || '').split(' ')[0]) },
   { k: 'notas', t: 'Notas', v: r => r.notas || '', h: r => fpTrunc(r.notas, 0, 190) },
   { k: 'acc', t: '', v: r => '', h: r => '<span style="white-space:nowrap"><button class="btn btn-g btn-xs" title="Detalle: qué te facturan" onclick="fpDetalle(\'' + r.id + '\')">🔍</button> <button class="btn btn-g btn-xs" title="Editar" onclick="fpForm(\'' + r.id + '\')">✏️</button>' + (r.estado === 'aprobada' ? ' <button class="btn btn-g btn-xs" title="Correo de aprobación" onclick="fpCorreo([\'' + r.id + '\'])">✉️</button>' : '') + '</span>' }];
+function fpNorm(t) { return String(t == null ? '' : t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
+function fpFilas() {
+  const todos = FP.prov === '__todos' || !FP.prov, q = fpNorm(FP.q || '').split(/\s+/).filter(Boolean);
+  return FP.rows.filter(r => (todos || r.proveedor === FP.prov) && (!q.length || (() => { const d = r.datos || {}, h = fpNorm([r.proveedor, fpCorto(r.proveedor), r.mes, fpMesTxt(r.mes), r.periodo, r.concepto, r.numero, r.vence, d.emision, (fpEstCol[r.estado] || [0, 0, r.estado])[2], r.aprobado_por, r.notas, Math.round(Number(r.total)), d.info, (d.lineas || []).map(l => l.d).join(' '), (r.lineas || []).map(l => l.cel + ' ' + l.nom).join(' ')].join(' ')); return q.every(w => h.includes(w)); })()));
+}
+function fpBuscar(v) { FP.q = v; FGX.rows = fpFilas(); FGXA = FGX; fgxPaint(); const c = document.getElementById('fp-qn'); if (c) c.textContent = FGX.rows.length + ' de ' + FP.rows.length; }
 async function renderCtFacturas(el) {
   el.innerHTML = cargaHtml('Cargando facturas');
   await fpCargar();
@@ -36002,6 +36008,7 @@ async function renderCtFacturas(el) {
   const kp = (v, t, c, ck) => '<div' + (ck ? ' onclick="' + ck + '" title="Clic para ver el detalle"' : '') + ' style="' + (ck ? 'cursor:pointer;' : '') + 'background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:10px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'inherit') + '">' + v + '</div><div style="font-size:11px;color:var(--mu)">' + t + (ck ? ' · <u>ver</u>' : '') + '</div></div>';
   el.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
     + '<select class="inp" style="width:auto;max-width:320px" onchange="FP.prov=this.value;renderCtFacturas(document.getElementById(\'ct-tab-content\'))">' + '<option value="__todos"' + (todos ? ' selected' : '') + '>Todos los proveedores</option>' + provs.map(p => '<option value="' + reabastEsc(p) + '"' + (p === FP.prov ? ' selected' : '') + '>' + reabastEsc(p) + '</option>').join('') + '</select>'
+    + '<input class="inp" id="fp-q" type="search" placeholder="🔍 Buscar: proveedor, concepto, N.º, mes, estado…" value="' + reabastEsc(FP.q || '') + '" oninput="fpBuscar(this.value)" style="width:280px;max-width:100%"><span id="fp-qn" style="font-size:11px;color:var(--mu)"></span>'
     + '<button class="btn btn-p btn-sm" onclick="fpUAbrir()">📤 Subir facturas</button><button class="btn btn-g btn-sm" onclick="fpGAbrir()">📊 Gráfico</button><button class="btn btn-g btn-sm" onclick="fpExcelMes()">📗 Excel mes a mes</button><button class="btn btn-g btn-sm" onclick="fpForm(\'\')">➕ Nueva factura</button>'
     + '<button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxLimpiar()">✖ Quitar filtros y orden</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxExcel()">⬇ Excel de esta vista</button></div>'
     + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
@@ -36010,7 +36017,7 @@ async function renderCtFacturas(el) {
     + kp(fpCOP(sumF(PEN)), 'Por pagar · ' + PEN.length + ' pendientes de aprobar', PEN.length ? '#b45309' : '', "fpKpi('pen')") + kp(VEN.length + ' · ' + fpCOP(sumF(VEN)), 'Vencidas sin aprobar/pagar', VEN.length ? '#b91c1c' : '', "fpKpi('ven')") + kp(SEM.length + ' · ' + fpCOP(sumF(SEM)), 'Vencen en los próximos 7 días', SEM.length ? '#c2410c' : '', "fpKpi('sem')") + '</div>'
     + '<style>#fgx_fp table{font-size:12px;width:100%}#fgx_fp th,#fgx_fp td{padding:5px 7px!important}#fgx_fp th{font-size:11.5px}#fgx_fp .btn-xs{padding:1px 5px}</style><div class="tw" id="fgx_fp" style="max-height:62vh;overflow:auto;"></div>'
     + '<div style="font-size:11px;color:var(--mu);margin-top:6px;">Rojo = subió contra el mes anterior (revisar); verde = bajó. Pasa el mouse sobre un nombre o nota para verlo completo; 🔍 muestra qué te facturan. «⬇ Excel de esta vista» baja exactamente lo que ves.</div>';
-  FGX.rows = F; FGX.cols = FP_COLS; FGXA = FGX; fgxPaint();
+  FGX.rows = fpFilas(); FGX.cols = FP_COLS; FGXA = FGX; fgxPaint(); const qn = document.getElementById('fp-qn'); if (qn && FP.q) qn.textContent = FGX.rows.length + ' de ' + FP.rows.length;
 }
 function fpCerrar() { const m = document.getElementById('fp-modal'); if (m) m.remove(); }
 function fpModal(html) { fpCerrar(); const d = document.createElement('div'); d.id = 'fp-modal'; d.className = 'ov on'; d.onclick = e => { if (e.target === d) fpCerrar(); }; d.innerHTML = '<div class="mo" style="max-width:980px;width:96vw">' + html + '</div>'; document.body.appendChild(d); }
