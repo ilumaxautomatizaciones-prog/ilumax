@@ -35221,7 +35221,7 @@ async function renderCtFacturas(el) {
   const kp = (v, t, c) => '<div style="background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:10px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'inherit') + '">' + v + '</div><div style="font-size:11px;color:var(--mu)">' + t + '</div></div>';
   el.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
     + '<select class="inp" style="width:auto;max-width:320px" onchange="FP.prov=this.value;renderCtFacturas(document.getElementById(\'ct-tab-content\'))">' + '<option value="__todos"' + (todos ? ' selected' : '') + '>Todos los proveedores</option>' + provs.map(p => '<option value="' + reabastEsc(p) + '"' + (p === FP.prov ? ' selected' : '') + '>' + reabastEsc(p) + '</option>').join('') + '</select>'
-    + '<button class="btn btn-p btn-sm" onclick="fpForm(\'\')">➕ Nueva factura</button>'
+    + '<button class="btn btn-p btn-sm" onclick="fpUAbrir()">📤 Subir facturas</button><button class="btn btn-g btn-sm" onclick="fpForm(\'\')">➕ Nueva factura</button>'
     + '<button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxLimpiar()">✖ Quitar filtros y orden</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxExcel()">⬇ Excel de esta vista</button></div>'
     + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
     + (ult ? kp(fpCOP(ult.total), 'Última factura · ' + fpMesTxt(ult.mes)) + kp(fpVar(ult._var) + (ult._pct == null ? '' : ' (' + (ult._pct > 0 ? '+' : '') + ult._pct.toFixed(1) + '%)'), 'Contra el mes anterior', ult._var > 0 ? '#b91c1c' : ult._var < 0 ? '#166534' : '') + kp(fpCOP(prom), 'Promedio (últimos ' + Math.min(F.length, 12) + ' meses)') : '')
@@ -35290,6 +35290,137 @@ async function fpGuardar(id) {
   try { if (id) await sb.patch('facturas_proveedor', 'id=eq.' + id, fila); else await sb.upsert('facturas_proveedor', fila, 'proveedor,mes'); }
   catch (e) { alert('No se pudo guardar: ' + e.message); return; }
   FP.prov = prov; fpCerrar(); renderCtFacturas(document.getElementById('ct-tab-content'));
+}
+/* ===== Subir facturas electrónicas (ZIP/XML DIAN) ===== */
+const FPU = { items: [], aviso: [] };
+const fpUMeses = { enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6, julio: 7, agosto: 8, septiembre: 9, setiembre: 9, octubre: 10, noviembre: 11, diciembre: 12 };
+function fpUAbrir() {
+  fpModal('<div class="mh"><span class="mt">📤 Subir facturas</span><button class="mx" onclick="fpCerrar()">✕</button></div><div class="mb">'
+    + '<div onclick="document.getElementById(\'fpu-in\').click()" ondragover="event.preventDefault();this.style.background=\'#fef9c3\'" ondragleave="this.style.background=\'#f8fafc\'" ondrop="event.preventDefault();this.style.background=\'#f8fafc\';fpULeer(event.dataTransfer.files)" style="border:2px dashed #94a3b8;border-radius:12px;padding:26px;text-align:center;background:#f8fafc;cursor:pointer;font-weight:600">📦 Arrastra aquí los ZIP (o XML) de las facturas<br><span style="font-size:11px;font-weight:400;color:#64748b">o haz clic para elegirlos · puedes subir varios a la vez · el sistema las compara con el mes anterior</span></div>'
+    + '<input type="file" id="fpu-in" multiple accept=".zip,.xml" style="display:none" onchange="fpULeer(this.files)"><div id="fpu-res" style="margin-top:10px"></div></div><div class="mf" id="fpu-mf"><button class="btn btn-g btn-sm" onclick="fpCerrar()">Cerrar</button></div>');
+}
+const fpKid = (n, nm) => n ? Array.from(n.children).find(c => c.localName === nm) : null;
+const fpPth = (n, p) => { for (const s of p.split('/')) { n = fpKid(n, s); if (!n) return null; } return n; };
+const fpTx = (n, p) => { const e = fpPth(n, p); return e ? (e.textContent || '').trim() : ''; };
+function fpUXml(txt) {
+  let t = String(txt || '').replace(/^﻿/, '').trim();
+  for (let i = 0; i < 3; i++) {
+    const d = new DOMParser().parseFromString(t, 'application/xml'); if (d.querySelector('parsererror')) return null;
+    if (d.documentElement.localName === 'Invoice') return d.documentElement;
+    const c = [...t.matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>/g)].map(m => m[1].trim()).find(s => /<(\w+:)?Invoice[\s>]/.test(s));
+    if (!c) return null; t = c;
+  }
+  return null;
+}
+function fpUProv(nit, desc, notas) {
+  const d = (desc || '').toLowerCase(), n = (notas || '').toLowerCase();
+  if (nit === '800153993') return d.includes('cargos fijos') ? 'CLARO / COMCEL · Celulares corporativos' : d.includes('telefon') ? 'CLARO / COMCEL · Telefonía fija (voz)' : d.includes('cloud') ? 'CLARO / COMCEL · Claro Cloud (datos)' : 'CLARO / COMCEL · ' + (desc || 'Otros');
+  if (nit === '890319193') return n.includes('cloud') ? 'SIESA · Siesa Cloud + WASolutions (cuota)' : n.includes('facturaci') ? 'SIESA · Facturación electrónica' : 'SIESA · ' + (desc || 'Otros');
+  if (nit === '900578416') return 'NOVOTECHNO · Alquiler de computadores';
+  if (nit === '900505107') return 'COMPUELITE · Alquiler de portátiles';
+  if (nit === '900092385') return 'UNE / TIGO · Internet dedicado';
+  return null;
+}
+function fpUMes(r, prov, notas, emision) {
+  let m = notas.match(/Periodo\s+(\d{4})\s+(\d{2})/i); if (m) return m[1] + '-' + m[2];
+  m = notas.toLowerCase().match(/mes\s+([a-záéíóú]+)\s+(?:de\s+)?(\d{4})/); if (m && fpUMeses[m[1]]) return m[2] + '-' + String(fpUMeses[m[1]]).padStart(2, '0');
+  const fin = fpTx(r, 'InvoicePeriod/EndDate'); if (/^\d{4}-\d{2}/.test(fin)) return fin.slice(0, 7);
+  let y = +emision.slice(0, 4), mo = +emision.slice(5, 7);
+  if (/voz/i.test(prov)) { mo--; if (mo < 1) { mo = 12; y--; } }
+  return y + '-' + String(mo).padStart(2, '0');
+}
+function fpUDatos(r) {
+  const nit = fpTx(r, 'AccountingSupplierParty/Party/PartyTaxScheme/CompanyID').replace(/\D/g, '').replace(/^(\d{9})\d?$/, '$1');
+  const nom = fpTx(r, 'AccountingSupplierParty/Party/PartyName/Name') || fpTx(r, 'AccountingSupplierParty/Party/PartyTaxScheme/RegistrationName');
+  const notas = Array.from(r.children).filter(c => c.localName === 'Note').map(c => (c.textContent || '').replace(/\s+/g, ' ').trim()).join(' · ');
+  const emision = fpTx(r, 'IssueDate');
+  const vence = fpTx(r, 'DueDate') || fpTx(r, 'PaymentMeans/PaymentDueDate') || '';
+  const num = v => { const x = parseFloat(v); return isFinite(x) ? x : 0; };
+  const payable = num(fpTx(r, 'LegalMonetaryTotal/PayableAmount')), subtotal = num(fpTx(r, 'LegalMonetaryTotal/LineExtensionAmount'));
+  let iva = 0, rete = 0;
+  Array.from(r.children).filter(c => c.localName === 'TaxTotal' || c.localName === 'WithholdingTaxTotal').forEach(tt => Array.from(tt.children).filter(c => c.localName === 'TaxSubtotal').forEach(s => { const nm = fpTx(s, 'TaxCategory/TaxScheme/Name'), a = num(fpTx(s, 'TaxAmount')); if (/^rete/i.test(nm)) rete += a; else if (/^iva$/i.test(nm)) iva += a; }));
+  const lineas = Array.from(r.children).filter(c => c.localName === 'InvoiceLine').map(l => ({ d: fpTx(l, 'Item/Description').replace(/\s+/g, ' ').slice(0, 120), v: num(fpTx(l, 'LineExtensionAmount')) }));
+  const desc = lineas[0] ? lineas[0].d : '';
+  let prov = fpUProv(nit, desc, notas); if (!prov) prov = (nom || 'Proveedor ' + nit) + ' · ' + (desc || 'Facturas').slice(0, 40);
+  const mes = fpUMes(r, prov, notas, emision);
+  return { nit, nom, prov, mes, numero: fpTx(r, 'ID'), emision, vence, payable, subtotal, iva, rete, total: Math.round((payable - rete) * 100) / 100, lineas, notas, desc };
+}
+async function fpULeer(files) {
+  const res = document.getElementById('fpu-res'); if (!res) return; res.innerHTML = cargaHtml('Leyendo facturas');
+  FPU.items = []; FPU.aviso = [];
+  try { if (typeof JSZip === 'undefined') await ocpCargarScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', 'JSZip'); } catch (e) { res.innerHTML = '<div class="alert">No se pudo cargar el lector de ZIP: ' + reabastEsc(e.message) + '</div>'; return; }
+  const xmls = [];
+  for (const f of Array.from(files || [])) {
+    try {
+      if (/\.zip$/i.test(f.name)) { const z = await JSZip.loadAsync(await f.arrayBuffer()); let n = 0; for (const nm of Object.keys(z.files)) { if (/\.xml$/i.test(nm) && !z.files[nm].dir) { xmls.push({ f: f.name, t: await z.files[nm].async('string') }); n++; } } if (!n) FPU.aviso.push(f.name + ': el ZIP no trae XML (súbelo con el XML o llena la factura a mano).'); }
+      else if (/\.xml$/i.test(f.name)) xmls.push({ f: f.name, t: await f.text() });
+      else FPU.aviso.push(f.name + ': solo leo ZIP o XML (el PDF viene dentro del ZIP).');
+    } catch (e) { FPU.aviso.push(f.name + ': no se pudo abrir (' + e.message + ').'); }
+  }
+  const vistos = new Set();
+  for (const x of xmls) {
+    const r = fpUXml(x.t); if (!r) { FPU.aviso.push(x.f + ': el XML no es una factura electrónica válida.'); continue; }
+    const d = fpUDatos(r); d.arch = x.f; const k = d.nit + '|' + d.numero; if (vistos.has(k)) continue; vistos.add(k); FPU.items.push(d);
+  }
+  if (!FP.cargado) await fpCargar();
+  FPU.items.forEach(fpUAnalizar); fpURender();
+}
+function fpUAnalizar(it) {
+  const ex = FP.rows.find(x => x.proveedor === it.prov && x.mes === it.mes);
+  const prev = FP.rows.filter(x => x.proveedor === it.prov && x.mes < it.mes).sort((a, b) => b.mes.localeCompare(a.mes))[0] || null;
+  it.ex = ex || null; it.prev = prev; it.obs = []; it.var = prev ? it.total - Number(prev.total) : null; it.pct = prev && Number(prev.total) ? it.var / Number(prev.total) * 100 : null;
+  if (ex) { const ok = Math.abs(Number(ex.total) - it.total) < 1; it.res = ok ? 'dup' : 'distinta'; it.obs.push(ok ? 'Ya estaba cargada (' + (fpEstCol[ex.estado] || [0, 0, ex.estado])[2] + ') y el total coincide; solo se completan sus datos.' : 'Ya existe esa factura del mes con otro total (' + fpCOP(ex.total) + '). No se toca: revísala a mano.'); return; }
+  if (!prev) { it.res = 'primera'; it.obs.push('Primera factura de este proveedor: no hay mes anterior para comparar.'); return; }
+  const dp = prev.datos; let cambio = Math.abs(it.var) >= 1;
+  if (cambio) it.obs.push('El total ' + (it.var > 0 ? 'subió ' : 'bajó ') + fpCOP(Math.abs(it.var)) + ' (' + (it.pct > 0 ? '+' : '') + it.pct.toFixed(1) + '%) contra ' + fpMesTxt(prev.mes) + '.');
+  if (dp && dp.lineas) {
+    const nk = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim(), A = {}; dp.lineas.forEach(l => A[nk(l.d)] = l.v); const B = {}; it.lineas.forEach(l => B[nk(l.d)] = l.v);
+    Object.keys(B).forEach(k => { if (!(k in A)) { it.obs.push('Concepto nuevo: ' + k.slice(0, 50) + ' (' + fpCOP(B[k]) + ').'); cambio = true; } else if (Math.abs(B[k] - A[k]) >= 1) { it.obs.push(k.slice(0, 40) + ': ' + fpVar(B[k] - A[k]) + '.'); cambio = true; } });
+    Object.keys(A).forEach(k => { if (!(k in B)) { it.obs.push('Ya no aparece: ' + k.slice(0, 50) + '.'); cambio = true; } });
+    if ((dp.iva > 0) !== (it.iva > 0)) { it.obs.push(it.iva > 0 ? 'Ahora cobra IVA.' : 'Ahora no cobra IVA.'); cambio = true; }
+  } else it.obs.push('El mes anterior no tiene detalle para comparar conceptos (solo total).');
+  it.res = cambio ? 'cambio' : 'igual';
+}
+const fpUResTxt = { igual: ['#dcfce7', '#166534', '✔ Sin cambios'], cambio: ['#fee2e2', '#b91c1c', '⚠ Cambió'], primera: ['#e0f2fe', '#0369a1', '🆕 Primera'], dup: ['#e2e8f0', '#334155', '＝ Ya cargada'], distinta: ['#fef3c7', '#b45309', '⚠ Ya existe distinta'] };
+function fpURender() {
+  const res = document.getElementById('fpu-res'), mf = document.getElementById('fpu-mf'); if (!res) return;
+  if (!FPU.items.length) { res.innerHTML = '<div class="alert">No encontré facturas legibles.' + (FPU.aviso.length ? '<br>' + FPU.aviso.map(reabastEsc).join('<br>') : '') + '</div>'; return; }
+  FGXL.rows = FPU.items; FGXL.hide = new Set(); FGXL.f = {}; FGXL.sort = null; FGXL.xl = 'Facturas_subidas';
+  FGXL.cols = [
+    { k: 'prov', t: 'Proveedor', v: r => r.prov, wrap: 1 }, { k: 'mes', t: 'Mes', v: r => r.mes, h: r => '<b>' + fpMesTxt(r.mes) + '</b>' }, { k: 'num', t: 'N.º', v: r => r.numero },
+    { k: 'vence', t: 'Vence', date: 1, v: r => r.vence || '', h: r => r.vence ? r.vence.slice(8, 10) + '/' + r.vence.slice(5, 7) + '/' + r.vence.slice(2, 4) : '—' },
+    { k: 'sub', t: 'Subtotal', num: 1, sum: 1, v: r => Math.round(r.subtotal), h: r => fpCOP(r.subtotal) }, { k: 'iva', t: 'IVA', num: 1, sum: 1, v: r => Math.round(r.iva), h: r => fpCOP(r.iva) }, { k: 'ret', t: 'Retención', num: 1, sum: 1, v: r => Math.round(r.rete), h: r => r.rete ? '−' + fpCOP(r.rete) : '—' },
+    { k: 'tot', t: 'A pagar', num: 1, sum: 1, v: r => Math.round(r.total), h: r => '<b>' + fpCOP(r.total) + '</b>' },
+    { k: 'ant', t: 'Mes anterior', num: 1, v: r => r.prev ? Math.round(Number(r.prev.total)) : '', h: r => r.prev ? fpCOP(r.prev.total) : '—' },
+    { k: 'var', t: 'Variación $', num: 1, v: r => r.var == null ? '' : Math.round(r.var), h: r => '<span style="font-weight:700;color:' + (r.var > 0 ? '#b91c1c' : r.var < 0 ? '#166534' : '#64748b') + '">' + fpVar(r.var) + '</span>' },
+    { k: 'pct', t: '%', num: 1, v: r => r.pct == null ? '' : Math.round(r.pct * 10) / 10, h: r => r.pct == null ? '—' : (r.pct > 0 ? '+' : '') + r.pct.toFixed(1) + '%' },
+    { k: 'res', t: 'Resultado', v: r => fpUResTxt[r.res][2], h: r => { const c = fpUResTxt[r.res]; return '<span style="background:' + c[0] + ';color:' + c[1] + ';padding:2px 8px;border-radius:99px;font-weight:700;font-size:11px;white-space:nowrap">' + c[2] + '</span>'; } },
+    { k: 'obs', t: 'Qué revisar', v: r => r.obs.join(' '), wrap: 1 }];
+  const n = c => FPU.items.filter(i => i.res === c).length, ap = n('igual');
+  res.innerHTML = (FPU.aviso.length ? '<div class="alert" style="margin-bottom:8px">' + FPU.aviso.map(reabastEsc).join('<br>') + '</div>' : '')
+    + '<div style="font-size:12.5px;margin-bottom:6px"><b>' + FPU.items.length + '</b> facturas leídas · ' + n('igual') + ' sin cambios · ' + n('cambio') + ' con cambios · ' + n('primera') + ' primeras · ' + n('dup') + ' ya cargadas' + (n('distinta') ? ' · ' + n('distinta') + ' distintas a las ya cargadas' : '') + '</div>'
+    + '<div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"><button class="btn btn-g btn-sm" onclick="FGXA=FGXL;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGXL;fgxLimpiar()">✖ Quitar filtros</button><button class="btn btn-g btn-sm" onclick="FGXA=FGXL;fgxExcel()">⬇ Excel</button></div>'
+    + '<div class="tw" id="fgx_fpl" style="max-height:46vh;overflow:auto;"></div>'
+    + '<div style="font-size:11px;color:var(--mu);margin-top:6px">A pagar = total de la factura menos retenciones (retefuente/reterenta). Nada se guarda hasta que pulses un botón.</div>';
+  FGXA = FGXL; fgxPaint();
+  if (mf) mf.innerHTML = '<button class="btn btn-g btn-sm" onclick="fpCerrar()">Cancelar</button><button class="btn btn-g btn-sm" onclick="fpUGuardar(false)">💾 Guardar todas como pendientes</button><button class="btn btn-gr btn-sm" onclick="fpUGuardar(true)">✅ Aprobar las ' + ap + ' sin cambios · el resto queda pendiente</button>';
+}
+async function fpUGuardar(aprobar) {
+  const quien = (CU && (CU.nombre || CU.email)) || '', ahora = new Date().toISOString(); let nu = 0, ap = 0, comp = 0, omit = 0; const err = [];
+  for (const it of FPU.items) {
+    const datos = { nit: it.nit, emision: it.emision, subtotal: it.subtotal, iva: it.iva, rete: it.rete, payable: it.payable, lineas: it.lineas };
+    try {
+      if (it.res === 'distinta') { omit++; continue; }
+      if (it.res === 'dup') { await sb.patch('facturas_proveedor', 'id=eq.' + it.ex.id, { datos, vence: it.ex.vence || it.vence || null, numero: it.ex.numero || it.numero, actualizado: ahora }); comp++; continue; }
+      const ok = aprobar && it.res === 'igual', conc = (it.prev && it.prev.concepto) || it.desc.slice(0, 60);
+      const nota = 'Subtotal ' + fpCOP(it.subtotal) + ' · IVA ' + fpCOP(it.iva) + (it.rete ? ' · retención −' + fpCOP(it.rete) : '') + ' · leída del XML (' + it.arch + ')';
+      await sb.upsert('facturas_proveedor', { proveedor: it.prov, mes: it.mes, numero: it.numero, periodo: it.notas.slice(0, 80), vence: it.vence || null, concepto: conc, total: it.total, estado: ok ? 'aprobada' : 'pendiente', aprobado_por: ok ? quien : null, aprobado_en: ok ? ahora : null, notas: nota, lineas: [], datos, actualizado: ahora }, 'proveedor,mes');
+      nu++; if (ok) ap++;
+    } catch (e) { err.push(it.numero + ': ' + e.message); }
+  }
+  if (err.length) alert('Algunas no se guardaron:\n' + err.join('\n'));
+  fpCerrar(); await renderCtFacturas(document.getElementById('ct-tab-content'));
+  if (typeof toast === 'function') toast(nu + ' facturas nuevas (' + ap + ' aprobadas)' + (comp ? ' · ' + comp + ' completadas' : '') + (omit ? ' · ' + omit + ' omitidas' : ''), 'ok');
 }
 async function fpEliminar(id) {
   const r = FP.rows.find(x => x.id === id); if (!r || !confirm('¿Eliminar la factura de ' + r.proveedor + ' de ' + fpMesTxt(r.mes) + '?\nNo se puede deshacer.')) return;
