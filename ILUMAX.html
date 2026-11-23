@@ -35980,7 +35980,7 @@ const FP_COLS = [
   { k: 'estado', t: 'Estado', v: r => (fpEstCol[r.estado] || [0, 0, r.estado])[2], h: r => { const c = fpEstCol[r.estado] || ['#e2e8f0', '#334155', r.estado]; return '<span style="background:' + c[0] + ';color:' + c[1] + ';padding:2px 8px;border-radius:99px;font-weight:700;font-size:11px">' + c[2] + '</span>'; } },
   { k: 'aprob', t: 'Aprobó', v: r => r.aprobado_por || '' },
   { k: 'notas', t: 'Notas', v: r => r.notas || '', wrap: 1 },
-  { k: 'acc', t: '', v: r => '', h: r => '<span style="white-space:nowrap"><button class="btn btn-g btn-xs" onclick="fpDetalle(\'' + r.id + '\')">🔍 Detalle</button> <button class="btn btn-g btn-xs" title="Editar" onclick="fpForm(\'' + r.id + '\')">✏️</button></span>' }];
+  { k: 'acc', t: '', v: r => '', h: r => '<span style="white-space:nowrap"><button class="btn btn-g btn-xs" onclick="fpDetalle(\'' + r.id + '\')">🔍 Detalle</button> <button class="btn btn-g btn-xs" title="Editar" onclick="fpForm(\'' + r.id + '\')">✏️</button>' + (r.estado === 'aprobada' ? ' <button class="btn btn-g btn-xs" title="Correo de aprobación" onclick="fpCorreo([\'' + r.id + '\'])">✉️</button>' : '') + '</span>' }];
 async function renderCtFacturas(el) {
   el.innerHTML = cargaHtml('Cargando facturas');
   await fpCargar();
@@ -35990,14 +35990,15 @@ async function renderCtFacturas(el) {
   const todos = FP.prov === '__todos', F = FP.rows.filter(r => todos || r.proveedor === FP.prov), ult = todos ? null : F[0], pen = FP.rows.filter(r => r.estado === 'pendiente').length;
   const hoyF = new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10), PEN = FP.rows.filter(r => r.estado === 'pendiente'), VEN = PEN.filter(r => r.vence && r.vence < hoyF), SEM = PEN.filter(r => r.vence && r.vence >= hoyF && r.vence <= new Date(Date.now() - 5 * 3600e3 + 7 * 864e5).toISOString().slice(0, 10)), sumF = a => a.reduce((s, r) => s + Number(r.total), 0);
   const tot12 = F.slice(0, 12).reduce((s, r) => s + Number(r.total), 0), prom = F.length ? tot12 / Math.min(F.length, 12) : 0;
-  const kp = (v, t, c) => '<div style="background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:10px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'inherit') + '">' + v + '</div><div style="font-size:11px;color:var(--mu)">' + t + '</div></div>';
+  const kp = (v, t, c, ck) => '<div' + (ck ? ' onclick="' + ck + '" title="Clic para ver el detalle"' : '') + ' style="' + (ck ? 'cursor:pointer;' : '') + 'background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:10px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'inherit') + '">' + v + '</div><div style="font-size:11px;color:var(--mu)">' + t + (ck ? ' · <u>ver</u>' : '') + '</div></div>';
   el.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
     + '<select class="inp" style="width:auto;max-width:320px" onchange="FP.prov=this.value;renderCtFacturas(document.getElementById(\'ct-tab-content\'))">' + '<option value="__todos"' + (todos ? ' selected' : '') + '>Todos los proveedores</option>' + provs.map(p => '<option value="' + reabastEsc(p) + '"' + (p === FP.prov ? ' selected' : '') + '>' + reabastEsc(p) + '</option>').join('') + '</select>'
-    + '<button class="btn btn-p btn-sm" onclick="fpUAbrir()">📤 Subir facturas</button><button class="btn btn-g btn-sm" onclick="fpGAbrir()">📊 Gráfico</button><button class="btn btn-g btn-sm" onclick="fpForm(\'\')">➕ Nueva factura</button>'
+    + '<button class="btn btn-p btn-sm" onclick="fpUAbrir()">📤 Subir facturas</button><button class="btn btn-g btn-sm" onclick="fpGAbrir()">📊 Gráfico</button><button class="btn btn-g btn-sm" onclick="fpExcelMes()">📗 Excel mes a mes</button><button class="btn btn-g btn-sm" onclick="fpForm(\'\')">➕ Nueva factura</button>'
     + '<button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxLimpiar()">✖ Quitar filtros y orden</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxExcel()">⬇ Excel de esta vista</button></div>'
     + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
-    + (ult ? kp(fpCOP(ult.total), 'Última factura · ' + fpMesTxt(ult.mes)) + kp(fpVar(ult._var) + (ult._pct == null ? '' : ' (' + (ult._pct > 0 ? '+' : '') + ult._pct.toFixed(1) + '%)'), 'Contra el mes anterior', ult._var > 0 ? '#b91c1c' : ult._var < 0 ? '#166534' : '') + kp(fpCOP(prom), 'Promedio (últimos ' + Math.min(F.length, 12) + ' meses)') : '')
-    + kp(fpCOP(sumF(PEN)), 'Por pagar · ' + PEN.length + ' pendientes de aprobar (todos los proveedores)', PEN.length ? '#b45309' : '') + kp(VEN.length + ' · ' + fpCOP(sumF(VEN)), 'Vencidas sin aprobar/pagar', VEN.length ? '#b91c1c' : '') + kp(SEM.length + ' · ' + fpCOP(sumF(SEM)), 'Vencen en los próximos 7 días', SEM.length ? '#c2410c' : '') + '</div>'
+    + (ult ? kp(fpCOP(ult.total), 'Última factura · ' + fpMesTxt(ult.mes), '', "fpDetalle('" + ult.id + "')") + kp(fpVar(ult._var) + (ult._pct == null ? '' : ' (' + (ult._pct > 0 ? '+' : '') + ult._pct.toFixed(1) + '%)'), 'Contra el mes anterior', ult._var > 0 ? '#b91c1c' : ult._var < 0 ? '#166534' : '', "fpDetalle('" + ult.id + "')") + kp(fpCOP(prom), 'Promedio (últimos ' + Math.min(F.length, 12) + ' meses)', '', "FPG.sel=new Set([FP.prov]);fpGAbrir()") : '')
+    + (() => { const hoyK = fpHoy(), aK = hoyK.slice(0, 4), mK = hoyK.slice(0, 7), AP = FP.rows.filter(r => r.estado === 'aprobada'), sm = a => a.reduce((s, r) => s + Number(r.total), 0), aM = AP.filter(r => r.mes === mK), aA = AP.filter(r => r.mes.slice(0, 4) === aK); return kp(aM.length + ' · ' + fpCOP(sm(aM)), '✅ Aprobadas en ' + fpMesTxt(mK), '#166534', "fpKpi('mesA')") + kp(aA.length + ' · ' + fpCOP(sm(aA)), '✅ Aprobadas en el año ' + aK, '#166534', "fpKpi('anioA')"); })()
+    + kp(fpCOP(sumF(PEN)), 'Por pagar · ' + PEN.length + ' pendientes de aprobar', PEN.length ? '#b45309' : '', "fpKpi('pen')") + kp(VEN.length + ' · ' + fpCOP(sumF(VEN)), 'Vencidas sin aprobar/pagar', VEN.length ? '#b91c1c' : '', "fpKpi('ven')") + kp(SEM.length + ' · ' + fpCOP(sumF(SEM)), 'Vencen en los próximos 7 días', SEM.length ? '#c2410c' : '', "fpKpi('sem')") + '</div>'
     + '<div class="tw" id="fgx_fp" style="max-height:60vh;overflow:auto;"></div>'
     + '<div style="font-size:11px;color:var(--mu);margin-top:6px;">Rojo = subió contra el mes anterior (revisar); verde = bajó. «Detalle» muestra cada línea contra el mes anterior.</div>';
   FGX.rows = F; FGX.cols = FP_COLS; FGXA = FGX; fgxPaint();
@@ -36025,7 +36026,7 @@ function fpDetalle(id) {
     + (r.notas ? '<div style="font-size:12px;color:#475569;margin-bottom:8px;">' + reabastEsc(r.notas) + '</div>' : '')
     + '<div style="border:1px solid var(--b1);border-radius:10px;padding:8px 10px;margin-bottom:8px"><b style="font-size:12.5px">🧾 Qué te facturan</b>' + fpQueHtml(r) + '</div>'
     + ((r.lineas || []).length ? '<div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"><button class="btn btn-g btn-sm" onclick="FGXA=FGXL;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGXL;fgxLimpiar()">✖ Quitar filtros</button><button class="btn btn-g btn-sm" onclick="FGXA=FGXL;fgxExcel()">⬇ Excel</button></div><div class="tw" id="fgx_fpl" style="max-height:48vh;overflow:auto;"></div>' : '')
-    + '</div><div class="mf">' + (r.estado !== 'aprobada' ? '<button class="btn btn-gr btn-sm" onclick="fpEstado(\'' + r.id + '\',\'aprobada\')">✅ Aprobar</button>' : '') + (r.estado !== 'devuelta' ? '<button class="btn btn-rd btn-sm" onclick="fpEstado(\'' + r.id + '\',\'devuelta\')">↩ Devolver</button>' : '') + (r.estado !== 'pendiente' ? '<button class="btn btn-g btn-sm" onclick="fpEstado(\'' + r.id + '\',\'pendiente\')">⏳ Dejar pendiente</button>' : '') + '<button class="btn btn-g btn-sm" onclick="fpCerrar()">Cerrar</button></div>');
+    + '</div><div class="mf">' + (r.estado !== 'aprobada' ? '<button class="btn btn-gr btn-sm" onclick="fpEstado(\'' + r.id + '\',\'aprobada\')">✅ Aprobar</button>' : '<button class="btn btn-gr btn-sm" onclick="fpCorreo([\'' + r.id + '\'])">✉️ Correo de aprobación</button>') + (r.estado !== 'devuelta' ? '<button class="btn btn-rd btn-sm" onclick="fpEstado(\'' + r.id + '\',\'devuelta\')">↩ Devolver</button>' : '') + (r.estado !== 'pendiente' ? '<button class="btn btn-g btn-sm" onclick="fpEstado(\'' + r.id + '\',\'pendiente\')">⏳ Dejar pendiente</button>' : '') + '<button class="btn btn-g btn-sm" onclick="fpCerrar()">Cerrar</button></div>');
   if ((r.lineas || []).length) fgxPaint();
 }
 async function fpEstado(id, est) {
@@ -36035,7 +36036,8 @@ async function fpEstado(id, est) {
   const quien = (CU && (CU.nombre || CU.email)) || '';
   try { await sb.patch('facturas_proveedor', 'id=eq.' + id, { estado: est, aprobado_por: est === 'pendiente' ? null : quien, aprobado_en: est === 'pendiente' ? null : new Date().toISOString(), notas: nota, actualizado: new Date().toISOString() }); }
   catch (e) { alert('No se pudo guardar: ' + e.message); return; }
-  fpCerrar(); renderCtFacturas(document.getElementById('ct-tab-content'));
+  fpCerrar(); await renderCtFacturas(document.getElementById('ct-tab-content'));
+  if (est === 'aprobada') fpCorreo([id]);
 }
 function fpForm(id) {
   const r = id ? FP.rows.find(x => x.id === id) : null, v = (k, d) => reabastEsc(r ? (r[k] == null ? '' : r[k]) : (d || ''));
@@ -36062,7 +36064,8 @@ async function fpGuardar(id) {
   if (est !== 'pendiente' && (!prev || prev.estado !== est)) { fila.aprobado_por = quien; fila.aprobado_en = new Date().toISOString(); } else if (est === 'pendiente') { fila.aprobado_por = null; fila.aprobado_en = null; }
   try { if (id) await sb.patch('facturas_proveedor', 'id=eq.' + id, fila); else await sb.upsert('facturas_proveedor', fila, 'proveedor,mes'); }
   catch (e) { alert('No se pudo guardar: ' + e.message); return; }
-  FP.prov = prov; fpCerrar(); renderCtFacturas(document.getElementById('ct-tab-content'));
+  FP.prov = prov; fpCerrar(); await renderCtFacturas(document.getElementById('ct-tab-content'));
+  if (est === 'aprobada' && (!prev || prev.estado !== 'aprobada')) { const n = FP.rows.find(x => x.proveedor === prov && x.mes === mes); if (n) fpCorreo([n.id]); }
 }
 /* ===== Subir facturas electrónicas (ZIP/XML DIAN) ===== */
 const FPU = { items: [], aviso: [] };
@@ -36199,6 +36202,7 @@ async function fpUGuardar(aprobar) {
   }
   if (err.length) alert('Algunas no se guardaron:\n' + err.join('\n'));
   fpCerrar(); await renderCtFacturas(document.getElementById('ct-tab-content'));
+  const idsOk = FPU.items.filter(it => aprobar && it.res === 'igual').map(it => (FP.rows.find(x => x.proveedor === it.prov && x.mes === it.mes) || {}).id).filter(Boolean); if (idsOk.length) setTimeout(() => fpCorreo(idsOk), 200);
   if (typeof toast === 'function') toast(nu + ' facturas nuevas (' + ap + ' aprobadas)' + (comp ? ' · ' + comp + ' completadas' : '') + (omit ? ' · ' + omit + ' omitidas' : ''), 'ok');
 }
 /* ===== Gráfico de gasto en facturas (torta / barras) ===== */
@@ -36277,9 +36281,101 @@ function fpGPaint() {
   if (act) {
     const sel = rows.filter(r => (!P.prov || r.proveedor === P.prov) && (!P.mes || r.mes === P.mes)).sort((a, b) => b.mes.localeCompare(a.mes) || a.proveedor.localeCompare(b.proveedor)), st = sel.reduce((s, r) => s + Number(r.total), 0);
     det = '<div id="fpg-det" style="margin-top:12px;border-top:2px solid #0f172a;padding-top:8px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px"><b style="font-size:14px">🔎 ' + reabastEsc((P.prov || 'Todos los proveedores') + (P.mes ? ' · ' + fpMesTxt(P.mes) : '')) + '</b><span style="font-size:12.5px">' + sel.length + ' facturas · <b>' + fpCOP(st) + '</b> (' + (st / tot * 100).toFixed(1) + '% del período)</span><button class="btn btn-g btn-xs" onclick="FPG.pick={prov:null,mes:null};fpGPaint()">✖ Quitar selección</button></div>'
-      + (sel.length ? sel.map(r => { const c = fpEstCol[r.estado] || ['#e2e8f0', '#334155', r.estado]; return '<div style="border:1px solid var(--b1);border-radius:10px;padding:8px 10px;margin-bottom:6px"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px"><b>' + reabastEsc(r.proveedor) + '</b><span style="color:#64748b">' + fpMesTxt(r.mes) + (r.numero ? ' · N.º ' + reabastEsc(r.numero) : '') + (r.vence ? ' · vence ' + r.vence.slice(8, 10) + '/' + r.vence.slice(5, 7) + '/' + r.vence.slice(2, 4) : '') + '</span><span style="background:' + c[0] + ';color:' + c[1] + ';padding:1px 8px;border-radius:99px;font-weight:700;font-size:11px">' + c[2] + '</span><b style="margin-left:auto">' + fpCOP(r.total) + '</b>' + (r._var != null ? '<span style="font-weight:700;font-size:12px;color:' + (r._var > 0 ? '#b91c1c' : r._var < 0 ? '#166534' : '#64748b') + '">' + fpVar(r._var) + (r._pct == null ? '' : ' (' + (r._pct > 0 ? '+' : '') + r._pct.toFixed(1) + '%)') + ' vs mes anterior</span>' : '') + '<button class="btn btn-g btn-xs" onclick="fpDetalle(\'' + r.id + '\')">🔍 Abrir</button></div>' + (r.concepto ? '<div style="font-size:12px;color:#475569;margin-bottom:2px">' + reabastEsc(r.concepto) + '</div>' : '') + fpQueHtml(r) + '</div>'; }).join('') : '<div class="empty">Sin facturas.</div>') + '</div>';
+      + (sel.length ? sel.map(fpCardHtml).join('') : '<div class="empty">Sin facturas.</div>') + '</div>';
   }
   box.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;font-size:12.5px"><span><b>Total del período:</b> ' + fpCOP(tot) + '</span><span><b>Facturas:</b> ' + rows.length + '</span><span><b>Promedio por mes:</b> ' + fpCOP(tot / Math.max(nm, 1)) + '</span></div><div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div style="flex:2;min-width:300px">' + svg + '</div>' + lg + '</div>' + det;
+}
+/* ===== Correo de aprobación + Excel mes a mes ===== */
+function fpCorreoDe(r) {
+  const d = r.datos, f = fpCOP, quien = (CU && (CU.nombre || CU.email)) || 'Duvier Trujillo', conc = r.concepto || r.proveedor;
+  const per = (d && d.info) ? d.info : (r.periodo || '');
+  const filas = []; // [concepto, valor, negrita]
+  if (d && (d.lineas || []).length) {
+    d.lineas.forEach(l => filas.push([(l.q && +l.q !== 1 ? (+l.q) + ' × ' : '') + l.d + (l.q && +l.q > 1 && l.p ? ' (' + f(l.p) + ' c/u)' : ''), f(l.v)]));
+    filas.push(['Subtotal', f(d.subtotal), 1]); filas.push(['IVA', d.iva ? f(d.iva) : 'No cobra', 0]);
+    if (d.inc) filas.push(['Impoconsumo (INC 4%)', f(d.inc), 0]);
+    if (d.rete) filas.push(['Retención en la fuente', '−' + f(d.rete), 0]);
+  } else filas.push([conc, f(r.total)]);
+  filas.push(['Total a pagar', f(r.total), 2]);
+  const vence = r.vence ? r.vence.slice(8, 10) + '/' + r.vence.slice(5, 7) + '/' + r.vence.slice(0, 4) : '';
+  const ref = [r.numero ? 'Factura N.º ' + r.numero : '', fpMesTxt(r.mes), vence ? 'vence ' + vence : ''].filter(Boolean).join(' · ');
+  const th = 'style="border:1px solid #94a3b8;padding:5px 10px;background:#0f172a;color:#fff;text-align:left;font-family:Arial,sans-serif;font-size:13px"', thr = th.replace('text-align:left', 'text-align:right');
+  const td = (b, al) => 'style="border:1px solid #cbd5e1;padding:5px 10px;font-family:Arial,sans-serif;font-size:13px;text-align:' + al + (b ? ';font-weight:bold;background:#f1f5f9' : '') + '"';
+  const html = '<div style="font-family:Arial,sans-serif;font-size:14px;color:#0f172a"><p>Buenos días,</p><p><b>Aprobado.</b> ' + reabastEsc(r.proveedor) + (ref ? ' — ' + reabastEsc(ref) : '') + '.</p>'
+    + (per ? '<p style="margin:0 0 6px;font-size:13px;color:#475569">' + reabastEsc(per) + '</p>' : '')
+    + '<table style="border-collapse:collapse"><thead><tr><th ' + th + '>Concepto</th><th ' + thr + '>Valor</th></tr></thead><tbody>' + filas.map(x => '<tr><td ' + td(x[2], 'left') + '>' + reabastEsc(x[0]) + '</td><td ' + td(x[2], 'right') + '>' + reabastEsc(x[1]) + '</td></tr>').join('') + '</tbody></table>'
+    + (r.notas && /^Devuelta|Aprob/i.test(r.notas) ? '' : '') + '<p>Cordialmente,<br>' + reabastEsc(quien) + '<br>TI · ILUMAX</p></div>';
+  const w = Math.max(...filas.map(x => x[0].length), 12), txt = 'Buenos días,\n\nAprobado. ' + r.proveedor + (ref ? ' — ' + ref : '') + '.\n' + (per ? per + '\n' : '') + '\n' + filas.map(x => x[0].padEnd(w + 2) + x[1]).join('\n') + '\n\nCordialmente,\n' + quien + '\nTI · ILUMAX';
+  return { html, txt, asunto: 'RE: Factura ' + (r.numero || '') + ' ' + r.proveedor + ' ' + fpMesTxt(r.mes) };
+}
+function fpCorreo(ids) {
+  const rs = (ids || []).map(id => FP.rows.find(x => x.id === id)).filter(Boolean); if (!rs.length) return;
+  fpModal('<div class="mh"><span class="mt">✉️ Correo de aprobación</span><button class="mx" onclick="fpCerrar()">✕</button></div><div class="mb"><div style="font-size:12px;color:#475569;margin-bottom:8px">Responde al correo de la factura (Yeymi Alvarez Mora y Sandra Senior Arango, con copia a Zuly Ventero). <b>Copiar correo</b> deja el texto y el cuadro listos para pegar en la respuesta de Outlook.</div>'
+    + rs.map(r => '<div style="border:1px solid var(--b1);border-radius:10px;padding:10px;margin-bottom:10px"><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button class="btn btn-p btn-sm" onclick="fpCorreoCopiar(\'' + r.id + '\',this)">📋 Copiar correo</button><button class="btn btn-g btn-sm" onclick="fpCorreoOutlook(\'' + r.id + '\')">✉ Abrir en Outlook</button><span style="font-size:11px;color:#64748b;align-self:center">Asunto sugerido: ' + reabastEsc(fpCorreoDe(r).asunto) + '</span></div><div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px">' + fpCorreoDe(r).html + '</div></div>').join('')
+    + '</div><div class="mf"><button class="btn btn-g btn-sm" onclick="fpCerrar()">Cerrar</button></div>');
+}
+async function fpCorreoCopiar(id, btn) {
+  const r = FP.rows.find(x => x.id === id); if (!r) return; const c = fpCorreoDe(r);
+  try { if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([c.html], { type: 'text/html' }), 'text/plain': new Blob([c.txt], { type: 'text/plain' }) })]); else await navigator.clipboard.writeText(c.txt); if (btn) { btn.textContent = '✔ Copiado'; setTimeout(() => btn.textContent = '📋 Copiar correo', 2500); } }
+  catch (e) { alert('No se pudo copiar: ' + e.message); }
+}
+function fpCorreoOutlook(id) { const r = FP.rows.find(x => x.id === id); if (!r) return; const c = fpCorreoDe(r); window.location.href = 'mailto:?subject=' + encodeURIComponent(c.asunto) + '&body=' + encodeURIComponent(c.txt); }
+async function fpExcelMes() {
+  try { if (!window.ExcelJS) await new Promise((ok, ko) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js'; s.onload = ok; s.onerror = () => ko(new Error('No se pudo cargar ExcelJS')); document.head.appendChild(s); }); } catch (e) { alert(e.message); return; }
+  const R = FP.rows.slice().sort((a, b) => a.mes.localeCompare(b.mes) || a.proveedor.localeCompare(b.proveedor)); if (!R.length) { alert('No hay facturas.'); return; }
+  const meses = []; for (let y = +R[0].mes.slice(0, 4), m = +R[0].mes.slice(5, 7); (y + '-' + String(m).padStart(2, '0')) <= R[R.length - 1].mes; m++) { if (m > 12) { m = 1; y++; } meses.push(y + '-' + String(m).padStart(2, '0')); }
+  const provs = [...new Set(R.map(r => r.proveedor))].sort(), wb = new ExcelJS.Workbook(), F = { name: 'Arial', size: 10 }, HD = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } }, NUM = '#,##0;[Red]-#,##0;-';
+  const hdr = ws => { const r = ws.getRow(1); r.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } }; r.fill = HD; r.alignment = { vertical: 'middle', wrapText: true }; r.height = 28; ws.views = [{ state: 'frozen', ySplit: 1 }]; };
+  const col = n => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
+  // 1) Mes a mes
+  const w1 = wb.addWorksheet('Mes a mes'); w1.addRow(['Proveedor', ...meses.map(m => fpMesTxt(m)), 'Total', 'Promedio mensual']); hdr(w1);
+  provs.forEach((p, i) => { const row = [p, ...meses.map(m => { const x = R.find(r => r.proveedor === p && r.mes === m); return x ? Number(x.total) : null; })], n = meses.length, rr = i + 2; row.push({ formula: 'SUM(B' + rr + ':' + col(n + 1) + rr + ')' }); row.push({ formula: 'IFERROR(AVERAGE(B' + rr + ':' + col(n + 1) + rr + '),0)' }); w1.addRow(row); });
+  const tr = provs.length + 2, tRow = ['TOTAL']; meses.forEach((m, j) => tRow.push({ formula: 'SUM(' + col(j + 2) + '2:' + col(j + 2) + (tr - 1) + ')' })); tRow.push({ formula: 'SUM(' + col(meses.length + 2) + '2:' + col(meses.length + 2) + (tr - 1) + ')' }); tRow.push(''); w1.addRow(tRow); const T = w1.getRow(tr); T.font = { name: 'Arial', size: 10, bold: true }; T.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+  const vr = tr + 2; w1.getCell('A' + vr).value = 'Variación del total contra el mes anterior'; w1.getCell('A' + vr).font = { name: 'Arial', size: 10, bold: true };
+  w1.getCell('A' + (vr + 1)).value = '$'; w1.getCell('A' + (vr + 2)).value = '%';
+  meses.forEach((m, j) => { if (!j) return; const c = col(j + 2), p = col(j + 1); w1.getCell(c + (vr + 1)).value = { formula: 'IF(AND(' + p + tr + '>0,' + c + tr + '>0),' + c + tr + '-' + p + tr + ',"")' }; w1.getCell(c + (vr + 2)).value = { formula: 'IF(AND(' + p + tr + '>0,' + c + tr + '>0),' + c + tr + '/' + p + tr + '-1,"")' }; w1.getCell(c + (vr + 2)).numFmt = '0.0%'; w1.getCell(c + (vr + 1)).numFmt = NUM; });
+  w1.eachRow((row, i) => row.eachCell((c, k) => { if (i > 1) { c.font = Object.assign({}, F, c.font || {}); if (k > 1 && !c.numFmt) c.numFmt = NUM; } })); w1.getColumn(1).width = 46; for (let k = 2; k <= meses.length + 3; k++) w1.getColumn(k).width = 15;
+  w1.getCell('A' + (vr + 4)).value = 'Valores = total a pagar de cada factura (IVA incluido, menos retenciones), ubicada en el mes que cubre el período facturado.'; w1.getCell('A' + (vr + 4)).font = { name: 'Arial', size: 9, italic: true, color: { argb: 'FF64748B' } };
+  // 2) Facturas
+  const w2 = wb.addWorksheet('Facturas'); w2.addRow(['Proveedor', 'Mes', 'N.º factura', 'Emisión', 'Vence', 'Concepto', 'Subtotal', 'IVA', 'Impoconsumo', 'Retención', 'A pagar', 'Variación $', 'Variación %', 'Estado', 'Aprobó', 'Notas']); hdr(w2);
+  const por = {}; R.forEach(r => (por[r.proveedor] = por[r.proveedor] || []).push(r));
+  R.forEach(r => { const d = r.datos || {}, p = por[r.proveedor][por[r.proveedor].indexOf(r) - 1]; w2.addRow([r.proveedor, fpMesTxt(r.mes), r.numero || '', d.emision || '', r.vence || '', r.concepto || '', d.subtotal != null ? d.subtotal : null, d.subtotal != null ? d.iva || 0 : null, d.inc || null, d.rete || null, Number(r.total), p ? Number(r.total) - Number(p.total) : null, p && Number(p.total) ? Number(r.total) / Number(p.total) - 1 : null, (fpEstCol[r.estado] || [0, 0, r.estado])[2].replace(/^\S+\s/, ''), r.aprobado_por || '', r.notas || '']); });
+  w2.eachRow((row, i) => row.eachCell((c, k) => { if (i > 1) { c.font = F; if ([7, 8, 9, 10, 11, 12].includes(k)) c.numFmt = NUM; if (k === 13) c.numFmt = '0.0%'; } })); [34, 16, 14, 12, 12, 34, 14, 14, 14, 14, 15, 14, 12, 12, 18, 50].forEach((x, k) => w2.getColumn(k + 1).width = x); w2.autoFilter = { from: 'A1', to: 'P1' };
+  // 3) Qué se factura
+  const w3 = wb.addWorksheet('Qué se factura'); w3.addRow(['Proveedor', 'Mes', 'N.º factura', 'Descripción', 'Cantidad', 'Valor unitario', 'Valor (antes de IVA)', 'Período / nota']); hdr(w3);
+  R.forEach(r => { const d = r.datos; if (d && (d.lineas || []).length) d.lineas.forEach(l => w3.addRow([r.proveedor, fpMesTxt(r.mes), r.numero || '', l.d, +l.q || 1, +l.p || +l.v, +l.v, d.info || ''])); });
+  w3.eachRow((row, i) => row.eachCell((c, k) => { if (i > 1) { c.font = F; if ([6, 7].includes(k)) c.numFmt = NUM; if (k === 5) c.numFmt = '#,##0'; } })); [34, 16, 14, 56, 10, 15, 18, 60].forEach((x, k) => w3.getColumn(k + 1).width = x); w3.autoFilter = { from: 'A1', to: 'H1' };
+  // 4) Celulares por línea
+  const cel = R.filter(r => (r.lineas || []).length); if (cel.length) {
+    const cm = [...new Set(cel.map(r => r.mes))].sort(), w4 = wb.addWorksheet('Celulares por línea'); w4.addRow(['Línea', 'Empleado / área', 'Centro de costo', ...cm.map(m => fpMesTxt(m))]); hdr(w4);
+    const L = {}; cel.forEach(r => r.lineas.forEach(l => { const o = L[l.cel] || (L[l.cel] = { nom: l.nom, cc: l.cc, v: {} }); o.nom = l.nom; o.cc = l.cc; o.v[r.mes] = (o.v[r.mes] || 0) + Number(l.val); }));
+    Object.keys(L).sort().forEach(k => w4.addRow([k, L[k].nom, L[k].cc, ...cm.map(m => L[k].v[m] != null ? L[k].v[m] : null)]));
+    const n = w4.rowCount; w4.addRow(['TOTAL', '', '', ...cm.map((m, j) => ({ formula: 'SUM(' + col(j + 4) + '2:' + col(j + 4) + n + ')' }))]); w4.getRow(n + 1).font = { name: 'Arial', size: 10, bold: true };
+    w4.eachRow((row, i) => row.eachCell((c, k) => { if (i > 1 && i <= n) c.font = F; if (i > 1 && k > 3) c.numFmt = NUM; })); [16, 34, 22, ...cm.map(() => 15)].forEach((x, k) => w4.getColumn(k + 1).width = x); w4.autoFilter = { from: 'A1', to: col(cm.length + 3) + '1' };
+  }
+  const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'Facturas_proveedores_mes_a_mes.xlsx'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+
+function fpCardHtml(r) {
+  const c = fpEstCol[r.estado] || ['#e2e8f0', '#334155', r.estado];
+  return '<div style="border:1px solid var(--b1);border-radius:10px;padding:8px 10px;margin-bottom:6px"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px"><b>' + reabastEsc(r.proveedor) + '</b><span style="color:#64748b">' + fpMesTxt(r.mes) + (r.numero ? ' · N.º ' + reabastEsc(r.numero) : '') + (r.vence ? ' · vence ' + r.vence.slice(8, 10) + '/' + r.vence.slice(5, 7) + '/' + r.vence.slice(2, 4) : '') + '</span><span style="background:' + c[0] + ';color:' + c[1] + ';padding:1px 8px;border-radius:99px;font-weight:700;font-size:11px">' + c[2] + '</span><b style="margin-left:auto">' + fpCOP(r.total) + '</b>' + (r._var != null ? '<span style="font-weight:700;font-size:12px;color:' + (r._var > 0 ? '#b91c1c' : r._var < 0 ? '#166534' : '#64748b') + '">' + fpVar(r._var) + (r._pct == null ? '' : ' (' + (r._pct > 0 ? '+' : '') + r._pct.toFixed(1) + '%)') + ' vs mes anterior</span>' : '') + '<button class="btn btn-g btn-xs" onclick="fpDetalle(\'' + r.id + '\')">🔍 Abrir</button>' + (r.estado === 'aprobada' ? '<button class="btn btn-g btn-xs" title="Correo de aprobación" onclick="fpCorreo([\'' + r.id + '\'])">✉️</button>' : '') + '</div>' + (r.concepto ? '<div style="font-size:12px;color:#475569;margin-bottom:2px">' + reabastEsc(r.concepto) + '</div>' : '') + fpQueHtml(r) + '</div>';
+}
+const fpHoy = () => new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10);
+function fpKpiRows(k) {
+  const hoy = fpHoy(), a = hoy.slice(0, 4), m = hoy.slice(0, 7), s7 = new Date(Date.now() - 5 * 3600e3 + 7 * 864e5).toISOString().slice(0, 10), R = FP.rows, P = R.filter(r => r.estado === 'pendiente');
+  const o = { pen: ['⏳ Por pagar · pendientes de aprobar', P], ven: ['🔴 Vencidas sin aprobar', P.filter(r => r.vence && r.vence < hoy)], sem: ['🟠 Vencen en los próximos 7 días', P.filter(r => r.vence && r.vence >= hoy && r.vence <= s7)],
+    mesA: ['✅ Aprobadas · ' + fpMesTxt(m), R.filter(r => r.estado === 'aprobada' && r.mes === m)], anioA: ['✅ Aprobadas · año ' + a, R.filter(r => r.estado === 'aprobada' && r.mes.slice(0, 4) === a)],
+    mesT: ['🧾 Facturas de ' + fpMesTxt(m) + ' (todas)', R.filter(r => r.mes === m)], anioT: ['🧾 Facturas del año ' + a + ' (todas)', R.filter(r => r.mes.slice(0, 4) === a)] };
+  return o[k];
+}
+function fpKpi(k) {
+  const [tit, rs] = fpKpiRows(k), tot = rs.reduce((s, r) => s + Number(r.total), 0), cnt = (a, f) => { const o = {}; a.forEach(r => { const x = f(r); (o[x] = o[x] || { n: 0, v: 0 }); o[x].n++; o[x].v += Number(r.total); }); return o; };
+  const resumen = (t, o, lab) => '<div style="flex:1;min-width:260px"><b style="font-size:12.5px">' + t + '</b><table style="font-size:12.5px;border-collapse:collapse;width:100%;margin-top:3px"><tbody>' + Object.keys(o).sort((x, y) => k.endsWith('T') || k.endsWith('A') ? (t.includes('mes') ? y.localeCompare(x) : o[y].v - o[x].v) : o[y].v - o[x].v).map(x => '<tr><td style="padding:2px 8px 2px 0;border-bottom:1px solid #f1f5f9">' + reabastEsc(lab(x)) + '</td><td style="text-align:right;padding:2px 6px;border-bottom:1px solid #f1f5f9;color:#64748b">' + o[x].n + '</td><td style="text-align:right;padding:2px 0 2px 8px;border-bottom:1px solid #f1f5f9"><b>' + fpCOP(o[x].v) + '</b></td></tr>').join('') + '</tbody></table></div>';
+  fpModal('<div class="mh"><span class="mt">' + reabastEsc(tit) + '</span><button class="mx" onclick="fpCerrar()">✕</button></div><div class="mb">'
+    + '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;font-size:13px"><span><b>' + rs.length + '</b> facturas</span><span><b>Total:</b> ' + fpCOP(tot) + '</span>' + (rs.length ? '<span><b>Promedio por factura:</b> ' + fpCOP(tot / rs.length) + '</span>' : '') + '</div>'
+    + (rs.length ? '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px">' + resumen('Por proveedor (facturas · total)', cnt(rs, r => r.proveedor), x => x) + (new Set(rs.map(r => r.mes)).size > 1 ? resumen('Por mes (facturas · total)', cnt(rs, r => r.mes), fpMesTxt) : '') + '</div>' : '')
+    + (rs.length ? rs.slice().sort((a, b) => b.mes.localeCompare(a.mes) || a.proveedor.localeCompare(b.proveedor)).map(fpCardHtml).join('') : '<div class="empty">No hay facturas en esta categoría.</div>')
+    + '</div><div class="mf"><button class="btn btn-g btn-sm" onclick="fpCerrar()">Cerrar</button></div>');
 }
 async function fpEliminar(id) {
   const r = FP.rows.find(x => x.id === id); if (!r || !confirm('¿Eliminar la factura de ' + r.proveedor + ' de ' + fpMesTxt(r.mes) + '?\nNo se puede deshacer.')) return;
