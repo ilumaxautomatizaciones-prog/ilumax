@@ -35199,7 +35199,9 @@ async function fpCargar() {
 const FP_COLS = [
   { k: 'proveedor', t: 'Proveedor', v: r => r.proveedor },
   { k: 'mes', t: 'Mes', v: r => r.mes, h: r => '<b>' + fpMesTxt(r.mes) + '</b>' + (r.periodo ? '<div style="font-size:10px;color:#64748b">' + reabastEsc(r.periodo) + '</div>' : '') },
+  { k: 'concepto', t: 'Concepto', v: r => r.concepto || '', wrap: 1 },
   { k: 'numero', t: 'N.º factura', v: r => r.numero || '' },
+  { k: 'vence', t: 'Vence', date: 1, v: r => r.vence || '', h: r => { if (!r.vence) return '—'; const hoy = new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10), d = Math.round((new Date(r.vence + 'T12:00:00') - new Date(hoy + 'T12:00:00')) / 864e5), f = r.vence.slice(8, 10) + '/' + r.vence.slice(5, 7) + '/' + r.vence.slice(2, 4); const c = r.estado === 'pendiente' ? (d < 0 ? '#b91c1c' : d <= 7 ? '#c2410c' : '') : ''; return '<span style="' + (c ? 'color:' + c + ';font-weight:700' : '') + '">' + f + '</span>' + (r.estado === 'pendiente' && d < 0 ? '<div style="font-size:10px;color:#b91c1c">vencida hace ' + (-d) + ' d</div>' : r.estado === 'pendiente' && d <= 7 ? '<div style="font-size:10px;color:#c2410c">' + (d === 0 ? 'vence hoy' : 'en ' + d + ' d') + '</div>' : ''); } },
   { k: 'total', t: 'Total', num: 1, v: r => Math.round(Number(r.total)), h: r => '<b>' + fpCOP(r.total) + '</b>' },
   { k: 'var', t: 'Variación $', num: 1, v: r => r._var == null ? '' : Math.round(r._var), h: r => '<span style="font-weight:700;color:' + (r._var > 0 ? '#b91c1c' : r._var < 0 ? '#166534' : '#64748b') + '">' + fpVar(r._var) + '</span>' },
   { k: 'pct', t: 'Variación %', num: 1, v: r => r._pct == null ? '' : Math.round(r._pct * 10) / 10, h: r => r._pct == null ? '—' : (r._pct > 0 ? '+' : '') + r._pct.toFixed(1) + '%' },
@@ -35212,17 +35214,18 @@ async function renderCtFacturas(el) {
   await fpCargar();
   if (FP.err) { el.innerHTML = '<div class="empty">No se pudo leer: ' + reabastEsc(FP.err) + '</div>'; return; }
   const provs = [...new Set(FP.rows.map(r => r.proveedor))].sort();
-  if (!FP.prov || !provs.includes(FP.prov)) FP.prov = provs[0] || '';
-  const F = FP.rows.filter(r => !FP.prov || r.proveedor === FP.prov), ult = F[0], pen = FP.rows.filter(r => r.estado === 'pendiente').length;
+  if (!FP.prov || (FP.prov !== '__todos' && !provs.includes(FP.prov))) FP.prov = '__todos';
+  const todos = FP.prov === '__todos', F = FP.rows.filter(r => todos || r.proveedor === FP.prov), ult = todos ? null : F[0], pen = FP.rows.filter(r => r.estado === 'pendiente').length;
+  const hoyF = new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10), PEN = FP.rows.filter(r => r.estado === 'pendiente'), VEN = PEN.filter(r => r.vence && r.vence < hoyF), SEM = PEN.filter(r => r.vence && r.vence >= hoyF && r.vence <= new Date(Date.now() - 5 * 3600e3 + 7 * 864e5).toISOString().slice(0, 10)), sumF = a => a.reduce((s, r) => s + Number(r.total), 0);
   const tot12 = F.slice(0, 12).reduce((s, r) => s + Number(r.total), 0), prom = F.length ? tot12 / Math.min(F.length, 12) : 0;
   const kp = (v, t, c) => '<div style="background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:10px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'inherit') + '">' + v + '</div><div style="font-size:11px;color:var(--mu)">' + t + '</div></div>';
   el.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
-    + '<select class="inp" style="width:auto;max-width:320px" onchange="FP.prov=this.value;renderCtFacturas(document.getElementById(\'ct-tab-content\'))">' + provs.map(p => '<option value="' + reabastEsc(p) + '"' + (p === FP.prov ? ' selected' : '') + '>' + reabastEsc(p) + '</option>').join('') + '</select>'
+    + '<select class="inp" style="width:auto;max-width:320px" onchange="FP.prov=this.value;renderCtFacturas(document.getElementById(\'ct-tab-content\'))">' + '<option value="__todos"' + (todos ? ' selected' : '') + '>Todos los proveedores</option>' + provs.map(p => '<option value="' + reabastEsc(p) + '"' + (p === FP.prov ? ' selected' : '') + '>' + reabastEsc(p) + '</option>').join('') + '</select>'
     + '<button class="btn btn-p btn-sm" onclick="fpForm(\'\')">➕ Nueva factura</button>'
     + '<button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxLimpiar()">✖ Quitar filtros y orden</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxExcel()">⬇ Excel de esta vista</button></div>'
     + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
     + (ult ? kp(fpCOP(ult.total), 'Última factura · ' + fpMesTxt(ult.mes)) + kp(fpVar(ult._var) + (ult._pct == null ? '' : ' (' + (ult._pct > 0 ? '+' : '') + ult._pct.toFixed(1) + '%)'), 'Contra el mes anterior', ult._var > 0 ? '#b91c1c' : ult._var < 0 ? '#166534' : '') + kp(fpCOP(prom), 'Promedio (últimos ' + Math.min(F.length, 12) + ' meses)') : '')
-    + kp(String(pen), 'Facturas pendientes de aprobar (todas)', pen ? '#b45309' : '') + '</div>'
+    + kp(fpCOP(sumF(PEN)), 'Por pagar · ' + PEN.length + ' pendientes de aprobar (todos los proveedores)', PEN.length ? '#b45309' : '') + kp(VEN.length + ' · ' + fpCOP(sumF(VEN)), 'Vencidas sin aprobar/pagar', VEN.length ? '#b91c1c' : '') + kp(SEM.length + ' · ' + fpCOP(sumF(SEM)), 'Vencen en los próximos 7 días', SEM.length ? '#c2410c' : '') + '</div>'
     + '<div class="tw" id="fgx_fp" style="max-height:60vh;overflow:auto;"></div>'
     + '<div style="font-size:11px;color:var(--mu);margin-top:6px;">Rojo = subió contra el mes anterior (revisar); verde = bajó. «Detalle» muestra cada línea contra el mes anterior.</div>';
   FGX.rows = F; FGX.cols = FP_COLS; FGXA = FGX; fgxPaint();
@@ -35266,9 +35269,10 @@ function fpForm(id) {
   const provs = [...new Set(FP.rows.map(x => x.proveedor))];
   const lin = r && (r.lineas || []).length ? (r.lineas.map(l => [l.cel, l.nom, l.cc, l.val].join('\t')).join('\n')) : '';
   fpModal('<div class="mh"><span class="mt">' + (r ? '✏️ Editar factura' : '➕ Nueva factura') + '</span><button class="mx" onclick="fpCerrar()">✕</button></div><div class="mb">'
-    + '<div class="fg2"><div class="fg"><label class="fl">Proveedor</label><input class="inp" id="fpf-prov" list="fpf-pl" value="' + (r ? v('proveedor') : reabastEsc(FP.prov)) + '"><datalist id="fpf-pl">' + provs.map(p => '<option value="' + reabastEsc(p) + '">').join('') + '</datalist></div>'
+    + '<div class="fg2"><div class="fg"><label class="fl">Proveedor</label><input class="inp" id="fpf-prov" list="fpf-pl" value="' + (r ? v('proveedor') : reabastEsc(FP.prov === '__todos' ? '' : FP.prov)) + '"><datalist id="fpf-pl">' + provs.map(p => '<option value="' + reabastEsc(p) + '">').join('') + '</datalist></div>'
     + '<div class="fg"><label class="fl">Mes (el de la hoja del Excel)</label><input class="inp" type="month" id="fpf-mes" value="' + v('mes') + '"></div></div>'
     + '<div class="fg2"><div class="fg"><label class="fl">N.º de factura</label><input class="inp" id="fpf-num" value="' + v('numero') + '"></div><div class="fg"><label class="fl">Período facturado</label><input class="inp" id="fpf-per" placeholder="ej. 15-Ago a 14-Sep 2026" value="' + v('periodo') + '"></div></div>'
+    + '<div class="fg2"><div class="fg"><label class="fl">Fecha límite de pago</label><input class="inp" type="date" id="fpf-vence" value="' + v('vence') + '"></div><div class="fg"><label class="fl">Concepto</label><input class="inp" id="fpf-conc" placeholder="ej. Internet dedicado 1-1" value="' + v('concepto') + '"></div></div>'
     + '<div class="fg2"><div class="fg"><label class="fl">Total de la factura ($, IVA incluido)</label><input class="inp" id="fpf-tot" inputmode="decimal" value="' + v('total') + '" placeholder="vacío = suma de las líneas"></div><div class="fg"><label class="fl">Estado</label><select class="inp" id="fpf-est">' + ['pendiente', 'aprobada', 'devuelta'].map(e => '<option value="' + e + '"' + ((r ? r.estado : 'pendiente') === e ? ' selected' : '') + '>' + fpEstCol[e][2] + '</option>').join('') + '</select></div></div>'
     + '<div class="fg"><label class="fl">Notas</label><input class="inp" id="fpf-not" value="' + v('notas') + '"></div>'
     + '<div class="fg"><label class="fl">Detalle por línea (opcional): pega desde Excel, una línea por renglón con 4 columnas: celular, empleado/área, centro de costo, valor factura</label><textarea class="inp" id="fpf-lin" rows="8" style="font-family:monospace;font-size:11px">' + reabastEsc(lin) + '</textarea></div>'
@@ -35281,7 +35285,7 @@ async function fpGuardar(id) {
   const lineas = []; for (const ln of g('fpf-lin').split('\n').map(x => x.trim()).filter(Boolean)) { const c = ln.split('\t'); if (c.length < 4) { alert('Línea mal formada (necesita 4 columnas separadas por tabulador, copiadas de Excel):\n' + ln.slice(0, 80)); return; } const val = fpNum(c[3]); if (isNaN(val)) { alert('Valor no válido en: ' + ln.slice(0, 80)); return; } lineas.push({ cel: c[0].trim(), nom: c[1].trim(), cc: c[2].trim(), val }); }
   let total = g('fpf-tot') === '' ? lineas.reduce((s, l) => s + l.val, 0) : fpNum(g('fpf-tot')); if (isNaN(total)) { alert('Total no válido.'); return; }
   const est = g('fpf-est'), prev = id ? FP.rows.find(x => x.id === id) : null, quien = (CU && (CU.nombre || CU.email)) || '';
-  const fila = { proveedor: prov, mes, numero: g('fpf-num'), periodo: g('fpf-per'), total, estado: est, notas: g('fpf-not'), lineas: lineas.length ? lineas : (prev ? prev.lineas : []), actualizado: new Date().toISOString() };
+  const fila = { proveedor: prov, mes, numero: g('fpf-num'), periodo: g('fpf-per'), vence: g('fpf-vence') || null, concepto: g('fpf-conc'), total, estado: est, notas: g('fpf-not'), lineas: lineas.length ? lineas : (prev ? prev.lineas : []), actualizado: new Date().toISOString() };
   if (est !== 'pendiente' && (!prev || prev.estado !== est)) { fila.aprobado_por = quien; fila.aprobado_en = new Date().toISOString(); } else if (est === 'pendiente') { fila.aprobado_por = null; fila.aprobado_en = null; }
   try { if (id) await sb.patch('facturas_proveedor', 'id=eq.' + id, fila); else await sb.upsert('facturas_proveedor', fila, 'proveedor,mes'); }
   catch (e) { alert('No se pudo guardar: ' + e.message); return; }
