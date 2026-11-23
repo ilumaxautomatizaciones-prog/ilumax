@@ -34204,6 +34204,7 @@ function renderCentroShell(el) {
       <button id="ct-tab-comisiones" class="flt"  onclick="ctTab('comisiones')" style="font-size:11px;padding:7px 14px;">💰 Comisiones</button>
       <button id="ct-tab-zona" class="flt" onclick="ctTab('zona')" style="font-size:11px;padding:7px 14px;">📍 Ventas por zona</button>
       <button id="ct-tab-facturas" class="flt"  onclick="ctTab('facturas')" style="font-size:11px;padding:7px 14px;">🧾 Facturas</button>
+      <button id="ct-tab-seguridad" class="flt"  onclick="ctTab('seguridad')" style="font-size:11px;padding:7px 14px;">🛡️ Seguridad</button>
       <button id="ct-tab-consumo" class="flt"  onclick="ctTab('consumo')" style="font-size:11px;padding:7px 14px;">📊 Consumo de datos</button>
     </div>
 
@@ -34863,7 +34864,7 @@ async function cmExcel(){
 // ── TABS ──────────────────────────────────────────────────────────────
 function ctTab(tab) {
   CT.tabActivo = tab;
-  ['tareas','funciones','manuales','contactos','tramites','briefing','reporte','comisiones','zona','facturas','consumo'].forEach(t => {
+  ['tareas','funciones','manuales','contactos','tramites','briefing','reporte','comisiones','zona','facturas','seguridad','consumo'].forEach(t => {
     const btn = document.getElementById('ct-tab-'+t);
     if(btn) btn.classList.toggle('on', t===tab);
   });
@@ -34879,6 +34880,7 @@ function ctTab(tab) {
   if(tab==='comisiones'){ CM.dest = null; renderCtComisiones(el); }
   if(tab==='zona')      renderCtZona(el);
   if(tab==='facturas')  renderCtFacturas(el);
+  if(tab==='seguridad') renderCtSeguridad(el);
   if(tab==='consumo')   renderCtConsumo(el);
 }
 
@@ -35956,7 +35958,354 @@ function fgxExcel(){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(V.map(r => { const o = {}; cols.forEach(c => { o[c.t] = fgxV(c, r); }); return o; })), 'Vista actual');
   XLSX.writeFile(wb, FGXA.xl + '_' + new Date().toISOString().slice(0, 10) + '.xlsx');
 }
-const FP = { rows: [], cargado: false, prov: '', q: '' };
+// ══════════════════════════════════════════════════════════════════════
+// 🛡️ SEGURIDAD (Centro de Trabajo): informe mensual de CompuElite (lista de bloqueo dinámico MikroTik). Se sube el PDF, se lee solo,
+// se guarda en `seguridad_informes` y los hallazgos H# / acciones R# quedan en `seguridad_items` con estado, responsable y evidencia (control OEA).
+// ══════════════════════════════════════════════════════════════════════
+const SGS = { inf: [], items: [], per: '', cargado: false, err: '' };
+const FGXS1 = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), limit: 800, box: 'fgx_seg1', xl: 'Seguridad_redes' };
+const FGXS2 = { rows: [], cols: [], sort: null, f: {}, hide: new Set(), limit: 800, box: 'fgx_seg2', xl: 'Seguridad_seguimiento' };
+const segN = n => n == null || n === '' ? '—' : Number(n).toLocaleString('es-CO');
+const segPct = n => n == null ? '—' : String(n).replace('.', ',') + '%';
+const segFec = d => d ? String(d).slice(8, 10) + '/' + String(d).slice(5, 7) + '/' + String(d).slice(0, 4) : '—';
+const segPerTxt = p => p ? fpMesTxt(p) : '';
+const SGS_EST = { abierto: ['#fee2e2', '#991b1b', 'Abierto'], en_curso: ['#fef3c7', '#92400e', 'En curso'], cerrado: ['#dcfce7', '#166534', 'Cerrado'], no_aplica: ['#e2e8f0', '#475569', 'No aplica'] };
+const SGS_NIV = { ALTA: ['#fee2e2', '#991b1b'], MEDIA: ['#fef3c7', '#92400e'], BAJA: ['#dbeafe', '#1e40af'], INFORMATIVA: ['#e2e8f0', '#475569'], CONTINUA: ['#ede9fe', '#5b21b6'] };
+const segCodN = c => Number(String(c).replace(/\D/g, '')) || 0;
+function segLineas(paginas) {
+  const out = [];
+  paginas.forEach(items => {
+    const rows = [];
+    items.slice().sort((a, b) => b.y - a.y || a.x - b.x).forEach(it => { const r = rows.find(r => Math.abs(r.y - it.y) <= 3); if (r) r.it.push(it); else rows.push({ y: it.y, it: [it] }); });
+    rows.sort((a, b) => b.y - a.y).forEach(r => {
+      r.it.sort((a, b) => a.x - b.x); let t = '', fin = null;
+      r.it.forEach(i => { if (fin != null) { const gap = i.x - fin; t += gap > 6 ? '  ' : (gap > 0.5 ? ' ' : ''); } t += i.s; fin = i.x + (i.w || 0); });
+      out.push(t.replace(/\s+$/, ''));
+    });
+  });
+  return out;
+}
+const segNum = t => { let s = String(t == null ? '' : t).replace(/%/g, '').trim(); if (/,/.test(s) && /\./.test(s)) s = s.replace(/\./g, '').replace(',', '.'); else if (/,/.test(s)) s = s.replace(',', '.'); else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, ''); const n = Number(s); return isFinite(n) ? n : null; };
+const SEG_MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+function segParse(L, archivo) {
+  const D = { kpi: {}, tipos: [], nube: [], paises: [], concentracion: [], redes: [], cobertura: [], hallazgos: [], plan: [], indicadores: [], limitaciones: [], conclusiones: [], secciones: {}, veredicto: '', postura: '' };
+  const lines = L.map(x => x.replace(/\s+$/, '')).filter(x => x.trim() !== '');
+  const txt = lines.join(' ').replace(/\s+/g, ' ');
+  // --- cabecera
+  const em = txt.match(/Emisi[oó]n:\s*(\d{1,2}) de (\w+) de (\d{4})/i); let emision = null;
+  if (em) { const m = SEG_MESES.indexOf(em[2].toLowerCase()); if (m >= 0) emision = em[3] + '-' + String(m + 1).padStart(2, '0') + '-' + String(em[1]).padStart(2, '0'); }
+  D.emision = emision; const fu = txt.match(/Fuente:\s*(\S+)/i); D.fuente = fu ? fu[1] : '';
+  const ti = lines.find(l => /^Lista de|^Exportaci/i.test(l)); D.subtitulo = ti || '';
+  const m1 = txt.match(/contiene (\d[\d.]*) registros.*?(\d[\d.]*) direcciones IP [uú]nicas.*?(\d[\d.]*) redes distintas y (\d[\d.]*) pa[ií]ses/i);
+  if (m1) { D.kpi.registros = segNum(m1[1]); D.kpi.ips = segNum(m1[2]); D.kpi.redes = segNum(m1[3]); D.kpi.paises = segNum(m1[4]); }
+  const m2 = txt.match(/(\d[\d.]*) direcciones \((\d+(?:,\d+)?)%\) pertenecen a/i); if (m2) { D.kpi.nube = segNum(m2[1]); D.kpi.nube_pct = segNum(m2[2]); }
+  const m3 = txt.match(/(\d[\d.]*) redes aportan una [uú]nica direcci[oó]n/i); if (m3) D.kpi.redes_unicas = segNum(m3[1]);
+  const m4 = txt.match(/rango observado se extiende de ([\d.]+) a ([\d.]+) y abarca (\d+) bloques/i); if (m4) { D.kpi.rango_desde = m4[1]; D.kpi.rango_hasta = m4[2]; D.kpi.bloques_octeto = segNum(m4[3]); }
+  const m5 = txt.match(/Se identific[oó] (\d+) direcci[oó]n(?:es)? repetida/i); if (m5) D.kpi.duplicados = segNum(m5[1]);
+  // --- secciones por encabezado
+  const reH = /^(\d{1,2})\.\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ ,.\-]{3,})$|^(\d{1,2}\.\d{1,2})\s+([A-ZÁÉÍÓÚÑa-záéíóúñ][^\d].{3,})$|^(ANEXO [A-Z])\.\s+(.+)$/;
+  const secs = []; lines.forEach((l, i) => { const m = l.match(reH); if (m) secs.push({ i, cod: m[1] || m[3] || m[5], tit: (m[2] || m[4] || m[6] || '').trim() }); });
+  secs.forEach((s, k) => { s.fin = k + 1 < secs.length ? secs[k + 1].i : lines.length; s.lin = lines.slice(s.i + 1, s.fin); });
+  const sec = c => secs.find(s => s.cod === c);
+  const cuerpo = s => s ? s.lin.filter(l => !/^(Indicador|#|Tipo |Proveedor|Pa[ií]s de|Categor|Situaci|Red \/24)\s/.test(l) && !/^[•]/.test(l)).join(' ').replace(/\s+/g, ' ').trim() : '';
+  // --- filas de tabla con porcentaje
+  const rowPct = /^(.+?)\s{2,}(\d[\d.]*)\s{2,}(\d+(?:,\d+)?)%(?:\s{2,}(.+))?$/;
+  const filas = s => { const o = []; (s ? s.lin : []).forEach(l => { const m = l.match(rowPct); if (m && !/^TOTAL/i.test(m[1])) o.push({ n: m[1].trim(), ips: segNum(m[2]), pct: segNum(m[3]), obs: (m[4] || '').trim() }); }); return o; };
+  D.tipos = filas(sec('3')); D.nube = filas(sec('3.1')); D.paises = filas(sec('3.2')); D.cobertura = filas(sec('2.2'));
+  const tn = (sec('3.1') || { lin: [] }).lin.find(l => /^TOTAL/i.test(l)); if (tn) { const m = tn.match(/(\d[\d.]*)\s{2,}(\d+(?:,\d+)?)%/); if (m && D.kpi.nube == null) { D.kpi.nube = segNum(m[1]); D.kpi.nube_pct = segNum(m[2]); } }
+  const tp = (sec('3.2') || { lin: [] }).lin.find(l => /^TOTAL/i.test(l) && /pa[ií]ses/.test(l)); if (tp) { const m = tp.match(/(\d+)\s+pa[ií]ses/); if (m && D.kpi.paises == null) D.kpi.paises = Number(m[1]); }
+  D.kpi.escaneres = (D.tipos.find(t => /esc[aá]ner/i.test(t.n)) || {}).ips; D.kpi.hosting = (D.tipos.find(t => /hosting/i.test(t.n)) || {}).ips; D.kpi.isp = (D.tipos.find(t => /acceso|isp/i.test(t.n)) || {}).ips; D.kpi.cdn = (D.tipos.find(t => /cdn/i.test(t.n)) || {}).ips; D.kpi.sin_atrib = (D.tipos.find(t => /sin atrib/i.test(t.n)) || {}).ips;
+  // --- concentración por red (4.1): fila con dos enteros
+  (sec('4.1') ? sec('4.1').lin : []).forEach(l => { const m = l.match(/^(.+?)\s{2,}(\d+)\s{2,}(\d+)\s{2,}(\d+(?:,\d+)?)%/); if (m && !/^TOTAL/i.test(m[1])) D.concentracion.push({ n: m[1].trim(), redes: Number(m[2]), ips: Number(m[3]), pct: segNum(m[4]) }); });
+  // --- anexo de redes
+  lines.forEach(l => { const m = l.match(/^(\d+\.\d+\.\d+\.\d+\/\d+)\s{2,}(\d+)\s{2,}(\d+(?:,\d+)?)%\s{2,}(.+?)\s{2,}([A-Z]{2})$/); if (m) D.redes.push({ red: m[1], ips: Number(m[2]), pct: segNum(m[3]), operador: m[4].trim(), pais: m[5] }); });
+  // --- hallazgos y plan (tablas con celdas partidas)
+  const reCod = /^([HR]\d+)\s+([A-ZÁÉÍÓÚ]{3,})(?:\s{2,}(.+))?$/, reUna = /^([HR]\d+)\s{2,}(.+?)\s{2,}([A-ZÁÉÍÓÚ]{3,})\s{2,}(.+)$/;
+  const partir = l => { const p = l.split(/\s{2,}/); return p.length > 1 ? [p[0], p.slice(1).join(' ')] : [l, '']; };
+  const tabla = (s, prefijo) => {
+    const out = []; if (!s) return out; const q = s.lin.filter(l => !/^#\s/.test(l));
+    for (let i = 0; i < q.length; i++) {
+      let m = q[i].match(reUna); if (m && m[1][0] === prefijo) { out.push({ codigo: m[1], texto: m[2].trim(), nivel: m[3], impacto: m[4].trim() }); continue; }
+      m = q[i].match(reCod); if (m && m[1][0] === prefijo) {
+        const a = i > 0 ? partir(q[i - 1]) : ['', ''], b = i + 1 < q.length && !reCod.test(q[i + 1]) && !reUna.test(q[i + 1]) ? partir(q[i + 1]) : ['', ''];
+        const sinPrev = i > 0 && (reCod.test(q[i - 1]) || reUna.test(q[i - 1])); const A = sinPrev ? ['', ''] : a;
+        out.push({ codigo: m[1], texto: [A[0], b[0]].filter(Boolean).join(' ').trim(), nivel: m[2], impacto: [(m[3] || ''), A[1], b[1]].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim() });
+        if (b[0]) i++;
+      }
+    }
+    return out;
+  };
+  D.hallazgos = tabla(sec('5'), 'H'); D.plan = tabla(sec('6'), 'R');
+  // --- indicadores del estado actual
+  const s7 = sec('7'); if (s7) s7.lin.forEach(l => { if (/^Indicador\s/.test(l) || /^VEREDICTO/.test(l)) return; const m = l.match(/^(.+?)\s{2,}(\S+)\s{2,}(.+)$/); if (m && !/^(orígenes|el nivel|las acciones|de la red)/i.test(m[1])) D.indicadores.push({ n: m[1].trim(), v: m[2], lectura: m[3].trim() }); });
+  const iv = k => { const x = D.indicadores.find(i => k.test(i.n)); return x ? x.v : null; };
+  D.kpi.intrusiones = segNum(iv(/intrusiones/i)); D.kpi.internas = segNum(iv(/internas/i)); D.kpi.falsos_positivos = segNum(iv(/falsos positivos/i)); D.kpi.neutralizadas = segNum(iv(/neutralizadas/i)); D.kpi.riesgo = iv(/riesgo residual/i) || ''; D.kpi.respuesta = iv(/tiempo de respuesta/i) || '';
+  if (D.kpi.ips == null && D.kpi.neutralizadas != null) D.kpi.ips = D.kpi.neutralizadas;
+  // --- textos
+  const v = lines.findIndex(l => /^VEREDICTO/.test(l)); if (v >= 0) { const o = [lines[v]]; for (let i = v + 1; i < lines.length && !reH.test(lines[i]); i++) o.push(lines[i]); D.veredicto = o.join(' ').replace(/\s+/g, ' ').trim(); }
+  const bullets = s => { const o = []; (s ? s.lin : []).forEach(l => { if (/^[•]/.test(l)) o.push(l.replace(/^[•]\s*/, '')); else if (o.length && !/^(La postura|Se recomienda)/.test(l) && !reH.test(l)) o[o.length - 1] += ' ' + l; }); return o.map(x => x.replace(/\s+/g, ' ').trim()); };
+  D.limitaciones = bullets(sec('2.3')); D.conclusiones = bullets(sec('8'));
+  const s8 = sec('8'); if (s8) { const i = s8.lin.findIndex(l => /^La postura/.test(l)); if (i >= 0) D.postura = s8.lin.slice(i).join(' ').replace(/\s+/g, ' ').trim(); }
+  ['1', '4.2', '4.3', '4.4', '4.5', '4.6'].forEach(c => { const s = sec(c); if (s) D.secciones[c] = { t: s.tit, x: cuerpo(s) }; });
+  const s41 = sec('4.1'); if (s41) D.secciones['4.1'] = { t: s41.tit, x: s41.lin.filter(l => !/\s{2,}/.test(l)).join(' ').replace(/\s+/g, ' ').trim() };
+  // periodo
+  const nm = (archivo || '').match(/(\d{4})/); let per = emision ? emision.slice(0, 7) : null;
+  const mm = (archivo || '').toLowerCase().match(/(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\w*[-_ ]?(\d{4})/); if (mm) { const k = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'].indexOf(mm[1]); per = mm[2] + '-' + String(k + 1).padStart(2, '0'); }
+  D.periodo = per; D.archivo = archivo || '';
+  return D;
+}
+
+
+async function segCargar(forzar) {
+  if (SGS.cargado && !forzar) return;
+  try {
+    SGS.inf = await sb.get('seguridad_informes', 'order=periodo.desc&limit=60') || [];
+    SGS.items = (await sb.get('seguridad_items', 'order=periodo.desc&limit=2000') || []).sort((a, b) => b.periodo.localeCompare(a.periodo) || a.tipo.localeCompare(b.tipo) || segCodN(a.codigo) - segCodN(b.codigo));
+    SGS.cargado = true; SGS.err = '';
+  } catch (e) { SGS.err = e.message || String(e); }
+  if (!SGS.inf.find(i => i.periodo === SGS.per)) SGS.per = SGS.inf[0] ? SGS.inf[0].periodo : '';
+}
+const segInf = () => SGS.inf.find(i => i.periodo === SGS.per) || null;
+const segIts = () => SGS.items.filter(x => x.periodo === SGS.per);
+const segPrev = () => { const k = SGS.inf.findIndex(i => i.periodo === SGS.per); return k >= 0 && SGS.inf[k + 1] ? SGS.inf[k + 1] : null; };
+const segBadge = (t, c) => '<span style="background:' + c[0] + ';color:' + c[1] + ';padding:2px 8px;border-radius:99px;font-weight:700;font-size:11px;white-space:nowrap">' + reabastEsc(t) + '</span>';
+const SGS_COL = ['#2563eb', '#16a34a', '#f59e0b', '#7c3aed', '#dc2626', '#0891b2', '#64748b', '#db2777'];
+
+async function renderCtSeguridad(el) {
+  el.innerHTML = cargaHtml('Cargando seguridad');
+  await segCargar(false);
+  if (SGS.err) { el.innerHTML = '<div class="empty">No se pudo leer: ' + reabastEsc(SGS.err) + '</div>'; return; }
+  const inf = segInf();
+  const barra = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'
+    + (SGS.inf.length ? '<select class="inp" style="width:auto" onchange="SGS.per=this.value;renderCtSeguridad(document.getElementById(\'ct-tab-content\'))">' + SGS.inf.map(i => '<option value="' + i.periodo + '"' + (i.periodo === SGS.per ? ' selected' : '') + '>' + reabastEsc(segPerTxt(i.periodo)) + '</option>').join('') + '</select>' : '')
+    + '<button class="btn btn-p btn-sm" onclick="document.getElementById(\'seg-file\').click()">📤 Subir informe PDF</button><input type="file" id="seg-file" accept="application/pdf,.pdf" style="display:none" onchange="segSubir(this)">'
+    + (inf ? '<button class="btn btn-g btn-sm" onclick="segPdf()">📄 PDF para la OEA</button><button class="btn btn-g btn-sm" onclick="segExcel()">📗 Excel avanzado</button><button class="btn btn-g btn-sm" onclick="segEliminar()">🗑 Eliminar informe</button>' : '') + '</div>';
+  if (!inf) { el.innerHTML = barra + '<div class="empty">Aún no hay informes. Sube el PDF de seguridad de CompuElite y el análisis sale solo.</div>'; return; }
+  const D = inf.datos, K = D.kpi || {}, its = segIts(), P = segPrev(), KP = P ? P.datos.kpi || {} : {};
+  const H = its.filter(x => x.tipo === 'H'), R = its.filter(x => x.tipo === 'R'), abH = H.filter(x => x.estado === 'abierto' || x.estado === 'en_curso').length, cerR = R.filter(x => x.estado === 'cerrado' || x.estado === 'no_aplica').length;
+  const dl = k => P && K[k] != null && KP[k] != null ? (K[k] - KP[k] === 0 ? ' · igual que ' + segPerTxt(P.periodo) : ' · ' + (K[k] - KP[k] > 0 ? '▲ +' : '▼ ') + segN(K[k] - KP[k]) + ' vs ' + segPerTxt(P.periodo)) : '';
+  const kp = (v, t, c, ck, sub) => '<div onclick="' + ck + '" title="Clic para ver el detalle" style="cursor:pointer;background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:10px 14px;min-width:140px;flex:1"><div style="font-size:21px;font-weight:800;color:' + c + '">' + v + '</div><div style="font-size:11px;color:var(--mu)">' + t + '</div>' + (sub ? '<div style="font-size:10px;color:var(--mu);margin-top:2px">' + sub + '</div>' : '') + '</div>';
+  const ries = String(K.riesgo || '').toUpperCase(), cr = ries === 'BAJO' ? '#16a34a' : ries === 'MEDIO' ? '#d97706' : '#dc2626';
+  const kpis = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'
+    + kp(segN(K.ips), 'IPs bloqueadas', '#0f172a', "segKpi('ips')", dl('ips').slice(3)) + kp(segN(K.redes), 'Redes /24 de origen', '#0f172a', "segKpi('redes')", '') + kp(segN(K.paises), 'Países', '#0f172a', "segKpi('paises')", '')
+    + kp(segPct(K.nube_pct), 'Origen en nube pública', '#2563eb', "segKpi('nube')", segN(K.nube) + ' IPs') + kp(segN(K.escaneres), 'Escáneres de Internet', '#7c3aed', "segKpi('escaneres')", '')
+    + kp(segN(K.falsos_positivos), 'Posibles falsos positivos', '#d97706', "segKpi('fp')", '') + kp(segN(K.intrusiones), 'Intrusiones exitosas', K.intrusiones ? '#dc2626' : '#16a34a', "segKpi('intrusiones')", 'Internas: ' + segN(K.internas))
+    + kp(reabastEsc(K.riesgo || '—'), 'Riesgo residual', cr, "segKpi('riesgo')", 'Respuesta: ' + reabastEsc(K.respuesta || '—'))
+    + kp(abH + ' de ' + H.length, 'Hallazgos sin cerrar', abH ? '#d97706' : '#16a34a', "segIrSeg()", '') + kp(cerR + ' de ' + R.length, 'Acciones cerradas', cerR === R.length && R.length ? '#16a34a' : '#2563eb', "segIrSeg()", R.length ? Math.round(cerR * 100 / R.length) + '% de avance' : '') + '</div>';
+  const veredicto = D.veredicto ? '<div class="alert" style="margin-bottom:12px;background:#f0fdf4;border:1px solid #bbf7d0;color:#14532d"><b>🛡️ ' + reabastEsc(D.veredicto.replace(/^VEREDICTO:\s*/i, 'Veredicto: ')) + '</b></div>' : '';
+  const card = (t, body) => '<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">' + t + '</div></div><div class="cb">' + body + '</div></div>';
+  const tend = SGS.inf.length > 1 ? card('📈 Tendencia mes a mes', segTendHtml()) : '';
+  el.innerHTML = barra
+    + '<div style="font-size:12px;color:var(--mu);margin-bottom:8px">' + reabastEsc(D.subtitulo || 'Informe de seguridad') + ' · emisión ' + segFec(inf.emision) + ' · fuente ' + reabastEsc(inf.fuente || '') + ' · <i>' + reabastEsc(inf.archivo || '') + '</i></div>'
+    + veredicto + kpis
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:12px;margin-bottom:12px">'
+    + card('🧭 Tipo de operador', segDonut(D.tipos || [], 'tipo')) + card('☁️ Proveedores de nube pública', segBarras(D.nube || [], 'nube'))
+    + card('🌍 Distribución por país', segBarras(D.paises || [], 'pais')) + card('🕸️ Concentración por red /24', segBarras((D.concentracion || []).map(c => ({ n: c.n, ips: c.ips, pct: c.pct, obs: c.redes + ' redes' })), 'conc')) + '</div>'
+    + tend
+    + card('🔎 Redes con más de una dirección (Anexo A)', '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px"><button class="btn btn-g btn-sm" onclick="FGXA=FGXS1;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGXS1;fgxLimpiar()">✖ Quitar filtros</button><button class="btn btn-g btn-sm" onclick="FGXA=FGXS1;fgxExcel()">⬇ Excel de esta vista</button></div><div class="tw" id="fgx_seg1" style="max-height:40vh;overflow:auto"></div>')
+    + '<div id="seg-seg">' + card('✅ Seguimiento de hallazgos y plan de acción (control OEA)', '<div style="font-size:11.5px;color:var(--mu);margin-bottom:6px">Cambia el estado, responsable, fecha compromiso y evidencia: se guarda al instante y queda en el PDF y el Excel.</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px"><button class="btn btn-g btn-sm" onclick="FGXA=FGXS2;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGXS2;fgxLimpiar()">✖ Quitar filtros</button><button class="btn btn-g btn-sm" onclick="FGXA=FGXS2;fgxExcel()">⬇ Excel de esta vista</button></div><div class="tw" id="fgx_seg2" style="max-height:60vh;overflow:auto"></div>') + '</div>'
+    + (D.conclusiones && D.conclusiones.length ? card('📌 Conclusiones para la gerencia', '<ul style="margin:0 0 0 18px;font-size:13px;line-height:1.5">' + D.conclusiones.map(x => '<li>' + reabastEsc(x) + '</li>').join('') + '</ul>' + (D.postura ? '<div style="margin-top:8px;font-size:13px"><b>' + reabastEsc(D.postura) + '</b></div>' : '')) : '')
+    + (D.limitaciones && D.limitaciones.length ? card('⚠️ Limitaciones del informe', '<ul style="margin:0 0 0 18px;font-size:13px;line-height:1.5">' + D.limitaciones.map(x => '<li>' + reabastEsc(x) + '</li>').join('') + '</ul>') : '');
+  FGXS1.rows = D.redes || []; FGXS1.hide = new Set(); FGXS1.f = {}; FGXS1.sort = null;
+  FGXS1.cols = [{ k: 'red', t: 'Red /24', v: r => r.red, mono: 1 }, { k: 'ips', t: 'IPs', num: 1, sum: 1, v: r => r.ips }, { k: 'pct', t: 'Cobertura %', num: 1, v: r => r.pct, h: r => segPct(r.pct) }, { k: 'op', t: 'Operador', v: r => r.operador }, { k: 'pais', t: 'País', v: r => r.pais }];
+  FGXA = FGXS1; fgxPaint(); segPintarSeg();
+}
+function segPintarSeg() {
+  FGXS2.rows = segIts(); FGXS2.hide = new Set(['notas']); FGXS2.f = FGXS2.f || {};
+  const inp = (r, c, ph, w) => '<input class="inp" style="width:' + (w || 130) + 'px;padding:3px 6px;font-size:12px" value="' + reabastEsc(r[c] || '') + '" placeholder="' + ph + '" onchange="segSet(\'' + r.id + '\',\'' + c + '\',this.value)">';
+  const dat = (r, c) => '<input type="date" class="inp" style="width:130px;padding:3px 6px;font-size:12px" value="' + (r[c] || '') + '" onchange="segSet(\'' + r.id + '\',\'' + c + '\',this.value)">';
+  FGXS2.cols = [
+    { k: 'tipo', t: 'Tipo', v: r => r.tipo === 'H' ? 'Hallazgo' : 'Acción' }, { k: 'cod', t: 'Código', v: r => r.codigo, h: r => '<b>' + r.codigo + '</b>' },
+    { k: 'txt', t: 'Descripción', v: r => r.texto, wrap: 1 }, { k: 'niv', t: 'Severidad / prioridad', v: r => r.nivel, h: r => segBadge(r.nivel || '—', SGS_NIV[r.nivel] || ['#e2e8f0', '#475569']) },
+    { k: 'imp', t: 'Impacto / beneficio', v: r => r.impacto, wrap: 1 },
+    { k: 'est', t: 'Estado', v: r => SGS_EST[r.estado][2], h: r => '<select class="inp" style="width:110px;padding:3px 6px;font-size:12px;font-weight:700;background:' + SGS_EST[r.estado][0] + ';color:' + SGS_EST[r.estado][1] + '" onchange="segSet(\'' + r.id + '\',\'estado\',this.value)">' + Object.keys(SGS_EST).map(k => '<option value="' + k + '"' + (k === r.estado ? ' selected' : '') + '>' + SGS_EST[k][2] + '</option>').join('') + '</select>' },
+    { k: 'resp', t: 'Responsable', v: r => r.responsable || '', h: r => inp(r, 'responsable', 'Responsable') },
+    { k: 'comp', t: 'Fecha compromiso', date: 1, v: r => r.fecha_compromiso || '', h: r => dat(r, 'fecha_compromiso') },
+    { k: 'cier', t: 'Fecha cierre', date: 1, v: r => r.fecha_cierre || '', h: r => dat(r, 'fecha_cierre') },
+    { k: 'evi', t: 'Evidencia', v: r => r.evidencia || '', h: r => inp(r, 'evidencia', 'Ticket, foto, enlace…', 190) },
+    { k: 'notas', t: 'Notas', v: r => r.notas || '', h: r => inp(r, 'notas', 'Notas', 160) }];
+  FGXA = FGXS2; fgxPaint();
+}
+async function segSet(id, campo, val) {
+  const it = SGS.items.find(x => x.id === id); if (!it) return; const cambio = {}; cambio[campo] = val === '' ? null : val;
+  if (campo === 'estado') { const hoy = new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10); if (val === 'cerrado' && !it.fecha_cierre) cambio.fecha_cierre = hoy; if (val === 'abierto' || val === 'en_curso') cambio.fecha_cierre = null; }
+  cambio.actualizado = new Date().toISOString();
+  try { await sb.patch('seguridad_items', 'id=eq.' + id, cambio); Object.assign(it, cambio); toast('Guardado', 'ok'); if (campo === 'estado') renderCtSeguridad(document.getElementById('ct-tab-content')); }
+  catch (e) { toast('No se guardó: ' + (e.message || e), 'er'); }
+}
+function segIrSeg() { const e = document.getElementById('seg-seg'); if (e) e.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+function segTendHtml() {
+  const L = SGS.inf.slice(0, 8).reverse(), ks = [['ips', 'IPs bloqueadas'], ['redes', 'Redes /24'], ['paises', 'Países'], ['nube_pct', '% nube pública'], ['escaneres', 'Escáneres'], ['falsos_positivos', 'Falsos positivos'], ['intrusiones', 'Intrusiones']];
+  return '<div class="tw"><table><thead><tr><th>Indicador</th>' + L.map(i => '<th style="text-align:right">' + reabastEsc(segPerTxt(i.periodo)) + '</th>').join('') + '</tr></thead><tbody>'
+    + ks.map(([k, t]) => '<tr><td>' + t + '</td>' + L.map(i => '<td style="text-align:right">' + (k === 'nube_pct' ? segPct((i.datos.kpi || {})[k]) : segN((i.datos.kpi || {})[k])) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
+}
+// ── gráficos interactivos (clic = detalle) ──
+const SGS_G = {};
+function segBarras(arr, kind) {
+  SGS_G[kind] = arr; if (!arr.length) return '<div class="empty">Sin datos</div>'; const mx = Math.max(...arr.map(a => a.ips || 0), 1);
+  return arr.map((a, i) => '<div onclick="segDet(\'' + kind + '\',' + i + ')" title="Clic para ver el detalle" style="cursor:pointer;display:grid;grid-template-columns:minmax(90px,150px) 1fr 76px;gap:8px;align-items:center;margin:4px 0;font-size:12px"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + reabastEsc(a.n) + '</span><div style="background:#e2e8f0;border-radius:6px;height:16px"><div style="width:' + Math.max(2, Math.round(a.ips * 100 / mx)) + '%;height:100%;border-radius:6px;background:' + SGS_COL[i % SGS_COL.length] + '"></div></div><b style="text-align:right">' + segN(a.ips) + ' · ' + segPct(a.pct) + '</b></div>').join('');
+}
+function segDonut(arr, kind) {
+  SGS_G[kind] = arr; if (!arr.length) return '<div class="empty">Sin datos</div>'; const tot = arr.reduce((s, a) => s + a.ips, 0) || 1, r = 70, C = 2 * Math.PI * r; let off = 0;
+  const arcs = arr.map((a, i) => { const l = a.ips / tot * C, s = '<circle onclick="segDet(\'' + kind + '\',' + i + ')" style="cursor:pointer" cx="90" cy="90" r="' + r + '" fill="none" stroke="' + SGS_COL[i % SGS_COL.length] + '" stroke-width="34" stroke-dasharray="' + l + ' ' + (C - l) + '" stroke-dashoffset="' + (-off) + '" transform="rotate(-90 90 90)"><title>' + reabastEsc(a.n) + ': ' + a.ips + '</title></circle>'; off += l; return s; }).join('');
+  return '<div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><svg viewBox="0 0 180 180" width="180" height="180">' + arcs + '<text x="90" y="88" text-anchor="middle" font-size="22" font-weight="800" fill="#0f172a">' + segN(tot) + '</text><text x="90" y="106" text-anchor="middle" font-size="10" fill="#64748b">IPs</text></svg><div style="flex:1;min-width:200px">'
+    + arr.map((a, i) => '<div onclick="segDet(\'' + kind + '\',' + i + ')" style="cursor:pointer;display:flex;gap:6px;align-items:center;margin:4px 0;font-size:12px"><span style="width:11px;height:11px;border-radius:3px;flex:none;background:' + SGS_COL[i % SGS_COL.length] + '"></span><span style="flex:1">' + reabastEsc(a.n) + '</span><b>' + segN(a.ips) + ' · ' + segPct(a.pct) + '</b></div>').join('') + '</div></div>';
+}
+function segTextoDe(n) {
+  const S = (segInf() || { datos: {} }).datos.secciones || {}, s = String(n).toLowerCase(); const pick = c => S[c] && S[c].x ? '<div style="margin-top:8px;font-size:13px;line-height:1.5"><b>' + reabastEsc(S[c].t) + '</b><br>' + reabastEsc(S[c].x) + '</div>' : '';
+  if (/esc[aá]ner/.test(s)) return pick('4.2'); if (/acceso|isp/.test(s)) return pick('4.4'); if (/cdn/.test(s)) return pick('4.5'); if (/sin atrib/.test(s)) return pick('4.6'); if (/google|b[eé]lgica/.test(s)) return pick('4.3'); return '';
+}
+function segDet(kind, i) {
+  const a = (SGS_G[kind] || [])[i]; if (!a) return; const D = (segInf() || {}).datos || {};
+  const rel = kind === 'tipo' && /nube/i.test(a.n) ? segTextoDe('google') : segTextoDe(a.n);
+  const cen = /censys/i.test(a.n) ? segTextoDe('escáner') : '';
+  const H = segIts().filter(x => x.tipo === 'H' && (a.n.split(/[ ,]/).some(w => w.length > 4 && x.texto.toLowerCase().includes(w.toLowerCase())))).slice(0, 4);
+  fpModal('<div class="mh"><div class="mt">' + reabastEsc(a.n) + '</div><button class="mx" onclick="fpCerrar()">✕</button></div><div class="mb"><div style="font-size:26px;font-weight:800">' + segN(a.ips) + ' <span style="font-size:14px;color:var(--mu)">IPs · ' + segPct(a.pct) + ' del total</span></div>' + (a.obs ? '<div style="margin-top:6px;font-size:13px">' + reabastEsc(a.obs) + '</div>' : '') + rel + cen
+    + (H.length ? '<div style="margin-top:10px;font-size:12.5px"><b>Hallazgos relacionados</b><br>' + H.map(h => '• ' + h.codigo + ' · ' + reabastEsc(h.texto) + ' (' + SGS_EST[h.estado][2] + ')').join('<br>') + '</div>' : '') + '</div><div class="mf"><button class="btn btn-g btn-sm" onclick="fpCerrar()">Cerrar</button></div>');
+}
+const SGS_KTXT = {
+  ips: ['IPs bloqueadas', 'Direcciones externas únicas que el firewall bloqueó de forma automática en el periodo (el archivo puede traer registros repetidos).'],
+  redes: ['Redes /24 de origen', 'Cantidad de bloques /24 distintos. Mientras más repartidas, menos útil es bloquear por red; ver concentración.'],
+  paises: ['Países', 'País de registro de la IP (GeoLite2). Refleja dónde están los centros de datos de la nube, no la nacionalidad del atacante, por eso no se recomienda bloquear por país.'],
+  nube: ['Origen en nube pública', 'Servidores alquilados (AWS, Google, Azure, etc.) usados para escaneo automatizado a gran escala.'],
+  escaneres: ['Escáneres de Internet', 'Servicios como Censys que catalogan lo que está expuesto. No son un ataque en sí, pero confirman que la infraestructura es visible.'],
+  fp: ['Posibles falsos positivos', 'IPs de Cloudflare/Squarespace que normalmente solo responden; bloquearlas puede cortar el acceso a sitios legítimos.'],
+  intrusiones: ['Intrusiones exitosas', 'Indicios de acceso no autorizado en la lista. 0 = ninguno evidenciado.'],
+  riesgo: ['Riesgo residual', 'Nivel de riesgo que queda después de los bloqueos, según CompuElite.']
+};
+function segKpi(k) {
+  const inf = segInf(); if (!inf) return; const D = inf.datos, t = SGS_KTXT[k] || [k, ''], ind = (D.indicadores || []).find(i => k === 'ips' ? /neutralizadas/i.test(i.n) : k === 'nube' ? /nube/i.test(i.n) : k === 'escaneres' ? /esc[aá]ner/i.test(i.n) : k === 'fp' ? /falsos/i.test(i.n) : k === 'intrusiones' ? /intrusiones/i.test(i.n) : k === 'riesgo' ? /riesgo/i.test(i.n) : false);
+  const L = SGS.inf.slice(0, 8).reverse(), kk = { ips: 'ips', redes: 'redes', paises: 'paises', nube: 'nube_pct', escaneres: 'escaneres', fp: 'falsos_positivos', intrusiones: 'intrusiones', riesgo: 'riesgo' }[k];
+  fpModal('<div class="mh"><div class="mt">' + t[0] + '</div><button class="mx" onclick="fpCerrar()">✕</button></div><div class="mb"><div style="font-size:13px;line-height:1.5">' + t[1] + '</div>' + (ind ? '<div style="margin-top:8px;font-size:13px"><b>Lectura de CompuElite:</b> ' + reabastEsc(ind.lectura) + '</div>' : '')
+    + '<div style="margin-top:10px;font-size:12.5px"><b>Mes a mes</b><br>' + L.map(i => segPerTxt(i.periodo) + ': <b>' + reabastEsc(String((i.datos.kpi || {})[kk] == null ? '—' : (i.datos.kpi || {})[kk])) + '</b>').join(' · ') + '</div></div><div class="mf"><button class="btn btn-g btn-sm" onclick="fpCerrar()">Cerrar</button></div>');
+}
+// ── subir y leer el PDF ──
+async function segLeerPdf(file) {
+  await ocpCargarScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', 'pdfjsLib');
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise, pags = [];
+  for (let p = 1; p <= pdf.numPages; p++) { const tc = await (await pdf.getPage(p)).getTextContent(); pags.push(tc.items.filter(i => i.str != null).map(i => ({ s: i.str, x: i.transform[4], y: i.transform[5], w: i.width }))); }
+  return segParse(segLineas(pags), file.name);
+}
+async function segSubir(inp) {
+  const f = inp.files && inp.files[0]; inp.value = ''; if (!f) return;
+  toast('Leyendo el PDF…', 'inf');
+  let D; try { D = await segLeerPdf(f); } catch (e) { alert('No pude leer el PDF: ' + (e.message || e)); return; }
+  if (!D.kpi.ips || !D.tipos.length) { alert('No reconocí el formato del informe de CompuElite (no encontré el total de IPs ni la tabla de operadores). Revisa que sea el PDF correcto.'); return; }
+  if (!D.periodo) { const p = prompt('No pude deducir el mes. Escríbelo como AAAA-MM (ej. 2026-11):'); if (!/^\d{4}-\d{2}$/.test(p || '')) return; D.periodo = p; }
+  const ex = SGS.inf.find(i => i.periodo === D.periodo);
+  if (ex && !confirm('Ya hay un informe de ' + segPerTxt(D.periodo) + '. ¿Reemplazarlo? (el seguimiento de hallazgos se conserva)')) return;
+  try {
+    const quien = (CU && (CU.nombre || CU.email)) || '';
+    await sb.upsert('seguridad_informes', { periodo: D.periodo, emision: D.emision, fuente: D.fuente, archivo: f.name, datos: D, usuario: quien, actualizado: new Date().toISOString() }, 'periodo');
+    const prevP = SGS.inf.filter(i => i.periodo < D.periodo)[0], previos = prevP ? SGS.items.filter(x => x.periodo === prevP.periodo) : [], ya = SGS.items.filter(x => x.periodo === D.periodo), nz = s => fgxNz(s).replace(/\d+/g, '#');
+    const nuevos = [];
+    [['H', D.hallazgos], ['R', D.plan]].forEach(([tipo, L]) => L.forEach(h => {
+      const ant = previos.find(p => p.tipo === tipo && nz(p.texto) === nz(h.texto));
+      if (ya.find(x => x.tipo === tipo && x.codigo === h.codigo)) { return; }
+      nuevos.push({ periodo: D.periodo, tipo, codigo: h.codigo, texto: h.texto, nivel: h.nivel, impacto: h.impacto, estado: ant ? ant.estado : 'abierto', responsable: ant ? ant.responsable : null, fecha_compromiso: ant ? ant.fecha_compromiso : null, fecha_cierre: ant ? ant.fecha_cierre : null, evidencia: ant ? ant.evidencia : null, notas: ant ? ant.notas : null, origen_periodo: ant ? ant.periodo : null });
+    }));
+    if (nuevos.length) await sb.post('seguridad_items', nuevos);
+    SGS.per = D.periodo; await segCargar(true);
+    toast('Informe de ' + segPerTxt(D.periodo) + ' cargado: ' + D.kpi.ips + ' IPs, ' + D.hallazgos.length + ' hallazgos, ' + D.plan.length + ' acciones', 'ok');
+    renderCtSeguridad(document.getElementById('ct-tab-content'));
+  } catch (e) { alert('No se pudo guardar: ' + (e.message || e)); }
+}
+async function segEliminar() {
+  const inf = segInf(); if (!inf || !confirm('¿Eliminar el informe de ' + segPerTxt(inf.periodo) + ' y su seguimiento? No se puede deshacer.')) return;
+  try { await sb.delete('seguridad_items', 'periodo=eq.' + inf.periodo); await sb.delete('seguridad_informes', 'id=eq.' + inf.id); await segCargar(true); renderCtSeguridad(document.getElementById('ct-tab-content')); toast('Eliminado', 'ok'); } catch (e) { toast('No se pudo: ' + (e.message || e), 'er'); }
+}
+// ── PDF para la OEA (ventana lista para imprimir / guardar como PDF) ──
+function segPdf() {
+  const inf = segInf(); if (!inf) return; const D = inf.datos, K = D.kpi || {}, its = segIts(), H = its.filter(x => x.tipo === 'H'), R = its.filter(x => x.tipo === 'R'), quien = (CU && (CU.nombre || CU.email)) || '', e = reabastEsc;
+  const tb = (cab, filas, al) => '<table><thead><tr>' + cab.map((c, i) => '<th style="text-align:' + (al && al[i] || 'left') + '">' + e(c) + '</th>').join('') + '</tr></thead><tbody>' + filas.map(f => '<tr>' + f.map((c, i) => '<td style="text-align:' + (al && al[i] || 'left') + '">' + c + '</td>').join('') + '</tr>').join('') + '</tbody></table>';
+  const barras = arr => { const mx = Math.max(...arr.map(a => a.ips), 1); return arr.map((a, i) => '<div class="b"><span>' + e(a.n) + '</span><div class="t"><div style="width:' + Math.max(2, Math.round(a.ips * 100 / mx)) + '%;background:' + SGS_COL[i % SGS_COL.length] + '"></div></div><b>' + segN(a.ips) + ' · ' + segPct(a.pct) + '</b></div>').join(''); };
+  const est = x => SGS_EST[x.estado][2];
+  const kp = [['IPs bloqueadas', segN(K.ips)], ['Redes /24', segN(K.redes)], ['Países', segN(K.paises)], ['Origen en nube', segPct(K.nube_pct)], ['Escáneres', segN(K.escaneres)], ['Falsos positivos', segN(K.falsos_positivos)], ['Intrusiones exitosas', segN(K.intrusiones)], ['Riesgo residual', e(K.riesgo || '—')]];
+  const html = '<!doctype html><html><head><meta charset="utf-8"><title>Control de seguridad perimetral ' + e(segPerTxt(inf.periodo)) + '</title><style>@page{size:A4;margin:14mm}*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font:11px/1.45 Arial,sans-serif;color:#0f172a;margin:0}h1{font-size:19px;margin:0}h2{font-size:13px;margin:16px 0 6px;border-bottom:2px solid #f5c518;padding-bottom:3px}.hd{background:#0f172a;color:#fff;padding:12px 16px;border-radius:8px;display:flex;justify-content:space-between;align-items:center}.hd b span{color:#f5c518}.k{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.k div{border:1px solid #cbd5e1;border-radius:6px;padding:6px 8px}.k b{font-size:16px;display:block}.k small{color:#64748b}table{width:100%;border-collapse:collapse;margin:4px 0}th{background:#0f172a;color:#fff;padding:4px 6px;font-size:10px}td{border-bottom:1px solid #e2e8f0;padding:3px 6px;vertical-align:top}tr{page-break-inside:avoid}.b{display:grid;grid-template-columns:130px 1fr 80px;gap:6px;align-items:center;margin:2px 0}.t{background:#e2e8f0;border-radius:4px;height:11px}.t div{height:100%;border-radius:4px}.ok{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px;margin:8px 0}.g2{display:grid;grid-template-columns:1fr 1fr;gap:14px}.f{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:46px;text-align:center}.f div{border-top:1px solid #0f172a;padding-top:4px}.pie{color:#64748b;font-size:9px;margin-top:14px}.no{position:fixed;top:8px;right:8px}@media print{.no{display:none}}</style></head><body>'
+    + '<button class="no" onclick="window.print()">🖨 Imprimir / Guardar PDF</button>'
+    + '<div class="hd"><div><h1>Informe de control de seguridad perimetral</h1><div>Periodo: <b>' + e(segPerTxt(inf.periodo)) + '</b> · Emisión ' + segFec(inf.emision) + ' · Proveedor: CompuElite</div></div><b style="font-size:18px">ILU<span>MAX</span></b></div>'
+    + '<div style="margin:6px 0;color:#475569">' + e(D.subtitulo || '') + ' · Fuente: ' + e(inf.fuente || '') + ' · Archivo: ' + e(inf.archivo || '') + '</div>'
+    + (D.veredicto ? '<div class="ok"><b>' + e(D.veredicto) + '</b></div>' : '')
+    + '<h2>1. Indicadores clave</h2><div class="k">' + kp.map(k => '<div><b>' + k[1] + '</b><small>' + k[0] + '</small></div>').join('') + '</div>'
+    + (D.indicadores && D.indicadores.length ? '<h2>2. Estado actual de seguridad</h2>' + tb(['Indicador', 'Resultado', 'Interpretación'], D.indicadores.map(i => [e(i.n), '<b>' + e(i.v) + '</b>', e(i.lectura)]), ['left', 'right', 'left']) : '')
+    + '<h2>3. Origen de las amenazas</h2><div class="g2"><div><b>Tipo de operador</b>' + barras(D.tipos || []) + '</div><div><b>Proveedores de nube pública</b>' + barras(D.nube || []) + '</div></div><div class="g2" style="margin-top:8px"><div><b>Países (principales)</b>' + barras(D.paises || []) + '</div><div><b>Concentración por red /24</b>' + tb(['Tipo de red', 'Redes', 'IPs', '%'], (D.concentracion || []).map(c => [e(c.n), c.redes, c.ips, segPct(c.pct)]), ['left', 'right', 'right', 'right']) + '</div></div>'
+    + '<h2>4. Hallazgos y plan de acción — seguimiento</h2>' + tb(['#', 'Descripción', 'Severidad', 'Estado', 'Responsable', 'Compromiso', 'Cierre', 'Evidencia'], H.map(x => ['<b>' + x.codigo + '</b>', e(x.texto) + '<br><i style="color:#64748b">' + e(x.impacto || '') + '</i>', e(x.nivel), '<b>' + est(x) + '</b>', e(x.responsable || '—'), segFec(x.fecha_compromiso), segFec(x.fecha_cierre), e(x.evidencia || '—')]))
+    + '<div style="height:6px"></div>' + tb(['#', 'Acción recomendada', 'Prioridad', 'Estado', 'Responsable', 'Compromiso', 'Cierre', 'Evidencia'], R.map(x => ['<b>' + x.codigo + '</b>', e(x.texto) + '<br><i style="color:#64748b">' + e(x.impacto || '') + '</i>', e(x.nivel), '<b>' + est(x) + '</b>', e(x.responsable || '—'), segFec(x.fecha_compromiso), segFec(x.fecha_cierre), e(x.evidencia || '—')]))
+    + '<div style="margin-top:4px">Avance del plan: <b>' + R.filter(x => x.estado === 'cerrado' || x.estado === 'no_aplica').length + ' de ' + R.length + '</b> acciones cerradas · Hallazgos sin cerrar: <b>' + H.filter(x => x.estado === 'abierto' || x.estado === 'en_curso').length + ' de ' + H.length + '</b></div>'
+    + (D.redes && D.redes.length ? '<h2>5. Anexo: redes con más de una dirección</h2>' + tb(['Red /24', 'IPs', 'Cobertura', 'Operador', 'País'], D.redes.map(r => [r.red, r.ips, segPct(r.pct), e(r.operador), r.pais]), ['left', 'right', 'right', 'left', 'left']) : '')
+    + (D.conclusiones && D.conclusiones.length ? '<h2>6. Conclusiones</h2><ul>' + D.conclusiones.map(x => '<li>' + e(x) + '</li>').join('') + '</ul>' : '')
+    + (D.limitaciones && D.limitaciones.length ? '<h2>7. Limitaciones del informe</h2><ul>' + D.limitaciones.map(x => '<li>' + e(x) + '</li>').join('') + '</ul>' : '')
+    + (SGS.inf.length > 1 ? '<h2>8. Tendencia</h2>' + segTendHtml() : '')
+    + '<div class="f"><div>Elaboró (TI)</div><div>Revisó</div><div>Aprobó</div></div><div class="pie">Generado desde el portal ILUMAX el ' + new Date().toLocaleString('es-CO') + (quien ? ' por ' + e(quien) : '') + '. Datos del informe de CompuElite; seguimiento registrado en el portal.</div></body></html>';
+  const w = window.open('', '_blank'); if (!w) { toast('El navegador bloqueó la ventana: permite ventanas emergentes para este sitio.', 'er'); return; }
+  w.document.open(); w.document.write(html); w.document.close(); setTimeout(() => { try { w.focus(); w.print(); } catch (x) { } }, 600);
+}
+// ── Excel avanzado ──
+async function segExcel() {
+  const inf = segInf(); if (!inf) return;
+  try { if (!window.ExcelJS) await new Promise((ok, ko) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js'; s.onload = ok; s.onerror = () => ko(new Error('No se pudo cargar ExcelJS')); document.head.appendChild(s); }); } catch (e) { alert(e.message); return; }
+  const D = inf.datos, K = D.kpi || {}, its = segIts(), wb = new ExcelJS.Workbook(), F = { name: 'Arial', size: 10 }, HD = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } }, NUM = '#,##0', PCT = '0.0%';
+  const hdr = (ws, n) => { const r = ws.getRow(n || 1); r.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } }; r.fill = HD; r.alignment = { vertical: 'middle', wrapText: true }; r.height = 26; };
+  const fin = ws => { ws.eachRow(r => r.eachCell(c => { if (!c.font || !c.font.bold) c.font = Object.assign({}, F, c.font || {}); })); };
+  const fillN = { ALTA: 'FFFEE2E2', MEDIA: 'FFFEF3C7', BAJA: 'FFDBEAFE', INFORMATIVA: 'FFE2E8F0', CONTINUA: 'FFEDE9FE' };
+  // Tipos / Nube / Países con % por fórmula
+  const tabla = (nombre, titulo, arr, c1) => {
+    const ws = wb.addWorksheet(nombre); ws.addRow([c1, 'IPs', '% del total', 'Observación']); hdr(ws);
+    arr.forEach((a, i) => ws.addRow([a.n, a.ips, { formula: 'B' + (i + 2) + '/B$' + (arr.length + 2) }, a.obs || '']));
+    ws.addRow(['TOTAL', { formula: 'SUM(B2:B' + (arr.length + 1) + ')' }, { formula: 'SUM(C2:C' + (arr.length + 1) + ')' }, '']);
+    const t = ws.getRow(arr.length + 2); t.font = { name: 'Arial', size: 10, bold: true }; t.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+    ws.getColumn(1).width = 34; ws.getColumn(2).width = 10; ws.getColumn(3).width = 12; ws.getColumn(4).width = 60; ws.getColumn(2).numFmt = NUM; ws.getColumn(3).numFmt = PCT; ws.views = [{ state: 'frozen', ySplit: 1 }]; ws.autoFilter = { from: 'A1', to: 'D1' }; fin(ws); return ws;
+  };
+  // Resumen
+  const w0 = wb.addWorksheet('Resumen'); w0.getColumn(1).width = 38; w0.getColumn(2).width = 18; w0.getColumn(3).width = 70;
+  w0.addRow(['Informe de control de seguridad perimetral — ILUMAX']).font = { name: 'Arial', size: 14, bold: true };
+  w0.addRow(['Periodo', segPerTxt(inf.periodo)]); w0.addRow(['Emisión', segFec(inf.emision)]); w0.addRow(['Proveedor', 'CompuElite']); w0.addRow(['Fuente / archivo', (inf.fuente || '') + ' / ' + (inf.archivo || '')]); w0.addRow([]);
+  const h0 = w0.addRow(['Indicador', 'Valor', 'Lectura']); hdr(w0, h0.number);
+  const ind = [['Registros del archivo', K.registros], ['IPs externas únicas bloqueadas', K.ips], ['Redes /24 de origen', K.redes], ['Países', K.paises], ['IPs en nube pública', K.nube], ['Escáneres de Internet', K.escaneres], ['Posibles falsos positivos', K.falsos_positivos], ['Intrusiones exitosas', K.intrusiones], ['Direcciones internas en la lista', K.internas]];
+  const r0 = w0.rowCount + 1; ind.forEach(x => w0.addRow([x[0], x[1] == null ? '' : x[1], '']));
+  const rIps = r0 + 1, rNube = r0 + 4;
+  w0.addRow(['% en nube pública', { formula: 'B' + rNube + '/B' + rIps }, 'Calculado: IPs en nube ÷ IPs únicas']); w0.getCell('B' + w0.rowCount).numFmt = PCT;
+  w0.addRow(['% escáneres de Internet', { formula: 'B' + (r0 + 5) + '/B' + rIps }, 'Calculado']); w0.getCell('B' + w0.rowCount).numFmt = PCT;
+  w0.addRow(['Nivel de riesgo residual', K.riesgo || '', K.respuesta ? 'Respuesta ante amenaza: ' + K.respuesta : '']);
+  w0.addRow([]); const sg = w0.addRow(['Control del plan (OEA)', 'Valor', '']); hdr(w0, sg.number); const q = w0.rowCount + 1;
+  w0.addRow(['Hallazgos totales', { formula: "COUNTIF('Seguimiento OEA'!A:A,\"Hallazgo\")" }, '']); w0.addRow(['Hallazgos sin cerrar', { formula: "COUNTIFS('Seguimiento OEA'!A:A,\"Hallazgo\",'Seguimiento OEA'!F:F,\"Abierto\")+COUNTIFS('Seguimiento OEA'!A:A,\"Hallazgo\",'Seguimiento OEA'!F:F,\"En curso\")" }, '']);
+  w0.addRow(['Acciones totales', { formula: "COUNTIF('Seguimiento OEA'!A:A,\"Acción\")" }, '']); w0.addRow(['Acciones cerradas o no aplica', { formula: "COUNTIFS('Seguimiento OEA'!A:A,\"Acción\",'Seguimiento OEA'!F:F,\"Cerrado\")+COUNTIFS('Seguimiento OEA'!A:A,\"Acción\",'Seguimiento OEA'!F:F,\"No aplica\")" }, '']);
+  w0.addRow(['% avance del plan', { formula: 'IF(B' + (q + 2) + '=0,0,B' + (q + 3) + '/B' + (q + 2) + ')' }, '']); w0.getCell('B' + w0.rowCount).numFmt = PCT;
+  if (D.veredicto) { w0.addRow([]); const v = w0.addRow([D.veredicto]); w0.mergeCells('A' + v.number + ':C' + v.number); v.alignment = { wrapText: true, vertical: 'top' }; v.height = 62; }
+  fin(w0); w0.getCell('A1').font = { name: 'Arial', size: 14, bold: true };
+  const wi = wb.addWorksheet('Estado actual'); wi.addRow(['Indicador', 'Resultado', 'Interpretación']); hdr(wi); (D.indicadores || []).forEach(i => wi.addRow([i.n, i.v, i.lectura])); wi.getColumn(1).width = 38; wi.getColumn(2).width = 14; wi.getColumn(3).width = 60; fin(wi);
+  tabla('Tipo de operador', '', D.tipos || [], 'Tipo de operador'); tabla('Nube pública', '', D.nube || [], 'Proveedor'); tabla('Países', '', D.paises || [], 'País');
+  const wc = wb.addWorksheet('Concentración'); wc.addRow(['Tipo de red /24', 'Redes', 'IPs', '% de la lista']); hdr(wc); (D.concentracion || []).forEach((c, i) => wc.addRow([c.n, c.redes, c.ips, { formula: 'C' + (i + 2) + "/Resumen!$B$" + rIps }])); wc.getColumn(1).width = 28; wc.getColumn(4).numFmt = PCT; fin(wc);
+  const wr = wb.addWorksheet('Redes (Anexo A)'); wr.addRow(['Red /24', 'IPs', 'Cobertura', 'Operador', 'País']); hdr(wr); (D.redes || []).forEach((r, i) => wr.addRow([r.red, r.ips, { formula: 'B' + (i + 2) + '/Resumen!$B$' + rIps }, r.operador, r.pais]));
+  const nr = (D.redes || []).length + 2; wr.addRow(['TOTAL', { formula: 'SUM(B2:B' + (nr - 1) + ')' }, { formula: 'SUM(C2:C' + (nr - 1) + ')' }, '', '']); wr.getRow(nr).font = { name: 'Arial', size: 10, bold: true }; wr.getColumn(1).width = 20; wr.getColumn(3).numFmt = PCT; wr.getColumn(4).width = 34; wr.views = [{ state: 'frozen', ySplit: 1 }]; wr.autoFilter = { from: 'A1', to: 'E1' }; fin(wr);
+  const ws = wb.addWorksheet('Seguimiento OEA'); ws.addRow(['Tipo', 'Código', 'Descripción', 'Severidad / prioridad', 'Impacto / beneficio', 'Estado', 'Responsable', 'Fecha compromiso', 'Fecha cierre', 'Evidencia', 'Notas', 'Origen (mes anterior)']); hdr(ws);
+  its.forEach((x, i) => { const r = ws.addRow([x.tipo === 'H' ? 'Hallazgo' : 'Acción', x.codigo, x.texto, x.nivel, x.impacto, SGS_EST[x.estado][2], x.responsable || '', x.fecha_compromiso ? new Date(x.fecha_compromiso + 'T12:00:00') : null, x.fecha_cierre ? new Date(x.fecha_cierre + 'T12:00:00') : null, x.evidencia || '', x.notas || '', x.origen_periodo ? segPerTxt(x.origen_periodo) : '']); if (fillN[x.nivel]) r.getCell(4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillN[x.nivel] } }; r.getCell(6).dataValidation = { type: 'list', allowBlank: false, formulae: ['"Abierto,En curso,Cerrado,No aplica"'] }; r.alignment = { vertical: 'top', wrapText: true }; });
+  [9, 8, 56, 16, 40, 12, 18, 14, 14, 36, 30, 16].forEach((w, i) => ws.getColumn(i + 1).width = w); ws.getColumn(8).numFmt = 'dd/mm/yyyy'; ws.getColumn(9).numFmt = 'dd/mm/yyyy'; ws.views = [{ state: 'frozen', ySplit: 1, xSplit: 2 }]; ws.autoFilter = { from: 'A1', to: 'L1' };
+  ws.addConditionalFormatting({ ref: 'F2:F' + (its.length + 1), rules: [{ type: 'cellIs', operator: 'equal', formulae: ['"Cerrado"'], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFDCFCE7' } } } }, { type: 'cellIs', operator: 'equal', formulae: ['"Abierto"'], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFEE2E2' } } } }, { type: 'cellIs', operator: 'equal', formulae: ['"En curso"'], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFEF3C7' } } } }] }); fin(ws);
+  const wh = wb.addWorksheet('Histórico'); const L = SGS.inf.slice().reverse(); wh.addRow(['Indicador', ...L.map(i => segPerTxt(i.periodo))]); hdr(wh);
+  [['IPs bloqueadas', 'ips'], ['Redes /24', 'redes'], ['Países', 'paises'], ['IPs en nube', 'nube'], ['% nube pública', 'nube_pct'], ['Escáneres', 'escaneres'], ['Falsos positivos', 'falsos_positivos'], ['Intrusiones exitosas', 'intrusiones']].forEach(([t, k]) => wh.addRow([t, ...L.map(i => { const v = (i.datos.kpi || {})[k]; return v == null ? null : (k === 'nube_pct' ? v / 100 : v); })]));
+  wh.getRow(6).numFmt = PCT; wh.getColumn(1).width = 26; L.forEach((_, i) => wh.getColumn(i + 2).width = 14); wh.addRow([]); wh.addRow(['Variación de IPs vs mes anterior', null, ...L.slice(1).map((_, i) => ({ formula: String.fromCharCode(67 + i) + '2-' + String.fromCharCode(66 + i) + '2' }))]); fin(wh);
+  const buf = await wb.xlsx.writeBuffer(); ocpDescargar(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'Seguridad_OEA_' + inf.periodo + '.xlsx'); toast('Excel generado', 'ok');
+}
+
+const FP = { rows: [], cargado: false, prov: '', q: '', mes: '' };
+function fpFaltantes() {
+  const mm = m => +m.slice(0, 4) * 12 + +m.slice(5, 7) - 1, mt = n => Math.floor(n / 12) + '-' + String(n % 12 + 1).padStart(2, '0'), out = [];
+  const provs = FP.prov && FP.prov !== '__todos' ? [FP.prov] : [...new Set(FP.rows.map(r => r.proveedor))];
+  provs.forEach(p => {
+    const R = FP.rows.filter(r => r.proveedor === p).sort((a, b) => a.mes.localeCompare(b.mes)), tiene = new Set(R.map(r => r.mes)), ini = mm(R[0].mes), fin = mm(R[R.length - 1].mes);
+    if (FP.mes) { const m = mm(FP.mes); if (!tiene.has(FP.mes) && m > ini) out.push({ p, mes: FP.mes, ult: R.filter(r => r.mes < FP.mes).pop() }); }
+    else if (FP.prov && FP.prov !== '__todos') for (let n = ini; n <= fin; n++) if (!tiene.has(mt(n))) out.push({ p, mes: mt(n), ult: R.filter(r => r.mes < mt(n)).pop() });
+  });
+  return out;
+}
+function fpFaltHtml() {
+  const F = fpFaltantes(); if (!F.length) return '';
+  return '<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:12.5px"><b>⚠️ Falta la factura de ' + F.length + (F.length > 1 ? ' proveedores/meses' : ' proveedor/mes') + ' — búscala en el correo:</b>'
+    + F.map(x => '<div style="margin-top:4px">• <b>' + reabastEsc(x.p) + '</b> · ' + fpMesTxt(x.mes) + (x.ult ? ' <span style="color:#64748b">(la última fue ' + fpMesTxt(x.ult.mes) + (x.ult.numero ? ', N.º ' + reabastEsc(x.ult.numero) : '') + ', ' + fpCOP(x.ult.total) + ')</span>' : '') + '</div>').join('')
+    + '<div style="margin-top:6px"><button class="btn btn-p btn-xs" onclick="fpUAbrir()">📤 Subir la que falta</button></div></div>';
+}
 const fpMesTxt = m => { const M = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']; return m ? M[+m.slice(5, 7) - 1] + ' ' + m.slice(0, 4) : ''; };
 const fpCOP = n => (n < 0 ? '-' : '') + '$' + Math.abs(Math.round(n || 0)).toLocaleString('es-CO');
 const fpVar = n => n == null ? '—' : (n > 0 ? '+' : n < 0 ? '−' : '') + '$' + Math.abs(Math.round(n)).toLocaleString('es-CO');
@@ -35993,7 +36342,7 @@ const FP_COLS = [
 function fpNorm(t) { return String(t == null ? '' : t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
 function fpFilas() {
   const todos = FP.prov === '__todos' || !FP.prov, q = fpNorm(FP.q || '').split(/\s+/).filter(Boolean);
-  return FP.rows.filter(r => (todos || r.proveedor === FP.prov) && (!q.length || (() => { const d = r.datos || {}, h = fpNorm([r.proveedor, fpCorto(r.proveedor), r.mes, fpMesTxt(r.mes), r.periodo, r.concepto, r.numero, r.vence, d.emision, (fpEstCol[r.estado] || [0, 0, r.estado])[2], r.aprobado_por, r.notas, Math.round(Number(r.total)), d.info, (d.lineas || []).map(l => l.d).join(' '), (r.lineas || []).map(l => l.cel + ' ' + l.nom).join(' ')].join(' ')); return q.every(w => h.includes(w)); })()));
+  return FP.rows.filter(r => (todos || r.proveedor === FP.prov) && (!FP.mes || r.mes === FP.mes) && (!q.length || (() => { const d = r.datos || {}, h = fpNorm([r.proveedor, fpCorto(r.proveedor), r.mes, fpMesTxt(r.mes), r.periodo, r.concepto, r.numero, r.vence, d.emision, (fpEstCol[r.estado] || [0, 0, r.estado])[2], r.aprobado_por, r.notas, Math.round(Number(r.total)), d.info, (d.lineas || []).map(l => l.d).join(' '), (r.lineas || []).map(l => l.cel + ' ' + l.nom).join(' ')].join(' ')); return q.every(w => h.includes(w)); })()));
 }
 function fpBuscar(v) { FP.q = v; FGX.rows = fpFilas(); FGXA = FGX; fgxPaint(); const c = document.getElementById('fp-qn'); if (c) c.textContent = FGX.rows.length + ' de ' + FP.rows.length; }
 async function renderCtFacturas(el) {
@@ -36008,6 +36357,7 @@ async function renderCtFacturas(el) {
   const kp = (v, t, c, ck) => '<div' + (ck ? ' onclick="' + ck + '" title="Clic para ver el detalle"' : '') + ' style="' + (ck ? 'cursor:pointer;' : '') + 'background:var(--w);border:1px solid var(--b1);border-radius:12px;padding:10px 14px;min-width:150px;"><div style="font-size:20px;font-weight:800;color:' + (c || 'inherit') + '">' + v + '</div><div style="font-size:11px;color:var(--mu)">' + t + (ck ? ' · <u>ver</u>' : '') + '</div></div>';
   el.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
     + '<select class="inp" style="width:auto;max-width:320px" onchange="FP.prov=this.value;renderCtFacturas(document.getElementById(\'ct-tab-content\'))">' + '<option value="__todos"' + (todos ? ' selected' : '') + '>Todos los proveedores</option>' + provs.map(p => '<option value="' + reabastEsc(p) + '"' + (p === FP.prov ? ' selected' : '') + '>' + reabastEsc(p) + '</option>').join('') + '</select>'
+    + '<select class="inp" style="width:auto" onchange="FP.mes=this.value;renderCtFacturas(document.getElementById(\'ct-tab-content\'))"><option value="">Todos los meses</option>' + [...new Set(FP.rows.map(r => r.mes))].sort().reverse().map(m => '<option value="' + m + '"' + (m === FP.mes ? ' selected' : '') + '>' + fpMesTxt(m) + '</option>').join('') + '</select>'
     + '<input class="inp" id="fp-q" type="search" placeholder="🔍 Buscar: proveedor, concepto, N.º, mes, estado…" value="' + reabastEsc(FP.q || '') + '" oninput="fpBuscar(this.value)" style="width:280px;max-width:100%"><span id="fp-qn" style="font-size:11px;color:var(--mu)"></span>'
     + '<button class="btn btn-p btn-sm" onclick="fpUAbrir()">📤 Subir facturas</button><button class="btn btn-g btn-sm" onclick="fpGAbrir()">📊 Gráfico</button><button class="btn btn-g btn-sm" onclick="fpExcelMes()">📗 Excel mes a mes</button><button class="btn btn-g btn-sm" onclick="fpForm(\'\')">➕ Nueva factura</button>'
     + '<button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxCols(event)">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxLimpiar()">✖ Quitar filtros y orden</button><button class="btn btn-g btn-sm" onclick="FGXA=FGX;fgxExcel()">⬇ Excel de esta vista</button></div>'
@@ -36015,7 +36365,7 @@ async function renderCtFacturas(el) {
     + (ult ? kp(fpCOP(ult.total), 'Última factura · ' + fpMesTxt(ult.mes), '', "fpDetalle('" + ult.id + "')") + kp(fpVar(ult._var) + (ult._pct == null ? '' : ' (' + (ult._pct > 0 ? '+' : '') + ult._pct.toFixed(1) + '%)'), 'Contra el mes anterior', ult._var > 0 ? '#b91c1c' : ult._var < 0 ? '#166534' : '', "fpDetalle('" + ult.id + "')") + kp(fpCOP(prom), 'Promedio (últimos ' + Math.min(F.length, 12) + ' meses)', '', "FPG.sel=new Set([FP.prov]);fpGAbrir()") : '')
     + (() => { const hoyK = fpHoy(), aK = hoyK.slice(0, 4), mK = hoyK.slice(0, 7), AP = FP.rows.filter(r => r.estado === 'aprobada'), sm = a => a.reduce((s, r) => s + Number(r.total), 0), aM = AP.filter(r => r.mes === mK), aA = AP.filter(r => r.mes.slice(0, 4) === aK); return kp(aM.length + ' · ' + fpCOP(sm(aM)), '✅ Aprobadas en ' + fpMesTxt(mK), '#166534', "fpKpi('mesA')") + kp(aA.length + ' · ' + fpCOP(sm(aA)), '✅ Aprobadas en el año ' + aK, '#166534', "fpKpi('anioA')"); })()
     + kp(fpCOP(sumF(PEN)), 'Por pagar · ' + PEN.length + ' pendientes de aprobar', PEN.length ? '#b45309' : '', "fpKpi('pen')") + kp(VEN.length + ' · ' + fpCOP(sumF(VEN)), 'Vencidas sin aprobar/pagar', VEN.length ? '#b91c1c' : '', "fpKpi('ven')") + kp(SEM.length + ' · ' + fpCOP(sumF(SEM)), 'Vencen en los próximos 7 días', SEM.length ? '#c2410c' : '', "fpKpi('sem')") + '</div>'
-    + '<style>#fgx_fp table{font-size:12px;width:100%}#fgx_fp th,#fgx_fp td{padding:5px 7px!important}#fgx_fp th{font-size:11.5px}#fgx_fp .btn-xs{padding:1px 5px}</style><div class="tw" id="fgx_fp" style="max-height:62vh;overflow:auto;"></div>'
+    + '<style>#fgx_fp table{font-size:12px;width:100%}#fgx_fp th,#fgx_fp td{padding:5px 7px!important}#fgx_fp th{font-size:11.5px}#fgx_fp .btn-xs{padding:1px 5px}</style>' + fpFaltHtml() + '<div class="tw" id="fgx_fp" style="max-height:62vh;overflow:auto;"></div>'
     + '<div style="font-size:11px;color:var(--mu);margin-top:6px;">Rojo = subió contra el mes anterior (revisar); verde = bajó. Pasa el mouse sobre un nombre o nota para verlo completo; 🔍 muestra qué te facturan. «⬇ Excel de esta vista» baja exactamente lo que ves.</div>';
   FGX.rows = fpFilas(); FGX.cols = FP_COLS; FGXA = FGX; fgxPaint(); const qn = document.getElementById('fp-qn'); if (qn && FP.q) qn.textContent = FGX.rows.length + ' de ' + FP.rows.length;
 }
