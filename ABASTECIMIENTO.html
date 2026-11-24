@@ -20811,8 +20811,10 @@ async function ivsCuaCargar() {
   if (IVS_CUA || IVS_CUA === 'cargando') return; IVS_CUA = 'cargando';
   try {
     const q = 'in.(' + IVS_CUA_BOD.join(',') + ')';
-    const vivo = await sb.get('inventario', 'select=referencia,descripcion,bodega,existencia,costo_prom,fecha_ult_entrada&bodega=' + q + '&existencia=gt.0&limit=5000');
-    const cor = await sb.get('inventario_cortes', 'select=corte,referencia,descripcion,bodega,existencia,costo_prom&bodega=' + q + '&existencia=gt.0&limit=20000');
+    /* Supabase entrega máx. 1000 filas por consulta: se pide por páginas para no dejar filas por fuera (antes la cuarentena salía incompleta) */
+    const pag = async (tabla, qs, ord) => { let all = [], off = 0; for (;;) { const r = await sb.get(tabla, qs + '&order=' + ord + '&limit=1000&offset=' + off); if (!r || !r.length) break; all = all.concat(r); if (r.length < 1000 || off > 60000) break; off += 1000; } return all; };
+    const vivo = await pag('inventario', 'select=referencia,descripcion,bodega,existencia,costo_prom,fecha_ult_entrada&bodega=' + q + '&existencia=gt.0', 'id');
+    const cor = await pag('inventario_cortes', 'select=corte,referencia,descripcion,bodega,existencia,costo_prom&bodega=' + q + '&existencia=gt.0', 'corte,bodega,referencia');
     let mot = {}; try { const c = await sb.get('configuracion', 'clave=eq.inv_motivos_cua'); if (c && c[0] && c[0].valor) mot = JSON.parse(c[0].valor) || {}; } catch (e) {}
     IVS_CUA_MOT = mot; IVS_CUA = { vivo: vivo || [], cor: cor || [] };
     try { const h = await sb.get('configuracion', 'clave=eq.inv_hist_mensual'); IVS_SNAP = (h && h[0] && h[0].valor) ? (JSON.parse(h[0].valor) || {}) : {}; ivsSnapAplicar(); } catch (e) { IVS_SNAP = {}; }
