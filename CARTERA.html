@@ -1941,6 +1941,7 @@ const EXT_COLS = [
   { k: 'banco', t: 'Banco', v: r => r.banco, h: r => { const c = BANCO_COL(r.banco); return '<span style="background:' + c[0] + ';color:#fff;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700;white-space:nowrap">' + esc(r.banco || '') + '</span>'; } },
   { k: 'desc', t: 'Descripción', wrap: 1, v: r => r.descripcion, h: r => esc(r.descripcion) + (r.texto_ref ? '<div style="font-size:10px;color:#64748b">' + esc(String(r.texto_ref).slice(0, 90)) + '</div>' : '') },
   { k: 'monto', t: 'Monto', num: 1, sum: 1, dec: 1, v: r => Number(r.monto), h: r => '<b>' + fm2(Number(r.monto)) + '</b>' },
+  { k: 'che', t: 'Monto en cheque', num: 1, sum: 1, dec: 1, v: r => { const t = String(r.monto_cheque || '').trim(); return /^\d+(\.\d+)?$/.test(t) ? Number(t) : 0; }, h: r => { const t = String(r.monto_cheque || '').trim(), n = /^\d+(\.\d+)?$/.test(t) ? Number(t) : 0; return n > 0 ? '<span class="pill p-or" title="Pago en cheque">💳 ' + fm2(n) + '</span>' : (t ? '<span style="font-size:10px;color:#64748b">' + esc(t.slice(0, 40)) + '</span>' : ''); } },
   { k: 'ref', t: 'Ref. cliente', v: r => r.ref_cliente },
   { k: 'cli', t: 'Cliente', wrap: 1, v: r => r.cliente },
   { k: 'rc', t: 'RC', v: r => r.rc || EXT_PILL[extEst(r)][1], h: r => '<span class="pill ' + EXT_PILL[extEst(r)][0] + '">' + esc(r.rc || EXT_PILL[extEst(r)][1]) + '</span>' },
@@ -2133,12 +2134,13 @@ const xSin = v => (v == null ? '' : String(v)).trim();
 const xRef = v => { let s = xSin(v).replace(/\.0+$/, ''); if (/^(N\/A|0+)$/i.test(s)) return ''; s = s.replace(/\D/g, ''); return s.length === 10 && /^[89]/.test(s) ? s.slice(0, 9) : s; };
 function xFechaD(v) { if (v instanceof Date) return new Date(v.getTime() + 12 * 36e5).toISOString().slice(0, 10); if (typeof v === 'number' && v > 19000000 && v < 21000000) { const s = String(v); return s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8); } return xFecha(v); }
 function extExcelLeer(rows) {
-  const fila = (banco, fecha, descripcion, texto_ref, monto, cheque, ref) => ({ banco, fecha, descripcion, texto_ref, monto, monto_cheque: cheque > 0 ? String(cheque) : '', ref_cliente: ref });
+  const fila = (banco, fecha, descripcion, texto_ref, monto, cheque, ref) => { if (!(cheque > 0) && /\bcheque/i.test(descripcion + ' ' + texto_ref)) cheque = monto; return { banco, fecha, descripcion, texto_ref, monto, monto_cheque: cheque > 0 ? String(cheque) : '', ref_cliente: ref }; };
   const hdr = (re) => rows.findIndex(r => r && r.some(c => re.test(xSin(c)))), out = [], r = { omit: 0 };
   let h;
   if ((h = hdr(/^Fecha de Sistema$/i)) >= 0) { r.banco = 'DAVIVIENDA'; const H = rows[h].map(xSin), ix = n => H.findIndex(x => x.toLowerCase().startsWith(n));
-    rows.slice(h + 1).forEach(c => { if (!c || !c[0]) return; const mo = xNum(c[ix('valor total')]); if (!/cr[eé]dito/i.test(xSin(c[ix('transacci')])) || !(mo > 0)) { r.omit++; return; }
-      out.push(fila(r.banco, xFechaD(c[0]), xSin(c[ix('descripci')]), '', mo, xNum(c[ix('valor  cheque')] != null ? c[ix('valor  cheque')] : c[ix('valor')]) || 0, xRef(c[ix('id origen')]))); }); }
+    rows.slice(h + 1).forEach(c => { if (!c || !c[0]) return; const mo = xNum(c[ix('valor total')]); if (!/cr[eé]dito|dep[oó]sito/i.test(xSin(c[ix('transacci')])) || !(mo > 0)) { r.omit++; return; }
+      const ic = H.findIndex(x => /cheque/i.test(x) && /valor|monto/i.test(x)), ds = xSin(c[ix('descripci')]);
+      out.push(fila(r.banco, xFechaD(c[0]), ds, xSin(c[ix('transacci')]), mo, (ic >= 0 ? xNum(c[ic]) : 0) || 0, xRef(c[ix('id origen')]))); }); }
   else if ((h = hdr(/Indicador D[eé]bito/i)) >= 0) { r.banco = 'BANCO DE BOGOTA'; const H = rows[h].map(xSin), ix = n => H.findIndex(x => x.toLowerCase().startsWith(n.toLowerCase()));
     rows.slice(h + 1).forEach(c => { if (!c || !c[ix('Indicador')]) return; const mo = xNum(c[ix('Valor')]); if (xSin(c[ix('Indicador')]).toUpperCase() !== 'C' || !(mo > 0)) { r.omit++; return; }
       const tx = xSin(c[ix('Texto de Ref')]); let ref = xRef(c[ix('Referencia del Cliente')]); if (!ref) { const m = tx.match(/Nit\s*(\d{5,12})/i) || tx.match(/comprobante\s+(\d{5,12})/i) || tx.match(/Nit(\d{5,12})/i); ref = m ? xRef(m[1]) : ''; }
@@ -2169,7 +2171,7 @@ function extExcel() {
     R.forEach(r => { r.nuevas = []; r.yaEstan = 0; r.filas.forEach(f => { const k = ks(f), c = cnt.get(k) || 0; if (c > 0) { cnt.set(k, c - 1); r.yaEstan++; } else r.nuevas.push(f); }); });
     EXT.subida = R; const d = document.createElement('div'); d.id = 'xwrap';
     d.innerHTML = '<div class="ov on"><div class="mo"><div class="mh"><span>Subir extracto del banco</span><button class="btn g" onclick="extCerrar()">✕</button></div><div style="padding:14px;font-size:13px">'
-      + R.map(r => '<div style="margin-bottom:8px"><b>' + esc(r.banco) + '</b> · ' + esc(r.archivo) + '<br>' + r.nuevas.length + ' nuevas por ' + fmc(r.nuevas.reduce((a, f) => a + f.monto, 0)) + ' · <b>' + r.yaEstan + ' ya estaban cargadas (no se repiten)</b> · ' + r.omit + ' omitidas (salidas / no cuentan) · ' + r.nuevas.filter(f => f.cliente).length + ' de las nuevas con cliente identificado</div>').join('')
+      + R.map(r => '<div style="margin-bottom:8px"><b>' + esc(r.banco) + '</b> · ' + esc(r.archivo) + '<br>' + r.nuevas.length + ' nuevas por ' + fmc(r.nuevas.reduce((a, f) => a + f.monto, 0)) + ' · <b>' + r.yaEstan + ' ya estaban cargadas (no se repiten)</b> · ' + r.omit + ' omitidas (salidas / no cuentan) · ' + (r.nuevas.filter(f => f.monto_cheque).length ? '<b style="color:#b45309">' + r.nuevas.filter(f => f.monto_cheque).length + ' en cheque</b> · ' : '') + r.nuevas.filter(f => f.cliente).length + ' de las nuevas con cliente identificado</div>').join('')
       + (bad.length ? '<div style="color:#b91c1c">Sin reconocer: ' + esc(bad.join(', ')) + '</div>' : '') + '<div style="font-size:12px;color:#475569">Los movimientos que ya estén cargados se omiten solos.</div><div id="xpmsg" style="font-size:12px;margin-top:6px"></div></div><div class="mf"><button class="btn g" onclick="extCerrar()">Cancelar</button><button class="btn" id="xpbtn" onclick="extExcelOk()">Cargar</button></div></div></div>';
     document.body.appendChild(d);
   };
