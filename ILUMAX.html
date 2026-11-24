@@ -27366,7 +27366,7 @@ async function marcarRecibido(id, cantidadSugerida){
 // INVENTARIO TI — equipos y actas de entrega (formato RHU-FOR-006)
 // ══════════════════════════════════════════════════════════
 let TI = {
-  equipos: [], entregas: [], tab: 'equipos',
+  equipos: [], entregas: [], devs: [], tab: 'equipos',
   qEquipos: '', filEstadoEq: '', qEntregas: '', filEstadoEnt: '',
   editEquipoId: null, lineas: [], lineaModo: 'nuevo',
 };
@@ -27395,6 +27395,9 @@ async function cargarInvTiSupa() {
   try {
     TI.entregas = await sb.get('ti_entregas', 'select=*,ti_entrega_items(*)&order=creado_en.desc') || [];
   } catch(e) { console.warn('Error cargando ti_entregas:', e.message); TI.entregas = []; }
+  try {
+    TI.devs = await sb.get('ti_devoluciones', 'select=*,ti_devolucion_items(*)&order=creado_en.desc') || [];
+  } catch(e) { console.warn('Error cargando ti_devoluciones:', e.message); TI.devs = []; }
 }
 
 function renderInvTiVista() {
@@ -27421,6 +27424,7 @@ function renderInvTiVista() {
     <div class="rrhh-tabs">
       <div class="rrhh-tab ${TI.tab==='equipos'?'on':''}" onclick="tiSwitchTab('equipos',this)">📇 Equipos</div>
       <div class="rrhh-tab ${TI.tab==='entregas'?'on':''}" onclick="tiSwitchTab('entregas',this)">📄 Actas de entrega</div>
+      <div class="rrhh-tab ${TI.tab==='devoluciones'?'on':''}" onclick="tiSwitchTab('devoluciones',this)">📥 Actas de devolución</div>
     </div>
 
     <div id="ti-tab-content"></div>
@@ -27439,8 +27443,8 @@ function tiSwitchTab(tab, el) {
 function renderTiTabContent() {
   const el = document.getElementById('ti-tab-content');
   if(!el) return;
-  el.innerHTML = TI.tab === 'equipos' ? tiHtmlTabEquipos() : tiHtmlTabEntregas();
-  if(TI.tab === 'equipos') filtrarTiEquipos(); else filtrarTiEntregas();
+  el.innerHTML = TI.tab === 'equipos' ? tiHtmlTabEquipos() : TI.tab === 'devoluciones' ? tiHtmlTabDevoluciones() : tiHtmlTabEntregas();
+  if(TI.tab === 'equipos') filtrarTiEquipos(); else if(TI.tab === 'devoluciones') filtrarTiDevoluciones(); else filtrarTiEntregas();
 }
 
 // ── TAB EQUIPOS ──────────────────────────────────────────
@@ -27747,7 +27751,7 @@ function filtrarTiEntregas() {
       <td style="padding:9px 12px;text-align:right;white-space:nowrap;">
         <button class="btn btn-bl btn-sm" style="padding:4px 8px;" onclick="tiAbrirActa('${e.id}')" title="Ver / Imprimir PDF">📄</button>
         <button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiSubirFirmada('${e.id}')" title="Subir foto o PDF del acta firmada">${e.acta_firmada_url?'🔁':'📎'} ${e.acta_firmada_url?'Cambiar firmada':'Subir firmada'}</button>
-        ${e.estado==='Vigente' ? `<button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiMarcarDevuelto('${e.id}')" title="Recibir equipo (devolución) y sacar el acta de recepción">📥 Recibir equipo</button>` : ''}
+        ${e.estado==='Vigente' ? `<button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiNuevaDevolucion('${e.id}')" title="Recibir equipo: estado de cada equipo y acta de devolución">📥 Recibir equipo</button>` : ''}
         ${e.estado==='Devuelto' ? `<button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiAbrirActa('${e.id}','recepcion')" title="Ver / Imprimir acta de recepción">📥 Acta de recepción</button>` : ''}
       </td>
     </tr>`;
@@ -28218,6 +28222,105 @@ function tiSubirFirmada(entregaId) {
   inp.click();
 }
 
+// ── ACTAS DE DEVOLUCIÓN: el colaborador devuelve uno o varios equipos de una acta de entrega vigente; se deja el estado en que se recibe cada equipo y su destino ──
+const TI_DEV_EST = ['Bueno', 'Con daños', 'Incompleto', 'Perdido'];
+const TI_DEV_DESTINO = ['Disponible', 'Mantenimiento', 'Baja', 'Perdido'];
+const tiDevDestinoDe = e => e === 'Bueno' ? 'Disponible' : e === 'Perdido' ? 'Perdido' : 'Mantenimiento';
+const tiDevItemsHechos = entregaId => new Set((TI.devs || []).filter(d => d.entrega_id === entregaId).flatMap(d => (d.ti_devolucion_items || []).map(i => i.entrega_item_id)).filter(Boolean));
+function tiHtmlTabDevoluciones() {
+  const th = (t, al) => '<th style="background:var(--bg);padding:9px 12px;text-align:' + (al || 'left') + ';font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">' + t + '</th>';
+  return `<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-p btn-sm" onclick="tiNuevaDevolucion()">➕ Nueva acta de devolución</button>
+      <div style="position:relative;flex:1;min-width:200px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;">🔍</span><input class="inp" id="srch-ti-dev" placeholder="Buscar colaborador, folio, cédula, equipo…" style="padding-left:32px;border-radius:22px;" oninput="filtrarTiDevoluciones()"></div>
+    </div>
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center;"><div style="font-size:13px;font-weight:800;">Actas de devolución</div><div id="ti-dev-cnt" style="font-size:11px;color:var(--mu);"></div></div>
+      <div style="overflow-x:auto;max-height:55vh;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>${th('Folio')}${th('Colaborador')}${th('Acta de entrega')}${th('Fecha')}${th('Equipos recibidos')}${th('Recibió')}${th('', 'right')}</tr></thead><tbody id="tbody-ti-dev"></tbody></table></div>
+    </div>`;
+}
+function filtrarTiDevoluciones() {
+  const q = (document.getElementById('srch-ti-dev') || { value: '' }).value.trim().toLowerCase(), col = { 'Bueno': '#16a34a', 'Con daños': '#d97706', 'Incompleto': '#d97706', 'Perdido': '#dc2626' };
+  const L = (TI.devs || []).filter(d => !q || [d.folio, d.entrega_folio, d.colaborador_nombre, d.colaborador_cedula, d.recibe_nombre, (d.ti_devolucion_items || []).map(i => (i.descripcion || '') + ' ' + (i.serial || '') + ' ' + (i.imei || '')).join(' ')].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const c = document.getElementById('ti-dev-cnt'); if (c) c.textContent = L.length.toLocaleString('es-CO') + ' acta(s)';
+  const tb = document.getElementById('tbody-ti-dev'); if (!tb) return;
+  if (!L.length) { tb.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--mu);">Aún no hay actas de devolución. Usa «Nueva acta de devolución» o «Recibir equipo» en la pestaña de entregas.</td></tr>'; return; }
+  tb.innerHTML = L.map(d => { const it = (d.ti_devolucion_items || []).slice().sort((a, b) => (a.no_item || 0) - (b.no_item || 0));
+    return `<tr style="border-bottom:1px solid var(--b1);"><td style="padding:9px 12px;font-family:monospace;font-size:11px;color:var(--mu);">${tiEsc(d.folio || '')}</td>
+      <td style="padding:9px 12px;font-weight:600;font-size:11px;">${tiEsc(d.colaborador_nombre || '')}${d.colaborador_cargo ? '<div style="font-size:10px;color:var(--mu);font-weight:400;">' + tiEsc(d.colaborador_cargo) + '</div>' : ''}</td>
+      <td style="padding:9px 12px;font-family:monospace;font-size:11px;">${tiEsc(d.entrega_folio || '—')}${d.parcial ? '<div style="font-size:10px;color:#d97706;font-family:inherit;">devolución parcial</div>' : ''}</td>
+      <td style="padding:9px 12px;font-size:11px;">${tiFechaCO(d.fecha)}</td>
+      <td style="padding:9px 12px;font-size:11px;">${it.map(i => tiEsc((i.descripcion || '').substring(0, 38)) + ' <span style="font-size:10px;font-weight:700;color:' + (col[i.estado_recibido] || '#64748b') + ';">· ' + tiEsc(i.estado_recibido || '') + '</span>').join('<br>')}</td>
+      <td style="padding:9px 12px;font-size:11px;">${tiEsc(d.recibe_nombre || '')}</td>
+      <td style="padding:9px 12px;text-align:right;white-space:nowrap;"><button class="btn btn-bl btn-sm" style="padding:4px 8px;" onclick="tiAbrirDevolucion('${d.id}')" title="Ver / Imprimir PDF">📄</button> <button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiSubirFirmadaDev('${d.id}')">${d.acta_firmada_url ? '🔁 Cambiar firmada' : '📎 Subir firmada'}</button>${d.acta_firmada_url ? ' <a href="' + d.acta_firmada_url + '" target="_blank" style="font-size:11px;">✅ Firmada</a>' : ''}</td></tr>`; }).join('');
+}
+function tiNuevaDevolucion(entregaId) {
+  const vig = TI.entregas.filter(e => e.estado === 'Vigente' && (e.ti_entrega_items || []).some(i => !tiDevItemsHechos(e.id).has(i.id)));
+  if (!vig.length) { toast('No hay actas de entrega vigentes con equipos por devolver', 'wa'); return; }
+  const sel = entregaId && vig.find(e => e.id === entregaId) ? entregaId : '';
+  let mo = document.getElementById('mo-ti-dev'); if (mo) mo.remove();
+  mo = document.createElement('div'); mo.className = 'ov on'; mo.id = 'mo-ti-dev'; mo.onclick = ev => { if (ev.target === mo) mo.remove(); };
+  mo.innerHTML = `<div class="mo" style="max-width:860px;width:96vw"><div class="mh"><div class="mt">📥 Nueva acta de devolución de equipos</div><button class="mx" onclick="document.getElementById('mo-ti-dev').remove()">✕</button></div><div class="mb">
+    <div class="fg"><label class="fl">Acta de entrega (vigente)</label><select class="inp" id="ti-dev-ent" onchange="tiDevPintarItems()"><option value="">— Elige el colaborador / acta —</option>${vig.map(e => `<option value="${e.id}"${e.id === sel ? ' selected' : ''}>${tiEsc(e.colaborador_nombre)} · ${tiEsc(e.folio || '')} · ${tiFechaCO(e.fecha)}</option>`).join('')}</select></div>
+    <div id="ti-dev-items" style="margin:10px 0;"></div>
+    <div class="fg2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"><div class="fg"><label class="fl">Fecha de devolución</label><input class="inp" type="date" id="ti-dev-fecha" value="${new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10)}"></div><div class="fg"><label class="fl">Recibe (nombre)</label><input class="inp" id="ti-dev-recibe" value="${tiEsc((CU && (CU.nombre || CU.email)) || '')}"></div></div>
+    <div class="fg"><label class="fl">Observaciones generales</label><textarea class="inp" id="ti-dev-obs" rows="2" placeholder="Ej. Entrega cargador y caja originales; pantalla con rayones leves…"></textarea></div></div>
+    <div class="mf"><button class="btn btn-g btn-sm" onclick="document.getElementById('mo-ti-dev').remove()">Cancelar</button><button class="btn btn-p btn-sm" id="btn-ti-dev-guardar" onclick="tiGuardarDevolucion()">💾 Guardar y generar PDF</button></div></div>`;
+  document.body.appendChild(mo); tiDevPintarItems();
+}
+function tiDevPintarItems() {
+  const box = document.getElementById('ti-dev-items'), id = (document.getElementById('ti-dev-ent') || {}).value; if (!box) return;
+  const e = TI.entregas.find(x => x.id === id); if (!e) { box.innerHTML = '<div class="arte-mu" style="font-size:12px;color:var(--mu)">Elige el acta para ver sus equipos.</div>'; return; }
+  const hechos = tiDevItemsHechos(e.id), its = (e.ti_entrega_items || []).slice().sort((a, b) => (a.no_item || 0) - (b.no_item || 0)).filter(i => !hechos.has(i.id));
+  const eq = i => TI.equipos.find(x => x.id === i.equipo_id) || {}, sl = (cls, o, v) => `<select class="inp ${cls}" style="padding:3px 6px;font-size:12px;width:auto">${o.map(x => `<option${x === v ? ' selected' : ''}>${x}</option>`).join('')}</select>`;
+  box.innerHTML = `<div style="font-size:12px;color:var(--mu);margin-bottom:6px;">Colaborador: <b style="color:var(--tx)">${tiEsc(e.colaborador_nombre)}</b>${e.colaborador_cedula ? ' · CC ' + tiEsc(e.colaborador_cedula) : ''}. Marca lo que devuelve y el estado en que lo recibes.</div>
+    <div class="tw"><table style="font-size:12px;width:100%"><thead><tr><th></th><th>Equipo</th><th>Estado al recibir</th><th>Pasa a</th><th>Observación / accesorios</th></tr></thead><tbody>${its.map((i, k) => `<tr data-i="${i.id}"><td><input type="checkbox" class="dv-ck" checked></td><td><b>${tiEsc(i.descripcion || '')}</b><div style="font-size:10.5px;color:var(--mu)">${tiEsc([eq(i).serial ? 'Serial ' + eq(i).serial : '', eq(i).imei ? 'IMEI ' + eq(i).imei : '', eq(i).codigo_interno || ''].filter(Boolean).join(' · '))}</div></td>
+      <td>${sl('dv-est', TI_DEV_EST, 'Bueno').replace('<select', '<select onchange="this.closest(\'tr\').querySelector(\'.dv-des\').value=tiDevDestinoDe(this.value)"')}</td><td>${sl('dv-des', TI_DEV_DESTINO, 'Disponible')}</td><td><input class="inp dv-obs" style="padding:3px 6px;font-size:12px;min-width:170px" placeholder="Cargador, caja, daños…"></td></tr>`).join('')}</tbody></table></div>`;
+}
+async function tiGuardarDevolucion() {
+  const eid = document.getElementById('ti-dev-ent').value, e = TI.entregas.find(x => x.id === eid); if (!e) { toast('Elige el acta de entrega', 'wa'); return; }
+  const filas = [...document.querySelectorAll('#ti-dev-items tr[data-i]')].filter(r => r.querySelector('.dv-ck').checked).map(r => ({ id: r.dataset.i, est: r.querySelector('.dv-est').value, des: r.querySelector('.dv-des').value, obs: r.querySelector('.dv-obs').value.trim() }));
+  if (!filas.length) { toast('Marca al menos un equipo que se devuelve', 'wa'); return; }
+  const todos = (e.ti_entrega_items || []), hechos = tiDevItemsHechos(e.id), completa = todos.every(i => hechos.has(i.id) || filas.some(f => f.id === i.id)), btn = document.getElementById('btn-ti-dev-guardar'), hoy = document.getElementById('ti-dev-fecha').value || new Date().toISOString().slice(0, 10);
+  if (btn) { btn.disabled = true; btn.textContent = '💾 Guardando…'; }
+  try {
+    const d = await sb.post('ti_devoluciones', { entrega_id: e.id, entrega_folio: e.folio, colaborador_nombre: e.colaborador_nombre, colaborador_cedula: e.colaborador_cedula, colaborador_cargo: e.colaborador_cargo, fecha: hoy, recibe_nombre: document.getElementById('ti-dev-recibe').value.trim(), observaciones: document.getElementById('ti-dev-obs').value.trim(), parcial: !completa, creado_por: (CU && (CU.nombre || CU.email)) || '' });
+    const did = d[0].id; let n = 1;
+    for (const f of filas) {
+      const it = todos.find(i => i.id === f.id), eq = TI.equipos.find(x => x.id === it.equipo_id) || {};
+      await sb.post('ti_devolucion_items', { devolucion_id: did, entrega_item_id: it.id, equipo_id: it.equipo_id || null, no_item: n++, descripcion: it.descripcion, especificaciones: it.especificaciones, serial: eq.serial || null, imei: eq.imei || null, estado_recibido: f.est, destino: f.des, observacion: f.obs || null });
+    }
+    if (completa) await sb.patch('ti_entregas', 'id=eq.' + e.id, { estado: 'Devuelto', fecha_devolucion: hoy, observaciones_devolucion: document.getElementById('ti-dev-obs').value.trim() || null, actualizado: new Date().toISOString() });
+    for (const f of filas) { const it = todos.find(i => i.id === f.id); if (it && it.equipo_id) await sb.patch('ti_equipos', 'id=eq.' + it.equipo_id, { estado_actual: f.des, asignado_a: null, asignado_cedula: null, entrega_actual_id: null, actualizado: new Date().toISOString() }); }
+    toast('✅ Acta de devolución ' + d[0].folio + (completa ? ' — acta de entrega cerrada' : ' (parcial)'), 'ok');
+    const m = document.getElementById('mo-ti-dev'); if (m) m.remove();
+    await cargarInvTiSupa(); TI.tab = 'devoluciones'; renderInvTiVista(); tiAbrirDevolucion(did);
+  } catch (err) { toast('❌ No se pudo guardar: ' + err.message, 'er'); if (btn) { btn.disabled = false; btn.textContent = '💾 Guardar y generar PDF'; } }
+}
+function tiAbrirDevolucion(id) {
+  const d = (TI.devs || []).find(x => x.id === id); if (!d) { toast('No se encontró el acta', 'er'); return; }
+  const url = URL.createObjectURL(new Blob([tiGenerarHtmlDevolucion(d)], { type: 'text/html;charset=utf-8' })); window.open(url, '_blank'); setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+function tiGenerarHtmlDevolucion(d) {
+  // Mismo formato RHU-FOR-006 de las actas de entrega (modo devolución): una fila por equipo con su estado al recibir
+  const ent = TI.entregas.find(e => e.id === d.entrega_id) || {};
+  const items = (d.ti_devolucion_items || []).slice().sort((a, b) => (a.no_item || 0) - (b.no_item || 0)).map((i, k) => ({ no_item: k + 1, descripcion: i.descripcion, especificaciones: [i.especificaciones, i.serial ? 'S/N ' + i.serial : '', i.imei ? 'IMEI ' + i.imei : ''].filter(Boolean).join(' · '), unidades: 1, condicion: 'U', observacion: [i.estado_recibido, i.observacion].filter(Boolean).join(' — ') }));
+  return tiGenerarHtmlActa({ folio: d.folio, colaborador_nombre: d.colaborador_nombre, colaborador_cargo: d.colaborador_cargo, colaborador_cedula: d.colaborador_cedula, fecha: ent.fecha || d.fecha, fecha_devolucion: d.fecha, empleador_nombre: d.recibe_nombre, ti_entrega_items: items }, 'devolucion');
+}
+async function tiSubirFirmadaDev(id) {
+  const d = (TI.devs || []).find(x => x.id === id); if (!d) return; let inp = document.getElementById('ti-firmada-inp'); if (inp) inp.remove();
+  inp = document.createElement('input'); inp.type = 'file'; inp.id = 'ti-firmada-inp'; inp.accept = 'image/*,application/pdf'; inp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;'; document.body.appendChild(inp); window._tiFirmadaInp = inp;
+  inp.addEventListener('change', async () => {
+    const f = inp.files && inp.files[0]; if (!f) return; if (f.size > 15 * 1024 * 1024) { toast('El archivo pesa más de 15 MB', 'wa'); return; }
+    try {
+      toast('Subiendo acta firmada…', 'inf'); const ext = (f.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg', path = 'ti-actas/' + String(d.folio || d.id).replace(/[^A-Za-z0-9_-]/g, '') + '_firmada_' + Date.now() + '.' + ext, fd = new FormData(); fd.append('', f, path.split('/').pop());
+      const r = await fetch(SB_URL + '/storage/v1/object/soportes/' + path, { method: 'POST', headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY }, body: fd }); if (!r.ok) throw new Error('subida ' + r.status);
+      const c = { acta_firmada_url: SB_URL + '/storage/v1/object/public/soportes/' + path, acta_firmada_en: new Date().toISOString(), acta_firmada_por: (CU && CU.nombre) || 'TI', actualizado: new Date().toISOString() };
+      await sb.patch('ti_devoluciones', 'id=eq.' + id, c); Object.assign(d, c); toast('✅ Acta firmada guardada en ' + (d.folio || ''), 'ok'); filtrarTiDevoluciones();
+    } catch (err) { toast('No se pudo subir: ' + err.message, 'er'); } finally { inp.value = ''; }
+  });
+  inp.click();
+}
+
 // ── GENERADOR DE ACTA EN HTML/PDF (formato RHU-FOR-006) ──
 function tiAbrirActa(entregaId, modo) {
   const entrega = TI.entregas.find(e => e.id === entregaId);
@@ -28230,7 +28333,7 @@ function tiAbrirActa(entregaId, modo) {
 }
 
 function tiGenerarHtmlActa(entrega, modo) {
-  const rec = modo === 'recepcion'; // acta de recepción (devolución) — mismo formato, otro título/constancia
+  const dev = modo === 'devolucion', rec = modo === 'recepcion' || dev; // acta de recepción (devolución) — mismo formato, otro título/constancia
   // Réplica exacta de la hoja Excel RHU-FOR-006 (Hoja1, A1:Q41): mismas 17 columnas, alturas de fila,
   // celdas combinadas, bordes (grueso en el marco/encabezado, fino en la cuadrícula), Century Gothic,
   // bloque negro del logo, filas vacías de la tabla, notas, firmas. Impresión: carta vertical, márgenes
@@ -28279,7 +28382,7 @@ function tiGenerarHtmlActa(entrega, modo) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>${rec?'Recepción':'Entrega'} de Equipos — ${tiEsc(entrega.colaborador_nombre)} — ${tiEsc(entrega.folio||'')}</title>
+<title>${dev?'Devolución':rec?'Recepción':'Entrega'} de Equipos — ${tiEsc(entrega.colaborador_nombre)} — ${tiEsc(entrega.folio||'')}</title>
 <style>
   @page{size:letter portrait;margin:0.4in;}
   *{box-sizing:border-box;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}
@@ -28333,7 +28436,7 @@ function tiGenerarHtmlActa(entrega, modo) {
     <td colspan="4" class="m b c">Código:RHU-FOR-006</td>
   </tr>
   <tr style="height:17.15pt">
-    <td colspan="9" rowspan="3" class="m b c">${rec?'RECEPCIÓN':'ENTREGA'} DE EQUIPOS Y ACCESORIOS</td>
+    <td colspan="9" rowspan="3" class="m b c">${dev?'DEVOLUCIÓN':rec?'RECEPCIÓN':'ENTREGA'} DE EQUIPOS Y ACCESORIOS</td>
     <td colspan="4" class="m b">Fecha: 19-Dic-2022</td>
   </tr>
   <tr style="height:17.15pt"><td colspan="4" class="m b">Edición: 1</td></tr>
