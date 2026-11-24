@@ -1359,7 +1359,7 @@ body:not(.sync-manual) [data-sync-manual]{display:none!important;}
             <option>Teclado</option><option>Mouse</option><option>Impresora</option><option>Accesorio</option><option>Otro</option>
           </select></div>
         <div class="fg" id="ti-eq-estado-w"><label class="fl">Estado</label>
-          <select class="inp" id="ti-eq-estado"><option>Disponible</option><option>Asignado</option><option>Mantenimiento</option><option>Baja</option><option>Perdido</option></select></div>
+          <select class="inp" id="ti-eq-estado"><option>Disponible</option><option>Asignado</option><option>Mantenimiento</option><option>Baja</option><option>Perdido</option><option>Devuelto a proveedor</option></select></div>
         <div class="fg"><label class="fl">Estado compra</label>
           <select class="inp" id="ti-eq-compra"><option value="N">N — Nuevo</option><option value="U">U — Usado</option><option value="C">C — Cambio</option></select></div>
       </div>
@@ -27366,7 +27366,7 @@ async function marcarRecibido(id, cantidadSugerida){
 // INVENTARIO TI — equipos y actas de entrega (formato RHU-FOR-006)
 // ══════════════════════════════════════════════════════════
 let TI = {
-  equipos: [], entregas: [], devs: [], mants: [], tab: 'equipos',
+  equipos: [], entregas: [], devs: [], mants: [], provs: [], tab: 'equipos',
   qEquipos: '', filEstadoEq: '', qEntregas: '', filEstadoEnt: '',
   editEquipoId: null, lineas: [], lineaModo: 'nuevo',
 };
@@ -27401,6 +27401,9 @@ async function cargarInvTiSupa() {
   try {
     TI.mants = await sb.get('ti_mantenimientos', 'select=*,ti_mantenimiento_items(*)&order=fecha.desc,creado_en.desc') || [];
   } catch(e) { console.warn('Error cargando ti_mantenimientos:', e.message); TI.mants = []; }
+  try {
+    TI.provs = await sb.get('ti_devoluciones_proveedor', 'select=*,ti_devolucion_prov_items(*)&order=fecha.desc,creado_en.desc') || [];
+  } catch(e) { console.warn('Error cargando ti_devoluciones_proveedor:', e.message); TI.provs = []; }
 }
 
 function renderInvTiVista() {
@@ -27429,6 +27432,8 @@ function renderInvTiVista() {
       <div class="rrhh-tab ${TI.tab==='entregas'?'on':''}" onclick="tiSwitchTab('entregas',this)">📄 Actas de entrega</div>
       <div class="rrhh-tab ${TI.tab==='devoluciones'?'on':''}" onclick="tiSwitchTab('devoluciones',this)">📥 Actas de devolución</div>
       <div class="rrhh-tab ${TI.tab==='mantenimiento'?'on':''}" onclick="tiSwitchTab('mantenimiento',this)">🔧 Mantenimiento</div>
+      <div class="rrhh-tab ${TI.tab==='alquilados'?'on':''}" onclick="tiSwitchTab('alquilados',this)">🏷️ Alquilados</div>
+      <div class="rrhh-tab ${TI.tab==='provdev'?'on':''}" onclick="tiSwitchTab('provdev',this)">🚚 Devoluciones al proveedor</div>
     </div>
 
     <div id="ti-tab-content"></div>
@@ -27447,8 +27452,8 @@ function tiSwitchTab(tab, el) {
 function renderTiTabContent() {
   const el = document.getElementById('ti-tab-content');
   if(!el) return;
-  el.innerHTML = TI.tab === 'equipos' ? tiHtmlTabEquipos() : TI.tab === 'devoluciones' ? tiHtmlTabDevoluciones() : TI.tab === 'mantenimiento' ? tiHtmlTabMant() : tiHtmlTabEntregas();
-  if(TI.tab === 'equipos') filtrarTiEquipos(); else if(TI.tab === 'devoluciones') filtrarTiDevoluciones(); else if(TI.tab === 'mantenimiento') filtrarTiMant(); else filtrarTiEntregas();
+  el.innerHTML = TI.tab === 'equipos' ? tiHtmlTabEquipos() : TI.tab === 'devoluciones' ? tiHtmlTabDevoluciones() : TI.tab === 'mantenimiento' ? tiHtmlTabMant() : TI.tab === 'alquilados' ? tiHtmlTabAlq() : TI.tab === 'provdev' ? tiHtmlTabProv() : tiHtmlTabEntregas();
+  if(TI.tab === 'equipos') filtrarTiEquipos(); else if(TI.tab === 'devoluciones') filtrarTiDevoluciones(); else if(TI.tab === 'mantenimiento') filtrarTiMant(); else if(TI.tab === 'alquilados') filtrarTiAlq(); else if(TI.tab === 'provdev') filtrarTiProv(); else filtrarTiEntregas();
 }
 
 // ── TAB EQUIPOS ──────────────────────────────────────────
@@ -27475,6 +27480,7 @@ function tiHtmlTabEquipos() {
         <option value="Disponible">Disponible</option>
         <option value="Asignado">Asignado</option>
         <option value="Mantenimiento">Mantenimiento</option>
+        <option value="Devuelto a proveedor">Devuelto a proveedor</option>
         <option value="Baja">Baja</option>
         <option value="Perdido">Perdido</option>
       </select>
@@ -27527,7 +27533,7 @@ function filtrarTiEquipos() {
   if(!tbody) return;
   if(!items.length) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--mu);">Sin resultados</td></tr>'; return; }
 
-  const badgeCol = { Disponible:'#16a34a', Asignado:'#f59e0b', Mantenimiento:'#2563eb', Baja:'#64748b', Perdido:'#dc2626' };
+  const badgeCol = { Disponible:'#16a34a', Asignado:'#f59e0b', Mantenimiento:'#2563eb', Baja:'#64748b', Perdido:'#dc2626', 'Devuelto a proveedor':'#7c3aed' };
 
   tbody.innerHTML = items.map(e => `
     <tr style="border-bottom:1px solid var(--b1);">
@@ -28350,6 +28356,134 @@ async function tiMantEliminar(id) {
   const m = (TI.mants || []).find(x => x.id === id); if(!m) return;
   if(!confirm('¿Eliminar el mantenimiento del ' + tiFechaCO(m.fecha) + ' con ' + (m.ti_mantenimiento_items || []).length + ' equipos? No se puede deshacer.')) return;
   try { await sb.delete('ti_mantenimientos', 'id=eq.' + id); await cargarInvTiSupa(); renderTiTabContent(); toast('Eliminado', 'ok'); } catch(e) { toast('No se pudo eliminar: ' + e.message, 'er'); }
+}
+
+// ── ALQUILADOS Y DEVOLUCIONES AL PROVEEDOR ──
+const tiAlqEstado = e => e.estado_actual === 'Devuelto a proveedor' ? 'Devuelto al proveedor' : e.estado_actual === 'Asignado' ? 'En uso' : (e.estado_actual || '');
+const tiThS = (t, al) => '<th style="background:var(--bg);padding:9px 12px;text-align:' + (al || 'left') + ';font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">' + t + '</th>';
+function tiHtmlTabAlq() {
+  const provs = [...new Set(TI.equipos.filter(e => e.propiedad === 'alquilado' && e.proveedor_alquiler).map(e => e.proveedor_alquiler))].sort();
+  return `<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+      <select class="inp" id="ti-alq-prov" style="width:auto;" onchange="filtrarTiAlq()"><option value="">Todos los proveedores</option>${provs.map(p => `<option>${tiEsc(p)}</option>`).join('')}</select>
+      <select class="inp" id="ti-alq-est" style="width:auto;" onchange="filtrarTiAlq()"><option value="">Todos los estados</option><option>En uso</option><option>Disponible</option><option>Devuelto al proveedor</option></select>
+      <div style="position:relative;flex:1;min-width:200px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;">🔍</span><input class="inp" id="srch-ti-alq" placeholder="Buscar etiqueta, equipo, colaborador, serial…" style="padding-left:32px;border-radius:22px;" oninput="filtrarTiAlq()"></div>
+      <button class="btn btn-p btn-sm" onclick="tiProvModal()">🚚 Devolver al proveedor</button>
+    </div>
+    <div id="ti-alq-kpi" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:10px;"></div>
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center;"><div style="font-size:13px;font-weight:800;">Equipos alquilados</div><div id="ti-alq-cnt" style="font-size:11px;color:var(--mu);"></div></div>
+      <div style="overflow-x:auto;max-height:58vh;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>${tiThS('Etiqueta / código')}${tiThS('Equipo')}${tiThS('Proveedor')}${tiThS('Estado')}${tiThS('Colaborador')}${tiThS('Alquiler')}${tiThS('Canon', 'right')}${tiThS('', 'right')}</tr></thead><tbody id="tbody-ti-alq"></tbody></table></div>
+    </div>`;
+}
+function filtrarTiAlq() {
+  const g = id => (document.getElementById(id) || {}).value || '', q = g('srch-ti-alq').toLowerCase().trim(), fp = g('ti-alq-prov'), fe = g('ti-alq-est'), td = 'padding:8px 12px;border-top:1px solid var(--b1);';
+  const todos = TI.equipos.filter(e => e.propiedad === 'alquilado' && e.activo !== false);
+  const rows = todos.filter(e => (!fp || e.proveedor_alquiler === fp) && (!fe || tiAlqEstado(e) === fe) && (!q || [e.codigo_interno, e.tipo, e.marca, e.modelo, e.serial, e.asignado_a, e.proveedor_alquiler, e.notas].join(' ').toLowerCase().includes(q)))
+    .sort((a, b) => (tiAlqEstado(a) === 'Devuelto al proveedor') - (tiAlqEstado(b) === 'Devuelto al proveedor') || String(a.codigo_interno || '').localeCompare(String(b.codigo_interno || '')));
+  const n = f => todos.filter(f).length, k = (v, l, c) => `<div style="background:var(--w);border-radius:10px;box-shadow:var(--sh);padding:10px 12px;"><div style="font-size:20px;font-weight:800;color:${c};">${v}</div><div style="font-size:10px;color:var(--mu);">${l}</div></div>`;
+  document.getElementById('ti-alq-kpi').innerHTML = k(todos.length, 'Alquilados registrados', '#0f172a') + k(n(e => e.estado_actual === 'Asignado'), 'En uso', '#f59e0b') + k(n(e => e.estado_actual === 'Disponible'), 'Disponibles / por devolver', '#16a34a') + k(n(e => e.estado_actual === 'Devuelto a proveedor'), 'Devueltos al proveedor', '#7c3aed');
+  const bc = { 'En uso': '#f59e0b', 'Disponible': '#16a34a', 'Devuelto al proveedor': '#7c3aed' };
+  document.getElementById('tbody-ti-alq').innerHTML = rows.map(e => { const st = tiAlqEstado(e), c = bc[st] || '#64748b', dev = e.estado_actual === 'Devuelto a proveedor';
+    return `<tr><td style="${td}"><b>${tiEsc(e.codigo_interno || '—')}</b></td><td style="${td}">${tiEsc([e.tipo, e.marca, e.modelo].filter(Boolean).join(' '))}${e.serial ? '<div style="font-size:10.5px;color:var(--mu)">SN ' + tiEsc(e.serial) + '</div>' : ''}</td><td style="${td}">${tiEsc(e.proveedor_alquiler || '—')}</td><td style="${td}"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:${c}22;color:${c};">${tiEsc(st)}</span></td><td style="${td}">${tiEsc(e.asignado_a || '—')}</td><td style="${td}font-size:11px;">${e.alquiler_desde ? tiFechaCO(e.alquiler_desde) : '—'} → ${e.alquiler_hasta ? tiFechaCO(e.alquiler_hasta) : 'vigente'}</td><td style="${td}text-align:right;">${tiCOPTabla(e.canon_mensual)}</td><td style="${td}text-align:right;white-space:nowrap;">${dev ? '' : e.estado_actual === 'Asignado' ? '<span style="font-size:10.5px;color:var(--mu)">Recíbelo del colaborador primero</span>' : `<button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiProvModal('${e.id}')">🚚 Devolver</button>`}</td></tr>`; }).join('') || `<tr><td colspan="8" style="padding:18px;text-align:center;color:var(--mu);">Sin equipos alquilados</td></tr>`;
+  const c = document.getElementById('ti-alq-cnt'); if(c) c.textContent = rows.length + ' de ' + todos.length;
+}
+function tiHtmlTabProv() {
+  return `<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-p btn-sm" onclick="tiProvModal()">➕ Nueva devolución al proveedor</button>
+      <div style="position:relative;flex:1;min-width:200px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;">🔍</span><input class="inp" id="srch-ti-prov" placeholder="Buscar proveedor, ticket, etiqueta, equipo…" style="padding-left:32px;border-radius:22px;" oninput="filtrarTiProv()"></div>
+    </div>
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center;"><div style="font-size:13px;font-weight:800;">Equipos devueltos al proveedor</div><div id="ti-prov-cnt" style="font-size:11px;color:var(--mu);"></div></div>
+      <div style="overflow-x:auto;max-height:58vh;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>${tiThS('Fecha')}${tiThS('Proveedor / ticket')}${tiThS('Equipos')}${tiThS('Documento')}${tiThS('Notas')}${tiThS('', 'right')}</tr></thead><tbody id="tbody-ti-prov"></tbody></table></div>
+    </div>`;
+}
+function filtrarTiProv() {
+  const q = ((document.getElementById('srch-ti-prov') || {}).value || '').toLowerCase().trim(), td = 'padding:8px 12px;border-top:1px solid var(--b1);vertical-align:top;';
+  const rows = (TI.provs || []).filter(d => !q || (d.proveedor + ' ' + (d.ticket || '') + ' ' + (d.notas || '') + ' ' + (d.ti_devolucion_prov_items || []).map(i => (i.etiqueta || '') + ' ' + (i.descripcion || '')).join(' ')).toLowerCase().includes(q));
+  document.getElementById('tbody-ti-prov').innerHTML = rows.map(d => { const its = d.ti_devolucion_prov_items || [];
+    return `<tr><td style="${td}white-space:nowrap;"><b>${tiFechaCO(d.fecha)}</b></td><td style="${td}">${tiEsc(d.proveedor)}${d.ticket ? '<div style="font-size:10.5px;color:var(--mu)">Ticket ' + tiEsc(d.ticket) + '</div>' : ''}</td><td style="${td}"><b>${its.length}</b> equipo(s)<div style="font-size:10.5px;color:var(--mu)">${its.map(i => tiEsc((i.etiqueta ? i.etiqueta + ' · ' : '') + (i.descripcion || ''))).join('<br>')}</div></td><td style="${td}">${d.documento_url ? '<a href="' + tiEsc(d.documento_url) + '" target="_blank" rel="noopener">📎 Ver documento</a>' : '<span style="color:#d97706;font-weight:700;font-size:11px;">Sin documento</span>'}<div><button class="btn btn-g btn-sm" style="padding:3px 7px;margin-top:4px;" onclick="tiProvDoc('${d.id}')">${d.documento_url ? '🔁 Cambiar' : '📎 Adjuntar'}</button></div></td><td style="${td}font-size:11px;max-width:280px;">${tiEsc(d.notas || '')}</td><td style="${td}text-align:right;"><button class="btn btn-rd btn-sm" style="padding:4px 8px;" onclick="tiProvEliminar('${d.id}')">🗑</button></td></tr>`; }).join('') || `<tr><td colspan="6" style="padding:18px;text-align:center;color:var(--mu);">Aún no hay devoluciones al proveedor.</td></tr>`;
+  const c = document.getElementById('ti-prov-cnt'); if(c) c.textContent = rows.length + ' devoluciones';
+}
+function tiProvModal(preId) {
+  const cand = TI.equipos.filter(e => e.activo !== false && e.estado_actual !== 'Asignado' && e.estado_actual !== 'Devuelto a proveedor').sort((a, b) => (b.propiedad === 'alquilado') - (a.propiedad === 'alquilado') || String(a.codigo_interno || '').localeCompare(String(b.codigo_interno || '')));
+  const pre = preId ? TI.equipos.find(e => e.id === preId) : null, hoy = new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10);
+  const provs = [...new Set(TI.equipos.map(e => e.proveedor_alquiler).filter(Boolean).concat(['CompuElite Servicios S.A.S.']))];
+  window._tiProvDoc = null;
+  let mo = document.getElementById('mo-ti-prov'); if(mo) mo.remove();
+  mo = document.createElement('div'); mo.className = 'ov on'; mo.id = 'mo-ti-prov'; mo.onclick = ev => { if(ev.target === mo) mo.remove(); };
+  mo.innerHTML = `<div class="mo" style="max-width:900px;width:96vw"><div class="mh"><div class="mt">🚚 Devolución de equipos al proveedor</div><button class="mx" onclick="document.getElementById('mo-ti-prov').remove()">✕</button></div><div class="mb">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;">
+      <div class="fg"><label class="fl">Fecha de entrega</label><input class="inp" type="date" id="ti-pv-fecha" value="${hoy}"></div>
+      <div class="fg"><label class="fl">Proveedor</label><input class="inp" id="ti-pv-prov" list="ti-pv-provs" value="${tiEsc(pre && pre.proveedor_alquiler || '')}"><datalist id="ti-pv-provs">${provs.map(p => `<option value="${tiEsc(p)}">`).join('')}</datalist></div>
+      <div class="fg"><label class="fl"># Ticket / orden de recogida</label><input class="inp" id="ti-pv-ticket"></div>
+    </div>
+    <div class="fg"><label class="fl">Carta, orden de recogida o foto</label><label class="btn btn-bl btn-sm" style="cursor:pointer;display:inline-block;">📷 Tomar o elegir foto / PDF<input type="file" id="ti-pv-doc" accept="image/*,application/pdf" style="display:none" onchange="tiProvDocElegido(this)"></label> <span id="ti-pv-doc-txt" style="font-size:11.5px;color:var(--mu);margin-left:8px;"></span></div>
+    <div style="font-size:12px;color:var(--mu);margin:6px 0;">Marca los equipos que se entregan. Los que están asignados a un colaborador no salen: primero recíbelos con su acta de devolución.</div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px;"><input class="inp" id="ti-pv-q" placeholder="🔍 Buscar etiqueta, equipo…" style="max-width:260px;padding:5px 10px;" oninput="tiProvFiltrar()"><span id="ti-pv-n" style="font-size:12px;font-weight:700;"></span></div>
+    <div class="tw" style="max-height:42vh;overflow-y:auto;"><table style="font-size:12px;width:100%"><thead><tr><th></th><th>Etiqueta / código</th><th>Equipo</th><th>Propiedad</th><th>Observación</th></tr></thead><tbody id="ti-pv-body" onchange="tiProvContar()">${cand.map(e => `<tr data-e="${e.id}" data-p="${tiEsc(e.proveedor_alquiler || '')}" data-t="${tiEsc([e.codigo_interno, e.tipo, e.marca, e.modelo, e.serial, e.proveedor_alquiler].join(' ').toLowerCase())}"><td><input type="checkbox" class="pv-ck"${pre && pre.id === e.id ? ' checked' : ''}></td><td><b>${tiEsc(e.codigo_interno || '—')}</b></td><td>${tiEsc([e.tipo, e.marca, e.modelo].filter(Boolean).join(' '))}${e.serial ? ' · SN ' + tiEsc(e.serial) : ''}</td><td>${e.propiedad === 'alquilado' ? 'Alquilado · ' + tiEsc(e.proveedor_alquiler || '') : 'Propio'}</td><td><input class="inp pv-ob" style="padding:3px 6px;font-size:12px;min-width:140px"></td></tr>`).join('')}</tbody></table></div>
+    <div class="fg" style="margin-top:8px;"><label class="fl">Notas</label><textarea class="inp" id="ti-pv-notas" rows="2" placeholder="Ej. Se entregan con su cargador; pendientes por entregar…"></textarea></div></div>
+    <div class="mf"><button class="btn btn-g btn-sm" onclick="document.getElementById('mo-ti-prov').remove()">Cancelar</button><button class="btn btn-p btn-sm" id="btn-ti-pv-guardar" onclick="tiProvGuardar()">💾 Guardar devolución</button></div></div>`;
+  document.body.appendChild(mo); tiProvContar();
+}
+function tiProvContar() {
+  const sel = [...document.querySelectorAll('#ti-pv-body tr')].filter(r => r.querySelector('.pv-ck').checked), el = document.getElementById('ti-pv-n'); if(el) el.textContent = sel.length + ' equipos marcados';
+  const pv = document.getElementById('ti-pv-prov'); if(pv && !pv.value.trim()) { const r = sel.find(x => x.dataset.p); if(r) pv.value = r.dataset.p; }
+}
+function tiProvFiltrar() { const q = ((document.getElementById('ti-pv-q') || {}).value || '').toLowerCase().trim(); document.querySelectorAll('#ti-pv-body tr').forEach(r => { r.style.display = !q || r.dataset.t.includes(q) ? '' : 'none'; }); }
+function tiProvDocElegido(inp) {
+  const f = inp.files && inp.files[0]; if(!f) return; const t = document.getElementById('ti-pv-doc-txt');
+  if(f.size > 30 * 1024 * 1024) { toast('El archivo pesa más de 30 MB', 'wa'); inp.value = ''; return; }
+  t.textContent = 'Preparando…';
+  tiComprimirImg(f).then(g => { if(g.size > 2 * 1024 * 1024) { toast('El archivo pesa más de 2 MB (límite del almacenamiento).', 'wa'); window._tiProvDoc = null; t.textContent = ''; return; } window._tiProvDoc = g; t.textContent = '✅ ' + Math.round(g.size / 1024) + ' KB (se sube al guardar)'; });
+}
+async function tiProvSubir(f) {
+  const ext = (f.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg', path = 'ti-proveedor/dev_' + Date.now() + '.' + ext, fd = new FormData(); fd.append('', f, path.split('/').pop());
+  const r = await fetch(SB_URL + '/storage/v1/object/soportes/' + path, { method: 'POST', headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY }, body: fd });
+  if(!r.ok) throw new Error('subida ' + r.status);
+  return SB_URL + '/storage/v1/object/public/soportes/' + path;
+}
+async function tiProvGuardar() {
+  const filas = [...document.querySelectorAll('#ti-pv-body tr')].filter(r => r.querySelector('.pv-ck').checked).map(r => ({ id: r.dataset.e, ob: r.querySelector('.pv-ob').value.trim() }));
+  const prov = document.getElementById('ti-pv-prov').value.trim(), fecha = document.getElementById('ti-pv-fecha').value;
+  if(!filas.length) { toast('Marca al menos un equipo', 'wa'); return; }
+  if(!prov) { toast('Escribe el proveedor', 'wa'); return; }
+  const btn = document.getElementById('btn-ti-pv-guardar'); if(btn) { btn.disabled = true; btn.textContent = '💾 Guardando…'; }
+  try {
+    const doc = window._tiProvDoc ? await tiProvSubir(window._tiProvDoc) : null;
+    const r = await sb.post('ti_devoluciones_proveedor', { fecha, proveedor: prov, ticket: document.getElementById('ti-pv-ticket').value.trim() || null, documento_url: doc, notas: document.getElementById('ti-pv-notas').value.trim() || null, creado_por: (CU && (CU.nombre || CU.email)) || '' });
+    for(const x of filas) {
+      const e = TI.equipos.find(q => q.id === x.id) || {};
+      await sb.post('ti_devolucion_prov_items', { devolucion_id: r[0].id, equipo_id: x.id, etiqueta: e.codigo_interno || null, descripcion: [e.tipo, e.marca, e.modelo].filter(Boolean).join(' '), observacion: x.ob || null });
+      const c = { estado_actual: 'Devuelto a proveedor', asignado_a: null, asignado_cedula: null, entrega_actual_id: null, actualizado: new Date().toISOString() };
+      if(e.propiedad === 'alquilado' && !e.alquiler_hasta) c.alquiler_hasta = fecha;
+      await sb.patch('ti_equipos', 'id=eq.' + x.id, c);
+    }
+    toast('✅ Devolución al proveedor guardada (' + filas.length + ' equipos)', 'ok');
+    const mo = document.getElementById('mo-ti-prov'); if(mo) mo.remove();
+    await cargarInvTiSupa(); TI.tab = 'provdev'; renderInvTiVista();
+  } catch(err) { toast('❌ No se pudo guardar: ' + err.message, 'er'); if(btn) { btn.disabled = false; btn.textContent = '💾 Guardar devolución'; } }
+}
+function tiProvDoc(id) {
+  let inp = document.getElementById('ti-provdoc-inp'); if(inp) inp.remove();
+  inp = document.createElement('input'); inp.type = 'file'; inp.id = 'ti-provdoc-inp'; inp.accept = 'image/*,application/pdf'; inp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;'; document.body.appendChild(inp);
+  inp.addEventListener('change', async () => {
+    let f = inp.files && inp.files[0]; if(!f) return;
+    try {
+      toast('Subiendo documento…', 'inf'); f = await tiComprimirImg(f);
+      if(f.size > 2 * 1024 * 1024) { toast('El archivo pesa más de 2 MB (límite del almacenamiento).', 'wa'); return; }
+      const url = await tiProvSubir(f); await sb.patch('ti_devoluciones_proveedor', 'id=eq.' + id, { documento_url: url, actualizado: new Date().toISOString() });
+      const d = (TI.provs || []).find(x => x.id === id); if(d) d.documento_url = url; toast('✅ Documento guardado', 'ok'); filtrarTiProv();
+    } catch(err) { toast('No se pudo subir: ' + err.message, 'er'); } finally { inp.value = ''; }
+  });
+  inp.click();
+}
+async function tiProvEliminar(id) {
+  const d = (TI.provs || []).find(x => x.id === id); if(!d) return; const its = d.ti_devolucion_prov_items || [];
+  if(!confirm('¿Eliminar la devolución del ' + tiFechaCO(d.fecha) + ' a ' + d.proveedor + '? Sus ' + its.length + ' equipos vuelven a quedar «Disponible». No se puede deshacer.')) return;
+  try {
+    for(const i of its) if(i.equipo_id) await sb.patch('ti_equipos', 'id=eq.' + i.equipo_id, { estado_actual: 'Disponible', actualizado: new Date().toISOString() });
+    await sb.delete('ti_devoluciones_proveedor', 'id=eq.' + id); await cargarInvTiSupa(); renderInvTiVista(); toast('Eliminada', 'ok');
+  } catch(e) { toast('No se pudo eliminar: ' + e.message, 'er'); }
 }
 
 // ── ACTAS DE DEVOLUCIÓN: el colaborador devuelve uno o varios equipos de una acta de entrega vigente; se deja el estado en que se recibe cada equipo y su destino ──
