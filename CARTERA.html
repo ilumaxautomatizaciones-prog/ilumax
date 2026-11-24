@@ -1413,8 +1413,18 @@ const usrNom = u => String(u || '').trim().toUpperCase() === 'KD' ? 'DT' : (u ||
 // Retenciones generadas (AR/NA/RC): quedan guardadas para saber qué ya se hizo y si ya está en Siesa
 function retListaPintar(L) {
   const b = $('retList'); if (!b) return; const en = c => /\(en Siesa\)/.test(c.plano || '');
-  const rows = L.map(c => '<tr><td style="text-align:left">' + esc(new Date(c.creado).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })) + '</td><td style="text-align:left">' + esc(usrNom(c.usuario)) + '</td><td style="text-align:left">' + esc(String(c.archivo).replace('RET · ', '')) + '</td><td style="text-align:left">' + esc(c.cliente || '') + '</td><td>' + c.n + '</td><td>' + fm(c.rte) + '</td><td>' + fm(c.ica) + '</td><td>' + fm(c.total_pagado) + '</td><td style="text-align:left">' + esc(String(c.plano || '').replace(' (en Siesa)', '').replace(' (generado)', '')) + '</td><td>' + (en(c) ? '<b style="color:#15803d">✅ En Siesa</b>' : '<span class="n">⏳ generado, sin subir</span>') + '</td><td><div class="ac"><button class="btn" onclick="retAbrir(\'' + c.id + '\')">Abrir</button> <button class="btn" onclick="retMarcar(\'' + c.id + '\')">' + (en(c) ? '✏️ Nº Siesa' : '✅ Ya lo subí') + '</button> <button class="btn" onclick="conBorrar(\'' + c.id + '\')">🗑</button></div></td></tr>').join('');
-  b.innerHTML = '<div class="card" style="margin-top:12px"><h2>🧾 Retenciones realizadas (' + L.length + ')</h2><div class="tw" style="overflow-x:hidden"><table class="fit"><thead><tr><th style="text-align:left">Generado</th><th style="text-align:left">Por</th><th style="text-align:left">Archivo</th><th style="text-align:left">Cliente</th><th>Facturas</th><th>RTE IVA</th><th>ICA</th><th>Total ret.</th><th style="text-align:left">Documento</th><th>Estado</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="n">Aún no hay retenciones generadas.</td></tr>') + '</tbody></table></div></div>';
+  b.innerHTML = '<div class="card" style="margin-top:12px"><h2>🧾 Retenciones realizadas (' + L.length + ')</h2>' + xgBar('retl') + '<div class="tw" id="xg_retl"></div></div>';
+  const doc = c => String(c.plano || '').replace(' (en Siesa)', '').replace(' (generado)', '');
+  xgInit('retl', [
+    { k: 'creado', t: 'Generado', date: 1, v: c => String(c.creado || '').slice(0, 10), h: c => esc(new Date(c.creado).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })) },
+    { k: 'por', t: 'Por', v: c => usrNom(c.usuario) }, { k: 'archivo', t: 'Archivo', wrap: 1, v: c => String(c.archivo || '').replace('RET · ', '') }, { k: 'cliente', t: 'Cliente', wrap: 1, v: c => c.cliente || '' },
+    { k: 'n', t: 'Facturas', num: 1, sum: 1, v: c => c.n }, { k: 'rte', t: 'RTE IVA', num: 1, sum: 1, v: c => c.rte, h: c => fm(c.rte) },
+    { k: 'ica', t: 'ICA', num: 1, sum: 1, v: c => c.ica, h: c => fm(c.ica) }, { k: 'tot', t: 'Total ret.', num: 1, sum: 1, v: c => c.total_pagado, h: c => fm(c.total_pagado) },
+    { k: 'doc', t: 'Documento', v: doc }, { k: 'est', t: 'Estado', v: c => en(c) ? 'En Siesa' : 'Generado, sin subir', h: c => en(c) ? '<b style="color:#15803d">✅ En Siesa</b>' : '<span class="n">⏳ generado, sin subir</span>' },
+    { k: 'ac', t: 'Acciones', v: () => '', h: c => '<div class="ac"><button class="btn" onclick="retAbrir(\'' + c.id + '\')">Abrir</button> <button class="btn" onclick="retMarcar(\'' + c.id + '\')">' + (en(c) ? '✏️ Nº Siesa' : '✅ Ya lo subí') + '</button> <button class="btn" onclick="conBorrar(\'' + c.id + '\')">🗑</button></div>' }
+  ], { rows: L, limit: 800, nombre: 'Retenciones_realizadas' });
+  if (!XG.retl.sort) XG.retl.sort = { k: 'creado', dir: -1 };
+  xgPaint('retl');
 }
 async function retAbrir(id) {
   const j = await conApi({ accion: 'ver', id }); if (!j.ok) { alert(j.error || 'No se pudo abrir'); return; }
@@ -1443,9 +1453,22 @@ async function conLista() {
   const j = await conApi({ accion: 'listar' }); if (!j.ok) { b.innerHTML = ''; return; }
   const _ret = j.lista.filter(c => String(c.archivo || '').startsWith('RET · ')); j.lista = j.lista.filter(c => !String(c.archivo || '').startsWith('RET · ')); retListaPintar(_ret);
   CON_LISTA = j.lista; CON_NUMS = conNums(j.lista);
-  const rcDe = c => { const m = conAprob(c); return m ? '<b style="color:#15803d">✅ Aprobada · ' + esc(m.doc) + '</b>' : '<span class="n">⏳ sin aprobar</span>'; };
-  const rows = j.lista.map(c => '<tr><td style="text-align:left">' + esc(new Date(c.creado).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })) + '</td><td style="text-align:left">' + esc(usrNom(c.usuario)) + '</td><td style="text-align:left">' + esc(c.archivo || '') + '</td><td style="text-align:left">' + esc(c.cliente || '') + '</td><td>' + c.n + '</td><td>' + fm(c.total_pagado) + '</td><td>' + fm(c.ica) + '</td><td>' + fm(c.rte) + '</td><td>' + (function () { const q = CON_NUMS[c.id]; if (!q) return esc(c.plano || '–'); const nv = q.tipo + '-' + q.num; return nv === c.plano ? esc(nv) : '<b>' + esc(nv) + '</b><div class="n" style="font-size:10px">antes ' + esc(c.plano) + ' (ya usado en Siesa)</div>'; })() + '</td><td>' + rcDe(c) + '</td><td><div class="ac"><button class="btn" onclick="conAbrir(\'' + c.id + '\')">Abrir</button> <button class="btn" title="Descarga el plano de Siesa con el siguiente consecutivo libre" onclick="conPlanoLista(\'' + c.id + '\')">⬇ Plano</button> <button class="btn" onclick="conBorrar(\'' + c.id + '\')">🗑</button></div></td></tr>').join('');
-  b.innerHTML = '<div class="card"><h2>📁 Conciliaciones realizadas (' + j.lista.length + ')</h2><div class="tw" style="overflow-x:hidden"><table class="fit"><thead><tr><th style="text-align:left">Guardada</th><th style="text-align:left">Por</th><th style="text-align:left">Archivo</th><th style="text-align:left">Cliente</th><th>Líneas</th><th>Pagado</th><th>ICA</th><th>RTE IVA</th><th>Plano</th><th>RC en Siesa</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="n">Aún no hay conciliaciones guardadas.</td></tr>') + '</tbody></table></div></div>';
+  const fGu = c => esc(new Date(c.creado).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' }));
+  const planoTxt = c => { const q = CON_NUMS[c.id]; return q ? q.tipo + '-' + q.num : (c.plano || ''); };
+  const planoH = c => { const q = CON_NUMS[c.id]; if (!q) return esc(c.plano || '–'); const nv = q.tipo + '-' + q.num; return nv === c.plano ? esc(nv) : '<b>' + esc(nv) + '</b><div class="n" style="font-size:10px">antes ' + esc(c.plano) + ' (ya usado en Siesa)</div>'; };
+  const rcT = c => { const m = conAprob(c); return m ? 'Aprobada · ' + m.doc : 'sin aprobar'; };
+  const rcH = c => { const m = conAprob(c); return m ? '<b style="color:#15803d">✅ Aprobada · ' + esc(m.doc) + '</b>' : '<span class="n">⏳ sin aprobar</span>'; };
+  b.innerHTML = '<div class="card"><h2>📁 Conciliaciones realizadas (' + j.lista.length + ')</h2>' + xgBar('conl') + '<div class="tw" id="xg_conl"></div></div>';
+  xgInit('conl', [
+    { k: 'creado', t: 'Guardada', date: 1, v: c => String(c.creado || '').slice(0, 10), h: fGu },
+    { k: 'por', t: 'Por', v: c => usrNom(c.usuario) }, { k: 'archivo', t: 'Archivo', wrap: 1, v: c => c.archivo || '' }, { k: 'cliente', t: 'Cliente', wrap: 1, v: c => c.cliente || '' },
+    { k: 'n', t: 'Líneas', num: 1, sum: 1, v: c => c.n }, { k: 'pag', t: 'Pagado', num: 1, sum: 1, v: c => c.total_pagado, h: c => fm(c.total_pagado) },
+    { k: 'ica', t: 'ICA', num: 1, sum: 1, v: c => c.ica, h: c => fm(c.ica) }, { k: 'rte', t: 'RTE IVA', num: 1, sum: 1, v: c => c.rte, h: c => fm(c.rte) },
+    { k: 'plano', t: 'Plano', al: 1, v: planoTxt, h: planoH }, { k: 'rc', t: 'RC en Siesa', v: rcT, h: rcH },
+    { k: 'ac', t: 'Acciones', v: () => '', h: c => '<div class="ac"><button class="btn" onclick="conAbrir(\'' + c.id + '\')">Abrir</button> <button class="btn" title="Descarga el plano de Siesa con el siguiente consecutivo libre" onclick="conPlanoLista(\'' + c.id + '\')">⬇ Plano</button> <button class="btn" onclick="conBorrar(\'' + c.id + '\')">🗑</button></div>' }
+  ], { rows: j.lista, limit: 800, nombre: 'Conciliaciones_realizadas' });
+  if (!XG.conl.sort) XG.conl.sort = { k: 'creado', dir: -1 };
+  xgPaint('conl');
 }
 async function conAbrir(id, quieto) {
   const j = await conApi({ accion: 'ver', id }); if (!j.ok) { alert(j.error || 'No se pudo abrir'); return; }
