@@ -28192,6 +28192,24 @@ async function tiMarcarDevuelto(id) {
 }
 
 
+// Comprime la foto del celular (el bucket "soportes" rechaza archivos de más de 2 MB): reduce a 1800 px y JPEG; si no puede, devuelve el original
+async function tiComprimirImg(f) {
+  if(!f || !/^image\//.test(f.type || '') || f.size <= 1500*1024) return f;
+  try {
+    const url = URL.createObjectURL(f);
+    const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = url; });
+    let lado = 1800, blob = null;
+    for(let q = 0.82; q >= 0.5 && (!blob || blob.size > 1800*1024); q -= 0.16) {
+      const k = Math.min(1, lado / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth*k); c.height = Math.round(img.naturalHeight*k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      blob = await new Promise(r => c.toBlob(r, 'image/jpeg', q)); lado = Math.round(lado*0.85);
+    }
+    URL.revokeObjectURL(url);
+    return blob && blob.size < f.size ? new File([blob], 'acta.jpg', { type:'image/jpeg' }) : f;
+  } catch(e) { return f; }
+}
+
 // ── Acta firmada: subir foto o PDF del acta ya firmada (queda como respaldo y marca "Firmada") ──
 function tiSubirFirmada(entregaId) {
   const e = TI.entregas.find(x => x.id === entregaId); if(!e) return;
@@ -28201,10 +28219,12 @@ function tiSubirFirmada(entregaId) {
   inp = document.createElement('input'); inp.type = 'file'; inp.id = 'ti-firmada-inp'; inp.accept = 'image/*,application/pdf'; inp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
   document.body.appendChild(inp); window._tiFirmadaInp = inp;
   inp.addEventListener('change', async () => {
-    const f = inp.files && inp.files[0]; if(!f) return;
-    if(f.size > 15*1024*1024) { toast('El archivo pesa más de 15 MB', 'wa'); return; }
+    let f = inp.files && inp.files[0]; if(!f) return;
+    if(f.size > 30*1024*1024) { toast('El archivo pesa más de 30 MB', 'wa'); return; }
     try {
       toast('Subiendo acta firmada…', 'inf');
+      f = await tiComprimirImg(f);
+      if(f.size > 2*1024*1024) { toast('El archivo pesa más de 2 MB (límite del almacenamiento). Sube una foto o un PDF más liviano.', 'wa'); return; }
       const ext = (f.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
       const path = 'ti-actas/' + String(e.folio || e.id).replace(/[^A-Za-z0-9_-]/g, '') + '_firmada_' + Date.now() + '.' + ext;
       const fd = new FormData(); fd.append('', f, path.split('/').pop());
@@ -28310,9 +28330,11 @@ async function tiSubirFirmadaDev(id) {
   const d = (TI.devs || []).find(x => x.id === id); if (!d) return; let inp = document.getElementById('ti-firmada-inp'); if (inp) inp.remove();
   inp = document.createElement('input'); inp.type = 'file'; inp.id = 'ti-firmada-inp'; inp.accept = 'image/*,application/pdf'; inp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;'; document.body.appendChild(inp); window._tiFirmadaInp = inp;
   inp.addEventListener('change', async () => {
-    const f = inp.files && inp.files[0]; if (!f) return; if (f.size > 15 * 1024 * 1024) { toast('El archivo pesa más de 15 MB', 'wa'); return; }
+    let f = inp.files && inp.files[0]; if (!f) return; if (f.size > 30 * 1024 * 1024) { toast('El archivo pesa más de 30 MB', 'wa'); return; }
     try {
-      toast('Subiendo acta firmada…', 'inf'); const ext = (f.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg', path = 'ti-actas/' + String(d.folio || d.id).replace(/[^A-Za-z0-9_-]/g, '') + '_firmada_' + Date.now() + '.' + ext, fd = new FormData(); fd.append('', f, path.split('/').pop());
+      toast('Subiendo acta firmada…', 'inf'); f = await tiComprimirImg(f);
+      if (f.size > 2 * 1024 * 1024) { toast('El archivo pesa más de 2 MB (límite del almacenamiento). Sube una foto o un PDF más liviano.', 'wa'); return; }
+      const ext = (f.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg', path = 'ti-actas/' + String(d.folio || d.id).replace(/[^A-Za-z0-9_-]/g, '') + '_firmada_' + Date.now() + '.' + ext, fd = new FormData(); fd.append('', f, path.split('/').pop());
       const r = await fetch(SB_URL + '/storage/v1/object/soportes/' + path, { method: 'POST', headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY }, body: fd }); if (!r.ok) throw new Error('subida ' + r.status);
       const c = { acta_firmada_url: SB_URL + '/storage/v1/object/public/soportes/' + path, acta_firmada_en: new Date().toISOString(), acta_firmada_por: (CU && CU.nombre) || 'TI', actualizado: new Date().toISOString() };
       await sb.patch('ti_devoluciones', 'id=eq.' + id, c); Object.assign(d, c); toast('✅ Acta firmada guardada en ' + (d.folio || ''), 'ok'); filtrarTiDevoluciones();
