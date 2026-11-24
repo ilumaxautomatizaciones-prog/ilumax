@@ -20868,6 +20868,29 @@ function ivsAveCard() {
 }
 /* al acercarse a una línea o a un punto (s) el cuadro muestra solo esa serie; en el resto de la columna del mes muestra todo */
 function ivsAHi(i, s) { s = s || ''; if (IVS_AG.hi === i && IVS_AG.s === s) return; IVS_AG.hi = i; IVS_AG.s = s; const el = document.getElementById('ivs-agraf'); if (el) el.innerHTML = ivsAveSvg(); }
+
+/* información detallada del cuadro: variación contra el mes anterior, peso sobre el inventario, referencias que más pesan y antigüedad */
+function ivsAveInfo(i, bods) {
+  const f = ivsCuaFilas(i, bods); if (!f.length) return '';
+  const val = r => (+r.existencia || 0) * (+r.costo_prom || 0), $ = v => '$ ' + Math.round(v).toLocaleString('es-CO'), E = ivsE, tot = f.reduce((a, r) => a + val(r), 0), un = f.reduce((a, r) => a + (+r.existencia || 0), 0);
+  const top = f.slice().sort((a, b) => val(b) - val(a)).slice(0, 3), hoy = Date.now();
+  const ant = f.filter(r => r.fecha_ult_entrada).map(r => ({ r, d: Math.floor((hoy - new Date(r.fecha_ult_entrada + 'T12:00:00')) / 864e5) })), v90 = ant.filter(x => x.d > 90).reduce((a, x) => a + val(x.r), 0);
+  let o = `<div style="border-top:1px solid rgba(255,255,255,.2);margin-top:5px;padding-top:5px;font-size:11px;"><span style="opacity:.8">${new Set(f.map(r => r.referencia)).size} referencias · ${Math.round(un).toLocaleString('es-CO')} unidades</span>`;
+  o += '<br><span style="opacity:.8">Las que más pesan:</span>' + top.map(r => `<br>• ${E(String(r.referencia))} ${E(String(r.descripcion || '').slice(0, 26))} <b>${$(val(r))}</b> (${tot ? (val(r) / tot * 100).toFixed(0) : 0}%)`).join('');
+  if (ant.length) o += `<br><span style="opacity:.8">Última entrada hace +90 días:</span> <b>${$(v90)}</b> (${tot ? (v90 / tot * 100).toFixed(0) : 0}%)`;
+  return o + '</div>';
+}
+function ivsAveTip(D, H, i, m) {
+  const sv = IVS_AG.s, p = i - 1, pct = v => v == null ? '—' : v.toFixed(2) + '%';
+  const dl = (arr, malo) => { if (p < 0 || arr[p] == null || arr[i] == null) return ''; const d = arr[i] - arr[p], c = arr[p] ? d / arr[p] * 100 : null; if (!d) return `<br><span style="opacity:.7;font-size:11px">igual que ${H.m[p]}</span>`; const col = malo ? (d > 0 ? '#fca5a5' : '#86efac') : '#e2e8f0'; return `<br><span style="font-size:11px;opacity:.9">vs ${H.m[p]}: <b style="color:${col}">${d > 0 ? '▲' : '▼'} ${m(Math.abs(d))}${c == null ? '' : ' (' + Math.abs(c).toFixed(1) + '%)'}</b></span>`; };
+  const pesoInv = (v, t) => v != null && t ? `<br><span style="font-size:11px;opacity:.9">= <b>${(v / t * 100).toFixed(2)}%</b> del inventario disponible</span>` : '';
+  const expo = D.ave[i] != null || D.cua[i] != null ? (D.ave[i] || 0) + (D.cua[i] || 0) : null;
+  if (sv === 'ave') return `<b>${H.m[i]} · Averías</b><br>${m(D.ave[i])}${dl(D.ave, 1)}${pesoInv(D.ave[i], D.tot[i])}${ivsAveInfo(i, IVS_AVE_BOD)}`;
+  if (sv === 'cua') return `<b>${H.m[i]} · Cuarentena</b><br>${m(D.cua[i])}${dl(D.cua, 1)}${pesoInv(D.cua[i], D.tot[i])}${ivsAveInfo(i, ['CU'])}`;
+  if (sv === 'tot') { const v = D.tot.filter(x => x != null), mx = Math.max(...v), mn = Math.min(...v); return `<b>${H.m[i]} · Inventario disponible</b><br>${m(D.tot[i])}${dl(D.tot, 0)}<br><span style="font-size:11px;opacity:.9">${D.tot[i] === mx ? 'es el <b>máximo</b> del periodo' : D.tot[i] === mn ? 'es el <b>mínimo</b> del periodo' : 'rango del periodo: ' + m(mn) + ' – ' + m(mx)}</span>`; }
+  if (sv === 'pct') return `<b>${H.m[i]} · Averías / inventario</b><br>${pct(D.pct[i])}<br><span style="font-size:11px;opacity:.9">${m(D.ave[i])} de averías sobre ${m(D.tot[i])} de inventario</span>${p >= 0 && D.pct[p] != null && D.pct[i] != null ? `<br><span style="font-size:11px;opacity:.9">vs ${H.m[p]}: <b>${D.pct[i] > D.pct[p] ? '▲' : '▼'} ${Math.abs(D.pct[i] - D.pct[p]).toFixed(2)} pts</b></span>` : ''}`;
+  return `<b>${H.m[i]}</b><br>Inventario disponible: <b>${m(D.tot[i])}</b>${dl(D.tot, 0)}<br>Averías: <b>${m(D.ave[i])}</b>${dl(D.ave, 1)}<br>Cuarentena: <b>${m(D.cua[i])}</b>${dl(D.cua, 1)}${expo != null ? `<div style="border-top:1px solid rgba(255,255,255,.2);margin-top:5px;padding-top:5px;">Averías + cuarentena: <b>${m(expo)}</b>${D.tot[i] ? ' = <b>' + (expo / D.tot[i] * 100).toFixed(2) + '%</b> del inventario' : ''}<br><span style="font-size:10.5px;opacity:.7">Acércate a una línea para ver su detalle</span></div>` : ''}`;
+}
 function ivsALin(ev, s) { const g = IVS_AG.geo, sv = ev.currentTarget.ownerSVGElement; if (!g || !sv) return; const r = sv.getBoundingClientRect(), x = (ev.clientX - r.left) / r.width * 1100, k = Math.max(0, Math.min(g.n - 1, Math.round((x - g.L) / g.pw * g.n - .5))); ivsAHi(g.idx[k], s); }
 function ivsAveSvg() {
   const D = ivsAveDatos(), H = IVS_HIST; if (!D.ix.length) return '<div class="empty">Cargando averías… (si sigue vacío, aún no hay datos de la bodega ' + IVS_AVE_BOD.join('/') + ')</div>';
@@ -20885,7 +20908,7 @@ function ivsAveSvg() {
     pts.forEach(q => { o += `<circle cx="${X(q[0])}" cy="${q[2]}" r="13" fill="transparent" pointer-events="all" onmouseenter="ivsAHi(${q[1]},'${g[0]}')" onmousemove="ivsAHi(${q[1]},'${g[0]}')" ontouchstart="ivsAHi(${q[1]},'${g[0]}')" onclick="ivsCuaDet(${q[1]}, IVS_CUA_BOD)" style="cursor:pointer;"/>`; }); });
   o += '</svg><div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;margin-top:4px;"><span><b style="color:#2563eb">━</b> Inventario disponible (total)</span><span><b style="color:#dc2626">━</b> Averías $</span><span><b style="color:#7c3aed">━</b> Cuarentena $</span><span><b style="color:#f59e0b">┅</b> Averías / inventario % (eje derecho)</span></div>';
   if (IVS_AG.hi >= 0) { const i = IVS_AG.hi, m = v => v == null ? 'sin dato' : '$ ' + Math.round(v * 1e6).toLocaleString('es-CO'), k = idx.indexOf(i), left = X(k) / W * 100;
-    o += `<div style="position:absolute;top:6px;${left > 55 ? 'right:' + (100 - left + 2) : 'left:' + (left + 2)}%;background:#0f172a;color:#fff;border-radius:8px;padding:8px 11px;font-size:12px;line-height:1.55;pointer-events:none;"><b>${H.m[i]}</b>${({ ave: '<br>Averías: <b>' + m(D.ave[i]) + '</b>', cua: '<br>Cuarentena: <b>' + m(D.cua[i]) + '</b>', tot: '<br>Inventario disponible: <b>' + m(D.tot[i]) + '</b>', pct: '<br>Averías / inventario: <b>' + (D.pct[i] == null ? '—' : D.pct[i].toFixed(2) + '%') + '</b>' })[IVS_AG.s] || '<br>Averías: <b>' + m(D.ave[i]) + '</b><br>Cuarentena: <b>' + m(D.cua[i]) + '</b><br>Inventario disponible: <b>' + m(D.tot[i]) + '</b><br>Averías / inventario: <b>' + (D.pct[i] == null ? '—' : D.pct[i].toFixed(2) + '%') + '</b>'}</div>`; }
+    o += `<div style="position:absolute;top:6px;${left > 55 ? 'right:' + (100 - left + 2) : 'left:' + (left + 2)}%;background:#0f172a;color:#fff;border-radius:8px;padding:8px 11px;font-size:12px;line-height:1.55;pointer-events:none;max-width:330px;min-width:200px;">${ivsAveTip(D, H, i, m)}</div>`; }
   return o;
 }
 function ivsGraf() { const el = document.getElementById('ivs-gcard'); if (el) el.outerHTML = ivsGrafCard(); const dc = document.getElementById('ivs-dcard'); if (dc) dc.outerHTML = ivsDCard(); const a = document.getElementById('ivs-acard'); if (a) a.outerHTML = ivsAveCard(); }
