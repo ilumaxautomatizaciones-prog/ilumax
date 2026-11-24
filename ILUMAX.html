@@ -27366,7 +27366,7 @@ async function marcarRecibido(id, cantidadSugerida){
 // INVENTARIO TI — equipos y actas de entrega (formato RHU-FOR-006)
 // ══════════════════════════════════════════════════════════
 let TI = {
-  equipos: [], entregas: [], devs: [], tab: 'equipos',
+  equipos: [], entregas: [], devs: [], mants: [], tab: 'equipos',
   qEquipos: '', filEstadoEq: '', qEntregas: '', filEstadoEnt: '',
   editEquipoId: null, lineas: [], lineaModo: 'nuevo',
 };
@@ -27398,6 +27398,9 @@ async function cargarInvTiSupa() {
   try {
     TI.devs = await sb.get('ti_devoluciones', 'select=*,ti_devolucion_items(*)&order=creado_en.desc') || [];
   } catch(e) { console.warn('Error cargando ti_devoluciones:', e.message); TI.devs = []; }
+  try {
+    TI.mants = await sb.get('ti_mantenimientos', 'select=*,ti_mantenimiento_items(*)&order=fecha.desc,creado_en.desc') || [];
+  } catch(e) { console.warn('Error cargando ti_mantenimientos:', e.message); TI.mants = []; }
 }
 
 function renderInvTiVista() {
@@ -27425,6 +27428,7 @@ function renderInvTiVista() {
       <div class="rrhh-tab ${TI.tab==='equipos'?'on':''}" onclick="tiSwitchTab('equipos',this)">📇 Equipos</div>
       <div class="rrhh-tab ${TI.tab==='entregas'?'on':''}" onclick="tiSwitchTab('entregas',this)">📄 Actas de entrega</div>
       <div class="rrhh-tab ${TI.tab==='devoluciones'?'on':''}" onclick="tiSwitchTab('devoluciones',this)">📥 Actas de devolución</div>
+      <div class="rrhh-tab ${TI.tab==='mantenimiento'?'on':''}" onclick="tiSwitchTab('mantenimiento',this)">🔧 Mantenimiento</div>
     </div>
 
     <div id="ti-tab-content"></div>
@@ -27443,8 +27447,8 @@ function tiSwitchTab(tab, el) {
 function renderTiTabContent() {
   const el = document.getElementById('ti-tab-content');
   if(!el) return;
-  el.innerHTML = TI.tab === 'equipos' ? tiHtmlTabEquipos() : TI.tab === 'devoluciones' ? tiHtmlTabDevoluciones() : tiHtmlTabEntregas();
-  if(TI.tab === 'equipos') filtrarTiEquipos(); else if(TI.tab === 'devoluciones') filtrarTiDevoluciones(); else filtrarTiEntregas();
+  el.innerHTML = TI.tab === 'equipos' ? tiHtmlTabEquipos() : TI.tab === 'devoluciones' ? tiHtmlTabDevoluciones() : TI.tab === 'mantenimiento' ? tiHtmlTabMant() : tiHtmlTabEntregas();
+  if(TI.tab === 'equipos') filtrarTiEquipos(); else if(TI.tab === 'devoluciones') filtrarTiDevoluciones(); else if(TI.tab === 'mantenimiento') filtrarTiMant(); else filtrarTiEntregas();
 }
 
 // ── TAB EQUIPOS ──────────────────────────────────────────
@@ -28240,6 +28244,111 @@ function tiSubirFirmada(entregaId) {
     finally { inp.value = ''; }
   });
   inp.click();
+}
+
+// ── MANTENIMIENTO DE EQUIPOS: se sube la foto del formato del proveedor (CompuElite) y se marcan los equipos atendidos; queda el historial por equipo ──
+const TI_MANT_PC = /port|cpu|todo|comput|torre|servidor|laptop/i;
+const tiMantEsPC = e => TI_MANT_PC.test(e.tipo || '');
+const tiMantEqNombre = e => [e.tipo, e.marca, e.modelo].filter(Boolean).join(' ') + (e.serial ? ' · SN ' + e.serial : '') + (e.codigo_interno ? ' · ' + e.codigo_interno : '');
+function tiMantUltimo() { // equipo_id -> {fecha, hw, sw, acr, n}
+  const m = {};
+  (TI.mants || []).forEach(x => (x.ti_mantenimiento_items || []).forEach(i => {
+    if(!i.equipo_id) return; const a = m[i.equipo_id] || (m[i.equipo_id] = { fecha: '', hw: false, sw: false, acr: false, n: 0 });
+    a.n++; if(!a.fecha || x.fecha > a.fecha) { a.fecha = x.fecha; a.hw = !!i.mnto_hardware; a.sw = !!i.mnto_software; a.acr = !!i.acronis; }
+  }));
+  return m;
+}
+function tiHtmlTabMant() {
+  const th = (t, al) => '<th style="background:var(--bg);padding:9px 12px;text-align:' + (al || 'left') + ';font-weight:700;font-size:10px;color:var(--mu);text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--b1);">' + t + '</th>';
+  return `<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-p btn-sm" onclick="tiMantModal()">📷 Registrar mantenimiento (subir foto)</button>
+      <div style="position:relative;flex:1;min-width:200px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;">🔍</span><input class="inp" id="srch-ti-mant" placeholder="Buscar equipo, colaborador, serial, técnico…" style="padding-left:32px;border-radius:22px;" oninput="filtrarTiMant()"></div>
+    </div>
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;margin-bottom:14px;">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center;"><div style="font-size:13px;font-weight:800;">Equipos: último mantenimiento</div><div id="ti-mant-cnt-eq" style="font-size:11px;color:var(--mu);"></div></div>
+      <div style="overflow-x:auto;max-height:50vh;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>${th('Equipo')}${th('Colaborador')}${th('Último mantenimiento')}${th('Hardware', 'center')}${th('Software', 'center')}${th('Acronis', 'center')}${th('Veces', 'center')}</tr></thead><tbody id="tbody-ti-mant-eq"></tbody></table></div>
+    </div>
+    <div style="background:var(--w);border-radius:12px;box-shadow:var(--sh);overflow:hidden;">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center;"><div style="font-size:13px;font-weight:800;">Visitas de mantenimiento registradas</div><div id="ti-mant-cnt" style="font-size:11px;color:var(--mu);"></div></div>
+      <div style="overflow-x:auto;max-height:45vh;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>${th('Fecha')}${th('Proveedor / técnico')}${th('Equipos')}${th('Formato')}${th('', 'right')}</tr></thead><tbody id="tbody-ti-mant"></tbody></table></div>
+    </div>`;
+}
+function filtrarTiMant() {
+  const q = ((document.getElementById('srch-ti-mant') || {}).value || '').toLowerCase().trim(), ult = tiMantUltimo(), td = 'padding:8px 12px;border-top:1px solid var(--b1);';
+  const eqs = TI.equipos.filter(e => e.activo !== false && (tiMantEsPC(e) || ult[e.id])).map(e => ({ e, u: ult[e.id] || null }))
+    .filter(x => !q || (tiMantEqNombre(x.e) + ' ' + (x.e.asignado_a || '')).toLowerCase().includes(q))
+    .sort((a, b) => (a.u ? a.u.fecha : '') < (b.u ? b.u.fecha : '') ? -1 : (a.u ? a.u.fecha : '') > (b.u ? b.u.fecha : '') ? 1 : 0);
+  const ck = v => v ? '✅' : '<span style="color:var(--mu)">—</span>';
+  document.getElementById('tbody-ti-mant-eq').innerHTML = eqs.map(({ e, u }) => `<tr><td style="${td}"><b>${tiEsc(tiMantEqNombre(e))}</b></td><td style="${td}">${tiEsc(e.asignado_a || '—')}</td><td style="${td}">${u ? '<b>' + tiFechaCO(u.fecha) + '</b>' : '<span style="color:#dc2626;font-weight:700;">Sin registro</span>'}</td><td style="${td}text-align:center;">${u ? ck(u.hw) : ''}</td><td style="${td}text-align:center;">${u ? ck(u.sw) : ''}</td><td style="${td}text-align:center;">${u ? ck(u.acr) : ''}</td><td style="${td}text-align:center;">${u ? u.n : 0}</td></tr>`).join('') || `<tr><td colspan="7" style="padding:18px;text-align:center;color:var(--mu);">Sin equipos</td></tr>`;
+  const c1 = document.getElementById('ti-mant-cnt-eq'); if(c1) c1.textContent = eqs.length + ' equipos · ' + eqs.filter(x => x.u).length + ' con mantenimiento';
+  const ms = (TI.mants || []).filter(m => !q || (m.proveedor + ' ' + (m.tecnico || '') + ' ' + (m.ti_mantenimiento_items || []).map(i => (i.descripcion || '') + ' ' + (i.usuario || '') + ' ' + (i.etiqueta || '')).join(' ')).toLowerCase().includes(q));
+  document.getElementById('tbody-ti-mant').innerHTML = ms.map(m => { const its = m.ti_mantenimiento_items || []; return `<tr><td style="${td}white-space:nowrap;"><b>${tiFechaCO(m.fecha)}</b></td><td style="${td}">${tiEsc(m.proveedor || '')}${m.tecnico ? '<div style="font-size:10.5px;color:var(--mu)">Técnico: ' + tiEsc(m.tecnico) + '</div>' : ''}</td><td style="${td}"><b>${its.length}</b> <span style="font-size:10.5px;color:var(--mu)">${tiEsc(its.map(i => i.usuario || i.descripcion || '').filter(Boolean).slice(0, 6).join(', '))}${its.length > 6 ? '…' : ''}</span></td><td style="${td}">${m.foto_url ? '<a href="' + tiEsc(m.foto_url) + '" target="_blank" rel="noopener">📷 Ver foto</a>' : '<span style="color:var(--mu)">Sin foto</span>'}</td><td style="${td}text-align:right;white-space:nowrap;"><button class="btn btn-g btn-sm" style="padding:4px 8px;" onclick="tiMantModal('${m.id}')">✏️</button> <button class="btn btn-rd btn-sm" style="padding:4px 8px;" onclick="tiMantEliminar('${m.id}')">🗑</button></td></tr>`; }).join('') || `<tr><td colspan="5" style="padding:18px;text-align:center;color:var(--mu);">Aún no hay mantenimientos. Toma la foto del formato y súbela con el botón de arriba.</td></tr>`;
+  const c2 = document.getElementById('ti-mant-cnt'); if(c2) c2.textContent = ms.length + ' visitas';
+}
+function tiMantModal(id) {
+  const m = id ? (TI.mants || []).find(x => x.id === id) : null, its = m ? (m.ti_mantenimiento_items || []) : [];
+  window._tiMantFoto = null; window._tiMantId = m ? m.id : null;
+  let mo = document.getElementById('mo-ti-mant'); if(mo) mo.remove();
+  mo = document.createElement('div'); mo.className = 'ov on'; mo.id = 'mo-ti-mant'; mo.onclick = ev => { if(ev.target === mo) mo.remove(); };
+  const hoy = new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10);
+  const lista = TI.equipos.filter(e => e.activo !== false && (tiMantEsPC(e) || its.some(i => i.equipo_id === e.id))).sort((a, b) => (a.asignado_a || 'zzz').localeCompare(b.asignado_a || 'zzz'));
+  const fila = e => { const i = its.find(x => x.equipo_id === e.id), on = !!i, et = i ? (i.etiqueta || '') : (e.codigo_interno || '').replace(/^COMPUELITE-/, '');
+    return `<tr data-e="${e.id}" data-t="${tiEsc((tiMantEqNombre(e) + ' ' + (e.asignado_a || '')).toLowerCase())}"><td><input type="checkbox" class="mt-ck"${on ? ' checked' : ''}></td><td><b>${tiEsc(tiMantEqNombre(e))}</b><div style="font-size:10.5px;color:var(--mu)">${tiEsc(e.asignado_a || 'Sin asignar')}</div></td><td><input class="inp mt-et" style="padding:3px 6px;font-size:12px;width:80px" value="${tiEsc(et)}" placeholder="Etiqueta"></td><td style="text-align:center"><input type="checkbox" class="mt-hw"${!i || i.mnto_hardware ? ' checked' : ''}></td><td style="text-align:center"><input type="checkbox" class="mt-sw"${!i || i.mnto_software ? ' checked' : ''}></td><td style="text-align:center"><input type="checkbox" class="mt-ac"${i && i.acronis ? ' checked' : ''}></td><td><input class="inp mt-ob" style="padding:3px 6px;font-size:12px;min-width:120px" value="${tiEsc(i ? i.observacion || '' : '')}" placeholder="Observación"></td></tr>`; };
+  mo.innerHTML = `<div class="mo" style="max-width:980px;width:96vw"><div class="mh"><div class="mt">🔧 ${m ? 'Editar' : 'Registrar'} mantenimiento de equipos</div><button class="mx" onclick="document.getElementById('mo-ti-mant').remove()">✕</button></div><div class="mb">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;">
+      <div class="fg"><label class="fl">Fecha</label><input class="inp" type="date" id="ti-mt-fecha" value="${m ? m.fecha : hoy}"></div>
+      <div class="fg"><label class="fl">Proveedor</label><input class="inp" id="ti-mt-prov" value="${tiEsc(m ? m.proveedor || '' : 'CompuElite')}"></div>
+      <div class="fg"><label class="fl">Técnico</label><input class="inp" id="ti-mt-tec" value="${tiEsc(m ? m.tecnico || '' : '')}"></div>
+    </div>
+    <div class="fg"><label class="fl">Foto del formato de mantenimiento</label>
+      <label class="btn btn-bl btn-sm" style="cursor:pointer;display:inline-block;">📷 Tomar o elegir foto<input type="file" id="ti-mt-foto" accept="image/*,application/pdf" style="display:none" onchange="tiMantFoto(this)"></label>
+      <span id="ti-mt-foto-txt" style="font-size:11.5px;color:var(--mu);margin-left:8px;">${m && m.foto_url ? 'Ya tiene foto (<a href="' + tiEsc(m.foto_url) + '" target="_blank" rel="noopener">verla</a>); elige otra para reemplazarla' : 'Se guarda como respaldo del formato firmado'}</span></div>
+    <div style="font-size:12px;color:var(--mu);margin:8px 0 6px;">Marca los equipos que aparecen en el formato y lo que se les hizo.</div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px;"><input class="inp" id="ti-mt-q" placeholder="🔍 Buscar equipo o colaborador…" style="max-width:280px;padding:5px 10px;" oninput="tiMantFiltrarLista()"><label style="font-size:12px;"><input type="checkbox" id="ti-mt-sel" onchange="tiMantSelTodos(this.checked)"> Marcar todos los visibles</label><span id="ti-mt-n" style="font-size:12px;font-weight:700;"></span></div>
+    <div class="tw" style="max-height:48vh;overflow-y:auto;"><table style="font-size:12px;width:100%"><thead><tr><th></th><th>Equipo</th><th>Etiqueta</th><th>Hardware</th><th>Software</th><th>Acronis</th><th>Observación</th></tr></thead><tbody id="ti-mt-body" onchange="tiMantContar()">${lista.map(fila).join('')}</tbody></table></div>
+    <div class="fg" style="margin-top:8px;"><label class="fl">Notas</label><textarea class="inp" id="ti-mt-notas" rows="2">${tiEsc(m ? m.notas || '' : '')}</textarea></div></div>
+    <div class="mf"><button class="btn btn-g btn-sm" onclick="document.getElementById('mo-ti-mant').remove()">Cancelar</button><button class="btn btn-p btn-sm" id="btn-ti-mt-guardar" onclick="tiMantGuardar()">💾 Guardar mantenimiento</button></div></div>`;
+  document.body.appendChild(mo); tiMantContar();
+}
+function tiMantContar() { const n = document.querySelectorAll('#ti-mt-body .mt-ck:checked').length, el = document.getElementById('ti-mt-n'); if(el) el.textContent = n + ' equipos marcados'; }
+function tiMantFiltrarLista() { const q = ((document.getElementById('ti-mt-q') || {}).value || '').toLowerCase().trim(); document.querySelectorAll('#ti-mt-body tr').forEach(r => { r.style.display = !q || r.dataset.t.includes(q) ? '' : 'none'; }); }
+function tiMantSelTodos(v) { document.querySelectorAll('#ti-mt-body tr').forEach(r => { if(r.style.display !== 'none') r.querySelector('.mt-ck').checked = v; }); tiMantContar(); }
+function tiMantFoto(inp) {
+  const f = inp.files && inp.files[0]; if(!f) return; const t = document.getElementById('ti-mt-foto-txt');
+  if(f.size > 30 * 1024 * 1024) { toast('El archivo pesa más de 30 MB', 'wa'); inp.value = ''; return; }
+  t.textContent = 'Preparando foto…';
+  tiComprimirImg(f).then(g => {
+    if(g.size > 2 * 1024 * 1024) { toast('La foto pesa más de 2 MB (límite del almacenamiento). Sube una más liviana.', 'wa'); window._tiMantFoto = null; t.textContent = ''; return; }
+    window._tiMantFoto = g; t.textContent = '✅ ' + (g.name || 'foto') + ' · ' + Math.round(g.size / 1024) + ' KB (se sube al guardar)';
+  });
+}
+async function tiMantGuardar() {
+  const filas = [...document.querySelectorAll('#ti-mt-body tr')].filter(r => r.querySelector('.mt-ck').checked).map(r => ({ id: r.dataset.e, et: r.querySelector('.mt-et').value.trim(), hw: r.querySelector('.mt-hw').checked, sw: r.querySelector('.mt-sw').checked, ac: r.querySelector('.mt-ac').checked, ob: r.querySelector('.mt-ob').value.trim() }));
+  if(!filas.length) { toast('Marca al menos un equipo', 'wa'); return; }
+  const btn = document.getElementById('btn-ti-mt-guardar'); if(btn) { btn.disabled = true; btn.textContent = '💾 Guardando…'; }
+  try {
+    const prev = window._tiMantId ? (TI.mants || []).find(x => x.id === window._tiMantId) : null; let foto = prev ? prev.foto_url : null;
+    const f = window._tiMantFoto;
+    if(f) {
+      const ext = (f.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg', path = 'ti-mantenimientos/mant_' + Date.now() + '.' + ext, fd = new FormData(); fd.append('', f, path.split('/').pop());
+      const r = await fetch(SB_URL + '/storage/v1/object/soportes/' + path, { method: 'POST', headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY }, body: fd });
+      if(!r.ok) throw new Error('subida de la foto ' + r.status);
+      foto = SB_URL + '/storage/v1/object/public/soportes/' + path;
+    }
+    const cab = { fecha: document.getElementById('ti-mt-fecha').value || new Date().toISOString().slice(0, 10), proveedor: document.getElementById('ti-mt-prov').value.trim() || null, tecnico: document.getElementById('ti-mt-tec').value.trim() || null, notas: document.getElementById('ti-mt-notas').value.trim() || null, foto_url: foto, actualizado: new Date().toISOString() };
+    let mid;
+    if(prev) { await sb.patch('ti_mantenimientos', 'id=eq.' + prev.id, cab); await sb.delete('ti_mantenimiento_items', 'mantenimiento_id=eq.' + prev.id); mid = prev.id; }
+    else { const r = await sb.post('ti_mantenimientos', Object.assign(cab, { creado_por: (CU && (CU.nombre || CU.email)) || '' })); mid = r[0].id; }
+    for(const x of filas) { const e = TI.equipos.find(q => q.id === x.id) || {}; await sb.post('ti_mantenimiento_items', { mantenimiento_id: mid, equipo_id: x.id, etiqueta: x.et || null, usuario: e.asignado_a || null, descripcion: tiMantEqNombre(e), mnto_hardware: x.hw, mnto_software: x.sw, acronis: x.ac, observacion: x.ob || null }); }
+    toast('✅ Mantenimiento guardado (' + filas.length + ' equipos)', 'ok');
+    const mo = document.getElementById('mo-ti-mant'); if(mo) mo.remove();
+    await cargarInvTiSupa(); TI.tab = 'mantenimiento'; renderInvTiVista();
+  } catch(err) { toast('❌ No se pudo guardar: ' + err.message, 'er'); if(btn) { btn.disabled = false; btn.textContent = '💾 Guardar mantenimiento'; } }
+}
+async function tiMantEliminar(id) {
+  const m = (TI.mants || []).find(x => x.id === id); if(!m) return;
+  if(!confirm('¿Eliminar el mantenimiento del ' + tiFechaCO(m.fecha) + ' con ' + (m.ti_mantenimiento_items || []).length + ' equipos? No se puede deshacer.')) return;
+  try { await sb.delete('ti_mantenimientos', 'id=eq.' + id); await cargarInvTiSupa(); renderTiTabContent(); toast('Eliminado', 'ok'); } catch(e) { toast('No se pudo eliminar: ' + e.message, 'er'); }
 }
 
 // ── ACTAS DE DEVOLUCIÓN: el colaborador devuelve uno o varios equipos de una acta de entrega vigente; se deja el estado en que se recibe cada equipo y su destino ──
