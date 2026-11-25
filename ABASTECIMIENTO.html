@@ -2210,6 +2210,9 @@ function renderInvVista() {
       <button onclick="invExportarExcelPorBodega()" style="display:inline-flex;align-items:center;gap:6px;background:#0f172a;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;" title="Descarga un Excel con SKU, Descripción, Categoría, Existencia y Bodega — una fila por cada SKU+bodega con existencia real (solo bodegas disponibles, sin averías/muestras/etc.)">
         📥 Excel existencias por bodega
       </button>
+      <button onclick="invExportarCostosBodega()" style="display:inline-flex;align-items:center;gap:6px;background:#047857;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;" title="Descarga un Excel con el inventario de TODAS las bodegas al costo promedio: resumen por bodega, categoría x bodega y detalle por SKU">
+        💲 Excel inventario con costos
+      </button>
       <button onclick="invExportarRotacion()" style="display:inline-flex;align-items:center;gap:6px;background:#0f766e;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;" title="Excel con inventario actual, rotación a 3 y 6 meses y meses de inventario por referencia (alto stock / reforzar compra)">
         📥 Excel inventario y rotación
       </button>
@@ -2298,6 +2301,84 @@ function renderInvVista() {
   filtrarInvMod();
 }
 const INV_XLS_MIN_REFS = 100;
+async function invExportarCostosBodega() {
+  try {
+    const src = (INV_DATA_ALL && INV_DATA_ALL.length ? INV_DATA_ALL : (INV_DATA||[]))
+      .filter(r => parseFloat(r.existencia||0) !== 0)
+      .map(r => ({bod:String(r.bodega||'').trim().toUpperCase(), ref:String(r.referencia||''), des:r.descripcion||'', cat:r.categoria||'(sin categoría)', sub:r.subcategoria||'', ubi:r.ubicacion||'', lot:r.lote||'', ex:parseFloat(r.existencia||0), co:parseFloat(r.costo_prom||0), ent:String(r.fecha_ult_entrada||'').slice(0,10), act:String(r.actualizado||'').slice(0,16).replace('T',' ')}))
+      .sort((a,b) => a.bod.localeCompare(b.bod) || a.ref.localeCompare(b.ref, undefined, {numeric:true}));
+    if(!src.length) { toast('Primero carga el inventario (no hay datos en pantalla)','wa'); return; }
+    toast('Armando el Excel con costos…','ok');
+    await ppCargarExcelJS();
+    const hoy = new Date().toISOString().slice(0,10);
+    const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX';
+    const thin = {style:'thin', color:{argb:'FFCBD5E1'}};
+    const hdr = (cell) => { cell.font = {bold:true, color:{argb:'FFFFFFFF'}}; cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FF0F172A'}}; cell.alignment = {horizontal:'center', vertical:'middle', wrapText:true}; cell.border = {top:thin,bottom:thin,left:thin,right:thin}; };
+    // ---- agrupar por bodega y categoría
+    const B = {}, C = {};
+    src.forEach(r => {
+      const v = r.ex * r.co;
+      const b = B[r.bod] = B[r.bod] || {refs:new Set(), filas:0, u:0, v:0, sc:0, act:''};
+      b.refs.add(r.ref); b.filas++; b.u += r.ex; b.v += v; if(r.co <= 0) b.sc++; if(r.act > b.act) b.act = r.act;
+      const c = C[r.cat] = C[r.cat] || {}; c[r.bod] = (c[r.bod]||0) + v;
+    });
+    const bods = Object.keys(B).sort((a,b) => B[b].v - B[a].v);
+    const totV = bods.reduce((a,k) => a + B[k].v, 0);
+    // ---- Hoja 1: Resumen por bodega
+    const w1 = wb.addWorksheet('Resumen por bodega', {properties:{tabColor:{argb:'FF0F172A'}}, views:[{showGridLines:false}]});
+    w1.getCell('A1').value = 'Inventario por bodega al costo promedio'; w1.getCell('A1').font = {bold:true, size:16, color:{argb:'FF0F172A'}};
+    w1.getCell('A2').value = 'Al ' + hoy + ' · incluye todas las bodegas con existencia · valor = existencia × costo promedio · "Cuenta" = bodega que cuenta como inventario disponible (' + (INV_BODEGAS_CUENTAN||[]).join(', ') + ')';
+    w1.getCell('A2').font = {italic:true, size:9, color:{argb:'FF64748B'}};
+    ['Bodega','Cuenta','Referencias','Unidades','Valor al costo','% del total','Líneas sin costo','Última actualización'].forEach((t,i) => { const c = w1.getCell(4,i+1); c.value = t; hdr(c); });
+    w1.getRow(4).height = 30;
+    bods.forEach((k,i) => { const r = 5+i, b = B[k];
+      w1.getCell(r,1).value = k; w1.getCell(r,2).value = invBodegaCuenta(k) ? 'Sí' : 'No'; w1.getCell(r,3).value = b.refs.size; w1.getCell(r,4).value = Math.round(b.u);
+      w1.getCell(r,5).value = Math.round(b.v); w1.getCell(r,6).value = {formula:'IF($E$'+(5+bods.length)+'=0,0,E'+r+'/$E$'+(5+bods.length)+')'}; w1.getCell(r,7).value = b.sc || 0; w1.getCell(r,8).value = b.act || '';
+      w1.getCell(r,3).numFmt = '#,##0'; w1.getCell(r,4).numFmt = '#,##0'; w1.getCell(r,5).numFmt = '$ #,##0'; w1.getCell(r,6).numFmt = '0.0%';
+      for(let c=1;c<=8;c++){ const cell = w1.getCell(r,c); cell.border = {top:thin,bottom:thin,left:thin,right:thin}; if(i%2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FFF1F5F9'}}; if(c===1||c===2) cell.alignment = {horizontal:'center'}; }
+    });
+    const rt = 5 + bods.length;
+    w1.getCell(rt,1).value = 'TOTAL';
+    w1.getCell(rt,4).value = {formula:'SUM(D5:D'+(rt-1)+')'}; w1.getCell(rt,5).value = {formula:'SUM(E5:E'+(rt-1)+')'}; w1.getCell(rt,7).value = {formula:'SUM(G5:G'+(rt-1)+')'};
+    w1.getCell(rt,4).numFmt = '#,##0'; w1.getCell(rt,5).numFmt = '$ #,##0';
+    for(let c=1;c<=8;c++){ const cell = w1.getCell(rt,c); cell.font = {bold:true, color:{argb:'FFFFFFFF'}}; cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FF0F172A'}}; }
+    w1.getCell(rt+2,1).value = 'Las unidades de bodegas distintas se suman solo como referencia. Líneas sin costo = costo promedio en 0 o negativo en Siesa (revisar).';
+    w1.getCell(rt+2,1).font = {italic:true, size:9, color:{argb:'FF64748B'}};
+    [12,9,13,14,20,11,14,20].forEach((w,i) => w1.getColumn(i+1).width = w);
+    w1.views = [{state:'frozen', ySplit:4, showGridLines:false}];
+    // ---- Hoja 2: Categoría x Bodega
+    const w2 = wb.addWorksheet('Categoría x Bodega', {properties:{tabColor:{argb:'FF047857'}}, views:[{state:'frozen', xSplit:1, ySplit:4, showGridLines:false}]});
+    w2.getCell('A1').value = 'Valor al costo por categoría y bodega'; w2.getCell('A1').font = {bold:true, size:15, color:{argb:'FF047857'}};
+    w2.getCell('A2').value = 'Al ' + hoy + ' · existencia × costo promedio'; w2.getCell('A2').font = {italic:true, size:9, color:{argb:'FF64748B'}};
+    const cats = Object.keys(C).sort((a,b) => Object.values(C[b]).reduce((x,y)=>x+y,0) - Object.values(C[a]).reduce((x,y)=>x+y,0));
+    const bv = bods.filter(k => Math.round(B[k].v) !== 0);
+    ['Categoría'].concat(bv, ['TOTAL']).forEach((t,i) => { const c = w2.getCell(4,i+1); c.value = t; hdr(c); });
+    const colL = (n) => { let s='', x=n; while(x>0){ const m=(x-1)%26; s=String.fromCharCode(65+m)+s; x=Math.floor((x-1)/26);} return s; };
+    cats.forEach((cat,i) => { const r = 5+i; w2.getCell(r,1).value = cat;
+      bv.forEach((k,j) => { const cell = w2.getCell(r,j+2); cell.value = Math.round(C[cat][k]||0) || null; cell.numFmt = '#,##0;[Red]-#,##0'; });
+      const tc = w2.getCell(r, bv.length+2); tc.value = {formula:'SUM(B'+r+':'+colL(bv.length+1)+r+')'}; tc.numFmt = '$ #,##0'; tc.font = {bold:true};
+      for(let c=1;c<=bv.length+2;c++){ const cell = w2.getCell(r,c); cell.border = {top:thin,bottom:thin,left:thin,right:thin}; if(i%2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FFF1F5F9'}}; }
+    });
+    const r2 = 5 + cats.length; w2.getCell(r2,1).value = 'TOTAL';
+    for(let c=2;c<=bv.length+2;c++){ const cell = w2.getCell(r2,c); cell.value = {formula:'SUM('+colL(c)+'5:'+colL(c)+(r2-1)+')'}; cell.numFmt = '$ #,##0'; }
+    for(let c=1;c<=bv.length+2;c++){ const cell = w2.getCell(r2,c); cell.font = {bold:true, color:{argb:'FFFFFFFF'}}; cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FF0F172A'}}; }
+    w2.getColumn(1).width = 38; for(let c=2;c<=bv.length+2;c++) w2.getColumn(c).width = 15; w2.getRow(4).height = 24;
+    // ---- Hoja 3: Detalle
+    const w3 = wb.addWorksheet('Detalle', {properties:{tabColor:{argb:'FF1E40AF'}}, views:[{state:'frozen', xSplit:2, ySplit:4, showGridLines:false}]});
+    w3.getCell('A1').value = 'Detalle por bodega y SKU con costo'; w3.getCell('A1').font = {bold:true, size:15, color:{argb:'FF1E40AF'}};
+    w3.getCell('A2').value = 'Al ' + hoy + ' · ' + src.length + ' líneas · usa los filtros del encabezado para quedarte con una bodega o categoría'; w3.getCell('A2').font = {italic:true, size:9, color:{argb:'FF64748B'}};
+    w3.addTable({name:'T_Detalle', ref:'A4', headerRow:true, totalsRow:true, style:{theme:'TableStyleMedium2', showRowStripes:true},
+      columns:[{name:'Bodega', totalsRowLabel:'TOTAL'},{name:'Cuenta'},{name:'SKU'},{name:'Descripción'},{name:'Categoría'},{name:'Subcategoría'},{name:'Ubicación'},{name:'Lote'},{name:'Existencia', totalsRowFunction:'sum'},{name:'Costo promedio'},{name:'Valor al costo', totalsRowFunction:'sum'},{name:'Última entrada'},{name:'Actualizado'}],
+      rows: src.map((r,k) => [r.bod, invBodegaCuenta(r.bod)?'Sí':'No', r.ref, r.des, r.cat, r.sub, r.ubi, r.lot, Math.round(r.ex*100)/100, Math.round(r.co*100)/100, {formula:'I'+(5+k)+'*J'+(5+k)}, r.ent, r.act])});
+    for(let k=0;k<=src.length+1;k++){ const row = w3.getRow(4+k); row.getCell(9).numFmt = '#,##0'; row.getCell(10).numFmt = '$ #,##0.00'; row.getCell(11).numFmt = '$ #,##0'; if(k>0&&k<=src.length){ row.getCell(1).alignment = {horizontal:'center'}; row.getCell(2).alignment = {horizontal:'center'}; } }
+    w3.getRow(4).height = 30; w3.getRow(4).alignment = {vertical:'middle', horizontal:'center', wrapText:true};
+    [9,8,14,46,30,26,14,12,13,15,18,14,17].forEach((w,i) => w3.getColumn(i+1).width = w);
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download = 'Inventario_por_bodega_con_costos_' + hoy + '.xlsx'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+    toast('📥 Excel descargado: ' + bods.length + ' bodegas · ' + src.length + ' líneas', 'ok');
+  } catch(e) { console.error(e); toast('Error: ' + e.message, 'er'); }
+}
 async function invExportarExcelPorBodega() {
   try {
     const src = (INV_DATA||[])
