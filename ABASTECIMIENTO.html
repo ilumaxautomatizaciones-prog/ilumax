@@ -2312,9 +2312,11 @@ function invElegirCorteFecha(){
   });
 }
 async function invCargarCorte(fecha){
-  let c = await sb.get('inventario_cortes','select=corte&corte=lte.'+fecha+'&order=corte.desc&limit=1');
+  const ant = await sb.get('inventario_cortes','select=corte&corte=lte.'+fecha+'&order=corte.desc&limit=1');
+  const sig = await sb.get('inventario_cortes','select=corte&corte=gte.'+fecha+'&order=corte.asc&limit=1');
+  const dd = x => Math.abs(new Date(String(x[0].corte).slice(0,10)) - new Date(fecha));
+  let c = (ant&&ant.length) && (sig&&sig.length) ? (dd(ant) <= dd(sig) ? ant : sig) : ((ant&&ant.length) ? ant : sig);
   let aprox = false;
-  if(!c || !c.length){ c = await sb.get('inventario_cortes','select=corte&corte=gte.'+fecha+'&order=corte.asc&limit=1'); aprox = true; }
   if(!c || !c.length) return null;
   const corte = String(c[0].corte).slice(0,10); if(corte !== fecha) aprox = true;
   let all = [], off = 0;
@@ -2331,12 +2333,13 @@ async function invExportarCostosBodega() {
       corteInfo = await invCargarCorte(fSel);
       if(!corteInfo){ toast('No hay cortes de inventario guardados','wa'); return; }
       const ref = {}; (INV_DATA_ALL && INV_DATA_ALL.length ? INV_DATA_ALL : (INV_DATA||[])).forEach(r => { if(!ref[r.referencia]) ref[r.referencia] = r; });
-      rowsFuente = corteInfo.rows.map(r => { const x = ref[r.referencia]||{}; return Object.assign({}, r, {categoria:x.categoria, subcategoria:x.subcategoria, ubicacion:'', lote:'', fecha_ult_entrada:'', actualizado:corteInfo.corte}); });
+      rowsFuente = corteInfo.rows.map(r => { const x = ref[r.referencia]||{}; return Object.assign({}, r, {descripcion:r.descripcion||x.descripcion||'', categoria:x.categoria, subcategoria:x.subcategoria, ubicacion:'', lote:'', fecha_ult_entrada:'', actualizado:corteInfo.corte}); });
       if(corteInfo.aprox) toast('Se usa el corte del ' + corteInfo.corte + ' (no hay uno del ' + fSel + ')','wa');
     }
+    const DESC = {}; (INV_DATA_ALL||[]).concat(INV_DATA||[]).forEach(r => { if(r.descripcion && !DESC[r.referencia]) DESC[r.referencia] = r.descripcion; });
     const src = rowsFuente
       .filter(r => parseFloat(r.existencia||0) !== 0)
-      .map(r => ({bod:String(r.bodega||'').trim().toUpperCase(), ref:String(r.referencia||''), des:r.descripcion||'', cat:r.categoria||'(sin categoría)', sub:r.subcategoria||'', ubi:r.ubicacion||'', lot:r.lote||'', ex:parseFloat(r.existencia||0), co:parseFloat(r.costo_prom||0), ent:String(r.fecha_ult_entrada||'').slice(0,10), act:String(r.actualizado||'').slice(0,16).replace('T',' ')}))
+      .map(r => ({bod:String(r.bodega||'').trim().toUpperCase(), ref:String(r.referencia||''), des:r.descripcion||DESC[r.referencia]||'', cat:r.categoria||'(sin categoría)', sub:r.subcategoria||'', ubi:r.ubicacion||'', lot:r.lote||'', ex:parseFloat(r.existencia||0), co:parseFloat(r.costo_prom||0), ent:String(r.fecha_ult_entrada||'').slice(0,10), act:String(r.actualizado||'').slice(0,16).replace('T',' ')}))
       .sort((a,b) => a.bod.localeCompare(b.bod) || a.ref.localeCompare(b.ref, undefined, {numeric:true}));
     if(!src.length) { toast('Primero carga el inventario (no hay datos en pantalla)','wa'); return; }
     toast('Armando el Excel con costos…','ok');
