@@ -2301,16 +2301,47 @@ function renderInvVista() {
   filtrarInvMod();
 }
 const INV_XLS_MIN_REFS = 100;
+function invElegirCorteFecha(){
+  return new Promise(res => {
+    const hoy = new Date().toISOString().slice(0,10);
+    const ov = document.createElement('div'); ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+    ov.innerHTML = '<div style="background:#fff;border-radius:12px;padding:20px 22px;width:340px;font-family:inherit;"><div style="font-weight:800;font-size:15px;margin-bottom:6px;">💲 Inventario con costos</div><div style="font-size:12px;color:#475569;margin-bottom:10px;">Fecha de corte. Hoy = inventario actual de Siesa; una fecha anterior usa el corte guardado más cercano.</div><input type="date" id="invCorteF" value="'+hoy+'" max="'+hoy+'" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;"><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;"><button id="invCorteNo" style="padding:7px 14px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;cursor:pointer;">Cancelar</button><button id="invCorteOk" style="padding:7px 14px;border:none;background:#047857;color:#fff;border-radius:8px;font-weight:700;cursor:pointer;">Descargar</button></div></div>';
+    document.body.appendChild(ov);
+    ov.querySelector('#invCorteNo').onclick = () => { ov.remove(); res(null); };
+    ov.querySelector('#invCorteOk').onclick = () => { const v = ov.querySelector('#invCorteF').value || hoy; ov.remove(); res(v); };
+  });
+}
+async function invCargarCorte(fecha){
+  let c = await sb.get('inventario_cortes','select=corte&corte=lte.'+fecha+'&order=corte.desc&limit=1');
+  let aprox = false;
+  if(!c || !c.length){ c = await sb.get('inventario_cortes','select=corte&corte=gte.'+fecha+'&order=corte.asc&limit=1'); aprox = true; }
+  if(!c || !c.length) return null;
+  const corte = String(c[0].corte).slice(0,10); if(corte !== fecha) aprox = true;
+  let all = [], off = 0;
+  for(;;){ const r = await sb.get('inventario_cortes','select=referencia,descripcion,bodega,existencia,costo_prom&corte=eq.'+corte+'&existencia=neq.0&order=bodega,referencia&limit=1000&offset='+off); if(!r || !r.length) break; all = all.concat(r); if(r.length < 1000 || off > 60000) break; off += 1000; }
+  return {corte, aprox, rows: all};
+}
 async function invExportarCostosBodega() {
   try {
-    const src = (INV_DATA_ALL && INV_DATA_ALL.length ? INV_DATA_ALL : (INV_DATA||[]))
+    const hoy0 = new Date().toISOString().slice(0,10);
+    const fSel = await invElegirCorteFecha(); if(!fSel) return;
+    let corteInfo = null, rowsFuente = (INV_DATA_ALL && INV_DATA_ALL.length ? INV_DATA_ALL : (INV_DATA||[]));
+    if(fSel < hoy0){
+      toast('Buscando el corte de inventario…','ok');
+      corteInfo = await invCargarCorte(fSel);
+      if(!corteInfo){ toast('No hay cortes de inventario guardados','wa'); return; }
+      const ref = {}; (INV_DATA_ALL && INV_DATA_ALL.length ? INV_DATA_ALL : (INV_DATA||[])).forEach(r => { if(!ref[r.referencia]) ref[r.referencia] = r; });
+      rowsFuente = corteInfo.rows.map(r => { const x = ref[r.referencia]||{}; return Object.assign({}, r, {categoria:x.categoria, subcategoria:x.subcategoria, ubicacion:'', lote:'', fecha_ult_entrada:'', actualizado:corteInfo.corte}); });
+      if(corteInfo.aprox) toast('Se usa el corte del ' + corteInfo.corte + ' (no hay uno del ' + fSel + ')','wa');
+    }
+    const src = rowsFuente
       .filter(r => parseFloat(r.existencia||0) !== 0)
       .map(r => ({bod:String(r.bodega||'').trim().toUpperCase(), ref:String(r.referencia||''), des:r.descripcion||'', cat:r.categoria||'(sin categoría)', sub:r.subcategoria||'', ubi:r.ubicacion||'', lot:r.lote||'', ex:parseFloat(r.existencia||0), co:parseFloat(r.costo_prom||0), ent:String(r.fecha_ult_entrada||'').slice(0,10), act:String(r.actualizado||'').slice(0,16).replace('T',' ')}))
       .sort((a,b) => a.bod.localeCompare(b.bod) || a.ref.localeCompare(b.ref, undefined, {numeric:true}));
     if(!src.length) { toast('Primero carga el inventario (no hay datos en pantalla)','wa'); return; }
     toast('Armando el Excel con costos…','ok');
     await ppCargarExcelJS();
-    const hoy = new Date().toISOString().slice(0,10);
+    const hoy = corteInfo ? corteInfo.corte : hoy0;
     const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX';
     const thin = {style:'thin', color:{argb:'FFCBD5E1'}};
     const hdr = (cell) => { cell.font = {bold:true, color:{argb:'FFFFFFFF'}}; cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FF0F172A'}}; cell.alignment = {horizontal:'center', vertical:'middle', wrapText:true}; cell.border = {top:thin,bottom:thin,left:thin,right:thin}; };
@@ -2326,8 +2357,8 @@ async function invExportarCostosBodega() {
     const totV = bods.reduce((a,k) => a + B[k].v, 0);
     // ---- Hoja 1: Resumen por bodega
     const w1 = wb.addWorksheet('Resumen por bodega', {properties:{tabColor:{argb:'FF0F172A'}}, views:[{showGridLines:false}]});
-    w1.getCell('A1').value = 'Inventario por bodega al costo promedio'; w1.getCell('A1').font = {bold:true, size:16, color:{argb:'FF0F172A'}};
-    w1.getCell('A2').value = 'Al ' + hoy + ' · incluye todas las bodegas con existencia · valor = existencia × costo promedio · "Cuenta" = bodega que cuenta como inventario disponible (' + (INV_BODEGAS_CUENTAN||[]).join(', ') + ')';
+    w1.getCell('A1').value = 'Inventario por bodega al costo promedio de instalación'; w1.getCell('A1').font = {bold:true, size:16, color:{argb:'FF0F172A'}};
+    w1.getCell('A2').value = (corteInfo ? 'Corte ' + corteInfo.corte + (corteInfo.aprox ? ' (el más cercano a ' + fSel + ')' : '') : 'Al ' + hoy) + ' · incluye todas las bodegas con existencia · valor = existencia × costo promedio · "Cuenta" = bodega que cuenta como inventario disponible (' + (INV_BODEGAS_CUENTAN||[]).join(', ') + ')';
     w1.getCell('A2').font = {italic:true, size:9, color:{argb:'FF64748B'}};
     ['Bodega','Cuenta','Referencias','Unidades','Valor al costo','% del total','Líneas sin costo','Última actualización'].forEach((t,i) => { const c = w1.getCell(4,i+1); c.value = t; hdr(c); });
     w1.getRow(4).height = 30;
@@ -2368,7 +2399,7 @@ async function invExportarCostosBodega() {
     w3.getCell('A1').value = 'Detalle por bodega y SKU con costo'; w3.getCell('A1').font = {bold:true, size:15, color:{argb:'FF1E40AF'}};
     w3.getCell('A2').value = 'Al ' + hoy + ' · ' + src.length + ' líneas · usa los filtros del encabezado para quedarte con una bodega o categoría'; w3.getCell('A2').font = {italic:true, size:9, color:{argb:'FF64748B'}};
     w3.addTable({name:'T_Detalle', ref:'A4', headerRow:true, totalsRow:true, style:{theme:'TableStyleMedium2', showRowStripes:true},
-      columns:[{name:'Bodega', totalsRowLabel:'TOTAL'},{name:'Cuenta'},{name:'SKU'},{name:'Descripción'},{name:'Categoría'},{name:'Subcategoría'},{name:'Ubicación'},{name:'Lote'},{name:'Existencia', totalsRowFunction:'sum'},{name:'Costo promedio'},{name:'Valor al costo', totalsRowFunction:'sum'},{name:'Última entrada'},{name:'Actualizado'}],
+      columns:[{name:'Bodega', totalsRowLabel:'TOTAL'},{name:'Cuenta'},{name:'SKU'},{name:'Descripción'},{name:'Categoría'},{name:'Subcategoría'},{name:'Ubicación'},{name:'Lote'},{name:'Existencia', totalsRowFunction:'sum'},{name:'Costo instalación (prom. Siesa)'},{name:'Valor al costo', totalsRowFunction:'sum'},{name:'Última entrada'},{name:'Actualizado'}],
       rows: src.map((r,k) => [r.bod, invBodegaCuenta(r.bod)?'Sí':'No', r.ref, r.des, r.cat, r.sub, r.ubi, r.lot, Math.round(r.ex*100)/100, Math.round(r.co*100)/100, {formula:'I'+(5+k)+'*J'+(5+k)}, r.ent, r.act])});
     for(let k=0;k<=src.length+1;k++){ const row = w3.getRow(4+k); row.getCell(9).numFmt = '#,##0'; row.getCell(10).numFmt = '$ #,##0.00'; row.getCell(11).numFmt = '$ #,##0'; if(k>0&&k<=src.length){ row.getCell(1).alignment = {horizontal:'center'}; row.getCell(2).alignment = {horizontal:'center'}; } }
     w3.getRow(4).height = 30; w3.getRow(4).alignment = {vertical:'middle', horizontal:'center', wrapText:true};
