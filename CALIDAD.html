@@ -22754,7 +22754,7 @@ async function ftmEvalProdCorrer() {
   let aut = '';
   if (!cat && V._tipo) { cat = ftmDetectarCat(V._tipo); if (cat) { document.getElementById('ftm-ep-cat').value = cat; aut = ' (categoría detectada de «' + V._tipo + '»)'; } }
   if (!cat) return toast('No pude saber la categoría' + (V._tipo ? ' de «' + V._tipo + '»' : '') + ': elígela en la lista', 'wa');
-  FTM.epV = V; FTM.epCat = cat; FTM.epOrigen = origen + aut; FTM.epF = V._filas || []; FTM.epEd = {};
+  FTM.epV = V; FTM.epCat = cat; FTM.epOrigen = origen + aut; FTM.epF = V._filas || []; FTM.epEd = {}; FTM.epSens = false; FTM.epQ = {};
   ftmEpPintar();
 }
 function ftmEpSet(k, v) {
@@ -22762,6 +22762,15 @@ function ftmEpSet(k, v) {
   (FTM.epF || []).forEach(f => { if (f.k === k) { f.valor = v; f.estado = v === '' ? 'blanco' : (ftmVacio(v) ? 'slash' : 'ok'); } });
   ftmEpPintar();
 }
+function ftmEpFila(f, sc, exigidos, bd, inp, esc) {
+  const ex = exigidos.has(f.k);
+  return '<tr data-t="' + esc((sc + ' ' + f.campo + ' ' + f.valor).toLowerCase()) + '" style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px;color:#64748b">' + esc(sc) + '</td><td>' + esc(f.campo) + (ex ? ' ' + bd() : '') + '</td><td style="background:' + (ex ? '#fecaca;color:#7f1d1d' : '#fef3c7;color:#92400e') + ';font-weight:700;padding:4px 8px">' + (f.estado === 'blanco' ? 'En blanco' : 'Puso «' + esc(f.valor) + '» (dato no suministrado)') + '</td><td>' + (f.k ? inp(f.k, f.estado === 'ok' ? f.valor : '') : '') + '</td></tr>';
+}
+function ftmEpBuscar(el, id) {
+  FTM.epQ = FTM.epQ || {}; FTM.epQ[id] = el.value; const q = ftmNorm(el.value) || '';
+  document.querySelectorAll('#' + id + ' tr[data-t]').forEach(tr => { tr.style.display = !q || ftmNorm(tr.getAttribute('data-t')).includes(q) ? '' : 'none'; });
+}
+function ftmEpVerSensor(e) { e.preventDefault(); FTM.epSens = true; ftmEpPintar(); }
 function ftmEpPintar() {
   const out = document.getElementById('ftm-ep-res'); if (!out) return; const cat = FTM_CATS[FTM.epCat] ? FTM.epCat : '', V = FTM.epV;
   const R = ftmEvaluar(cat, V); FTM.epR = R; const esc = x => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
@@ -22773,10 +22782,17 @@ function ftmEpPintar() {
   if (FTM.epF.length) {
     const bySec = {}; FTM.epF.forEach(f => { (bySec[f.sec || 'General'] = bySec[f.sec || 'General'] || []).push(f); });
     let tot = 0, filas = '';
+    const bd = e => '<span style="background:#991b1b;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:700">EXIGIDO POR LA NORMA</span>';
     Object.keys(bySec).forEach(sc => { const L = bySec[sc], vac = L.filter(f => f.estado !== 'ok');
-      if (/sensor/i.test(sc) && vac.length === L.length) { filas += '<tr style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px" colspan="4"><b>' + sc + '</b>: toda la sección sin diligenciar (solo aplica si el producto trae sensor)</td></tr>'; return; }
-      vac.forEach(f => { tot++; filas += '<tr style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px;color:#64748b">' + sc + '</td><td>' + esc(f.campo) + (exigidos.has(f.k) ? ' <span style="background:#991b1b;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:700">EXIGIDO POR LA NORMA</span>' : '') + '</td><td style="background:' + (exigidos.has(f.k) ? '#fecaca;color:#7f1d1d' : '#fef3c7;color:#92400e') + ';font-weight:700;padding:4px 8px">' + (f.estado === 'blanco' ? 'En blanco' : 'Puso «' + esc(f.valor) + '» (dato no suministrado)') + '</td><td>' + (f.k ? inp(f.k, f.estado === 'ok' ? f.valor : '') : '') + '</td></tr>'; }); });
-    vacios = '<div style="margin-top:14px;font-size:12px"><b>📋 Datos no completados por el proveedor</b> (vacíos, «/», «-», «NA»… se pidan o no en la categoría): ' + tot + '</div>' + (filas ? '<div style="overflow:auto;max-height:40vh;margin-top:6px"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:5px 8px">Sección</th><th>Campo</th><th>Qué pasó</th><th>Completar</th></tr>' + filas + '</table></div>' : '<div style="color:#166534;font-size:12px">Todos los campos fueron diligenciados.</div>');
+      if (/sensor/i.test(sc) && vac.length === L.length) { tot += 0; filas += '<tr data-t="' + esc(sc.toLowerCase()) + ' sensor" style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px" colspan="4"><b>' + esc(sc) + '</b>: toda la sección sin diligenciar (solo aplica si el producto trae sensor) · <a href="#" onclick="ftmEpVerSensor(event)">ver los ' + L.length + ' campos</a></td></tr>'; if (FTM.epSens) vac.forEach(f => { tot++; filas += ftmEpFila(f, sc, exigidos, bd, inp, esc); }); return; }
+      vac.forEach(f => { tot++; filas += ftmEpFila(f, sc, exigidos, bd, inp, esc); }); });
+    const todos = FTM.epF.map(f => { const ex = exigidos.has(f.k); return '<tr data-t="' + esc((f.sec + ' ' + f.campo + ' ' + f.valor).toLowerCase()) + '" style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px;color:#64748b">' + esc(f.sec) + '</td><td>' + esc(f.campo) + (ex ? ' ' + bd() : '') + '</td><td>' + (f.k ? inp(f.k, f.estado === 'ok' ? f.valor : '') : esc(f.valor)) + '</td><td style="padding:4px 8px;font-weight:700;color:' + (f.estado === 'ok' ? '#166534' : '#92400e') + '">' + (f.estado === 'ok' ? '✅ Diligenciado' : f.estado === 'blanco' ? '⚠️ En blanco' : '⚠️ Puso «' + esc(f.valor) + '»') + '</td></tr>'; }).join('');
+    const hdr = c => '<tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:5px 8px">Sección</th><th>Campo</th>' + c + '</tr>';
+    const buscador = id => '<input class="inp" placeholder="🔎 Buscar campo, sección o valor…" style="margin:6px 0;max-width:360px" oninput="ftmEpBuscar(this,\'' + id + '\')" value="' + esc(FTM.epQ && FTM.epQ[id] || '') + '">';
+    vacios = '<details ' + (FTM.epOp1 === false ? '' : 'open') + ' ontoggle="FTM.epOp1=this.open" style="margin-top:14px"><summary style="cursor:pointer;font-size:13px;font-weight:700">📋 Datos no completados por el proveedor (' + tot + ') <span style="font-weight:400;color:var(--mu)">· vacíos, «/», «-», «NA»… exigidos o no</span></summary>' + buscador('ftm-t1') +
+      (filas ? '<div style="overflow:auto;max-height:42vh"><table id="ftm-t1" style="border-collapse:collapse;width:100%;font-size:12px">' + hdr('<th>Qué pasó</th><th>Completar</th>') + filas + '</table></div>' : '<div style="color:#166534;font-size:12px">Todos los campos fueron diligenciados.</div>') + '</details>' +
+      '<details ' + (FTM.epOp2 ? 'open' : '') + ' ontoggle="FTM.epOp2=this.open" style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;font-weight:700">🗂 Todos los campos del formato (' + FTM.epF.length + ') <span style="font-weight:400;color:var(--mu)">· diligenciados y no, con buscador</span></summary>' + buscador('ftm-t2') +
+      '<div style="overflow:auto;max-height:42vh"><table id="ftm-t2" style="border-collapse:collapse;width:100%;font-size:12px">' + hdr('<th>Valor (editable)</th><th>Estado</th>') + todos + '</table></div></details>';
   }
   const ord = { no: 0, falta: 1, ok: 2 }, ed = Object.keys(FTM.epEd).length;
   const guardar = ftmRolDe() === 'edit' ? '<div style="margin-top:14px;border:2px solid #0f172a;border-radius:10px;padding:12px"><b style="font-size:13px">💾 Pasar a la base de datos (matriz)</b>' +
@@ -22790,6 +22806,7 @@ function ftmEpPintar() {
     '<div style="overflow:auto;max-height:50vh"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:5px 8px">Requisito</th><th>Valor (editable)</th><th>Resultado</th></tr>' +
     R.slice().sort((a, b) => ord[a.estado] - ord[b.estado]).map(r => '<tr style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px">' + esc(r.req) + '</td><td>' + inp(r.campo, V[r.campo] == null ? '' : V[r.campo]) + '</td><td style="background:' + col[r.estado][0] + ';color:' + col[r.estado][1] + ';font-weight:700;padding:4px 8px">' + col[r.estado][2] + (r.nota ? '<div style="font-weight:400;font-size:11px">' + esc(r.nota) + '</div>' : '') + '</td></tr>').join('') + '</table></div>' +
     vacios + '<div style="margin-top:8px"><button class="btn btn-sm" onclick="ftmEvalProdExcel()">⬇️ Descargar resultado (Excel)</button></div>' + guardar;
+  ['ftm-t1', 'ftm-t2'].forEach(id => { const q = FTM.epQ && FTM.epQ[id]; if (q) ftmEpBuscar({ value: q }, id); });
 }
 async function ftmEpGuardar() {
   const msg = t => { const m = document.getElementById('ftm-ep-gmsg'); if (m) m.innerHTML = t; };
