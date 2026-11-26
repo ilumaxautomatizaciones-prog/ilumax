@@ -4811,19 +4811,19 @@ async function ssocSubirAuto(inp) {
     const wb = await new Promise((ok, no) => { const fr = new FileReader(); fr.onerror = () => no(new Error('No se pudo leer el archivo')); fr.onload = () => { try { ok(XLSX.read(fr.result, { type: 'array', sheets: undefined })); } catch (e) { no(new Error('Archivo no válido')); } }; fr.readAsArrayBuffer(f); });
     let A = null; for (const n of wb.SheetNames) { const a = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' }); const h = (a[0] || []).map(x => String(x).trim()); if (h.includes('Tipo de Entidad') && h.includes('IBC') && h.includes('Periodo')) { A = a; break; } }
     if (!A) throw new Error('No encuentro la hoja de autoliquidación (columnas Tipo de Entidad, IBC, Periodo). Descarga «Resumen Autoliquidacion» de SIESA.');
-    const h = A[0].map(x => String(x).trim()), c = n => h.indexOf(n), iE = c('Empleado'), iN = c('Nombre'), iT = c('Tipo de Entidad'), iI = c('IBC'), iP = c('Periodo'), iC = c('Valor aporte cotiz empleado'), iA = c('Valor Aporte Cotizacion'), iCar = c('Cargo'), iCc = c('Ccostos'), iSb = c('Sueldo basico'), iS1 = c('Vlr aporte fondo Solidaridad'), iS2 = c('Vlr aporte fondo solid L797');
+    const h = A[0].map(x => String(x).trim()), c = n => h.indexOf(n), iE = c('Empleado'), iN = c('Nombre'), iT = c('Tipo de Entidad'), iI = c('IBC'), iP = c('Periodo'), iC = c('Valor aporte cotiz empleado'), iA = c('Valor Aporte Cotizacion'), iCar = c('Cargo'), iCc = c('Ccostos'), iSb = c('Sueldo basico'), iS1 = c('Vlr aporte fondo Solidaridad'), iS2 = c('Vlr aporte fondo solid L797'), iRet = c('RET');
     const P = {};
     for (let r = 1; r < A.length; r++) {
       const R = A[r], per = String(R[iP] || '').replace(/\D/g, ''), ced = String(R[iE] || '').trim(), t = String(R[iT] || '').trim(); if (!/^20\d{4}$/.test(per) || !ced) continue;
-      const Q = P[per] || (P[per] = { emp: {}, sol: 0 }); const o = Q.emp[ced] || (Q.emp[ced] = { n: String(R[iN] || '').replace(/\s+/g, ' ').trim(), ibc: 0, sa: 0, pe: 0, p16: 0, car: String(R[iCar] || '').trim(), cc: String(R[iCc] || '').trim(), sal: 0 });
+      const Q = P[per] || (P[per] = { emp: {}, sol: 0 }); const o = Q.emp[ced] || (Q.emp[ced] = { n: String(R[iN] || '').replace(/\s+/g, ' ').trim(), ibc: 0, ibcA: 0, sa: 0, pe: 0, p16: 0, ret: 0, car: String(R[iCar] || '').trim(), cc: String(R[iCc] || '').trim(), sal: 0 }); if (iRet >= 0 && ssocNum(R[iRet]) > 0) o.ret = 1;
       if (t === 'EPS') { o.ibc += ssocNum(R[iI]); o.sa += ssocNum(R[iC]); o.sal = Math.max(o.sal, ssocNum(R[iSb])); Q.sol += ssocNum(R[iS1]) + ssocNum(R[iS2]); }
-      else if (t === 'AFP') { o.pe += ssocNum(R[iC]); o.p16 += ssocNum(R[iA]); if (!o.ibc) o.ibc = ssocNum(R[iI]); }
+      else if (t === 'AFP') { o.pe += ssocNum(R[iC]); o.p16 += ssocNum(R[iA]); o.ibcA += ssocNum(R[iI]); }
     }
     const pers = Object.keys(P).sort(); if (!pers.length) throw new Error('El archivo no trae periodos');
     let n = 0;
     for (const per of pers) {
       const E = Object.entries(P[per].emp), rd = Math.round;
-      const emp = E.map(([ced, o]) => [ced, o.n, rd(o.ibc), 'Autoliquidación', o.car, 'Activo', rd(o.sal), '', '', o.cc, {}, rd(o.sa), rd(o.pe), rd(o.p16)]);
+      const emp = E.map(([ced, o]) => [ced, o.n, rd(o.ibc || o.ibcA), 'Autoliquidación', o.car, o.ret ? 'Retirado' : 'Activo', rd(o.sal), '', '', o.cc, {}, rd(o.sa), rd(o.pe), rd(o.p16)]);
       const filas = [['AUTO', 'Autoliquidación SIESA (empleado)', rd(E.reduce((x, [, o]) => x + o.sa, 0)), rd(E.reduce((x, [, o]) => x + o.pe, 0)), rd(P[per].sol), 'Resumen Autoliquidación']];
       await ssocKvSet('siesa:' + per, { j: { ok: true, periodo: per, filas, emp, auto: true }, cuando: new Date().toISOString(), por: (CU.nombre || CU.email) + ' · ' + f.name }); n++;
     }
