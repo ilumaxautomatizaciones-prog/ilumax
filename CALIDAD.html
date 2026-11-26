@@ -20225,7 +20225,7 @@ function renderComextMod() {
   if (!CE_MOD_TABS.includes(REABAST.tab)) REABAST.tab = 'ce_hoy';
   return renderReabastMod();
 }
-const pgMap = { reabast: renderReabastMod, comext: renderComextMod, inv: renderInvAbast, tesoreria: renderTesoreriaMod, compras: renderComprasMod, innov: renderInnovMod, onepage: renderOnePageMod, autom: renderAutomMod, calidad: renderCalidadMod, fichas: renderFichasMod, oc: () => calReabTab('oc'), referencias: () => calReabTab('referencias') };
+const pgMap = { reabast: renderReabastMod, comext: renderComextMod, inv: renderInvAbast, tesoreria: renderTesoreriaMod, compras: renderComprasMod, innov: renderInnovMod, onepage: renderOnePageMod, autom: renderAutomMod, calidad: renderCalidadMod, fichas: renderFichasMod, oc: () => calReabTab('oc'), referencias: () => calReabTab('referencias'), dev: () => calReabTab('dev') };
 // ================= ONE PAGE OPERACIONES =================
 const OP = { d: null, mes: null, cargando: false, pre: null };
 const OP_M = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -20454,14 +20454,14 @@ function opExcel() {
   const ws = XLSX.utils.aoa_to_sheet(A), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'One Page'); ws['!cols'] = [{ wch: 42 }].concat(Array(14).fill({ wch: 11 })); XLSX.writeFile(wb, 'One_Page_Operaciones_2026.xlsx');
 }
 
-const ABAST_TABS = [['fichas', '📄', 'Fichas técnicas'], ['calidad', '🧪', 'Calidad'], ['oc', '📑', 'Órdenes de compra'], ['referencias', '🧩', 'Referencias']];
+const ABAST_TABS = [['fichas', '📄', 'Fichas técnicas'], ['calidad', '🧪', 'Calidad'], ['oc', '📑', 'Órdenes de compra'], ['referencias', '🧩', 'Referencias'], ['dev', '↩️', 'Devoluciones']];
 function buildNav() {
   const n = document.getElementById('nav'); if (!n) return;
   n.innerHTML = ABAST_TABS.map(t => '<div class="nt" id="tab-' + t[0] + '" onclick="goPage(\'' + t[0] + '\')">' + t[1] + ' ' + t[2] + '</div>').join('');
 }
 function goPage(id) {
   if (!pgMap[id] || id === 'reabast') id = 'fichas';
-  const pgId = (id === 'oc' || id === 'referencias') ? 'reabast' : id;
+  const pgId = (id === 'oc' || id === 'referencias' || id === 'dev') ? 'reabast' : id;
   // Abastecimiento y Comercio Exterior comparten el mismo código: solo uno dibuja a la vez (evita ids repetidos)
   const ce = id === 'comext';
   if (!!REABAST.vistaCE !== ce) {
@@ -20487,7 +20487,7 @@ async function startApp() {
   buildNav();
   const uv = leerUltimaVista();
   if (uv && uv.page === 'reabast' && uv.reabastTab && typeof REABAST !== 'undefined') REABAST.tab = uv.reabastTab;
-  goPage(uv && ['fichas', 'calidad', 'oc', 'referencias'].includes(uv.page) ? uv.page : 'fichas');
+  goPage(uv && ['fichas', 'calidad', 'oc', 'referencias', 'dev'].includes(uv.page) ? uv.page : 'fichas');
   hideLoader();
 }
 // Restaurar sesión al recargar
@@ -22781,10 +22781,10 @@ function ftmEpSet(k, v) {
 async function calReabTab(tab) {
   const el = document.getElementById('reabast-content'); if (!el) return;
   REABAST.vistaCal = true; REABAST.vistaCE = false; REABAST.tab = tab;
-  el.innerHTML = '<div style="padding:14px"><div id="cal-reab-body">' + cargaHtml('Cargando ' + (tab === 'oc' ? 'órdenes de compra' : 'referencias')) + '</div></div>';
-  try { if (!(REABAST.ordenesCompra || []).length) await cargarOC(); if (!FTM.roles) await ftmBorCargar(); } catch (e) { console.warn('calReabTab', e); }
+  el.innerHTML = '<div style="padding:14px"><div id="cal-reab-body">' + cargaHtml('Cargando ' + (tab === 'oc' ? 'órdenes de compra' : tab === 'dev' ? 'devoluciones' : 'referencias')) + '</div></div>';
+  try { if (tab !== 'dev' && !(REABAST.ordenesCompra || []).length) await cargarOC(); if (!FTM.roles) await ftmBorCargar(); } catch (e) { console.warn('calReabTab', e); }
   const body = document.getElementById('cal-reab-body'); if (!body || REABAST.tab !== tab) return;
-  try { if (tab === 'oc') { body.innerHTML = calOcHtml(); calOcPintar(); } else { body.innerHTML = reabastHtmlReferenciasShell(); reabastRepintarReferencias(); } }
+  try { if (tab === 'dev') { body.innerHTML = calDevHtml(); if (CDEV.l) calDevPintar(); else calDevCargar(); } else if (tab === 'oc') { body.innerHTML = calOcHtml(); calOcPintar(); } else { body.innerHTML = reabastHtmlReferenciasShell(); reabastRepintarReferencias(); } }
   catch (e) { body.innerHTML = '<div class="alert">No se pudo mostrar: ' + ftmE(e.message) + '</div>'; }
 }
 const _reabastPintarOrig = reabastPintar;
@@ -22813,6 +22813,80 @@ function calOcPintar() {
   }).join('') + (os.length > 150 ? '<div class="arte-mu" style="font-size:11px">Se muestran 150 de ' + os.length + '; filtra para ver el resto.</div>' : '');
 }
 function calOcTog(id) { CALOC.abiertas.has(id) ? CALOC.abiertas.delete(id) : CALOC.abiertas.add(id); calOcPintar(); }
+/* ===== Calidad: Devoluciones (vienen de Logística; solo lectura) ===== */
+const CDEV = { l: null, per: '90', est: '', umb: Number((() => { try { return localStorage.getItem('cal_dev_umb'); } catch (e) { return 0; } })()) || 300, umbR: Number((() => { try { return localStorage.getItem('cal_dev_umbr'); } catch (e) { return 0; } })()) || 500, g: { sort: null, f: {}, hide: new Set(), q: '', rows: [], cols: [] }, err: '' };
+const CDEV_EST = { por_recibir: ['Por recibir', '#dbeafe', '#1e40af'], recibida: ['Recibida · falta verificar', '#ffedd5', '#9a3412'], verificada: ['Verificada · falta nota crédito', '#fee2e2', '#991b1b'], nota_credito: ['Con nota crédito', '#dcfce7', '#166534'] };
+const cdFecha = d => String(d.fecha_doc || d.fecha_recibo || d.creado || '').slice(0, 10);
+const cdUds = d => (d.items || []).reduce((s, i) => s + (Number(i.cant_doc) || 0), 0);
+const cdFm = n => (Number(n) || 0).toLocaleString('es-CO');
+async function calDevCargar() {
+  try {
+    const r = await fetch(SB_URL + '/functions/v1/calidad-devoluciones', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ email: (CU && CU.email) || '' }) }), j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'Error'); CDEV.l = j.devs; CDEV.err = '';
+  } catch (e) { CDEV.err = e.message || String(e); CDEV.l = CDEV.l || []; }
+  calDevPintar();
+}
+function calDevHtml() {
+  if (!document.getElementById('cdev-css')) { const s = document.createElement('style'); s.id = 'cdev-css'; s.textContent = '@keyframes cdpulse{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.55);background:#fee2e2}50%{box-shadow:0 0 0 8px rgba(220,38,38,0);background:#fecaca}}.cd-alerta{animation:cdpulse 1.2s infinite;border:2px solid #dc2626;border-radius:10px;padding:10px 12px;margin-bottom:10px;color:#7f1d1d}.cdg th{background:#0f172a;color:#fff;padding:6px 8px;white-space:nowrap;text-align:left;position:sticky;top:0}.cdg td{padding:4px 8px;border-top:1px solid #e2e8f0}.cdg tr:nth-child(even) td{background:#eff6ff}.cdgb{border:0;background:#ffffff26;color:#fff;border-radius:5px;margin-left:5px;cursor:pointer;font-size:10px;padding:2px 5px}.cdgb.on{background:#f5c518;color:#0f172a}#cdgm{position:fixed;z-index:10000;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 12px 32px #0004;width:264px;padding:10px;font-size:12px;color:#0f172a}#cdgm input:not([type=checkbox]){display:block;width:100%;font:inherit;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:2px}#cdgm .li{max-height:210px;overflow:auto;border:1px solid #e2e8f0;border-radius:6px;margin:6px 0;padding:4px 6px}#cdgm label{display:flex;gap:6px;align-items:center;padding:2px 0}'; document.head.appendChild(s); }
+  return '<div class="toolbar" style="margin-bottom:8px;gap:8px;flex-wrap:wrap;align-items:center"><select class="inp" style="width:auto" onchange="CDEV.per=this.value;calDevPintar()">' + [['30', 'Últimos 30 días'], ['90', 'Últimos 90 días'], ['180', 'Últimos 6 meses'], ['365', 'Último año'], ['0', 'Todo']].map(([v, l]) => '<option value="' + v + '"' + (CDEV.per === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select><select class="inp" style="width:auto" onchange="CDEV.est=this.value;calDevPintar()"><option value="">Todos los estados</option>' + Object.entries(CDEV_EST).map(([k, v]) => '<option value="' + k + '"' + (CDEV.est === k ? ' selected' : '') + '>' + v[0] + '</option>').join('') + '</select><span style="font-size:11.5px;color:var(--mu)">Alerta si una devolución ≥</span><input class="inp" type="number" style="width:80px;padding:5px 8px" value="' + CDEV.umb + '" onchange="CDEV.umb=Number(this.value)||1;try{localStorage.setItem(\'cal_dev_umb\',CDEV.umb)}catch(e){}calDevPintar()"><span style="font-size:11.5px;color:var(--mu)">uds, o una referencia ≥</span><input class="inp" type="number" style="width:80px;padding:5px 8px" value="' + CDEV.umbR + '" onchange="CDEV.umbR=Number(this.value)||1;try{localStorage.setItem(\'cal_dev_umbr\',CDEV.umbR)}catch(e){}calDevPintar()"><span style="font-size:11.5px;color:var(--mu)">uds en el período</span><button class="btn btn-sm" onclick="calDevCargar()">🔄 Actualizar</button></div><div id="cdev-b"></div>';
+}
+function cdgSet(k, f) { if (f) CDEV.g.f[k] = f; else delete CDEV.g.f[k]; }
+function calDevPintar() {
+  const box = document.getElementById('cdev-b'); if (!box) return; if (!CDEV.l) { box.innerHTML = cargaHtml('Cargando devoluciones'); return; }
+  const lim = CDEV.per === '0' ? '' : new Date(Date.now() - Number(CDEV.per) * 864e5 - 5 * 36e5).toISOString().slice(0, 10);
+  const D = CDEV.l.filter(d => (!lim || cdFecha(d) >= lim) && (!CDEV.est || d.estado === CDEV.est));
+  const tot = D.reduce((s, d) => s + cdUds(d), 0), pend = D.filter(d => d.estado !== 'nota_credito').length;
+  const grandes = D.filter(d => cdUds(d) >= CDEV.umb).sort((a, b) => cdUds(b) - cdUds(a));
+  const porRef = {}, porMot = {}, porCli = {};
+  D.forEach(d => { (d.items || []).forEach(i => { const u = Number(i.cant_doc) || 0, k = String(i.referencia || '(sin ref)').trim(); const o = porRef[k] || (porRef[k] = { ref: k, desc: i.descripcion || '', u: 0, n: new Set() }); o.u += u; o.n.add(d.id); const m = String(i.motivo || d.motivo || '(sin motivo)').trim(); porMot[m] = (porMot[m] || 0) + u; }); const c = String(d.cliente || '(sin cliente)').trim(); porCli[c] = (porCli[c] || 0) + cdUds(d); });
+  const refs = Object.values(porRef).sort((a, b) => b.u - a.u), refAl = refs.filter(r => r.u >= CDEV.umbR);
+  const top = (o, n) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n);
+  const kp = (l, v, s, c) => '<div style="flex:1;min-width:130px;background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 12px;border-top:4px solid ' + c + '"><div style="font-size:10.5px;color:var(--mu)">' + l + '</div><div style="font-size:22px;font-weight:800">' + v + '</div><div style="font-size:10.5px;color:var(--mu)">' + s + '</div></div>';
+  let h = '';
+  if (CDEV.err) h += '<div class="alert">No se pudieron leer las devoluciones: ' + ftmE(CDEV.err) + '</div>';
+  if (grandes.length || refAl.length) h += '<div class="cd-alerta"><div style="font-weight:800;font-size:14px">🚨 Alerta de devoluciones grandes</div>' + (grandes.length ? '<div style="font-size:12px;margin-top:4px"><b>Devoluciones de ' + cdFm(CDEV.umb) + ' uds o más:</b> ' + grandes.slice(0, 8).map(d => 'Nº ' + ftmE(d.consecutivo) + ' · ' + ftmE(d.cliente || '') + ' · <b>' + cdFm(cdUds(d)) + ' uds</b>').join(' &nbsp;|&nbsp; ') + (grandes.length > 8 ? ' … y ' + (grandes.length - 8) + ' más' : '') + '</div>' : '') + (refAl.length ? '<div style="font-size:12px;margin-top:4px"><b>Referencias con ' + cdFm(CDEV.umbR) + ' uds o más devueltas en el período:</b> ' + refAl.slice(0, 8).map(r => ftmE(r.ref) + ' · <b>' + cdFm(r.u) + ' uds</b>').join(' &nbsp;|&nbsp; ') + '</div>' : '') + '</div>';
+  h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' + kp('Devoluciones', cdFm(D.length), 'en el período', '#2563eb') + kp('Unidades devueltas', cdFm(tot), 'según documento', '#dc2626') + kp('Sin terminar', cdFm(pend), 'falta recibir, verificar o nota crédito', '#d97706') + kp('Referencias distintas', cdFm(refs.length), '', '#7c3aed') + '</div>';
+  const barras = (t, arr, ir) => { const mx = Math.max(1, ...arr.map(x => x[1])); return '<div style="flex:1;min-width:280px;background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px 12px"><div style="font-weight:800;font-size:12.5px;margin-bottom:4px">' + t + '</div>' + (arr.length ? arr.map(([k, v]) => '<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;margin:2px 0"><div style="flex:0 0 42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + ftmE(k) + '">' + (ir ? '<a href="javascript:void(0)" style="color:#1d4ed8;font-weight:700" onclick="ftmIrA(\'' + ftmE(k).replace(/\'/g, '') + '\')">' + ftmE(k) + '</a>' : ftmE(k)) + '</div><div style="flex:1;background:#f1f5f9;border-radius:4px"><div style="height:10px;border-radius:4px;background:#dc2626;width:' + Math.round(v / mx * 100) + '%"></div></div><b style="flex:0 0 52px;text-align:right">' + cdFm(v) + '</b></div>').join('') : '<div class="empty">Sin datos</div>') + '</div>'; };
+  h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' + barras('🏆 Referencias con más devoluciones (uds)', refs.slice(0, 10).map(r => [r.ref + (r.desc ? ' · ' + r.desc.slice(0, 22) : ''), r.u]).map((x, i) => [refs[i].ref, x[1]]), true) + barras('📋 Motivos', top(porMot, 8), false) + barras('🏬 Clientes', top(porCli, 8), false) + '</div>';
+  const rows = D.flatMap(d => (d.items && d.items.length ? d.items : [{}]).map(i => ({ cons: d.consecutivo, doc: d.doc_adt || '', cli: d.cliente || '', canal: d.canal || '', ref: i.referencia || '', desc: i.descripcion || '', ud: i.cant_doc == null ? '' : Number(i.cant_doc), ur: d.estado === 'por_recibir' || i.cant_recibida == null ? '' : Number(i.cant_recibida), ei: i.estado_item === 'buena' ? 'Buena' : i.estado_item === 'mala' ? 'Mala' : '', lote: i.lote || '', mot: i.motivo || d.motivo || '', fecha: cdFecha(d), est: (CDEV_EST[d.estado] || [d.estado])[0], nc: d.nc_numero || '', grande: cdUds(d) >= CDEV.umb })));
+  const g = CDEV.g; g.rows = rows; g.cols = [{ k: 'cons', t: 'Nº', v: r => r.cons, num: 1 }, { k: 'doc', t: 'Doc. devolución', v: r => r.doc }, { k: 'fecha', t: 'Fecha', v: r => r.fecha, date: 1 }, { k: 'cli', t: 'Cliente', v: r => r.cli }, { k: 'canal', t: 'Canal', v: r => r.canal }, { k: 'ref', t: 'Referencia', v: r => r.ref, h: r => r.ref ? '<a href="javascript:void(0)" style="color:#1d4ed8;font-weight:700" onclick="ftmIrA(\'' + ftmE(r.ref).replace(/\'/g, '') + '\')">' + ftmE(r.ref) + '</a>' : '' }, { k: 'desc', t: 'Descripción', v: r => r.desc }, { k: 'ud', t: 'Cant. doc.', v: r => r.ud, num: 1, sum: 1 }, { k: 'ur', t: 'Cant. recibida', v: r => r.ur, num: 1, sum: 1 }, { k: 'ei', t: 'Estado ítem', v: r => r.ei }, { k: 'lote', t: 'Lote', v: r => r.lote }, { k: 'mot', t: 'Motivo', v: r => r.mot }, { k: 'est', t: 'Estado', v: r => r.est }, { k: 'nc', t: 'Nota crédito', v: r => r.nc }];
+  h += '<div style="background:#fff;border:1px solid var(--b1);border-radius:10px;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px"><b>Detalle</b><input class="inp" id="cdg-q" style="max-width:260px;padding:5px 8px" placeholder="🔎 Buscar en la tabla…" value="' + ftmE(g.q) + '" oninput="CDEV.g.q=this.value;cdgPaint()"><button class="btn btn-sm" onclick="cdgColsM(event)">▦ Columnas</button><button class="btn btn-sm" onclick="CDEV.g.f={};CDEV.g.sort=null;CDEV.g.q=\'\';document.getElementById(\'cdg-q\').value=\'\';cdgPaint()">✖ Quitar filtros y orden</button><button class="btn btn-sm" onclick="cdgExcel()">⬇ Excel de esta vista</button></div><div style="overflow:auto;max-height:70vh" id="cdg"></div></div>';
+  box.innerHTML = h; cdgPaint();
+}
+const cdgN = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+function cdgView() {
+  const g = CDEV.g, q = cdgN(g.q).trim();
+  let R = g.rows.filter(r => (!q || g.cols.some(c => cdgN(c.v(r)).includes(q))) && g.cols.every(c => { const f = g.f[c.k]; if (!f) return true; const v = c.v(r); if (f.sel && !f.sel.has(String(v))) return false; if (f.min !== '' && f.min != null) { if (v === '' || (c.num ? Number(v) < Number(f.min) : String(v) < f.min)) return false; } if (f.max !== '' && f.max != null) { if (v === '' || (c.num ? Number(v) > Number(f.max) : String(v) > f.max)) return false; } return true; }));
+  if (g.sort) { const c = g.cols.find(x => x.k === g.sort.k), d = g.sort.dir; if (c) R = R.slice().sort((a, b) => { const x = c.v(a), y = c.v(b); return d * (c.num ? (x === '' ? -Infinity : Number(x)) - (y === '' ? -Infinity : Number(y)) : String(x).localeCompare(String(y), 'es', { numeric: true })); }); }
+  return R;
+}
+function cdgPaint() {
+  const box = document.getElementById('cdg'); if (!box) return; const g = CDEV.g, V = cdgView(), cols = g.cols.filter(c => !g.hide.has(c.k));
+  const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : '', on = g.f[c.k]; return '<th><span style="cursor:pointer" onclick="cdgSort(\'' + c.k + '\')">' + ftmE(c.t) + s + '</span><button class="cdgb' + (on ? ' on' : '') + '" onclick="cdgMenu(event,\'' + c.k + '\')">▾</button></th>'; }).join('');
+  const rows = V.slice(0, 600).map(r => '<tr' + (r.grande ? ' style="color:#b91c1c;font-weight:700"' : '') + '>' + cols.map(c => '<td style="text-align:' + (c.num ? 'right' : 'left') + '">' + (c.h ? c.h(r) : ftmE(c.v(r))) + '</td>').join('') + '</tr>').join('');
+  const tot = '<tr>' + cols.map((c, i) => '<td style="text-align:' + (c.num ? 'right' : 'left') + ';font-weight:800;background:#0f172a;color:#fff;position:sticky;bottom:0">' + (i === 0 ? V.length + ' filas' : c.sum ? cdFm(V.reduce((s, r) => s + (Number(c.v(r)) || 0), 0)) : '') + '</td>').join('') + '</tr>';
+  box.innerHTML = '<table class="cdg" style="border-collapse:collapse;width:100%;font-size:12px"><thead><tr>' + th + '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + cols.length + '" class="empty">Sin resultados</td></tr>') + '</tbody><tfoot>' + tot + '</tfoot></table>' + (V.length > 600 ? '<div style="font-size:11px;color:var(--mu)">Se muestran 600 de ' + V.length + '; filtra para ver el resto (el Excel trae todas).</div>' : '') + '<div style="font-size:11px;color:var(--mu);margin-top:4px">En rojo: devoluciones de ' + cdFm(CDEV.umb) + ' uds o más.</div>';
+}
+function cdgSort(k) { const g = CDEV.g; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; cdgPaint(); }
+function cdgCerrar() { const m = document.getElementById('cdgm'); if (m) m.remove(); }
+document.addEventListener('click', cdgCerrar);
+function cdgPos(d, ev) { const b = ev.currentTarget.getBoundingClientRect(); d.style.top = Math.max(8, Math.min(b.bottom + 4, innerHeight - 440)) + 'px'; d.style.left = Math.max(8, Math.min(b.left - 120, innerWidth - 280)) + 'px'; }
+function cdgColsM(ev) { ev.stopPropagation(); cdgCerrar(); const g = CDEV.g, d = document.createElement('div'); d.id = 'cdgm'; d.onclick = e => e.stopPropagation(); cdgPos(d, ev); d.innerHTML = '<b>Columnas visibles</b><div class="li" style="max-height:300px">' + g.cols.map(c => '<label><input type="checkbox" ' + (g.hide.has(c.k) ? '' : 'checked') + ' onchange="CDEV.g.hide[this.checked?\'delete\':\'add\'](\'' + c.k + '\');cdgPaint()"> ' + ftmE(c.t) + '</label>').join('') + '</div>'; document.body.appendChild(d); }
+let CDGM = null;
+function cdgMenu(ev, k) {
+  ev.stopPropagation(); cdgCerrar(); const g = CDEV.g, c = g.cols.find(x => x.k === k), f = g.f[k] || {}, d = document.createElement('div'); d.id = 'cdgm'; d.onclick = e => e.stopPropagation(); cdgPos(d, ev);
+  const vals = c.num || c.date ? null : [...new Set(g.rows.map(r => String(c.v(r))))].sort((a, b) => a.localeCompare(b, 'es', { numeric: true })).slice(0, 600); CDGM = { k, vals };
+  d.innerHTML = '<button class="btn btn-sm" style="width:100%;margin-bottom:4px" onclick="cdgOrden(1)">↑ Ordenar ' + (c.num ? 'menor a mayor' : 'A → Z') + '</button><button class="btn btn-sm" style="width:100%" onclick="cdgOrden(-1)">↓ Ordenar ' + (c.num ? 'mayor a menor' : 'Z → A') + '</button>' +
+    (c.num ? '<div style="margin-top:8px">Mayor o igual a<input id="cdgMin" value="' + ftmE(f.min == null ? '' : f.min) + '"></div><div>Menor o igual a<input id="cdgMax" value="' + ftmE(f.max == null ? '' : f.max) + '"></div>' : '') +
+    (c.date ? '<div style="margin-top:8px">Desde<input type="date" id="cdgMin" value="' + ftmE(f.min || '') + '"></div><div>Hasta<input type="date" id="cdgMax" value="' + ftmE(f.max || '') + '"></div>' : '') +
+    (vals ? '<input id="cdgBus" placeholder="Buscar…" style="margin-top:8px" oninput="cdgBuscar(this.value)"><div class="li" id="cdgLi">' + vals.map((v, i) => '<label data-t="' + ftmE(cdgN(v)) + '"><input type="checkbox" class="cdgc" data-i="' + i + '" ' + (!f.sel || f.sel.has(v) ? 'checked' : '') + '> ' + ftmE(v || '(vacío)') + '</label>').join('') + '</div>' : '') +
+    '<div style="display:flex;gap:6px;margin-top:8px"><button class="btn btn-sm" style="flex:1" onclick="cdgAplicar()">Aplicar</button><button class="btn btn-sm" style="flex:1" onclick="cdgQuitar()">Quitar filtro</button></div>'; document.body.appendChild(d);
+}
+function cdgBuscar(t) { const q = cdgN(t); document.querySelectorAll('#cdgLi label').forEach(l => { const ok = !q || l.dataset.t.includes(q); l.style.display = ok ? '' : 'none'; l.querySelector('input').checked = ok; }); }
+function cdgOrden(dir) { CDEV.g.sort = { k: CDGM.k, dir }; cdgCerrar(); cdgPaint(); }
+function cdgAplicar() { const g = CDEV.g, c = g.cols.find(x => x.k === CDGM.k), f = {}; if (c.num || c.date) { f.min = document.getElementById('cdgMin').value.trim(); f.max = document.getElementById('cdgMax').value.trim(); } if (CDGM.vals) { const chk = [...document.querySelectorAll('.cdgc')], on = chk.filter(x => x.checked).map(x => CDGM.vals[+x.dataset.i]); if (on.length < chk.length) f.sel = new Set(on); } if (f.sel || f.min || f.max) g.f[CDGM.k] = f; else delete g.f[CDGM.k]; cdgCerrar(); cdgPaint(); }
+function cdgQuitar() { delete CDEV.g.f[CDGM.k]; cdgCerrar(); cdgPaint(); }
+function cdgExcel() { const g = CDEV.g, V = cdgView(), cols = g.cols.filter(c => !g.hide.has(c.k)); if (!V.length) return toast('No hay filas para exportar', 'wa'); const ws = XLSX.utils.json_to_sheet(V.map(r => { const o = {}; cols.forEach(c => { const v = c.v(r); o[c.t] = c.num && v !== '' ? Number(v) : v; }); return o; })), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Devoluciones'); XLSX.writeFile(wb, 'Devoluciones.xlsx'); }
 const FTM_RM_MAP = { descripcion: ['descripcion_en', 'Descripción'], nombre_comercial: ['nombre_comercial', 'Nombre comercial'], referencia_ilumax: ['referencia_ilumax', 'Referencia ILUMAX'], temperatura_de_color_k: ['temperatura_color', 'Temperatura de color'], ean_13: ['ean13', 'EAN 13'], tipo_de_empaque_principal: ['tipo_empaque', 'Tipo de empaque'] };
 async function ftmActSistema(k) {
   if (ftmRolDe() !== 'edit') return toast('Solo calidad (jefe o analista) puede actualizar la referencia en el sistema', 'wa');
