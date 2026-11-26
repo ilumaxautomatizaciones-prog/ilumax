@@ -24168,7 +24168,19 @@ function ocpLeerPI(buf){
     const ws = wb.Sheets[nombre]; if(!ws || !ws['!ref']) return;
     const filas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
     const rng = XLSX.utils.decode_range(ws['!ref']);
-    const hdr = filas.findIndex(r=> r && r.some(c=>/^\s*(code|item\s*no\.?|model|ref(erence)?|yours?)\s*$/i.test(String(c||''))) && r.some(c=>/quantity|qty|q['’`]?ty/i.test(String(c||''))));
+    let hdr = filas.findIndex(r=> r && r.some(c=>/^\s*(code|item\s*no\.?|model|ref(erence)?|yours?)\s*$/i.test(String(c||''))) && r.some(c=>/quantity|qty|q['’`]?ty/i.test(String(c||''))));
+    if(hdr<0){   // encabezado en varias filas (p. ej. "Item No." arriba y "QTY" / "USD/pc" en las de abajo): se unen en una sola
+      const rxC = /^\s*(code|item\s*no\.?|model|ref(erence)?|yours?)\s*$/i, esTxt = r=> (r||[]).some(c=>c!=null&&String(c).trim()) && !(r||[]).some(c=>typeof c==='number' || (typeof c==='string' && /^\s*\d[\d.,]*\s*$/.test(c)));
+      for(let r=0; r<filas.length && hdr<0; r++){
+        if(!(filas[r]||[]).some(c=>rxC.test(String(c||'')))) continue;
+        let fin = r; while(fin<r+3 && esTxt(filas[fin+1])) fin++;
+        if(fin===r) continue;
+        const ancho = Math.max(...filas.slice(r,fin+1).map(x=>(x||[]).length));
+        const uni = Array.from({length:ancho}, (_,c)=> filas.slice(r,fin+1).map(x=>x&&x[c]!=null?String(x[c]).replace(/\s+/g,' ').trim():'').filter(Boolean).join(' ') || null);
+        if(!uni.some(c=>/quantity|qty|q['’`]?ty/i.test(String(c||'')))) continue;
+        filas[r] = uni; for(let k=r+1;k<=fin;k++) filas[k] = []; hdr = r;
+      }
+    }
     if(hdr<0) return;
     if(!mejor || filas.length>mejor.filas.length) mejor = {nombre, idx, ws, filas, hdr, off:{r:rng.s.r, c:rng.s.c}};
   });
@@ -24195,8 +24207,8 @@ function ocpLeerPI(buf){
   const col = (...rx)=>{ for(const r of rx){ const i = H.findIndex(h=>r.test(h)); if(i>=0) return i; } return -1; };
   const cCode = refCol>=0 ? refCol : col(/^code$/i, /^yours?$/i, /^item\s*no/i, /^model$/i, /^ref/i);
   const cQty  = col(/^quantity$/i, /^qty$/i, /^q['’`]?ty\.?$/i, /quantity/i, /q['’`]?ty/i);
-  const cFob  = col(/^fob/i, /unit\s*price/i, /^usd\s*\/\s*(pcs?|unit|set)/i, /price/i);
-  const cAmt  = col(/^amount/i, /total\s*(usd|amount)/i);
+  const cFob  = col(/^fob/i, /unit\s*price/i, /^usd\s*\/\s*(pcs?|unit|set)/i, /price/i, /usd\s*\/\s*(pcs?|unit|set)/i);
+  const cAmt  = col(/^amount/i, /total\s*(usd|amount)/i, /amount/i);
   const cDesc = col(/customer.*item|cusomer.*item/i, /descrip/i);
   const cCtn  = col(/qty\s*\/\s*ctn|pcs\s*\/\s*ctn|qty\s*inner|inner\s*\/\s*outer|packing\s*qty|qty\s*per\s*(ctn|carton)|pcs\s*\/\s*carton/i);
   const cPack = H.findIndex((h,i)=> i!==cCtn && /packag|^package|^packing$/i.test(h));
