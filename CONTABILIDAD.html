@@ -515,7 +515,10 @@ function infHtml() {
     + '<button class="btn" ' + (INF.busy ? 'disabled' : '') + ' onclick="infGenerar()">' + (INF.busy ? '⏳ Generando…' : '🔎 Ver informe') + '</button>' + (INF.data ? '<button class="btn g" onclick="infDescargar()">⬇ Descargar Excel (' + INF.data.d + ' a ' + INF.data.h + ')</button>' : '') + '</div>'
     + '<div class="n" id="inf_msg" style="padding:8px 14px">' + esc(INF.msg) + '</div>'
     + '<div class="n" style="padding:0 14px 12px;color:#64748b">Todo está con fórmulas (SUMIFS sobre la hoja BD). Hojas: BD, Por Linea, Por Tipo Dcto, Por Cliente, Hoja1, Hoja2, Sodimac y Vta Bogota. Datos directos de Siesa (facturas + notas crédito/débito). La <b>línea</b> es la que tiene cada referencia en Siesa (criterio LINEA del ítem, se consulta al generar) y la <b>ciudad</b> sale de las facturas de Excel ya cargadas («SIN CIUDAD» si no hay); en el Excel, un clic en «NO APLICA» lleva a la hoja <i>Refs sin linea</i> con las referencias por corregir y sus documentos. Un rango largo (varios meses) puede tardar unos minutos.</div></div>';
-  if (INF.data) { const nsl = INF.data.SL.length; h += '<div class="card"><div class="tabs" style="padding:0 14px 8px">' + [['bd', '📋 Ventas por cliente (' + INF.data.F.length + ' filas)'], ['sl', '⚠️ Sin línea (' + nsl + ' líneas)']].map(t => '<div class="tab ' + (INF.vista === t[0] ? 'on' : '') + '" onclick="INF.vista=\'' + t[0] + '\';pintar()">' + t[1] + '</div>').join('') + '</div>' + xgBar(INF.vista === 'sl' ? 'infsl' : 'infbd') + '<div class="tw" id="xg_' + (INF.vista === 'sl' ? 'infsl' : 'infbd') + '" style="max-height:68vh;overflow:auto"></div></div>'; }
+  if (INF.data) {
+    const nsl = INF.data.SL.length, nrf = new Set(INF.data.SL.map(x => x[6] || '(sin referencia)')).size, gid = 'inf' + INF.vista;
+    h += '<div class="card"><div class="tabs" style="padding:0 14px 8px;flex-wrap:wrap">' + [['bd', '📋 Ventas por cliente (' + INF.data.F.length + ' filas)'], ['lin', '📚 Por línea'], ['tip', '🧾 Por tipo Dcto'], ['cli', '👥 Por cliente'], ['h1', '🔀 Canal × línea'], ['sod', '🏬 Sodimac'], ['bog', '📍 Vta Bogotá'], ['rsl', '⚠️ Referencias sin línea (' + nrf + ')'], ['sl', '📄 Sin línea · detalle (' + nsl + ' líneas)']].map(t => '<div class="tab ' + (INF.vista === t[0] ? 'on' : '') + '" onclick="INF.vista=\'' + t[0] + '\';pintar()">' + t[1] + '</div>').join('') + '</div>' + xgBar(gid) + '<div class="tw" id="xg_' + gid + '" style="max-height:68vh;overflow:auto"></div></div>';
+  }
   if (INF.res) h += '<div class="card"><h2>Resumen del último informe (' + esc(INF.res.rango) + ')</h2><div class="tw"><table><tr><th>Concepto</th><th style="text-align:right">Valor</th></tr>' + INF.res.t.map(r => '<tr><td>' + esc(r[0]) + '</td><td style="text-align:right">' + fm(r[1]) + '</td></tr>').join('') + '</table></div></div>';
   return h;
 }
@@ -560,12 +563,27 @@ function infRes(F, SL) {
 }
 function infDescargar() { const D = INF.data; if (!D) return; infMsg('Armando el Excel…'); setTimeout(() => { try { infExcel(D.F, D.canales, D.d, D.h, D.nLin, D.SL); } catch (e) { infMsg('No se pudo armar el Excel: ' + e.message); } }, 30); }
 function infPaint() {
-  const D = INF.data; if (!D) return; const cn = c => D.canales[c] || (c ? 'CANAL ' + c : 'SIN CANAL'), id = INF.vista === 'sl' ? 'infsl' : 'infbd'; if (!$('xg_' + id)) return;
+  const D = INF.data; if (!D) return; const cn = c => D.canales[c] || (c ? 'CANAL ' + c : 'SIN CANAL'), id = 'inf' + INF.vista; if (!$('xg_' + id)) return;
   if (id === 'infbd') {
     const rows = D.F.map(f => ({ per: f[0], nit: f[1], cli: f[2], ciu: f[3], can: cn(f[4]), lin: f[5], tipo: f[6], sub: f[7], dsc: f[8], imp: f[9], net: f[10], bru: f[11] }));
     const c = (k, t, o) => Object.assign({ k, t, v: r => r[k] }, o || {});
     xgInit(id, [c('per', 'Periodo'), c('nit', 'NIT'), c('cli', 'Cliente', { wrap: true }), c('ciu', 'Ciudad'), c('can', 'Canal'), c('lin', 'Línea', { h: r => (r.lin === 'NO APLICA' ? '<span class="mal">NO APLICA</span>' : esc(r.lin)) }), c('tipo', 'Tipo Dcto'),
       c('sub', 'Subtotal', { num: true, h: r => fm(r.sub), sum: true }), c('dsc', 'Descuento', { num: true, h: r => fm(r.dsc), sum: true }), c('imp', 'Impuesto', { num: true, h: r => fm(r.imp), sum: true }), c('net', 'Neto', { num: true, h: r => fm(r.net), sum: true }), c('bru', 'Bruto', { num: true, h: r => fm(r.bru), sum: true })], { rows, nombre: 'Ventas_clientes_' + D.d + '_a_' + D.h, attr: r => (r.lin === 'NO APLICA' ? ' class="dif"' : '') });
+  } else if (id === 'infrsl') {
+    const m = new Map(); D.SL.forEach(x => { const ref = x[6] || '(sin referencia)'; let o = m.get(ref); if (!o) { o = { ref, des: x[7], cat: x[8], mot: x[9], n: 0, docs: new Set(), sub: 0 }; m.set(ref, o); } o.n++; o.docs.add(x[2] + x[3]); o.sub += x[10]; });
+    const rows = [...m.values()].map(o => ({ ref: o.ref, des: o.des, cat: o.cat, mot: o.mot, n: o.n, nd: o.docs.size, sub: Math.round(o.sub * 100) / 100 })).sort((a, b) => a.ref.localeCompare(b.ref, 'es', { numeric: true }));
+    const c = (k, t, o) => Object.assign({ k, t, v: r => r[k] }, o || {});
+    xgInit(id, [c('ref', 'Referencia'), c('des', 'Descripción', { wrap: true }), c('cat', 'Categoría / subcategoría en Siesa', { wrap: true }), c('mot', 'Por qué no tiene línea', { wrap: true }), c('n', 'Líneas', { num: true, h: r => fm(r.n), sum: true }), c('nd', 'Documentos', { num: true, h: r => fm(r.nd) }), c('sub', 'Subtotal', { num: true, h: r => fm(r.sub), sum: true })], { rows, nombre: 'Referencias_sin_linea_' + D.d + '_a_' + D.h });
+  } else if (id !== 'infsl') {
+    const per = [...new Set(D.F.map(f => f[0]))].sort(), c = (k, t, o) => Object.assign({ k, t, v: r => r[k] }, o || {});
+    const piv = (filas, kf, tit) => {
+      const m = new Map(); filas.forEach(f => { const k = kf(f), kk = k.join('\u0001'); let o = m.get(kk); if (!o) { o = { k: {}, v: {}, t: 0 }; tit.forEach((t, i) => { o.k['k' + i] = k[i]; }); m.set(kk, o); } o.v[f[0]] = (o.v[f[0]] || 0) + f[7]; o.t += f[7]; });
+      const rows = [...m.values()].map(o => { const r = Object.assign({}, o.k, { tot: o.t }); per.forEach(p => { r['p' + p] = o.v[p] || 0; }); return r; }).sort((a, b) => b.tot - a.tot);
+      const cols = tit.map((t, i) => c('k' + i, t, { wrap: t === 'Cliente' || t === 'Cliente (Bogotá)', h: r => (r['k' + i] === 'NO APLICA' ? '<span class="mal">NO APLICA</span>' : esc(r['k' + i])) })).concat(per.map(p => c('p' + p, p, { num: true, h: r => fm(r['p' + p]), sum: true })), [c('tot', 'TOTAL', { num: true, h: r => fm(r.tot), sum: true })]);
+      return { rows, cols };
+    };
+    const V = { lin: ['Línea', F => piv(F, f => [f[5]], ['Línea'])], tip: ['Tipo Dcto', F => piv(F, f => [f[6]], ['Tipo Dcto'])], cli: ['Cliente', F => piv(F, f => [f[1], f[2], f[3], cn(f[4])], ['NIT', 'Cliente', 'Ciudad', 'Canal'])], h1: ['Canal x línea', F => piv(F, f => [cn(f[4]), f[5]], ['Canal', 'Línea'])], sod: ['Sodimac', F => piv(F.filter(f => /SODIMAC/i.test(f[2])), f => [f[5]], ['Línea (Sodimac)'])], bog: ['Vta Bogota', F => piv(F.filter(f => /BOGOT/i.test(f[3])), f => [f[2]], ['Cliente (Bogotá)'])] }[INF.vista];
+    const r = V[1](D.F); xgInit(id, r.cols, { rows: r.rows, nombre: V[0].replace(/ /g, '_') + '_' + D.d + '_a_' + D.h });
   } else {
     const rows = D.SL.map(x => ({ per: x[0], fec: x[1], tipo: x[2], doc: x[3], nit: x[4], cli: x[5], ref: x[6] || '(sin referencia)', des: x[7], cat: x[8], mot: x[9], sub: x[10] }));
     const c = (k, t, o) => Object.assign({ k, t, v: r => r[k] }, o || {});
