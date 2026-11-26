@@ -502,18 +502,20 @@ function pintar() {
   const tabs = '<div class="tabs" style="padding:0 0 12px">' + [['conf', '📄 Descuentos confidenciales (CPR)'], ['rev', '↩️ Reversos / cruce de cuentas'], ['inv', '📦 Inventario por corte (Siesa)'], ['inf', '📊 Informe de ventas (Excel)'], ['reve', '👥 Reversos cruce de cuentas · empleados']].map(t => '<div class="tab ' + (S.vista === t[0] ? 'on' : '') + '" onclick="S.vista=\'' + t[0] + '\';try{localStorage.setItem(\'ca_vista\',S.vista)}catch(e){};if(S.vista===\'reve\')revTodos();else if(S.vista===\'inv\')ivInicio();else pintar();scrollTo(0,0)">' + t[1] + '</div>').join('') + '</div>';
   $('app').innerHTML = tabs + (S.vista === 'inf' ? infHtml() : S.vista === 'inv' ? ivHtml() : S.vista === 'rev' || S.vista === 'reve' ? revHtml() : h);
   if (S.vista === 'inv') { if (IV.cortes === null) { IV.cortes = []; ivCortes(); } ivPaint(); }
+  if (S.vista === 'inf') infPaint();
 }
 
 /* ===== Informe de ventas por cliente (Excel con todas las hojas) ===== */
-const INF = { desde: '', hasta: '', busy: false, msg: '', res: null };
+const INF = { desde: '', hasta: '', busy: false, msg: '', res: null, data: null, vista: 'bd' };
 function infHtml() {
   if (!INF.hasta) { const h = new Date(Date.now() - 5 * 3600e3), y = h.getUTCFullYear(), m = h.getUTCMonth(); INF.hasta = h.toISOString().slice(0, 10); INF.desde = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10); }
   let h = '<div class="card"><h2>📊 Informe de ventas por cliente</h2><div class="bar" style="flex-wrap:wrap;gap:10px;align-items:end">'
     + '<label class="n">Desde<br><input type="date" id="inf_d" value="' + INF.desde + '" style="padding:7px;border:1px solid #cbd5e1;border-radius:8px"></label>'
     + '<label class="n">Hasta<br><input type="date" id="inf_h" value="' + INF.hasta + '" style="padding:7px;border:1px solid #cbd5e1;border-radius:8px"></label>'
-    + '<button class="btn" ' + (INF.busy ? 'disabled' : '') + ' onclick="infGenerar()">' + (INF.busy ? '⏳ Generando…' : '⬇ Generar y descargar Excel') + '</button></div>'
+    + '<button class="btn" ' + (INF.busy ? 'disabled' : '') + ' onclick="infGenerar()">' + (INF.busy ? '⏳ Generando…' : '🔎 Ver informe') + '</button>' + (INF.data ? '<button class="btn g" onclick="infDescargar()">⬇ Descargar Excel (' + INF.data.d + ' a ' + INF.data.h + ')</button>' : '') + '</div>'
     + '<div class="n" id="inf_msg" style="padding:8px 14px">' + esc(INF.msg) + '</div>'
     + '<div class="n" style="padding:0 14px 12px;color:#64748b">Todo está con fórmulas (SUMIFS sobre la hoja BD). Hojas: BD, Por Linea, Por Tipo Dcto, Por Cliente, Hoja1, Hoja2, Sodimac y Vta Bogota. Datos directos de Siesa (facturas + notas crédito/débito). La <b>línea</b> es la que tiene cada referencia en Siesa (criterio LINEA del ítem, se consulta al generar) y la <b>ciudad</b> sale de las facturas de Excel ya cargadas («SIN CIUDAD» si no hay); en el Excel, un clic en «NO APLICA» lleva a la hoja <i>Refs sin linea</i> con las referencias por corregir y sus documentos. Un rango largo (varios meses) puede tardar unos minutos.</div></div>';
+  if (INF.data) { const nsl = INF.data.SL.length; h += '<div class="card"><div class="tabs" style="padding:0 14px 8px">' + [['bd', '📋 Ventas por cliente (' + INF.data.F.length + ' filas)'], ['sl', '⚠️ Sin línea (' + nsl + ' líneas)']].map(t => '<div class="tab ' + (INF.vista === t[0] ? 'on' : '') + '" onclick="INF.vista=\'' + t[0] + '\';pintar()">' + t[1] + '</div>').join('') + '</div>' + xgBar(INF.vista === 'sl' ? 'infsl' : 'infbd') + '<div class="tw" id="xg_' + (INF.vista === 'sl' ? 'infsl' : 'infbd') + '" style="max-height:68vh;overflow:auto"></div></div>'; }
   if (INF.res) h += '<div class="card"><h2>Resumen del último informe (' + esc(INF.res.rango) + ')</h2><div class="tw"><table><tr><th>Concepto</th><th style="text-align:right">Valor</th></tr>' + INF.res.t.map(r => '<tr><td>' + esc(r[0]) + '</td><td style="text-align:right">' + fm(r[1]) + '</td></tr>').join('') + '</table></div></div>';
   return h;
 }
@@ -546,9 +548,30 @@ async function infGenerar() {
     if (!r || !r.ok) throw new Error((r && r.error) || 'Siesa no respondió (notas)');
     lin += r.lineas || 0; r.filas.forEach(meter); (r.sinlinea || []).forEach(x => SL.push(x));
     const F = [...acc.values()]; if (!F.length) { infMsg('No hay ventas en ese rango.'); return; }
-    infMsg('Armando el Excel…'); infExcel(F, canales, d, h, lin, SL);
+    INF.data = { F, canales, SL, d, h, nLin: lin }; INF.vista = 'bd'; INF.res = { rango: d + ' a ' + h, t: infRes(F, SL) }; INF.msg = '✅ Listo: ' + F.length + ' filas (' + lin + ' líneas de Siesa). Revisa y filtra aquí; con «Descargar Excel» baja el archivo con todas las hojas.'; pintar();
   } catch (e) { if (String(e.message) !== 'auth') infMsg('No se pudo generar: ' + e.message); }
-  finally { INF.busy = false; const b = document.querySelector('.card .btn[onclick="infGenerar()"]'); if (b) { b.disabled = false; b.textContent = '⬇ Generar y descargar Excel'; } }
+  finally { INF.busy = false; const b = document.querySelector('.card .btn[onclick="infGenerar()"]'); if (b) { b.disabled = false; b.textContent = '🔎 Ver informe'; } }
+}
+function infRes(F, SL) {
+  const nota = f => /^(VN|ND)/i.test(f[6]), fa = F.filter(f => !nota(f)), no = F.filter(nota), sm = (A, i) => A.reduce((a, f) => a + f[i], 0);
+  const r = [['Ventas brutas (facturas)', sm(fa, 11)], ['Descuentos', -sm(fa, 8)], ['Ventas netas facturas (subtotal)', sm(fa, 7)], ['Notas crédito/débito (subtotal)', sm(no, 7)], ['VENTA NETA TOTAL (subtotal)', sm(F, 7)]];
+  if (SL && SL.length) r.push(['Sin línea (referencias por corregir) · ' + new Set(SL.map(x => x[6] || '(sin referencia)')).size + ' referencias', SL.reduce((a, x) => a + x[10], 0)]);
+  return r;
+}
+function infDescargar() { const D = INF.data; if (!D) return; infMsg('Armando el Excel…'); setTimeout(() => { try { infExcel(D.F, D.canales, D.d, D.h, D.nLin, D.SL); } catch (e) { infMsg('No se pudo armar el Excel: ' + e.message); } }, 30); }
+function infPaint() {
+  const D = INF.data; if (!D) return; const cn = c => D.canales[c] || (c ? 'CANAL ' + c : 'SIN CANAL'), id = INF.vista === 'sl' ? 'infsl' : 'infbd'; if (!$('xg_' + id)) return;
+  if (id === 'infbd') {
+    const rows = D.F.map(f => ({ per: f[0], nit: f[1], cli: f[2], ciu: f[3], can: cn(f[4]), lin: f[5], tipo: f[6], sub: f[7], dsc: f[8], imp: f[9], net: f[10], bru: f[11] }));
+    const c = (k, t, o) => Object.assign({ k, t, v: r => r[k] }, o || {});
+    xgInit(id, [c('per', 'Periodo'), c('nit', 'NIT'), c('cli', 'Cliente', { wrap: true }), c('ciu', 'Ciudad'), c('can', 'Canal'), c('lin', 'Línea', { h: r => (r.lin === 'NO APLICA' ? '<span class="mal">NO APLICA</span>' : esc(r.lin)) }), c('tipo', 'Tipo Dcto'),
+      c('sub', 'Subtotal', { num: true, h: r => fm(r.sub), sum: true }), c('dsc', 'Descuento', { num: true, h: r => fm(r.dsc), sum: true }), c('imp', 'Impuesto', { num: true, h: r => fm(r.imp), sum: true }), c('net', 'Neto', { num: true, h: r => fm(r.net), sum: true }), c('bru', 'Bruto', { num: true, h: r => fm(r.bru), sum: true })], { rows, nombre: 'Ventas_clientes_' + D.d + '_a_' + D.h, attr: r => (r.lin === 'NO APLICA' ? ' class="dif"' : '') });
+  } else {
+    const rows = D.SL.map(x => ({ per: x[0], fec: x[1], tipo: x[2], doc: x[3], nit: x[4], cli: x[5], ref: x[6] || '(sin referencia)', des: x[7], cat: x[8], mot: x[9], sub: x[10] }));
+    const c = (k, t, o) => Object.assign({ k, t, v: r => r[k] }, o || {});
+    xgInit(id, [c('per', 'Periodo'), c('fec', 'Fecha', { date: true }), c('tipo', 'Tipo'), c('doc', 'Documento'), c('nit', 'NIT'), c('cli', 'Cliente', { wrap: true }), c('ref', 'Referencia'), c('des', 'Descripción', { wrap: true }), c('cat', 'Categoría / subcategoría en Siesa', { wrap: true }), c('mot', 'Por qué no tiene línea', { wrap: true }), c('sub', 'Subtotal', { num: true, h: r => fm(r.sub), sum: true })], { rows, nombre: 'Sin_linea_' + D.d + '_a_' + D.h });
+  }
+  xgPaint(id);
 }
 function infExcel(F, CAN, d, h, nLin, SL) {
   const per = [...new Set(F.map(f => f[0]))].sort(), cn = c => CAN[c] || (c ? 'CANAL ' + c : 'SIN CANAL');
