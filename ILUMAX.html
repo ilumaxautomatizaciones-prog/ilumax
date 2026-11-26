@@ -3105,6 +3105,7 @@ function buildNav(){
     { id:'carvajal-dist', lbl:'Distribución Carvajal', ico:'🚚' },
   ]});
   if(adminItems.length) grupos.push({ tipo:'grupo', id:'g-admin', lbl:'⚙️ Admin', header:'Sistema', items: adminItems });
+  if(typeof ssocPermitido==='function' && ssocPermitido()) grupos.push({ tipo:'tab', id:'ssocial', lbl:'🛡️ Seguridad social', onclick:'ssocAbrir(this)' });
 
   // Ocultar del menú los módulos a los que este usuario no tiene acceso, según lo configurado
   // en 🧩 Módulos por Rol (Admin Center). Solo se filtran los ítems que son "módulos" reales
@@ -3126,7 +3127,9 @@ function buildNav(){
   // Construir HTML
   let html = '';
   gruposVisibles.forEach(g => {
-    if(g.tipo === 'tab') {
+    if(g.tipo === 'tab' && g.onclick) {
+      html += `<div class="nt" onclick="${g.onclick}" id="tab-${g.id}"><span>${g.lbl}</span></div>`;
+    } else if(g.tipo === 'tab') {
       const fav = esFavorito(g.id);
       html += `<div class="nt" onclick="goPage('${g.id}',this)" id="tab-${g.id}">
         <span>${g.lbl}</span>
@@ -4582,18 +4585,27 @@ function ssocPermitido() {
   if (CU.rol === 'admin') return true;
   return ['rrhh@ilumax.com.co', 'talentohumano@ilumax.com.co', 'sandra@ilumax.com.co'].includes(String(CU.email || '').toLowerCase());
 }
+function ssocAbrir(el) {
+  goPage('rrhh', el);
+  setTimeout(() => { const t = $s('rrhh-tab-ssoc'); if (t) { t.style.display = ''; setRrhhTab('ssoc', t); } }, 150);
+}
 function ssocMostrarTab() { const t = $s('rrhh-tab-ssoc'); if (t) t.style.display = ssocPermitido() ? '' : 'none'; }
 async function ssocKey() {
   if (SSOCS.k) return SSOCS.k;
-  if (CU.rol === 'admin') { const r = await sb.get('configuracion', 'clave=eq.rv_link_token&select=valor'); SSOCS.k = (r && r[0] && r[0].valor) || ''; return SSOCS.k; }
+  if (CU.rol === 'admin') { const r = await Promise.race([sb.get('configuracion', 'clave=eq.rv_link_token&select=valor'), new Promise((_, rj) => setTimeout(() => rj(new Error('No se pudo leer el acceso de administrador')), 15000))]); SSOCS.k = (r && r[0] && r[0].valor) || ''; return SSOCS.k; }
   let p = ''; try { p = localStorage.getItem('ss_pin') || ''; } catch (e) {}
   if (!p) p = prompt('Código de acceso a Seguridad social (4 a 8 dígitos):') || '';
   SSOCS.k = p.trim(); return SSOCS.k;
 }
 async function ssocApi(accion, body, extra) {
   const k = await ssocKey(); if (!k) throw new Error('Sin código de acceso');
-  const x = await fetch(SB_URL + '/functions/v1/rrhh-seguridad-social?k=' + encodeURIComponent(k) + '&accion=' + accion + (extra || ''), { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY }, body: body ? JSON.stringify(body) : undefined });
-  const j = await x.json().catch(() => ({ error: 'Respuesta inválida' }));
+  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 30000);
+  let x, j;
+  try {
+    x = await fetch(SB_URL + '/functions/v1/rrhh-seguridad-social?k=' + encodeURIComponent(k) + '&accion=' + accion + (extra || ''), { method: body ? 'POST' : 'GET', headers: body ? { 'Content-Type': 'text/plain' } : {}, body: body ? JSON.stringify(body) : undefined, signal: ctl.signal });
+    j = await x.json().catch(() => ({ error: 'Respuesta inválida' }));
+  } catch (e) { throw new Error(e && e.name === 'AbortError' ? 'Tardó demasiado en responder. Reintenta.' : 'No se pudo conectar (' + (e && e.message || e) + ')'); }
+  finally { clearTimeout(tm); }
   if (x.status === 401) { SSOCS.k = ''; try { localStorage.removeItem('ss_pin'); } catch (e) {} }
   if (!x.ok || j.error) throw new Error(j.error || 'Error');
   if (CU.rol !== 'admin') try { localStorage.setItem('ss_pin', SSOCS.k); } catch (e) {}
