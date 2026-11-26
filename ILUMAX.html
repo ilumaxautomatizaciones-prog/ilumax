@@ -661,6 +661,21 @@ body:not(.sync-manual) [data-sync-manual]{display:none!important;}
 #fgx_fp table,#fgx_fpl table{width:100%;font-size:12px;border-collapse:collapse}#fgx_fp th,#fgx_fp td,#fgx_fpl th,#fgx_fpl td{padding:5px 8px;line-height:1.25;border-bottom:1px solid #e2e8f0}#fgx_fp th,#fgx_fpl th{font-size:10.5px;position:sticky;top:0;z-index:2;background:#0f172a;color:#fff;text-align:left}#fgx_fp td,#fgx_fpl td{white-space:nowrap}#fgx_fp td[style*="white-space:normal"],#fgx_fpl td[style*="white-space:normal"]{white-space:normal}#fgx_fp tr.tot td,#fgx_fpl tr.tot td{font-weight:800;background:#0f172a;color:#fff;position:sticky;bottom:0}
 .xgh{white-space:nowrap}.xgb{border:0;background:#ffffff26;color:#fff;border-radius:5px;margin-left:5px;cursor:pointer;font-size:10px;padding:2px 5px}.xgb.on{background:#f5c518;color:#0f172a}
 .xgm{position:fixed;z-index:10000;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 12px 32px #0004;width:264px;padding:10px;font-size:12px;color:#0f172a}.xgm input:not([type=checkbox]){display:block;width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:2px}.xgm .li{max-height:210px;overflow:auto;border:1px solid #e2e8f0;border-radius:6px;margin:6px 0;padding:4px 6px}.xgm label{display:flex;gap:6px;align-items:center;padding:2px 0;cursor:pointer}.xgm .btn{font-size:12px;padding:5px 8px}
+
+/* Seguridad social (RRHH) */
+#ssoc-wrap table{border-collapse:collapse;width:100%;font-size:11px}
+#ssoc-wrap th{background:#0f172a;color:#fff;padding:6px 8px;position:sticky;top:0;z-index:2;font-weight:700}
+#ssoc-wrap td{padding:5px 8px;border-bottom:1px solid var(--b1);white-space:nowrap}
+#ssoc-wrap tbody tr:nth-child(even) td{background:#eff6ff}
+#ssoc-wrap tbody tr.dif td{background:#fef2f2}
+#ssoc-wrap tfoot tr.tot td{font-weight:800;background:#0f172a;color:#fff;position:sticky;bottom:0}
+#ssoc-wrap select.inp{width:100%}
+.ssocgh{white-space:nowrap}.ssocgb{border:0;background:#ffffff26;color:#fff;border-radius:5px;margin-left:5px;cursor:pointer;font-size:10px;padding:2px 5px}.ssocgb.on{background:#f5c518;color:#0f172a}
+.ssocgm{position:fixed;z-index:10000;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 12px 32px #0004;width:264px;padding:10px;font-size:12px;color:#0f172a}
+.ssocgm input:not([type=checkbox]){display:block;width:100%;font:inherit;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:2px}
+.ssocgm .li{max-height:210px;overflow:auto;border:1px solid #e2e8f0;border-radius:6px;margin:6px 0;padding:4px 6px}.ssocgm label{display:flex;gap:6px;align-items:center;padding:2px 0;cursor:pointer}
+.chk{display:flex;gap:6px;align-items:center;font-size:12px;font-weight:600}.chk input{width:auto;min-width:0;flex:none}
+tr.tot td{font-weight:800;background:#0f172a;color:#fff;position:sticky;bottom:0}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
@@ -1123,6 +1138,7 @@ body:not(.sync-manual) [data-sync-manual]{display:none!important;}
         <div class="rrhh-tab on" onclick="setRrhhTab('lista',this)">📋 Lista</div>
         <div class="rrhh-tab" onclick="setRrhhTab('kanban',this)">🗂️ Kanban</div>
         <div class="rrhh-tab" onclick="setRrhhTab('calendario',this)">📅 Calendario</div>
+        <div class="rrhh-tab" id="rrhh-tab-ssoc" style="display:none" onclick="setRrhhTab('ssoc',this)">🛡️ Seguridad social</div>
       </div>
 
       <!-- Barra filtro activo -->
@@ -1149,6 +1165,7 @@ body:not(.sync-manual) [data-sync-manual]{display:none!important;}
       <div class="rrhh-view on" id="rv-lista">
         <div id="rrhh-lista-wrap"><div id="rrhh-lista"></div></div>
       </div>
+      <div class="rrhh-view" id="rv-ssoc"><div id="ssoc-wrap"></div></div>
       <div class="rrhh-view" id="rv-kanban">
         <div class="kanban-board" id="rrhh-kanban"></div>
       </div>
@@ -4473,7 +4490,271 @@ function getPrio(p) {
   return `<span class="bdg ${m[p]||'bdg-gris'}" style="font-size:9px;">${p||'Media'}</span>`;
 }
 
+/* ===== RRHH · Seguridad social ===== */
+/* ===== Rejilla tipo Excel: ordenar y filtrar desde el encabezado, elegir columnas ===== */
+const SSOCG = {};
+function ssocgInit(id, cols, opt) { const g = SSOCG[id] || (SSOCG[id] = { sort: null, f: {}, hide: new Set(), rows: [], limit: 600 }); g.cols = cols; Object.assign(g, opt || {}); return g; }
+const ssocgV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
+function ssocgView(id) {
+  const g = SSOCG[id], q = g.q ? g.q.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim() : '';
+  let R = g.rows.filter(r => (!q || g.cols.some(c => String(ssocgV(c, r)).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().includes(q))) && g.cols.every(c => {
+    const f = g.f[c.k]; if (!f) return true; const v = ssocgV(c, r);
+    if (f.sel && !f.sel.has(String(v))) return false;
+    if (c.num || c.date) {
+      if (f.min !== '' && f.min != null) { if (v === '') return false; if (c.num ? Number(v) < Number(f.min) : String(v) < f.min) return false; }
+      if (f.max !== '' && f.max != null) { if (v === '') return false; if (c.num ? Number(v) > Number(f.max) : String(v) > f.max) return false; }
+    }
+    return true;
+  }));
+  if (g.sort) { const c = g.cols.find(x => x.k === g.sort.k), d = g.sort.dir; if (c) R = R.map((r, i) => [r, i]).sort((a, b) => { const x = ssocgV(c, a[0]), y = ssocgV(c, b[0]); let o; if (c.num) o = (x === '' ? -Infinity : Number(x)) - (y === '' ? -Infinity : Number(y)); else o = String(x).localeCompare(String(y), 'es', { numeric: true }); return (o || a[1] - b[1]) * (o ? d : 1); }).map(x => x[0]); }
+  return R;
+}
+const ssocgOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !== '' && f.max != null));
+function ssocgQ(id, v) { SSOCG[id].q = v; ssocgPaint(id); }
+function ssocgBar(id) { return '<div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;padding:10px 14px"><input id="ssocgq_' + id + '" placeholder="🔎 Buscar en la tabla…" value="' + esc((SSOCG[id] && SSOCG[id].q) || '') + '" oninput="ssocgQ(\'' + id + '\',this.value)" style="min-width:240px"><button class="btn btn-g btn-sm" onclick="ssocgCols(event,\'' + id + '\')">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="ssocgLimpiar(\'' + id + '\')">✖ Quitar filtros y orden</button><button class="btn btn-g btn-sm" onclick="ssocgExcel(\'' + id + '\')">⬇ Excel de esta vista</button></div>'; }
+function ssocgPaint(id) {
+  const g = SSOCG[id], box = $s('ssocg_' + id); if (!box) return; const V = ssocgView(id), cols = g.cols.filter(c => !g.hide.has(c.k));
+  const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="ssocgh" style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '"><span style="cursor:pointer" onclick="ssocgSort(\'' + id + '\',\'' + c.k + '\')">' + esc(c.t) + s + '</span><button class="ssocgb' + (ssocgOn(g.f[c.k]) ? ' on' : '') + '" onclick="ssocgMenu(event,\'' + id + '\',\'' + c.k + '\')">▾</button></th>'; }).join('');
+  const rows = V.slice(0, g.limit).map(r => '<tr' + (g.attr ? g.attr(r) : '') + '>' + cols.map(c => '<td style="text-align:' + (c.num && !c.al ? 'right' : 'left') + (c.wrap ? ';white-space:normal;min-width:150px;max-width:280px;overflow-wrap:anywhere' : '') + '">' + (c.h ? c.h(r) : esc(ssocgV(c, r))) + '</td>').join('') + '</tr>').join('');
+  const tot = '<tr class="tot">' + cols.map((c, i) => '<td style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '">' + (i === 0 ? V.length + ' filas' : c.totf ? c.totf(V) : c.sum ? (c.dec ? ssocFm2 : ssocFm)(V.reduce((s, r) => s + (Number(ssocgV(c, r)) || 0), 0)) : '') + '</td>').join('') + '</tr>';
+  box.innerHTML = '<table><thead><tr>' + th + '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + cols.length + '" class="empty">Sin resultados</td></tr>') + '</tbody><tfoot>' + tot + '</tfoot></table>' + (V.length > g.limit ? '<div style="padding:8px 14px;font-size:11px;color:var(--mu)">Se muestran ' + g.limit + ' de ' + V.length + '; filtra para ver el resto (el Excel trae todas).</div>' : '');
+  if (g.after) g.after(box);
+}
+function ssocgSort(id, k) { const g = SSOCG[id]; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; ssocgPaint(id); }
+function ssocgLimpiar(id) { const g = SSOCG[id]; g.f = {}; g.sort = null; g.q = ''; const i = $s('ssocgq_' + id); if (i) i.value = ''; ssocgPaint(id); }
+function ssocgCerrar() { const m = $s('ssocgm'); if (m) m.remove(); }
+document.addEventListener('click', ssocgCerrar);
+function ssocgPos(d, ev) { const b = ev.currentTarget.getBoundingClientRect(); d.style.top = Math.max(8, Math.min(b.bottom + 4, innerHeight - 440)) + 'px'; d.style.left = Math.max(8, Math.min(b.left - 120, innerWidth - 280)) + 'px'; }
+function ssocgCols(ev, id) {
+  ev.stopPropagation(); ssocgCerrar(); const g = SSOCG[id], d = document.createElement('div'); d.id = 'ssocgm'; d.className = 'ssocgm'; d.onclick = e => e.stopPropagation(); ssocgPos(d, ev);
+  d.innerHTML = '<b>Columnas visibles</b><div class="li" style="max-height:300px">' + g.cols.map((c, i) => '<label><input type="checkbox" ' + (g.hide.has(c.k) ? '' : 'checked') + ' onchange="ssocgToggle(\'' + id + '\',' + i + ',this.checked)"> ' + esc(c.t) + '</label>').join('') + '</div>';
+  document.body.appendChild(d);
+}
+function ssocgToggle(id, i, on) { const g = SSOCG[id], k = g.cols[i].k; if (on) g.hide.delete(k); else g.hide.add(k); ssocgPaint(id); }
+let SSOCGM = null;
+function ssocgMenu(ev, id, k) {
+  ev.stopPropagation(); ssocgCerrar(); const g = SSOCG[id], c = g.cols.find(x => x.k === k), f = g.f[k] || {}, d = document.createElement('div'); d.id = 'ssocgm'; d.className = 'ssocgm'; d.onclick = e => e.stopPropagation(); ssocgPos(d, ev);
+  const vals = c.num || c.date ? null : [...new Set(g.rows.map(r => String(ssocgV(c, r))))].sort((a, b) => a.localeCompare(b, 'es', { numeric: true })).slice(0, 600);
+  SSOCGM = { id, k, vals };
+  const num = c.num ? 'menor a mayor' : 'A → Z', num2 = c.num ? 'mayor a menor' : 'Z → A';
+  d.innerHTML = '<button class="btn btn-g btn-sm" style="width:100%;margin-bottom:4px" onclick="ssocgOrden(1)">↑ Ordenar ' + num + '</button><button class="btn btn-g btn-sm" style="width:100%" onclick="ssocgOrden(-1)">↓ Ordenar ' + num2 + '</button>'
+    + (c.num ? '<div style="margin-top:8px">Mayor o igual a<input id="ssocgMin" value="' + esc(f.min == null ? '' : f.min) + '"></div><div>Menor o igual a<input id="ssocgMax" value="' + esc(f.max == null ? '' : f.max) + '"></div>' : '')
+    + (c.date ? '<div style="margin-top:8px">Desde<input type="date" id="ssocgMin" value="' + esc(f.min || '') + '"></div><div>Hasta<input type="date" id="ssocgMax" value="' + esc(f.max || '') + '"></div>' : '')
+    + (vals ? '<input id="ssocgBus" placeholder="Buscar…" style="margin-top:8px" oninput="ssocgBuscar(this.value)"><label style="margin-top:4px"><input type="checkbox" id="ssocgAll" ' + (!f.sel ? 'checked' : '') + ' onchange="ssocgTodos(this.checked)"> <b>(Seleccionar visibles)</b></label><div class="li" id="ssocgLi">' + vals.map((v, i) => '<label data-t="' + esc(ssocNz(v)) + '"><input type="checkbox" class="ssocgc" data-i="' + i + '" ' + (!f.sel || f.sel.has(v) ? 'checked' : '') + '> ' + (v === '' ? '(vacío)' : esc(v)) + '</label>').join('') + '</div>' : '')
+    + '<div style="display:flex;gap:6px;margin-top:8px"><button class="btn btn-p btn-sm" style="flex:1" onclick="ssocgAplicar()">Aplicar</button><button class="btn btn-g btn-sm" style="flex:1" onclick="ssocgQuitar()">Quitar filtro</button></div>';
+  document.body.appendChild(d);
+}
+function ssocgOrden(dir) { const g = SSOCG[SSOCGM.id]; g.sort = { k: SSOCGM.k, dir }; ssocgCerrar(); ssocgPaint(SSOCGM.id); }
+function ssocgBuscar(t) { const q = ssocNz(t); document.querySelectorAll('#ssocgLi label').forEach(l => { const ok = !q || l.dataset.t.includes(q); l.style.display = ok ? '' : 'none'; l.querySelector('input').checked = ok; }); const a = $s('ssocgAll'); if (a) a.checked = true; }  // como en Excel: al buscar quedan marcados solo los que coinciden
+function ssocgTodos(on) { document.querySelectorAll('#ssocgLi label').forEach(l => { if (l.style.display !== 'none') l.querySelector('input').checked = on; }); }
+function ssocgAplicar() {
+  const g = SSOCG[SSOCGM.id], c = g.cols.find(x => x.k === SSOCGM.k), f = {};
+  if (c.num || c.date) { const mn = $s('ssocgMin').value.trim(), mx = $s('ssocgMax').value.trim(); f.min = c.num ? (mn === '' ? '' : String(ssocNum(mn))) : mn; f.max = c.num ? (mx === '' ? '' : String(ssocNum(mx))) : mx; if (c.num && (f.min === 'NaN' || f.max === 'NaN')) { toast('Escribe números válidos.','er'); return; } }
+  if (SSOCGM.vals) { const chk = [...document.querySelectorAll('.ssocgc')], on = chk.filter(x => x.checked).map(x => SSOCGM.vals[+x.dataset.i]); if (on.length < chk.length) f.sel = new Set(on); }
+  if (ssocgOn(f)) g.f[SSOCGM.k] = f; else delete g.f[SSOCGM.k]; const id = SSOCGM.id; ssocgCerrar(); ssocgPaint(id);
+}
+function ssocgQuitar() { const id = SSOCGM.id; delete SSOCG[id].f[SSOCGM.k]; ssocgCerrar(); ssocgPaint(id); }
+function ssocgExcel(id) {
+  const g = SSOCG[id], V = ssocgView(id), cols = g.cols.filter(c => !g.hide.has(c.k)); if (!V.length) { toast('No hay filas para exportar.','wa'); return; }
+  const ws = XLSX.utils.json_to_sheet(V.map(r => { const o = {}; cols.forEach(c => { const v = ssocgV(c, r); o[c.t] = c.num && v !== '' ? Number(v) : v; }); return o; })), wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'VISTA'); XLSX.writeFile(wb, (g.nombre || id) + '.xlsx');
+}
+
+/* ===== RRHH · Revisión mensual de seguridad social (nómina Siesa vs planilla PILA) ===== */
+const SSOCS = { k:'', per:'', metas:[], nom:[], pila:[], pS:4, pP:16, tol:100, smmlv:1750906, msg:'', cargado:false };
+const $s = id => document.getElementById(id);
+const ssocNz = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+const ssocFm = n => (n === '' || n == null || isNaN(n)) ? '' : Math.round(Number(n)).toLocaleString('es-CO');
+const ssocFm2 = n => (n === '' || n == null || isNaN(n)) ? '' : Number(n).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function ssocNum(v) {
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  let s = String(v == null ? '' : v).replace(/[$\s]/g, ''); if (!s) return 0;
+  const c = s.lastIndexOf(','), d = s.lastIndexOf('.');
+  if (c > -1 && d > -1) s = c > d ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  else if (c > -1) s = /,\d{1,2}$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, '');
+  else if (d > -1 && /\.\d{3}$/.test(s)) s = s.replace(/\./g, '');
+  const n = parseFloat(s); return isFinite(n) ? n : 0;
+}
+const ssocCed = x => String(x == null ? '' : x).replace(/\D/g, '').replace(/^0+/, '');
+const ssocR2 = x => Math.round(x * 100) / 100;
+function ssocPermitido() {
+  if (typeof CU === 'undefined' || !CU) return false;
+  if (CU.rol === 'admin') return true;
+  return ['rrhh@ilumax.com.co', 'talentohumano@ilumax.com.co'].includes(String(CU.email || '').toLowerCase());
+}
+function ssocMostrarTab() { const t = $s('rrhh-tab-ssoc'); if (t) t.style.display = ssocPermitido() ? '' : 'none'; }
+async function ssocKey() {
+  if (SSOCS.k) return SSOCS.k;
+  if (CU.rol === 'admin') { const r = await sb.get('configuracion', 'clave=eq.rv_link_token&select=valor'); SSOCS.k = (r && r[0] && r[0].valor) || ''; return SSOCS.k; }
+  let p = ''; try { p = localStorage.getItem('ss_pin') || ''; } catch (e) {}
+  if (!p) p = prompt('Código de acceso a Seguridad social (4 a 8 dígitos):') || '';
+  SSOCS.k = p.trim(); return SSOCS.k;
+}
+async function ssocApi(accion, body, extra) {
+  const k = await ssocKey(); if (!k) throw new Error('Sin código de acceso');
+  const x = await fetch(SB_URL + '/functions/v1/rrhh-seguridad-social?k=' + encodeURIComponent(k) + '&accion=' + accion + (extra || ''), { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY }, body: body ? JSON.stringify(body) : undefined });
+  const j = await x.json().catch(() => ({ error: 'Respuesta inválida' }));
+  if (x.status === 401) { SSOCS.k = ''; try { localStorage.removeItem('ss_pin'); } catch (e) {} }
+  if (!x.ok || j.error) throw new Error(j.error || 'Error');
+  if (CU.rol !== 'admin') try { localStorage.setItem('ss_pin', SSOCS.k); } catch (e) {}
+  return j;
+}
+const ssocPerTxt = p => { const m = ['', 'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']; return p && p.length === 6 ? m[+p.slice(4)] + ' ' + p.slice(0, 4) : (p || ''); };
+async function ssocInit() {
+  const w = $s('ssoc-wrap'); if (!w) return;
+  if (!ssocPermitido()) { w.innerHTML = '<div class="empty">⛔ No tienes acceso a esta sección.</div>'; return; }
+  w.innerHTML = '<div class="empty">Cargando…</div>';
+  try {
+    const j = await ssocApi('periodos'); SSOCS.metas = j.meta || [];
+    if (!SSOCS.per) { const u = SSOCS.metas.map(m => m.periodo).sort().pop(); SSOCS.per = u || (new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 7).replace('-', '')); }
+    await ssocLeer();
+  } catch (e) { w.innerHTML = '<div class="empty">⚠️ ' + esc(e.message) + '<br><button class="btn btn-p btn-sm" style="margin-top:10px" onclick="ssocInit()">Reintentar</button></div>'; }
+}
+async function ssocLeer() {
+  const j = await ssocApi('leer', null, '&periodo=' + SSOCS.per);
+  SSOCS.nom = (j.nomina || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], cargo: a[2], estado: a[3], ibc: a[4], salud: a[5], pen: a[6], total: a[7], con: a[8] || {} }));
+  SSOCS.pila = (j.pila || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], ibc: a[2], salud: a[3], pen: a[4] }));
+  SSOCS.cargado = true; ssocPintar();
+}
+async function ssocCambiarPer(v) { SSOCS.per = String(v || '').replace('-', ''); if (!/^20\d{4}$/.test(SSOCS.per)) return; try { await ssocLeer(); } catch (e) { toast(e.message, 'er'); } }
+/* ---------- cálculo de la revisión ---------- */
+function ssocCalc() {
+  const pS = SSOCS.pS / 100, pP = SSOCS.pP / 100, tol = Number(SSOCS.tol) || 0, hayPila = SSOCS.pila.length > 0, cnt = {};
+  SSOCS.nom.forEach(r => { cnt[r.ced] = (cnt[r.ced] || 0) + 1; });
+  const pm = new Map(); SSOCS.pila.forEach(p => pm.set(p.ced, p)); const usados = new Set();
+  const rows = SSOCS.nom.map(r => {
+    const suma = Object.values(r.con).reduce((s, v) => s + (Number(v) || 0), 0), sEsp = ssocR2(r.ibc * pS), pEsp = ssocR2(r.ibc * pP), o = [];
+    const dI = ssocR2(r.ibc - suma), dS = ssocR2(r.salud - sEsp), dP = ssocR2(r.pen - pEsp);
+    if (Math.abs(dI) > 1) o.push('IBC ≠ suma de conceptos');
+    if (Math.abs(dS) > 1) o.push('Salud ≠ ' + SSOCS.pS + '% del IBC');
+    if (Math.abs(dP) > 1) o.push('Pensión ≠ ' + SSOCS.pP + '% del IBC');
+    if (cnt[r.ced] > 1) o.push('Cédula repetida');
+    if (/activo/i.test(r.estado) && r.ibc <= 0) o.push('IBC en cero');
+    else if (/activo/i.test(r.estado) && r.ibc < SSOCS.smmlv - 1) o.push('IBC menor al SMMLV');
+    const row = { ced: r.cedTxt, nombre: r.nombre, cargo: r.cargo, estado: r.estado, suma, ibc: r.ibc, dI, salud: r.salud, sEsp, dS, pen: r.pen, pEsp, dP, pI: '', pSa: '', pPe: '', xI: '', xS: '', xP: '', enNom: true };
+    if (hayPila) {
+      const p = pm.get(r.ced);
+      if (!p) { o.push('No está en la PILA'); row.enPila = false; }
+      else {
+        usados.add(r.ced); row.pI = p.ibc; row.pSa = p.salud; row.pPe = p.pen; row.xI = ssocR2(p.ibc - r.ibc); row.xS = ssocR2(p.salud - r.salud); row.xP = ssocR2(p.pen - r.pen); row.enPila = true;
+        if (Math.abs(row.xI) > 1) o.push('IBC PILA ≠ nómina'); if (Math.abs(row.xS) > tol) o.push('Salud PILA ≠ nómina'); if (Math.abs(row.xP) > tol) o.push('Pensión PILA ≠ nómina');
+      }
+    }
+    row.obs = o.join('; '); return row;
+  });
+  if (hayPila) SSOCS.pila.forEach(p => { if (!usados.has(p.ced)) rows.push({ ced: p.cedTxt, nombre: p.nombre, cargo: '', estado: '', suma: '', ibc: '', dI: '', salud: '', sEsp: '', dS: '', pen: '', pEsp: '', dP: '', pI: p.ibc, pSa: p.salud, pPe: p.pen, xI: '', xS: '', xP: '', enNom: false, enPila: true, obs: 'Solo en la PILA (no está en la nómina)' }); });
+  return rows;
+}
+const ssocDifH = (v, t) => v === '' ? '' : (Math.abs(v) > (t == null ? 1 : t) ? '<b style="color:#dc2626">' + ssocFm2(v) + '</b>' : '<span style="color:#16a34a">' + ssocFm2(v) + '</span>');
+function ssocCols() {
+  const tol = Number(SSOCS.tol) || 0;
+  return [
+    { k: 'ced', t: 'Cédula', v: r => r.ced }, { k: 'nombre', t: 'Nombre', v: r => r.nombre }, { k: 'cargo', t: 'Cargo', v: r => r.cargo }, { k: 'estado', t: 'Estado', v: r => r.estado },
+    { k: 'suma', t: 'Suma conceptos', v: r => r.suma, num: true, sum: true },
+    { k: 'ibc', t: 'IBC nómina', v: r => r.ibc, num: true, sum: true },
+    { k: 'dI', t: 'Dif. IBC', v: r => r.dI, num: true, dec: true, h: r => ssocDifH(r.dI, 1) },
+    { k: 'salud', t: 'Salud nómina', v: r => r.salud, num: true, sum: true, dec: true, h: r => ssocFm2(r.salud) },
+    { k: 'sEsp', t: 'Salud ' + SSOCS.pS + '%', v: r => r.sEsp, num: true, sum: true, dec: true, h: r => ssocFm2(r.sEsp) },
+    { k: 'dS', t: 'Dif. salud', v: r => r.dS, num: true, dec: true, h: r => ssocDifH(r.dS, 1) },
+    { k: 'pen', t: 'Pensión nómina', v: r => r.pen, num: true, sum: true, dec: true, h: r => ssocFm2(r.pen) },
+    { k: 'pEsp', t: 'Pensión ' + SSOCS.pP + '%', v: r => r.pEsp, num: true, sum: true, dec: true, h: r => ssocFm2(r.pEsp) },
+    { k: 'dP', t: 'Dif. pensión', v: r => r.dP, num: true, dec: true, h: r => ssocDifH(r.dP, 1) },
+    { k: 'pI', t: 'IBC PILA', v: r => r.pI, num: true, sum: true },
+    { k: 'pSa', t: 'Salud PILA', v: r => r.pSa, num: true, sum: true, dec: true, h: r => ssocFm2(r.pSa) },
+    { k: 'pPe', t: 'Pensión PILA', v: r => r.pPe, num: true, sum: true, dec: true, h: r => ssocFm2(r.pPe) },
+    { k: 'xI', t: 'PILA − nómina IBC', v: r => r.xI, num: true, dec: true, h: r => ssocDifH(r.xI, 1) },
+    { k: 'xS', t: 'PILA − nómina salud', v: r => r.xS, num: true, dec: true, h: r => ssocDifH(r.xS, tol) },
+    { k: 'xP', t: 'PILA − nómina pensión', v: r => r.xP, num: true, dec: true, h: r => ssocDifH(r.xP, tol) },
+    { k: 'obs', t: 'Observación', v: r => r.obs || 'OK', wrap: true, h: r => r.obs ? '<span style="color:#dc2626;font-weight:600">' + esc(r.obs) + '</span>' : '<span style="color:#16a34a">OK</span>' }
+  ];
+}
+function ssocPintar() {
+  const w = $s('ssoc-wrap'); if (!w) return;
+  const rows = ssocCalc(), nm = SSOCS.metas.find(m => m.periodo === SSOCS.per && m.tipo === 'nomina'), pm = SSOCS.metas.find(m => m.periodo === SSOCS.per && m.tipo === 'pila');
+  const meta = (m, t) => m ? '<b>' + t + ':</b> ' + esc(m.archivo || '') + ' · ' + m.filas + ' filas · ' + esc(m.cargado_por || '') + ' · ' + new Date(m.cargado_en).toLocaleString('es-CO') : '<b>' + t + ':</b> <span style="color:var(--rd)">sin cargar</span>';
+  const con = rows.filter(r => r.obs), sum = k => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const kp = (v, l, c) => '<div class="sc"><div class="sv"' + (c ? ' style="color:' + c + '"' : '') + '>' + v + '</div><div class="sl">' + l + '</div></div>';
+  w.innerHTML = '<div class="card"><div class="ch"><div class="ct">🛡️ Revisión de seguridad social · ' + esc(ssocPerTxt(SSOCS.per)) + '</div></div><div class="cb">'
+    + '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">'
+    + '<div class="fg" style="margin:0"><div class="fl">Periodo</div><input class="inp" type="month" id="ssoc-per" value="' + SSOCS.per.slice(0, 4) + '-' + SSOCS.per.slice(4) + '" onchange="ssocCambiarPer(this.value)"></div>'
+    + '<div class="fg" style="margin:0"><div class="fl">% Salud</div><input class="inp" style="width:70px" value="' + SSOCS.pS + '" onchange="SSOCS.pS=ssocNum(this.value);ssocPintar()"></div>'
+    + '<div class="fg" style="margin:0"><div class="fl">% Pensión</div><input class="inp" style="width:70px" value="' + SSOCS.pP + '" onchange="SSOCS.pP=ssocNum(this.value);ssocPintar()"></div>'
+    + '<div class="fg" style="margin:0"><div class="fl">SMMLV</div><input class="inp" style="width:110px" value="' + SSOCS.smmlv + '" onchange="SSOCS.smmlv=ssocNum(this.value);ssocPintar()"></div>'
+    + '<div class="fg" style="margin:0"><div class="fl">Tolerancia PILA ($)</div><input class="inp" style="width:90px" value="' + SSOCS.tol + '" onchange="SSOCS.tol=ssocNum(this.value);ssocPintar()"></div></div>'
+    + '<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px"><button class="btn btn-p btn-sm" onclick="$s(\'ssoc-f-nom\').click()">📤 Subir nómina Siesa (Excel)</button><button class="btn btn-bl btn-sm" onclick="$s(\'ssoc-f-pila\').click()">📥 Subir planilla PILA</button>'
+    + (nm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'nomina\')">🗑 Quitar nómina</button>' : '') + (pm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'pila\')">🗑 Quitar PILA</button>' : '') + '</div>'
+    + '<input type="file" id="ssoc-f-nom" accept=".xlsx,.xls,.csv" style="display:none" onchange="ssocSubirNomina(this)"><input type="file" id="ssoc-f-pila" accept=".xlsx,.xls,.csv" style="display:none" onchange="ssocSubirPila(this)">'
+    + '<div style="font-size:11px;color:var(--mu);line-height:1.7">' + meta(nm, 'Nómina') + '<br>' + meta(pm, 'PILA') + '</div></div></div>'
+    + (SSOCS.nom.length || SSOCS.pila.length ? '<div class="sg" style="margin-bottom:12px">' + kp(SSOCS.nom.length, 'Empleados en nómina') + kp(ssocFm(sum('ibc')), 'IBC total') + kp(ssocFm(sum('salud')), 'Salud total') + kp(ssocFm(sum('pen')), 'Pensión total') + kp(con.length, 'Con observaciones', con.length ? 'var(--rd)' : 'var(--gr)') + (SSOCS.pila.length ? kp(rows.filter(r => /PILA/.test(r.obs)).length, 'Diferencias con PILA', 'var(--or)') : '') + '</div>'
+      + '<div class="card" style="padding:0">' + ssocgBar('ssoc') + '<div class="tw" id="ssocg_ssoc" style="max-height:70vh;overflow:auto"></div></div>'
+      : '<div class="empty">Sube el Excel de nómina de Siesa de este periodo (el mismo formato de «Movimientos»).</div>');
+  if (SSOCS.nom.length || SSOCS.pila.length) { const hide = SSOCG.ssoc ? SSOCG.ssoc.hide : new Set(['suma']); ssocgInit('ssoc', ssocCols(), { rows, nombre: 'Seguridad_social_' + SSOCS.per, attr: r => r.obs ? ' class="dif"' : '' }); SSOCG.ssoc.hide = hide; ssocgPaint('ssoc'); }
+}
+/* ---------- lectura de archivos ---------- */
+function ssocLeerArchivo(file) {
+  return new Promise((ok, no) => { const fr = new FileReader(); fr.onerror = () => no(new Error('No se pudo leer el archivo')); fr.onload = () => { try { const wb = XLSX.read(fr.result, { type: 'array' }); ok(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' })); } catch (e) { no(new Error('Archivo no válido')); } }; fr.readAsArrayBuffer(file); });
+}
+function ssocParseNomina(A) {
+  const h1 = (A[0] || []).map(x => String(x == null ? '' : x).trim()), h2 = (A[1] || []).map(x => String(x == null ? '' : x).trim());
+  const iIbc = h1.findIndex(x => /\bIBC\b/i.test(x)); if (iIbc < 0) throw new Error('No encuentro la columna «VALOR TOTAL IBC» en la fila 1');
+  const after = re => { for (let i = iIbc + 1; i < h1.length; i++) if (re.test(h1[i])) return i; return -1; };
+  const iSal = after(/EPS|SALUD/i), iPen = after(/PENSI/i); if (iSal < 0 || iPen < 0) throw new Error('No encuentro «VALOR EPS» o «VALOR PENSION» después del IBC');
+  let iTot = -1; h1.forEach((x, i) => { if (/^TOTAL$/i.test(x)) iTot = i; });
+  const f = (re, d) => { const i = h2.findIndex(x => re.test(x)); return i >= 0 ? i : d; };
+  const iPer = f(/^periodo/i, 0), iCar = f(/^cargo/i, 1), iCed = f(/^empleado/i, 2), iNom = f(/^nombre/i, 3), iEst = f(/^estado/i, 4), ini = Math.max(iPer, iCar, iCed, iNom, iEst) + 1;
+  const cols = []; for (let i = ini; i < iIbc; i++) cols.push([i, (h2[i] ? h2[i] + ' · ' : '') + (h1[i] || '')]);
+  const out = [], per = new Set();
+  for (let r = 2; r < A.length; r++) {
+    const R = A[r], ced = ssocCed(R[iCed]); if (!ced || ced.length < 5) continue;
+    const con = {}; cols.forEach(([i, n]) => { const v = ssocNum(R[i]); if (v) con[n] = (con[n] || 0) + v; });
+    const p = String(R[iPer] || '').replace(/\D/g, ''); if (p) per.add(p);
+    out.push([String(R[iCed]).trim(), String(R[iNom] || '').replace(/\s+/g, ' ').trim(), String(R[iCar] || '').trim(), String(R[iEst] || '').trim(), ssocNum(R[iIbc]), ssocNum(R[iSal]), ssocNum(R[iPen]), iTot >= 0 ? ssocNum(R[iTot]) : 0, con]);
+  }
+  if (!out.length) throw new Error('No encontré empleados en el archivo');
+  return { filas: out, periodo: per.size === 1 ? [...per][0] : '', periodos: [...per] };
+}
+async function ssocSubirNomina(inp) {
+  const f = inp.files[0]; inp.value = ''; if (!f) return;
+  try {
+    const A = await ssocLeerArchivo(f), P = ssocParseNomina(A);
+    if (P.periodos.length > 1) throw new Error('El archivo trae varios periodos (' + P.periodos.join(', ') + '). Sube uno por mes.');
+    const per = /^20\d{4}$/.test(P.periodo) ? P.periodo : SSOCS.per;
+    if (SSOCS.metas.some(m => m.periodo === per && m.tipo === 'nomina') && !confirm('Ya hay nómina cargada para ' + ssocPerTxt(per) + '. ¿Reemplazarla?')) return;
+    const j = await ssocApi('guardar', { periodo: per, tipo: 'nomina', archivo: f.name, quien: CU.nombre || CU.email, filas: P.filas });
+    SSOCS.per = per; toast('Nómina guardada: ' + j.meta.filas + ' empleados', 'ok'); await ssocInit();
+  } catch (e) { toast(e.message, 'er'); }
+}
+let SSOCP = null;
+async function ssocSubirPila(inp) {
+  const f = inp.files[0]; inp.value = ''; if (!f) return;
+  try {
+    const A = await ssocLeerArchivo(f); let hi = A.findIndex(R => R.filter(x => String(x).trim() !== '' && isNaN(Number(x))).length >= 4); if (hi < 0) throw new Error('No encuentro los encabezados de la PILA');
+    const H = A[hi].map((x, i) => ({ i, t: String(x || '').trim() })).filter(x => x.t); const g = (re, ex) => { const c = H.find(x => re.test(x.t) && !(ex && ex.test(x.t))); return c ? c.i : ''; };
+    SSOCP = { A, hi, H, archivo: f.name, m: { ced: g(/identific|c[eé]dula|documento|n[uú]mero/i), nom: g(/nombre|apellido/i), ibc: g(/ibc.*pensi|ibc/i), sal: g(/(cotiz|valor|aporte).*(salud|eps)|(salud|eps).*(cotiz|valor|aporte|total)/i), pen: g(/(cotiz|valor|aporte).*pensi|pensi.*(cotiz|valor|aporte|total)/i, /fondo|solidar|ibc/i) } };
+    const sel = (id, lbl) => '<div class="fg"><div class="fl">' + lbl + '</div><select class="inp" id="ssocpm_' + id + '"><option value="">— no aplica —</option>' + H.map(x => '<option value="' + x.i + '"' + (String(SSOCP.m[id]) === String(x.i) ? ' selected' : '') + '>' + esc(x.t) + '</option>').join('') + '</select></div>';
+    const m = document.createElement('div'); m.id = 'ssoc-mp'; m.className = 'ov on'; m.style.display = 'flex'; m.innerHTML = '<div class="mo" style="max-width:520px;width:96%"><div class="mh"><div class="mt">📥 Columnas de la PILA</div><button class="mx" onclick="this.closest(\'.ov\').remove()">✕</button></div><div class="mb"><div style="font-size:11px;color:var(--mu);margin-bottom:8px">Confirma qué columna de «' + esc(f.name) + '» es cada dato (' + (A.length - hi - 1) + ' filas).</div>'
+      + sel('ced', 'Cédula / identificación') + sel('nom', 'Nombre') + sel('ibc', 'IBC') + sel('sal', 'Cotización salud') + sel('pen', 'Cotización pensión') + '</div><div class="mf"><button class="btn btn-g" onclick="this.closest(\'.ov\').remove()">Cancelar</button><button class="btn btn-p" onclick="ssocGuardarPila()">Guardar PILA</button></div></div>';
+    document.body.appendChild(m);
+  } catch (e) { toast(e.message, 'er'); }
+}
+async function ssocGuardarPila() {
+  try {
+    const v = id => { const x = $s('ssocpm_' + id).value; return x === '' ? -1 : +x; }, c = { ced: v('ced'), nom: v('nom'), ibc: v('ibc'), sal: v('sal'), pen: v('pen') };
+    if (c.ced < 0 || c.sal < 0 || c.pen < 0) { toast('Falta cédula, salud o pensión', 'wa'); return; }
+    const filas = []; for (let r = SSOCP.hi + 1; r < SSOCP.A.length; r++) { const R = SSOCP.A[r], ced = ssocCed(R[c.ced]); if (!ced || ced.length < 5) continue; filas.push([String(R[c.ced]).trim(), c.nom >= 0 ? String(R[c.nom] || '').trim() : '', c.ibc >= 0 ? ssocNum(R[c.ibc]) : 0, ssocNum(R[c.sal]), ssocNum(R[c.pen])]); }
+    if (!filas.length) { toast('No encontré filas con cédula', 'er'); return; }
+    if (SSOCS.metas.some(m => m.periodo === SSOCS.per && m.tipo === 'pila') && !confirm('Ya hay PILA cargada para ' + ssocPerTxt(SSOCS.per) + '. ¿Reemplazarla?')) return;
+    const j = await ssocApi('guardar', { periodo: SSOCS.per, tipo: 'pila', archivo: SSOCP.archivo, quien: CU.nombre || CU.email, filas });
+    $s('ssoc-mp').remove(); toast('PILA guardada: ' + j.meta.filas + ' personas', 'ok'); await ssocInit();
+  } catch (e) { toast(e.message, 'er'); }
+}
+async function ssocBorrar(tipo) {
+  if (!confirm('¿Quitar ' + (tipo === 'nomina' ? 'la nómina' : 'la PILA') + ' de ' + ssocPerTxt(SSOCS.per) + '?')) return;
+  try { await ssocApi('borrar', { periodo: SSOCS.per, tipo }); toast('Quitado', 'ok'); await ssocInit(); } catch (e) { toast(e.message, 'er'); }
+}
+
 function renderRrhh() {
+  if(typeof ssocMostrarTab==='function') ssocMostrarTab();
   renderRrhhProgressBar();
   renderRrhhStats();
   renderRrhhLista();
@@ -4525,6 +4806,7 @@ function setRrhhTab(tab, el) {
   document.getElementById('rv-'+tab)?.classList.add('on');
   if (tab==='kanban') renderRrhhKanban();
   if (tab==='calendario') renderRrhhCal();
+  if (tab==='ssoc') ssocInit();
 }
 
 function renderRrhhLista() {
