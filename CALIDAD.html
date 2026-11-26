@@ -22705,6 +22705,12 @@ function ftmLeerFormato(A) {
   }
   { let vo = null, fr = null; A.forEach(r => { r = r || []; const a = ftmNorm(r[0]); if (r[2] != null && /^voltaje \[v\]$/.test(a)) vo = String(r[2]).trim(); if (r[2] != null && /^frecuencia \[hz\]$/.test(a)) fr = String(r[2]).trim(); });
     if (vo && !V.voltaje_v_frecuencia_hz) V.voltaje_v_frecuencia_hz = vo + (fr && !/^[\/\-]+$/.test(fr) ? ' / ' + fr : ''); }
+  { let sec = ''; const fil = []; A.forEach((r, i) => { r = r || []; if (!r[0] || i === 0) return; const a = String(r[0]).trim(), b = String(r[1] == null ? '' : r[1]).trim();
+      if (b && ftmNorm(b) === ftmNorm(r[2]) ) { sec = a; return; }
+      if (!/^\*/.test(String(r[3] == null ? '' : r[3]).trim()) && !mapa.has(ftmNorm(a))) return;
+      const raw = r[2] == null ? '' : String(r[2]).trim(), n = ftmNorm(raw);
+      const est = raw === '' ? 'blanco' : (/^[\/\\\-–_.]+$/.test(raw) || n === '') ? 'slash' : 'ok';
+      fil.push({ sec, campo: a.replace(/\s+/g, ' '), en: b, valor: raw, estado: est }); }); V._filas = fil; }
   if (tipo) V._tipo = String(tipo).trim();
   if (n >= 5) return V;
   const campos = FTM_CAMPOS.filter(c => c.mx);
@@ -22749,15 +22755,25 @@ async function ftmEvalProdCorrer() {
   const R = ftmEvaluar(cat, V); FTM.epR = R; FTM.epCat = cat;
   const n = { ok: 0, no: 0, falta: 0 }; R.forEach(r => n[r.estado]++);
   const col = { ok: ['#dcfce7', '#166534', '✅ Cumple'], no: ['#fee2e2', '#991b1b', '❌ No cumple'], falta: ['#fef3c7', '#92400e', '⚠️ Falta dato'] };
+  FTM.epF = V._filas || [];
+  let vacios = '';
+  if (FTM.epF.length) {
+    const bySec = {}; FTM.epF.forEach(f => { (bySec[f.sec || 'General'] = bySec[f.sec || 'General'] || []).push(f); });
+    let tot = 0, filas = '';
+    Object.keys(bySec).forEach(sc => { const L = bySec[sc], vac = L.filter(f => f.estado !== 'ok');
+      if (/sensor/i.test(sc) && vac.length === L.length) { filas += '<tr style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px" colspan="3"><b>' + sc + '</b>: toda la sección sin diligenciar (solo aplica si el producto trae sensor)</td></tr>'; return; }
+      vac.forEach(f => { tot++; filas += '<tr style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px;color:#64748b">' + sc + '</td><td>' + f.campo.replace(/</g, '&lt;') + '</td><td style="background:#fef3c7;color:#92400e;font-weight:700;padding:4px 8px">' + (f.estado === 'blanco' ? 'En blanco' : 'Puso «' + f.valor.replace(/</g, '&lt;') + '» (no aplica)') + '</td></tr>'; }); });
+    vacios = '<div style="margin-top:14px;font-size:12px"><b>📋 Campos del formato no diligenciados</b> (se pidan o no en la categoría): ' + tot + '</div>' + (filas ? '<div style="overflow:auto;max-height:40vh;margin-top:6px"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:5px 8px">Sección</th><th>Campo</th><th>Qué pasó</th></tr>' + filas + '</table></div>' : '<div style="color:#166534;font-size:12px">Todos los campos fueron diligenciados.</div>');
+  }
   out.innerHTML = '<div style="font-size:12px;margin-bottom:8px"><b>' + FTM_CATS[cat].n + '</b>' + aut + ' · fuente: ' + origen + '<br><span style="color:#166534">' + n.ok + ' cumplen</span> · <span style="color:#991b1b">' + n.no + ' no cumplen</span> · <span style="color:#92400e">' + n.falta + ' faltan</span></div>' +
     '<div style="overflow:auto;max-height:50vh"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:5px 8px">Requisito</th><th>Valor encontrado</th><th>Resultado</th></tr>' +
     R.sort((a, b) => ({ no: 0, falta: 1, ok: 2 })[a.estado] - ({ no: 0, falta: 1, ok: 2 })[b.estado]).map(r => '<tr style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px">' + r.req + '</td><td>' + String(r.valor).replace(/</g, '&lt;') + '</td><td style="background:' + col[r.estado][0] + ';color:' + col[r.estado][1] + ';font-weight:700;padding:4px 8px">' + col[r.estado][2] + (r.nota ? '<div style="font-weight:400;font-size:11px">' + r.nota + '</div>' : '') + '</td></tr>').join('') + '</table></div>' +
-    '<div style="margin-top:8px"><button class="btn btn-sm" onclick="ftmEvalProdExcel()">⬇️ Descargar resultado (Excel)</button></div>';
+    vacios + '<div style="margin-top:8px"><button class="btn btn-sm" onclick="ftmEvalProdExcel()">⬇️ Descargar resultado (Excel)</button></div>';
 }
 function ftmEvalProdExcel() {
   const R = FTM.epR || []; if (!R.length) return;
   const ws = XLSX.utils.aoa_to_sheet([['Grupo', 'Requisito', 'Valor encontrado', 'Resultado', 'Observación']].concat(R.map(r => [r.grupo, r.req, r.valor, { ok: 'Cumple', no: 'No cumple', falta: 'Falta dato' }[r.estado], r.nota]))), wb = XLSX.utils.book_new();
-  ws['!cols'] = [{ wch: 14 }, { wch: 55 }, { wch: 28 }, { wch: 14 }, { wch: 32 }]; XLSX.utils.book_append_sheet(wb, ws, 'Evaluación'); XLSX.writeFile(wb, 'Evaluacion_producto_' + (FTM_CATS[FTM.epCat] || {}).n.replace(/[^\w]+/g, '_') + '.xlsx');
+  ws['!cols'] = [{ wch: 14 }, { wch: 55 }, { wch: 28 }, { wch: 14 }, { wch: 32 }]; XLSX.utils.book_append_sheet(wb, ws, 'Evaluación'); if ((FTM.epF || []).length) { const w2 = XLSX.utils.aoa_to_sheet([['Sección', 'Campo', 'Valor del proveedor', 'Estado']].concat(FTM.epF.map(f => [f.sec, f.campo, f.valor, { ok: 'Diligenciado', blanco: 'En blanco', slash: 'No aplica / slash' }[f.estado]]))); w2['!cols'] = [{ wch: 18 }, { wch: 42 }, { wch: 34 }, { wch: 20 }]; XLSX.utils.book_append_sheet(wb, w2, 'Campos del formato'); } XLSX.writeFile(wb, 'Evaluacion_producto_' + (FTM_CATS[FTM.epCat] || {}).n.replace(/[^\w]+/g, '_') + '.xlsx');
 }
 async function ftmSubir(inp) {
   const f = inp.files && inp.files[0]; if (!f) return; const msg = t => { FTM.msg = t; const m = document.getElementById('ftm-msg'); if (m) m.innerHTML = t; };
