@@ -22723,7 +22723,7 @@ function ftmLeerFormato(A) {
       if (!/^\*/.test(String(r[3] == null ? '' : r[3]).trim()) && !mapa.has(ftmNorm(a))) return;
       const raw = r[2] == null ? '' : String(r[2]).trim(), n = ftmNorm(raw);
       const est = raw === '' ? 'blanco' : (ftmVacio(raw) || n === '') ? 'slash' : 'ok';
-      fil.push({ sec, k: mapa.get(ftmNorm(a)) || mapa.get(ftmNorm(b)) || '', campo: a.replace(/\s+/g, ' '), en: b, valor: raw, estado: est }); }); V._filas = fil; }
+      fil.push({ fila: i + 1, sec, k: mapa.get(ftmNorm(a)) || mapa.get(ftmNorm(b)) || '', campo: a.replace(/\s+/g, ' '), en: b, valor: raw, estado: est }); }); V._filas = fil; }
   if (tipo) V._tipo = String(tipo).trim();
   if (n >= 5) return V;
   const campos = FTM_CAMPOS.filter(c => c.mx);
@@ -22758,8 +22758,11 @@ async function ftmEvalProdCorrer() {
   let cat = document.getElementById('ftm-ep-cat').value; const f = document.getElementById('ftm-ep-file').files[0], ref = document.getElementById('ftm-ep-ref').value.trim();
   let V = {}, origen = '';
   try {
-    if (f) { const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' }); wb.SheetNames.forEach(n => { const v = ftmLeerFormato(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null, raw: false })); Object.keys(v).forEach(k => { if (V[k] == null) V[k] = v[k]; }); }); origen = 'formato «' + f.name + '»'; }
-    else if (ref) { await ftmCargar(); const ev = ftmEval(ftmK(ref)); if (!ev) return toast('La referencia no está en la matriz', 'wa'); Object.keys(ev.vals).forEach(k => { if (ev.vals[k].v != null) V[k] = ev.vals[k].v; }); origen = 'matriz, referencia ' + ref; }
+    if (f) { const buf = await f.arrayBuffer(); const wb = XLSX.read(buf, { type: 'array' }); let best = null; const all = [];
+      wb.SheetNames.forEach(n => { const v = ftmLeerFormato(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null, raw: false })); all.push(v); if (!best || (v._filas || []).length > (best.v._filas || []).length) best = { n, v }; });
+      V = Object.assign({}, best.v); all.forEach(v => Object.keys(v).forEach(k => { if (k !== '_filas' && V[k] == null) V[k] = v[k]; }));
+      FTM.epBuf = buf; FTM.epHoja = best.n; FTM.epArchivo = f.name; origen = 'formato «' + f.name + '»'; }
+    else if (ref) { FTM.epBuf = null; await ftmCargar(); const ev = ftmEval(ftmK(ref)); if (!ev) return toast('La referencia no está en la matriz', 'wa'); Object.keys(ev.vals).forEach(k => { if (ev.vals[k].v != null) V[k] = ev.vals[k].v; }); origen = 'matriz, referencia ' + ref; }
     else return toast('Sube el formato de desarrollo o escribe una referencia', 'wa');
   } catch (e) { return toast('No pude leer el archivo: ' + e.message, 'er'); }
   let aut = '';
@@ -22789,7 +22792,7 @@ function ftmEpPintar() {
   const col = { ok: ['#dcfce7', '#166534', '✅ Cumple'], no: ['#fee2e2', '#991b1b', '❌ No cumple'], falta: ['#fecaca', '#7f1d1d', '🚨 EXIGIDO y falta'] };
   const exigidos = new Set(R.filter(r => r.estado === 'falta').map(r => r.campo));
   const inp = (k, val) => '<input class="inp" style="padding:3px 6px;font-size:12px;min-width:120px;' + (FTM.epEd[k] ? 'background:#eff6ff;' : '') + '" value="' + esc(val) + '" onchange="ftmEpSet(\'' + k + '\',this.value)">';
-  let vacios = '';
+  let vacios = FTM.epBuf && !FTM.epF.length ? '<div class="alert" style="margin-top:12px;font-size:12px">⚠️ No pude identificar los campos de este Excel (esperaba las etiquetas del formato en la columna A y las respuestas en la C), por eso no puedo listar los datos incompletos.</div>' : '';
   if (FTM.epF.length) {
     const bySec = {}; FTM.epF.forEach(f => { (bySec[f.sec || 'General'] = bySec[f.sec || 'General'] || []).push(f); });
     let tot = 0, filas = '';
@@ -22800,7 +22803,7 @@ function ftmEpPintar() {
     const todos = FTM.epF.map(f => { const ex = exigidos.has(f.k); return '<tr data-t="' + esc((f.sec + ' ' + f.campo + ' ' + f.valor).toLowerCase()) + '" style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px;color:#64748b">' + esc(f.sec) + '</td><td>' + esc(f.campo) + (ex ? ' ' + bd() : '') + '</td><td>' + (f.k ? inp(f.k, f.estado === 'ok' ? f.valor : '') : esc(f.valor)) + '</td><td style="padding:4px 8px;font-weight:700;color:' + (f.estado === 'ok' ? '#166534' : '#92400e') + '">' + (f.estado === 'ok' ? '✅ Diligenciado' : f.estado === 'blanco' ? '⚠️ En blanco' : '⚠️ Puso «' + esc(f.valor) + '»') + '</td></tr>'; }).join('');
     const hdr = c => '<tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:5px 8px">Sección</th><th>Campo</th>' + c + '</tr>';
     const buscador = id => '<input class="inp" placeholder="🔎 Buscar campo, sección o valor…" style="margin:6px 0;max-width:360px" oninput="ftmEpBuscar(this,\'' + id + '\')" value="' + esc(FTM.epQ && FTM.epQ[id] || '') + '">';
-    vacios = '<details ' + (FTM.epOp1 === false ? '' : 'open') + ' ontoggle="FTM.epOp1=this.open" style="margin-top:14px"><summary style="cursor:pointer;font-size:13px;font-weight:700">📋 Datos no completados por el proveedor (' + tot + ') <span style="font-weight:400;color:var(--mu)">· vacíos, «/», «-», «NA»… exigidos o no</span></summary>' + buscador('ftm-t1') +
+    vacios += '<details ' + (FTM.epOp1 === false ? '' : 'open') + ' ontoggle="FTM.epOp1=this.open" style="margin-top:14px"><summary style="cursor:pointer;font-size:13px;font-weight:700">📋 Datos incompletos (' + tot + ') <span style="font-weight:400;color:var(--mu)">· vacíos, «/», «-», «NA»… exigidos o no</span></summary>' + buscador('ftm-t1') +
       (filas ? '<div style="overflow:auto;max-height:42vh"><table id="ftm-t1" style="border-collapse:collapse;width:100%;font-size:12px">' + hdr('<th>Qué pasó</th><th>Completar</th>') + filas + '</table></div>' : '<div style="color:#166534;font-size:12px">Todos los campos fueron diligenciados.</div>') + '</details>' +
       '<details ' + (FTM.epOp2 ? 'open' : '') + ' ontoggle="FTM.epOp2=this.open" style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;font-weight:700">🗂 Todos los campos del formato (' + FTM.epF.length + ') <span style="font-weight:400;color:var(--mu)">· diligenciados y no, con buscador</span></summary>' + buscador('ftm-t2') +
       '<div style="overflow:auto;max-height:42vh"><table id="ftm-t2" style="border-collapse:collapse;width:100%;font-size:12px">' + hdr('<th>Valor (editable)</th><th>Estado</th>') + todos + '</table></div></details>';
@@ -22838,10 +22841,32 @@ async function ftmEpGuardar() {
     msg('<span style="color:var(--gr)">✅ Guardado: referencia ' + ftmE(cod) + ' · orden ' + ftmE(ord) + ' (' + nd + ' campos). Ya aparece en la matriz como un registro nuevo.</span>');
   } catch (e) { msg('<span style="color:var(--rd)">' + ftmE(e.message) + '</span>'); }
 }
-function ftmEvalProdExcel() {
+async function ftmEvalProdExcel() {
   const R = FTM.epR || []; if (!R.length) return;
-  const ws = XLSX.utils.aoa_to_sheet([['Grupo', 'Requisito', 'Valor encontrado', 'Resultado', 'Observación']].concat(R.map(r => [r.grupo, r.req, r.valor, { ok: 'Cumple', no: 'No cumple', falta: 'Falta dato' }[r.estado], r.nota]))), wb = XLSX.utils.book_new();
-  ws['!cols'] = [{ wch: 14 }, { wch: 55 }, { wch: 28 }, { wch: 14 }, { wch: 32 }]; XLSX.utils.book_append_sheet(wb, ws, 'Evaluación'); if ((FTM.epF || []).length) { const w2 = XLSX.utils.aoa_to_sheet([['Sección', 'Campo', 'Valor del proveedor', 'Estado']].concat(FTM.epF.map(f => [f.sec, f.campo, f.valor, { ok: 'Diligenciado', blanco: 'En blanco', slash: 'No aplica / slash' }[f.estado]]))); w2['!cols'] = [{ wch: 18 }, { wch: 42 }, { wch: 34 }, { wch: 20 }]; XLSX.utils.book_append_sheet(wb, w2, 'Campos del formato'); } XLSX.writeFile(wb, 'Evaluacion_producto_' + (FTM_CATS[FTM.epCat] || {}).n.replace(/[^\w]+/g, '_') + '.xlsx');
+  const nom = ((FTM.epArchivo || 'Evaluacion_producto').replace(/\.xlsx?$/i, '')) + '_EVALUADO.xlsx';
+  const EST = { ok: 'Cumple', no: 'No cumple', falta: 'EXIGIDO y falta' }, EF = { ok: 'FFDCFCE7', no: 'FFFED7AA', falta: 'FFFECACA' };
+  if (FTM.epBuf) {
+    try {
+      await comprasCargarExcelJS();
+      const wb = new ExcelJS.Workbook(); await wb.xlsx.load(FTM.epBuf.slice(0));
+      const ws = wb.getWorksheet(FTM.epHoja); let n = 0;
+      if (ws) (FTM.epF || []).forEach(f => { if (f.k && FTM.epEd && FTM.epEd[f.k]) { ws.getCell(f.fila, 3).value = String(FTM.epV[f.k] == null ? '' : FTM.epV[f.k]); n++; } });
+      const hs = (w, cols, rows, widths) => { w.addRow(cols).eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } }; }); rows.forEach(r => w.addRow(r)); widths.forEach((x, i) => w.getColumn(i + 1).width = x); };
+      const w1 = wb.addWorksheet('Evaluación RETILAP'); w1.addRow(['Categoría: ' + (FTM_CATS[FTM.epCat] || {}).n]).font = { bold: true }; w1.addRow([]);
+      hs(w1, ['Grupo', 'Requisito', 'Valor', 'Resultado', 'Observación'], R.map(r => [r.grupo, r.req, r.valor, EST[r.estado], r.nota]), [14, 55, 28, 18, 34]);
+      w1.eachRow((row, rn) => { if (rn > 3) { const r = R[rn - 4]; if (r) row.getCell(4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: EF[r.estado] } }; } });
+      const inc = (FTM.epF || []).filter(f => f.estado !== 'ok'), ex = new Set(R.filter(r => r.estado === 'falta').map(r => r.campo));
+      const w2 = wb.addWorksheet('Datos incompletos');
+      hs(w2, ['Sección', 'Campo', 'Qué pasó', 'Exigido por la norma'], inc.map(f => [f.sec, f.campo, f.estado === 'blanco' ? 'En blanco' : 'Puso «' + f.valor + '»', ex.has(f.k) ? 'SÍ' : '']), [20, 44, 28, 20]);
+      w2.eachRow((row, rn) => { if (rn > 1 && row.getCell(4).value === 'SÍ') row.getCell(4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFECACA' } }; });
+      const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = nom; document.body.appendChild(a); a.click(); a.remove();
+      return toast('Excel descargado en el mismo formato que subiste' + (n ? ' (' + n + ' dato(s) actualizados)' : '') + ', con hojas de evaluación y datos incompletos', 'ok');
+    } catch (e) { toast('No pude conservar el formato original (' + e.message + '); bajo un Excel simple', 'wa'); }
+  }
+  const ws = XLSX.utils.aoa_to_sheet([['Grupo', 'Requisito', 'Valor encontrado', 'Resultado', 'Observación']].concat(R.map(r => [r.grupo, r.req, r.valor, EST[r.estado], r.nota]))), wb = XLSX.utils.book_new();
+  ws['!cols'] = [{ wch: 14 }, { wch: 55 }, { wch: 28 }, { wch: 16 }, { wch: 32 }]; XLSX.utils.book_append_sheet(wb, ws, 'Evaluación');
+  if ((FTM.epF || []).length) { const w2 = XLSX.utils.aoa_to_sheet([['Sección', 'Campo', 'Valor del proveedor', 'Estado']].concat(FTM.epF.map(f => [f.sec, f.campo, f.valor, { ok: 'Diligenciado', blanco: 'En blanco', slash: 'No suministrado' }[f.estado]]))); w2['!cols'] = [{ wch: 18 }, { wch: 42 }, { wch: 34 }, { wch: 20 }]; XLSX.utils.book_append_sheet(wb, w2, 'Datos incompletos'); }
+  XLSX.writeFile(wb, nom);
 }
 async function ftmSubir(inp) {
   const f = inp.files && inp.files[0]; if (!f) return; const msg = t => { FTM.msg = t; const m = document.getElementById('ftm-msg'); if (m) m.innerHTML = t; };
