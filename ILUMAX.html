@@ -4561,7 +4561,7 @@ function ssocgExcel(id) {
 }
 
 /* ===== RRHH · Revisión mensual de seguridad social (nómina Siesa vs planilla PILA) ===== */
-const SSOCS = { k:'', per:'', metas:[], nom:[], pila:[], pS:4, pP:16, tol:100, smmlv:1750906, msg:'', cargado:false };
+const SSOCS = { k:'', per:'', metas:[], nom:[], pila:[], pS:4, pP:16, tol:100, smmlv:1750905, msg:'', cargado:false, vista:'rev', maestro:null, ap:null, tramos:null, genPer:'' };
 const $s = id => document.getElementById(id);
 const ssocNz = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
 const ssocFm = n => (n === '' || n == null || isNaN(n)) ? '' : Math.round(Number(n)).toLocaleString('es-CO');
@@ -4683,11 +4683,12 @@ function ssocPintar() {
     + '<div class="fg" style="margin:0"><div class="fl">Tolerancia PILA ($)</div><input class="inp" style="width:90px" value="' + SSOCS.tol + '" onchange="SSOCS.tol=ssocNum(this.value);ssocPintar()"></div></div>'
     + '<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px"><button class="btn btn-p btn-sm" onclick="$s(\'ssoc-f-nom\').click()">📤 Subir nómina Siesa (Excel)</button><button class="btn btn-bl btn-sm" onclick="$s(\'ssoc-f-pila\').click()">📥 Subir planilla PILA</button>'
     + (nm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'nomina\')">🗑 Quitar nómina</button>' : '') + (pm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'pila\')">🗑 Quitar PILA</button>' : '') + '</div>'
-    + '<input type="file" id="ssoc-f-nom" accept=".xlsx,.xls,.csv" style="display:none" onchange="ssocSubirNomina(this)"><input type="file" id="ssoc-f-pila" accept=".xlsx,.xls,.csv" style="display:none" onchange="ssocSubirPila(this)">'
+    + '<input type="file" id="ssoc-f-nom" accept=".xlsx,.xls,.csv" style="display:none" onchange="ssocSubirNomina(this)"><input type="file" id="ssoc-f-pila" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="ssocSubirPila(this)">'
     + '<div style="font-size:11px;color:var(--mu);line-height:1.7">' + meta(nm, 'Nómina') + '<br>' + meta(pm, 'PILA') + '</div></div></div>'
-    + (SSOCS.nom.length || SSOCS.pila.length ? '<div class="sg" style="margin-bottom:12px">' + kp(SSOCS.nom.length, 'Empleados en nómina') + kp(ssocFm(sum('ibc')), 'IBC total') + kp(ssocFm(sum('salud')), 'Salud total') + kp(ssocFm(sum('pen')), 'Pensión total') + kp(con.length, 'Con observaciones', con.length ? 'var(--rd)' : 'var(--gr)') + (SSOCS.pila.length ? kp(rows.filter(r => /PILA/.test(r.obs)).length, 'Diferencias con PILA', 'var(--or)') : '') + '</div>'
+    + ssocNav() + (SSOCS.vista === 'gen' ? '<div id="ssoc-gen"></div>' : SSOCS.nom.length || SSOCS.pila.length ? '<div class="sg" style="margin-bottom:12px">' + kp(SSOCS.nom.length, 'Empleados en nómina') + kp(ssocFm(sum('ibc')), 'IBC total') + kp(ssocFm(sum('salud')), 'Salud total') + kp(ssocFm(sum('pen')), 'Pensión total') + kp(con.length, 'Con observaciones', con.length ? 'var(--rd)' : 'var(--gr)') + (SSOCS.pila.length ? kp(rows.filter(r => /PILA/.test(r.obs)).length, 'Diferencias con PILA', 'var(--or)') : '') + '</div>'
       + '<div class="card" style="padding:0">' + ssocgBar('ssoc') + '<div class="tw" id="ssocg_ssoc" style="max-height:70vh;overflow:auto"></div></div>'
       : '<div class="empty">Sube el Excel de nómina de Siesa de este periodo (el mismo formato de «Movimientos»).</div>');
+  if (SSOCS.vista === 'gen') { ssocGenPintar(); return; }
   if (SSOCS.nom.length || SSOCS.pila.length) { const hide = SSOCG.ssoc ? SSOCG.ssoc.hide : new Set(['suma']); ssocgInit('ssoc', ssocCols(), { rows, nombre: 'Seguridad_social_' + SSOCS.per, attr: r => r.obs ? ' class="dif"' : '' }); SSOCG.ssoc.hide = hide; ssocgPaint('ssoc'); }
 }
 /* ---------- lectura de archivos ---------- */
@@ -4727,6 +4728,7 @@ async function ssocSubirNomina(inp) {
 let SSOCP = null;
 async function ssocSubirPila(inp) {
   const f = inp.files[0]; inp.value = ''; if (!f) return;
+  if (/\.txt$/i.test(f.name)) return ssocSubirPilaTxt(f);
   try {
     const A = await ssocLeerArchivo(f); let hi = A.findIndex(R => R.filter(x => String(x).trim() !== '' && isNaN(Number(x))).length >= 4); if (hi < 0) throw new Error('No encuentro los encabezados de la PILA');
     const H = A[hi].map((x, i) => ({ i, t: String(x || '').trim() })).filter(x => x.t); const g = (re, ex) => { const c = H.find(x => re.test(x.t) && !(ex && ex.test(x.t))); return c ? c.i : ''; };
@@ -4751,6 +4753,226 @@ async function ssocGuardarPila() {
 async function ssocBorrar(tipo) {
   if (!confirm('¿Quitar ' + (tipo === 'nomina' ? 'la nómina' : 'la PILA') + ' de ' + ssocPerTxt(SSOCS.per) + '?')) return;
   try { await ssocApi('borrar', { periodo: SSOCS.per, tipo }); toast('Quitado', 'ok'); await ssocInit(); } catch (e) { toast(e.message, 'er'); }
+}
+/* ===== Generador del TXT de PILA (Planilla Única, Res. 2388/2016): encabezado 359 · detalle 693 · totales ARL 178 ===== */
+const SSOC_T2 = [['tipo',2],['sec',5],['tdoc',2],['doc',16],['tcot',2],['subt',2],['ext',1],['colext',1],['dep',2],['mun',3],['ap1',20],['ap2',30],['nom1',20],['nom2',30],
+['ING',1],['RET',1],['TDE',1],['TAE',1],['TDP',1],['TAP',1],['VSP',1],['COR',1],['VST',1],['SLN',1],['IGE',1],['LMA',1],['VAC',1],['AVP',1],['VCT',1],['IRL',2],
+['afp',6],['afpd',6],['eps',6],['epsd',6],['ccf',6],['dpen',2],['dsal',2],['darl',2],['dccf',2],['sal',9],['integ',1],['ibcp',9],['ibcs',9],['ibca',9],['ibcc',9],
+['tarp',7],['cotp',9],['avpa',9],['avpb',9],['totp',9],['fsp',9],['fsub',9],['vnr',9],['tars',7],['cots',9],['upc',9],['autEG',15],['vEG',9],['autLM',15],['vLM',9],
+['tara',9],['ctr',9],['cota',9],['tarc',7],['vcc',9],['tarsena',7],['vsena',9],['taricbf',7],['vicbf',9],['taresap',7],['vesap',9],['tarmen',7],['vmen',9],
+['tdp2',2],['dp2',16],['exo',1],['arl',6],['riesgo',1],['tesp',1],
+['fing',10],['fret',10],['fvsp',10],['fslni',10],['fslnf',10],['figei',10],['figef',10],['flmai',10],['flmaf',10],['fvaci',10],['fvacf',10],['fvcti',10],['fvctf',10],['firli',10],['firlf',10],
+['ibco',9],['horas',3],['fradext',10],['actec',7]];
+const SSOC_T1 = [['tipo',2],['sec',5],['razon',200],['tdoc',2],['nit',16],['dv',1],['tplan',1],['nplanasoc',10],['fplanasoc',10],['forma',1],['sucursal',10],['nomsuc',40],['arl',6],['perpen',7],['persal',7],['radic',10],['fpago',10],['ncot',5],['vnomina',12],['taport',2],['operador',2]];
+const SSOC_T6 = [['tipo',2],['sec',5],['arl',6],['nit',16],['dv',1],['vtot',13],['autinc',15],['vinc',13],['votros',13],['vneto',13],['diasmora',5],['intmora',10],['subtotal',13],['nplanilla',10],['saldo',11],['total',13],['fondo',11],['afiliados',8]];
+const ssocAscii = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\x20-\x7e]/g, ' ').toUpperCase();
+const ssocT = (s, w) => (ssocAscii(s) + ' '.repeat(w)).slice(0, w);
+const ssocN = (n, w) => String(Math.round(Math.abs(Number(n) || 0))).padStart(w, '0').slice(-w);
+const ssocRiesgoTar = { 1: 0.00522, 2: 0.01044, 3: 0.02436, 4: 0.04350, 5: 0.06960 };
+const ssocTarTxt = (r, w) => Number(r).toFixed(w - 2);                       // 0.16 -> "0.16000" (7) · 0.01044 -> "0.0104400" (9)
+const ssocCeil100 = (ibc, rate) => { const R = Math.round(rate * 1e7); return Math.floor((Math.round(ibc) * R + 1e9 - 1) / 1e9) * 100; };   // aporte = IBC × tarifa, redondeado hacia arriba a la centena
+function ssocParse(txt) {
+  const L = String(txt).split(/\r?\n/), cut = (line, spec) => { const o = {}; let p = 0; spec.forEach(([k, w]) => { o[k] = line.substr(p, w); p += w; }); return o; };
+  const out = { head: null, rows: [], trailer: null };
+  L.forEach(l => { if (l.substr(0, 2) === '01' && l.length >= 359) out.head = cut(l, SSOC_T1); else if (l.substr(0, 2) === '02' && l.length >= 693) out.rows.push(cut(l, SSOC_T2)); else if (l.substr(0, 2) === '06' && l.length >= 178) out.trailer = cut(l, SSOC_T6); });
+  return out;
+}
+/* maestro: datos fijos de cada persona tomados de un TXT anterior */
+function ssocMaestroDe(parsed) {
+  const M = {};
+  parsed.rows.forEach(r => {
+    const ced = String(r.doc).trim(), reg = !(r.SLN.trim() || r.IGE.trim() || r.LMA.trim() || r.VAC.trim() || (r.IRL !== '00' && r.IRL.trim()));
+    const prev = M[ced]; if (prev && !(reg && !prev._reg)) return;
+    M[ced] = { _reg: reg, tdoc: r.tdoc, doc: ced, tcot: r.tcot, subt: r.subt, dep: r.dep, mun: r.mun, ap1: r.ap1.trim(), ap2: r.ap2.trim(), nom1: r.nom1.trim(), nom2: r.nom2.trim(), afp: r.afp.trim(), eps: r.eps.trim(), ccf: r.ccf.trim(), arl: r.arl.trim(), riesgo: r.riesgo, actec: r.actec, exo: r.exo, integ: r.integ, sal: Number(r.sal) };
+  });
+  Object.values(M).forEach(m => delete m._reg); return M;
+}
+/* tramos que reproducen un TXT existente (para validar el motor) */
+function ssocTramosDe(parsed) {
+  const T = {};
+  parsed.rows.forEach(r => {
+    const ced = String(r.doc).trim(); let t = 'REG';
+    if (r.SLN.trim()) t = 'SLN'; else if (r.IGE.trim()) t = 'IGE'; else if (r.LMA.trim()) t = 'LMA'; else if (r.VAC.trim() === 'X') t = 'VAC'; else if (r.VAC.trim() === 'L') t = 'LR'; else if (r.IRL.trim() && r.IRL !== '00') t = 'IRL';
+    (T[ced] = T[ced] || []).push({ t, d: +r.dpen, ibc: +r.ibcs, ibcp: +r.ibcp, ibcc: +r.ibcc, ing: !!r.ING.trim(), ret: !!r.RET.trim(), vsp: !!r.VSP.trim(), vst: !!r.VST.trim(), fing: r.fing.trim(), fret: r.fret.trim(), fvsp: r.fvsp.trim(), horas: +r.horas });
+  });
+  return T;
+}
+/* calcula un renglón (detalle tipo 2) a partir de la persona (maestro) y el tramo */
+function ssocLinea(m, tr, sec, ap, fs) {
+  const o = {}; SSOC_T2.forEach(([k, w]) => { o[k] = ' '.repeat(w); });
+  const z = (k, w) => { o[k] = '0'.repeat(w); };
+  ['avpa', 'avpb', 'totp', 'fsp', 'fsub', 'vnr', 'upc', 'vEG', 'vLM', 'vsena', 'vicbf', 'vesap', 'vmen', 'ibco'].forEach(k => z(k, 9)); z('IRL', 2); z('horas', 3);
+  ['tarsena', 'taricbf', 'taresap', 'tarmen'].forEach(k => { o[k] = '0.00000'; });
+  const pens = m.subt === '01', t = tr.t, ibc = Math.round(Number(tr.ibc) || 0), ibcp = pens ? 0 : Math.round(tr.ibcp != null && tr.ibcp !== '' ? tr.ibcp : ibc), ibcc = Math.round(tr.ibcc != null && tr.ibcc !== '' ? tr.ibcc : ibc);
+  const conSalud = t !== 'SLN', conArl = ['REG'].includes(t), conCcf = ['REG', 'VAC', 'LR'].includes(t), tarA = conArl ? (ssocRiesgoTar[m.riesgo] || 0) : 0;
+  Object.assign(o, { tipo: '02', sec: ssocN(sec, 5), tdoc: m.tdoc, doc: ssocT(m.doc, 16), tcot: m.tcot, subt: m.subt, dep: m.dep, mun: m.mun, ap1: ssocT(m.ap1, 20), ap2: ssocT(m.ap2, 30), nom1: ssocT(m.nom1, 20), nom2: ssocT(m.nom2, 30) });
+  if (tr.ing) o.ING = 'X'; if (tr.ret) o.RET = 'X'; if (tr.vsp) o.VSP = 'X'; if (tr.vst) o.VST = 'X';
+  if (t === 'SLN') o.SLN = 'X'; if (t === 'IGE') o.IGE = 'X'; if (t === 'LMA') o.LMA = 'X'; if (t === 'VAC') o.VAC = 'X'; if (t === 'LR') o.VAC = 'L'; if (t === 'IRL') o.IRL = ssocN(tr.d, 2);
+  Object.assign(o, { afp: ssocT(m.afp, 6), eps: ssocT(m.eps, 6), ccf: ssocT(m.ccf, 6), dpen: ssocN(tr.d, 2), dsal: ssocN(tr.d, 2), darl: ssocN(tr.d, 2), dccf: ssocN(tr.d, 2), sal: ssocN(m.sal, 9), integ: m.integ || 'F',
+    ibcp: ssocN(ibcp, 9), ibcs: ssocN(ibc, 9), ibca: ssocN(ibc, 9), ibcc: ssocN(ibcc, 9), tarp: ssocTarTxt(pens ? 0 : 0.16, 7), cotp: ssocN(ssocCeil100(ibcp, pens ? 0 : 0.16), 9),
+    tars: ssocTarTxt(conSalud ? 0.04 : 0, 7), cots: ssocN(conSalud ? ssocCeil100(ibc, 0.04) : 0, 9), tara: ssocTarTxt(tarA, 9), ctr: ssocN(conArl ? m.riesgo : 0, 9), cota: ssocN(ssocCeil100(ibc, tarA), 9),
+    tarc: ssocTarTxt(conCcf ? 0.04 : 0, 7), vcc: ssocN(conCcf ? ssocCeil100(ibcc, 0.04) : 0, 9), exo: m.exo || 'S', arl: ssocT(ap.arl, 6), riesgo: String(m.riesgo), fing: ssocT(tr.fing, 10), fret: ssocT(tr.ret ? tr.fret : '', 10), fvsp: ssocT(tr.fvsp, 10), horas: ssocN(tr.horas || 0, 3), actec: ssocT(m.actec, 7) });
+  if (!conArl) o.cota = ssocN(0, 9);
+  if (fs && !pens) { o.fsp = ssocN(ssocCeil100(ibcp, 0.005), 9); o.fsub = ssocN(ssocCeil100(ibcp, Math.round((fs - 0.005) * 1e5) / 1e5), 9); }   // fondo de solidaridad pensional
+  return o;
+}
+/* fondo de solidaridad: IBC mensual total de la persona ≥ 4 SMMLV (1 % · sube 0,2 % por cada SMMLV desde 16) */
+function ssocFsRate(totalIbc, smmlv) { const x = totalIbc / smmlv; if (x < 4) return 0; if (x < 16) return 0.01; if (x < 17) return 0.012; if (x < 18) return 0.014; if (x < 19) return 0.016; if (x < 20) return 0.018; return 0.02; }
+const ssocJoin = (o, spec) => spec.map(([k]) => o[k]).join('');
+/* arma el archivo completo: tramos = { cédula: [tramo…] } · retorna {texto, lineas, resumen} */
+function ssocArmar(periodo, maestro, tramos, ap, ordenCeds) {
+  const ceds = ordenCeds || Object.keys(tramos), lines = []; let sec = 0, sumCcf = 0, sumArl = 0, n = 0;
+  ceds.forEach(c => { const m = maestro[c]; const fs = m && m.subt !== '01' ? ssocFsRate((tramos[c] || []).reduce((s, t) => s + (Number(t.d) > 0 ? (t.ibcp != null && t.ibcp !== '' ? +t.ibcp : +t.ibc || 0) : 0), 0), ap.smmlv || 1750905) : 0; (tramos[c] || []).forEach(tr => { if (!m || !(Number(tr.d) > 0)) return; sec++; const L = ssocLinea(m, tr, sec, ap, fs); lines.push(L); sumCcf += +L.ibcc; sumArl += +L.cota; }); });
+  const emp = new Set(lines.map(l => l.doc.trim())).size;
+  const p = String(periodo), per = p.slice(0, 4) + '-' + p.slice(4), sig = (() => { let y = +p.slice(0, 4), mth = +p.slice(4) + 1; if (mth > 12) { mth = 1; y++; } return y + '-' + String(mth).padStart(2, '0'); })();
+  const H = {}; SSOC_T1.forEach(([k, w]) => { H[k] = ' '.repeat(w); });
+  Object.assign(H, { tipo: '01', sec: '00001', razon: ssocT(ap.razon, 200), tdoc: ap.tdoc, nit: ssocT(ap.nit, 16), dv: ap.dv, tplan: ap.tplan, forma: ap.forma, arl: ssocT(ap.arl, 6), perpen: per, persal: sig, radic: '0000000000', ncot: ssocN(emp, 5), vnomina: ssocN(sumCcf, 12), taport: ap.taport, operador: ap.operador });
+  const T6 = {}; SSOC_T6.forEach(([k, w]) => { T6[k] = ' '.repeat(w); });
+  Object.assign(T6, { tipo: '06', sec: '00001', arl: ssocT(ap.arl, 6), nit: ssocN(ap.nitArl, 16), dv: ap.dvArl, vtot: ssocN(sumArl, 13), vinc: ssocN(0, 13), votros: ssocN(0, 13), vneto: ssocN(sumArl, 13), diasmora: ssocN(0, 5), intmora: ssocN(0, 10), subtotal: ssocN(sumArl, 13), nplanilla: ssocN(0, 10), saldo: ssocN(0, 11), total: ssocN(sumArl, 13), fondo: ssocN(Math.round(sumArl * 0.1), 11), afiliados: ssocN(lines.length, 8) });
+  const texto = [ssocJoin(H, SSOC_T1)].concat(lines.map(l => ssocJoin(l, SSOC_T2)), [ssocJoin(T6, SSOC_T6)]).join('\r\n') + '\r\n';
+  return { texto, lineas: lines, resumen: { empleados: emp, lineas: lines.length, vnomina: sumCcf, arl: sumArl } };
+}
+/* propone los tramos (líneas) de una persona a partir de su fila de nómina Siesa; lo que no se pueda saber queda marcado para revisar */
+function ssocProponer(r, m) {
+  const con = r.con || {}, sum = re => Object.entries(con).filter(([k]) => re.test(k)).reduce((s, [, v]) => s + (Number(v) || 0), 0);
+  const fb = sum(/SALARIO BASICO/i), vac = sum(/VACACIONES/i), ige = sum(/INCAPACIDAD|INC\. EG/i), irl = sum(/INC\. AT/i), lr = sum(/LICENCIA REMUNERADA|CALAMIDAD/i);
+  const sal = m ? Number(m.sal) : 0, ibc = Number(r.ibc) || 0, nov = [['VAC', vac], ['IGE', ige], ['IRL', irl], ['LR', lr]].filter(x => x[1] > 0), sumNov = nov.reduce((s, x) => s + x[1], 0);
+  let dReg = sal > 0 && fb > 0 ? Math.round(fb / (sal / 30)) : (fb > 0 ? 30 : 0); dReg = Math.max(0, Math.min(30, dReg));
+  const ibcReg = Math.round(ibc - sumNov), out = [], avisos = []; let resto = 30 - dReg;
+  if (dReg > 0 || (!nov.length && ibcReg > 0)) {
+    if (dReg === 0) dReg = 30, resto = 0;
+    out.push({ t: 'REG', d: dReg, ibc: ibcReg, ibcp: '', ibcc: '', ing: false, ret: false, vsp: false, vst: false, fing: '', fret: '', fvsp: '', horas: dReg * 7 });
+  }
+  nov.forEach((x, i) => { const d = i === 0 ? resto : 0; if (d === 0 && out.length && out[0].t === 'REG' && nov.length === 1) { out[0].ibc += Math.round(x[1]); return; } out.push({ t: x[0], d, ibc: Math.round(x[1]), ibcp: '', ibcc: '', ing: false, ret: false, vsp: false, vst: false, fing: '', fret: '', fvsp: '', horas: 0 }); if (nov.length > 1) avisos.push('varias novedades: reparte los días'); });
+  if (out.length && out[0].t === 'REG') out[0].vst = Math.abs(out[0].ibc - sal * out[0].d / 30) > 1;
+  if (!nov.length && resto > 0) { out.push({ t: 'VAC', d: resto, ibc: Math.round(sal * resto / 30), ibcp: '', ibcc: '', ing: false, ret: false, vsp: false, vst: false, fing: '', fret: '', fvsp: '', horas: 0, _pend: true }); avisos.push('faltan ' + resto + ' días: define la novedad (vacaciones, licencia, incapacidad) o marca ingreso/retiro'); }
+  if (!m) avisos.push('persona sin datos fijos (maestro)');
+  return { tramos: out, avisos };
+}
+/* ===== Generar planilla (TXT) · pantalla ===== */
+const ssocApDef = { razon: 'ILUMAX SA', tdoc: 'NI', nit: '900053261', dv: '8', tplan: 'E', forma: 'U', arl: '14-7', taport: '01', operador: '00', nitArl: '860002503', dvArl: '2' };
+const ssocAp = () => Object.assign({}, ssocApDef, SSOCS.ap || {}, { smmlv: SSOCS.smmlv });
+const ssocKv = async c => (await ssocApi('kv', null, '&clave=' + encodeURIComponent(c))).valor;
+const ssocKvSet = (c, v) => ssocApi('kvset', { clave: c, valor: v, quien: CU.nombre || CU.email });
+const ssocNav = () => { const b = (v, t) => '<button class="btn ' + (SSOCS.vista === v ? 'btn-p' : 'btn-g') + ' btn-sm" onclick="SSOCS.vista=\'' + v + '\';ssocPintar()">' + t + '</button>'; return '<div style="display:flex;gap:7px;margin-bottom:12px">' + b('rev', '📋 Revisión') + b('gen', '📄 Generar planilla (TXT)') + '</div>'; };
+async function ssocGenCargar() {
+  if (SSOCS.genPer === SSOCS.per && SSOCS.maestro) return;
+  const [m, a, t] = await Promise.all([ssocKv('maestro'), ssocKv('aportante'), ssocKv('tramos:' + SSOCS.per)]);
+  SSOCS.maestro = m || {}; SSOCS.ap = a || null; SSOCS.tramos = t || {}; SSOCS.genPer = SSOCS.per;
+}
+function ssocGenData() {
+  const M = SSOCS.maestro || {}, byC = {};
+  SSOCS.nom.forEach(r => { const e = byC[r.ced] || (byC[r.ced] = { ced: r.ced, cedTxt: r.cedTxt, nombre: r.nombre, ibc: 0, salud: 0, pen: 0, con: {} }); e.ibc += r.ibc; e.salud += r.salud; e.pen += r.pen; Object.entries(r.con || {}).forEach(([k, v]) => { e.con[k] = (e.con[k] || 0) + v; }); });
+  const emps = Object.values(byC), tr = {}, av = {};
+  emps.forEach(e => { const m = M[e.ced], pr = ssocProponer(e, m); tr[e.ced] = SSOCS.tramos && SSOCS.tramos[e.ced] ? SSOCS.tramos[e.ced] : pr.tramos; av[e.ced] = SSOCS.tramos && SSOCS.tramos[e.ced] ? [] : pr.avisos; if (!m && SSOCS.tramos && SSOCS.tramos[e.ced]) av[e.ced].push('persona sin datos fijos (maestro)'); });
+  const out = ssocArmar(SSOCS.per, M, tr, ssocAp(), emps.map(e => e.ced)), agg = {};
+  out.lineas.forEach(l => { const c = ssocCed(l.doc), a = agg[c] || (agg[c] = { n: 0, d: 0, ibc: 0, s: 0, p: 0 }); a.n++; a.d += +l.dpen; a.ibc += +l.ibcs; a.s += +l.cots; a.p += +l.cotp; });
+  const rows = emps.map(e => {
+    const a = agg[e.ced] || { n: 0, d: 0, ibc: 0, s: 0, p: 0 }, T = tr[e.ced], o = av[e.ced].slice(), esp = T.some(t => t.ing || t.ret);
+    if (a.d !== 30 && !esp) o.push('días = ' + a.d + ' (deben ser 30)');
+    if (T.some(t => t._pend)) { /* ya incluido en avisos */ }
+    return { ced: e.cedTxt, key: e.ced, nombre: e.nombre, n: a.n, d: a.d, ibcL: a.ibc, ibcN: e.ibc, dI: ssocR2(a.ibc - e.ibc), sT: a.s, sN: e.salud, dS: ssocR2(a.s - e.salud), pT: a.p, pN: e.pen, dP: ssocR2(a.p - e.pen), est: o.join('; '), editada: !!(SSOCS.tramos && SSOCS.tramos[e.ced]) };
+  });
+  return { rows, out, tr, emps };
+}
+function ssocGenCols() {
+  const tol = Number(SSOCS.tol) || 0;
+  return [
+    { k: 'ced', t: 'Cédula', v: r => r.ced }, { k: 'nombre', t: 'Nombre', v: r => r.nombre },
+    { k: 'n', t: 'Líneas', v: r => r.n, num: true, sum: true }, { k: 'd', t: 'Días', v: r => r.d, num: true },
+    { k: 'ibcL', t: 'IBC planilla', v: r => r.ibcL, num: true, sum: true }, { k: 'ibcN', t: 'IBC nómina', v: r => r.ibcN, num: true, sum: true }, { k: 'dI', t: 'Dif. IBC', v: r => r.dI, num: true, dec: true, h: r => ssocDifH(r.dI, 1) },
+    { k: 'sT', t: 'Salud planilla', v: r => r.sT, num: true, sum: true }, { k: 'sN', t: 'Salud nómina', v: r => r.sN, num: true, sum: true, dec: true, h: r => ssocFm2(r.sN) }, { k: 'dS', t: 'Dif. salud', v: r => r.dS, num: true, dec: true, h: r => ssocDifH(r.dS, tol) },
+    { k: 'pT', t: 'Pensión planilla', v: r => r.pT, num: true, sum: true }, { k: 'pN', t: 'Pensión nómina', v: r => r.pN, num: true, sum: true, dec: true, h: r => ssocFm2(r.pN) }, { k: 'dP', t: 'Dif. pensión', v: r => r.dP, num: true, dec: true, h: r => ssocDifH(r.dP, tol) },
+    { k: 'est', t: 'Revisar', v: r => r.est || 'OK', wrap: true, h: r => r.est ? '<span style="color:#dc2626;font-weight:600">' + esc(r.est) + '</span>' : '<span style="color:#16a34a">OK</span>' },
+    { k: 'ed', t: '', v: r => '', h: r => '<button class="btn btn-g btn-xs" onclick="ssocEditar(\'' + r.key + '\')">✏️ Líneas' + (r.editada ? ' ✔' : '') + '</button>' }
+  ];
+}
+async function ssocGenPintar() {
+  const box = $s('ssoc-gen'); if (!box) return;
+  if (!SSOCS.nom.length) { box.innerHTML = '<div class="empty">Primero sube la nómina de Siesa de este periodo (pestaña Revisión).</div>'; return; }
+  box.innerHTML = '<div class="empty">Cargando…</div>';
+  try { await ssocGenCargar(); } catch (e) { box.innerHTML = '<div class="empty">⚠️ ' + esc(e.message) + '</div>'; return; }
+  const inpMae = '<input type="file" id="ssoc-f-mae" accept=".txt" style="display:none" onchange="ssocSubirMaestro(this)">';
+  if (!Object.keys(SSOCS.maestro).length) { box.innerHTML = '<div class="card"><div class="cb"><b>Falta cargar los datos fijos de las personas</b> (tipo de documento, apellidos y nombres, AFP, EPS, caja, riesgo, salario).<br><span style="font-size:11px;color:var(--mu)">Sube una vez el TXT de una planilla anterior (por ejemplo el de septiembre); de ahí se toman automáticamente.</span><div style="margin-top:10px"><button class="btn btn-p btn-sm" onclick="$s(\'ssoc-f-mae\').click()">📂 Subir TXT de una planilla anterior</button></div>' + inpMae + '</div></div>'; return; }
+  const D = ssocGenData(), nAv = D.rows.filter(r => r.est).length, kp = (v, l, c) => '<div class="sc"><div class="sv"' + (c ? ' style="color:' + c + '"' : '') + '>' + v + '</div><div class="sl">' + l + '</div></div>';
+  box.innerHTML = '<div class="sg" style="margin-bottom:12px">' + kp(D.out.resumen.empleados, 'Personas en la planilla') + kp(D.out.resumen.lineas, 'Líneas del TXT') + kp(ssocFm(D.out.resumen.vnomina), 'Valor nómina (IBC caja)') + kp(ssocFm(D.out.resumen.arl), 'Aporte ARL') + kp(nAv, 'Por revisar', nAv ? 'var(--rd)' : 'var(--gr)') + '</div>'
+    + '<div class="card"><div class="cb" style="display:flex;gap:7px;flex-wrap:wrap;align-items:center"><button class="btn btn-p btn-sm" onclick="ssocGenDescargar()">⬇ Generar TXT para Aportes en Línea</button><button class="btn btn-g btn-sm" onclick="$s(\'ssoc-f-mae\').click()">📂 Actualizar datos fijos (TXT anterior)</button><button class="btn btn-g btn-sm" onclick="ssocEditar(\'\')">➕ Persona nueva</button><button class="btn btn-g btn-sm" onclick="ssocGenReset()">↺ Restablecer propuesta</button>' + inpMae
+    + '<div style="font-size:11px;color:var(--mu);width:100%">Las líneas se proponen desde la nómina de Siesa. Revisa las personas marcadas (vacaciones, licencias, incapacidades, ingresos y retiros) con «✏️ Líneas»; lo que corriges queda guardado para el periodo.</div></div></div>'
+    + '<div class="card" style="padding:0;margin-top:12px">' + ssocgBar('ssocgen') + '<div class="tw" id="ssocg_ssocgen" style="max-height:68vh;overflow:auto"></div></div>';
+  const hide = SSOCG.ssocgen ? SSOCG.ssocgen.hide : new Set(); ssocgInit('ssocgen', ssocGenCols(), { rows: D.rows, nombre: 'Planilla_' + SSOCS.per, attr: r => r.est ? ' class="dif"' : '' }); SSOCG.ssocgen.hide = hide; ssocgPaint('ssocgen');
+}
+async function ssocGenReset() { if (!confirm('¿Descartar tus ajustes de líneas de este periodo y volver a la propuesta automática?')) return; try { SSOCS.tramos = {}; await ssocKvSet('tramos:' + SSOCS.per, {}); toast('Propuesta restablecida', 'ok'); ssocGenPintar(); } catch (e) { toast(e.message, 'er'); } }
+function ssocLeerTexto(f) { return new Promise((ok, no) => { const fr = new FileReader(); fr.onerror = () => no(new Error('No se pudo leer el archivo')); fr.onload = () => ok(String(fr.result)); fr.readAsText(f, 'ISO-8859-1'); }); }
+async function ssocSubirMaestro(inp) {
+  const f = inp.files[0]; inp.value = ''; if (!f) return;
+  try {
+    const P = ssocParse(await ssocLeerTexto(f)); if (!P.rows.length) throw new Error('No es una planilla TXT válida (no encuentro líneas de detalle)');
+    const nuevo = ssocMaestroDe(P), M = Object.assign({}, SSOCS.maestro || {}); Object.values(nuevo).forEach(m => { M[ssocCed(m.doc)] = m; });
+    const ap = P.head ? { razon: P.head.razon.trim(), tdoc: P.head.tdoc, nit: P.head.nit.trim(), dv: P.head.dv, tplan: P.head.tplan, forma: P.head.forma, arl: P.head.arl.trim(), taport: P.head.taport, operador: P.head.operador } : {};
+    if (P.trailer) { ap.nitArl = String(+P.trailer.nit); ap.dvArl = P.trailer.dv; }
+    await ssocKvSet('maestro', M); if (Object.keys(ap).length) await ssocKvSet('aportante', ap);
+    SSOCS.maestro = M; if (Object.keys(ap).length) SSOCS.ap = ap; toast('Datos fijos cargados: ' + Object.keys(nuevo).length + ' personas', 'ok'); ssocGenPintar();
+  } catch (e) { toast(e.message, 'er'); }
+}
+async function ssocSubirPilaTxt(f) {
+  try {
+    const P = ssocParse(await ssocLeerTexto(f)); if (!P.rows.length) throw new Error('No encuentro líneas de detalle en el TXT');
+    const m = new Map(); P.rows.forEach(r => { const c = r.doc.trim(), a = m.get(c) || [c, [r.ap1, r.ap2, r.nom1, r.nom2].map(x => x.trim()).filter(Boolean).join(' '), 0, 0, 0]; a[2] += +r.ibcs; a[3] += +r.cots; a[4] += +r.cotp; m.set(c, a); });
+    const per = P.head ? P.head.perpen.replace('-', '') : SSOCS.per;
+    if (/^20\d{4}$/.test(per) && per !== SSOCS.per && !confirm('El TXT es del periodo ' + ssocPerTxt(per) + ' y estás viendo ' + ssocPerTxt(SSOCS.per) + '. ¿Cargarlo en ' + ssocPerTxt(per) + '?')) return;
+    if (/^20\d{4}$/.test(per)) SSOCS.per = per;
+    const j = await ssocApi('guardar', { periodo: SSOCS.per, tipo: 'pila', archivo: f.name, quien: CU.nombre || CU.email, filas: [...m.values()] });
+    toast('PILA (TXT) guardada: ' + j.meta.filas + ' personas', 'ok'); await ssocInit();
+  } catch (e) { toast(e.message, 'er'); }
+}
+function ssocGenDescargar() {
+  const D = ssocGenData(), M = SSOCS.maestro || {}, sin = D.emps.filter(e => !M[e.ced]);
+  if (sin.length) { toast('Faltan datos fijos de: ' + sin.map(e => e.nombre).slice(0, 4).join(', ') + (sin.length > 4 ? '…' : '') + '. Complétalos con «✏️ Líneas».', 'er'); return; }
+  const pend = D.rows.filter(r => r.est);
+  if (pend.length && !confirm(pend.length + ' persona(s) tienen avisos por revisar (por ejemplo días ≠ 30 o novedades sin definir). ¿Generar el TXT de todas formas?')) return;
+  const b = new Blob([D.out.texto], { type: 'text/plain' }), a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'PlanillaUnica_' + SSOCS.per + '.txt'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+  toast('TXT generado: ' + D.out.resumen.lineas + ' líneas · ' + D.out.resumen.empleados + ' personas', 'ok');
+}
+/* ---------- editor de una persona ---------- */
+const SSOC_TIPOS = [['REG', 'Salario normal'], ['VAC', 'Vacaciones (X)'], ['LR', 'Licencia remunerada (L)'], ['IGE', 'Incapacidad general'], ['IRL', 'Incapacidad laboral (ARL)'], ['SLN', 'Licencia no remunerada'], ['LMA', 'Licencia maternidad/paternidad']];
+let SSOCE = null;
+function ssocEditar(key) {
+  const M = SSOCS.maestro || {}, D = ssocGenData(), nuevo = !key, e = D.emps.find(x => x.ced === key), m = nuevo ? { tdoc: 'CC', tcot: '01', subt: '00', dep: '05', mun: '001', ap1: '', ap2: '', nom1: '', nom2: '', afp: '', eps: '', ccf: '', riesgo: '2', actec: '1469001', sal: 0, integ: 'F', exo: 'S', doc: '' } : Object.assign({ tdoc: 'CC', tcot: '01', subt: '00', dep: '05', mun: '001', riesgo: '2', actec: '1469001', integ: 'F', exo: 'S', ap1: '', ap2: '', nom1: '', nom2: '', afp: '', eps: '', ccf: '' }, M[key] || {});
+  if (!nuevo && !M[key] && e) { const p = e.nombre.split(/\s+/); m.doc = e.cedTxt; m.ap1 = p[0] || ''; m.ap2 = p.length > 3 ? p[1] : ''; m.nom1 = p.length > 3 ? p[2] : (p[1] || ''); m.nom2 = p.length > 3 ? p.slice(3).join(' ') : p.slice(2).join(' '); }
+  SSOCE = { key, nuevo, m, T: nuevo ? [{ t: 'REG', d: 30, ibc: 0, ibcc: '', ing: false, ret: false, vsp: false, vst: false, fing: '', fret: '', fvsp: '', horas: 210 }] : JSON.parse(JSON.stringify(D.tr[key])), ibcN: e ? e.ibc : 0, nombre: e ? e.nombre : 'Persona nueva' };
+  const o = document.createElement('div'); o.id = 'ssoc-ed'; o.className = 'ov on'; o.style.display = 'flex'; o.innerHTML = '<div class="mo" style="max-width:980px;width:98%;max-height:92vh;overflow:auto"><div class="mh"><div class="mt">✏️ ' + esc(SSOCE.nombre) + '</div><button class="mx" onclick="$s(\'ssoc-ed\').remove()">✕</button></div><div class="mb" id="ssoc-ed-b"></div><div class="mf"><button class="btn btn-g" onclick="$s(\'ssoc-ed\').remove()">Cancelar</button><button class="btn btn-p" onclick="ssocEdGuardar()">Guardar</button></div></div>';
+  document.body.appendChild(o); ssocEdPintar();
+}
+function ssocEdPintar() {
+  const m = SSOCE.m, f = (k, l, w) => '<div class="fg" style="margin:0"><div class="fl">' + l + '</div><input class="inp" style="width:' + (w || 90) + 'px" id="ssoc-m-' + k + '" value="' + esc(m[k] == null ? '' : m[k]) + '"></div>';
+  const fila = (t, i) => '<tr><td><select class="inp" id="ssoc-t' + i + '-t">' + SSOC_TIPOS.map(x => '<option value="' + x[0] + '"' + (t.t === x[0] ? ' selected' : '') + '>' + x[1] + '</option>').join('') + '</select></td>'
+    + '<td><input class="inp" style="width:56px" id="ssoc-t' + i + '-d" value="' + t.d + '"></td><td><input class="inp" style="width:100px" id="ssoc-t' + i + '-ibc" value="' + (t.ibc || 0) + '"></td><td><input class="inp" style="width:100px" id="ssoc-t' + i + '-ibcc" value="' + (t.ibcc === '' || t.ibcc == null ? '' : t.ibcc) + '" placeholder="= IBC"></td>'
+    + '<td style="white-space:nowrap">' + [['ing', 'Ingreso'], ['ret', 'Retiro'], ['vsp', 'Var. salario perm.'], ['vst', 'Var. salario transit.']].map(x => '<label style="font-size:10px;margin-right:6px"><input type="checkbox" id="ssoc-t' + i + '-' + x[0] + '"' + (t[x[0]] ? ' checked' : '') + '> ' + x[1] + '</label>').join('') + '</td>'
+    + '<td><input class="inp" type="date" style="width:130px" id="ssoc-t' + i + '-f" value="' + esc(t.fing || t.fret || t.fvsp || '') + '"></td><td><input class="inp" style="width:56px" id="ssoc-t' + i + '-h" value="' + (t.horas || 0) + '"></td><td><button class="btn btn-rd btn-xs" onclick="ssocEdQuitar(' + i + ')">🗑</button></td></tr>';
+  $s('ssoc-ed-b').innerHTML = '<div style="font-size:11px;color:var(--mu);margin-bottom:6px"><b>Datos fijos</b> (de la planilla anterior; corrígelos si cambiaron)</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' + f('tdoc', 'Tipo doc', 50) + f('doc', 'Cédula', 110) + f('ap1', '1er apellido', 120) + f('ap2', '2º apellido', 120) + f('nom1', '1er nombre', 110) + f('nom2', '2º nombre', 110) + f('afp', 'AFP', 70) + f('eps', 'EPS', 70) + f('ccf', 'Caja', 70) + f('riesgo', 'Riesgo ARL', 60) + f('sal', 'Salario', 90) + f('subt', 'Subtipo', 50) + f('tcot', 'Tipo cot.', 50) + f('dep', 'Depto', 50) + f('mun', 'Mpio', 50) + f('actec', 'Act. económica', 80) + f('integ', 'Salario F/V', 50) + '</div>'
+    + '<div style="font-size:11px;color:var(--mu);margin-bottom:6px"><b>Líneas de la planilla</b> · en cada línea el IBC se usa para pensión, salud y ARL; «IBC caja» solo si es distinto</div>'
+    + '<div class="tw"><table style="width:100%;font-size:11px"><thead><tr><th>Tipo</th><th>Días</th><th>IBC</th><th>IBC caja</th><th>Marcas</th><th>Fecha</th><th>Horas</th><th></th></tr></thead><tbody>' + SSOCE.T.map(fila).join('') + '</tbody></table></div>'
+    + '<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn btn-g btn-sm" onclick="ssocEdAgregar()">➕ Agregar línea</button><span id="ssoc-ed-tot" style="font-size:11px;color:var(--mu)"></span></div>';
+  ssocEdTot(); document.querySelectorAll('#ssoc-ed-b input,#ssoc-ed-b select').forEach(x => x.addEventListener('input', ssocEdTot));
+}
+function ssocEdLeer() {
+  const g = id => { const x = $s(id); return x ? x : { value: '', checked: false }; };
+  ['tdoc', 'doc', 'ap1', 'ap2', 'nom1', 'nom2', 'afp', 'eps', 'ccf', 'riesgo', 'subt', 'tcot', 'dep', 'mun', 'actec', 'integ'].forEach(k => { SSOCE.m[k] = g('ssoc-m-' + k).value.trim(); }); SSOCE.m.sal = ssocNum(g('ssoc-m-sal').value);
+  SSOCE.T = SSOCE.T.map((_, i) => { const p = k => g('ssoc-t' + i + '-' + k), ing = p('ing').checked, ret = p('ret').checked, vsp = p('vsp').checked, f = p('f').value, ibcc = p('ibcc').value.trim(); return { t: p('t').value, d: Math.max(0, Math.min(30, Math.round(ssocNum(p('d').value)))), ibc: Math.round(ssocNum(p('ibc').value)), ibcc: ibcc === '' ? '' : Math.round(ssocNum(ibcc)), ing, ret, vsp, vst: p('vst').checked, fing: ing ? f : '', fret: ret ? f : '', fvsp: vsp ? f : '', horas: Math.round(ssocNum(p('h').value)) }; });
+}
+function ssocEdTot() { try { ssocEdLeer(); const d = SSOCE.T.reduce((s, t) => s + t.d, 0), i = SSOCE.T.reduce((s, t) => s + t.ibc, 0); $s('ssoc-ed-tot').innerHTML = 'Días: <b style="color:' + (d === 30 ? '#16a34a' : '#dc2626') + '">' + d + '</b> · IBC líneas: <b>' + ssocFm(i) + '</b>' + (SSOCE.ibcN ? ' · IBC nómina: <b>' + ssocFm(SSOCE.ibcN) + '</b> · dif.: <b>' + ssocFm(i - SSOCE.ibcN) + '</b>' : ''); } catch (e) {} }
+function ssocEdAgregar() { ssocEdLeer(); SSOCE.T.push({ t: 'VAC', d: 0, ibc: 0, ibcc: '', ing: false, ret: false, vsp: false, vst: false, fing: '', fret: '', fvsp: '', horas: 0 }); ssocEdPintar(); }
+function ssocEdQuitar(i) { ssocEdLeer(); SSOCE.T.splice(i, 1); ssocEdPintar(); }
+async function ssocEdGuardar() {
+  try {
+    ssocEdLeer(); const m = SSOCE.m, ced = ssocCed(m.doc); if (!ced || !m.ap1 || !m.nom1) { toast('Falta cédula, primer apellido o primer nombre', 'wa'); return; }
+    if (!m.afp || !m.eps || !m.ccf) { toast('Falta AFP, EPS o caja de compensación', 'wa'); return; } if (!(m.sal > 0)) { toast('Falta el salario', 'wa'); return; }
+    if (SSOCE.key && ssocCed(SSOCE.key) !== ced) { toast('No cambies la cédula de una persona existente', 'wa'); return; }
+    m.doc = m.doc.replace(/\D/g, ''); const M = Object.assign({}, SSOCS.maestro || {}); M[ced] = m; await ssocKvSet('maestro', M); SSOCS.maestro = M;
+    SSOCS.tramos = Object.assign({}, SSOCS.tramos || {}); SSOCS.tramos[ced] = SSOCE.T; await ssocKvSet('tramos:' + SSOCS.per, SSOCS.tramos);
+    $s('ssoc-ed').remove(); toast('Guardado', 'ok'); ssocGenPintar();
+  } catch (e) { toast(e.message, 'er'); }
 }
 
 function renderRrhh() {
