@@ -4691,7 +4691,7 @@ async function ssocLeer() {
   SSOCS.pila = (j.pila || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], ibc: a[2], salud: a[3], pen: a[4] }));
   SSOCS.cargado = true; ssocPintar(); if (!SSOCS.siesa) ssocSiesaGuardado(SSOCS.per);
 }
-async function ssocCambiarPer(v) { SSOCS.pre = null; SSOCS.siesa = null; SSOCS.siesaMsg = ''; SSOCS.per = String(v || '').replace('-', ''); if (!/^20\d{4}$/.test(SSOCS.per)) return; try { await ssocLeer(); } catch (e) { toast(e.message, 'er'); } }
+async function ssocCambiarPer(v) { SSOCS.pre = null; SSOCS.siesa = null; SSOCS.api = null; SSOCS.auto = false; SSOCS.siesaMsg = ''; SSOCS.per = String(v || '').replace('-', ''); if (!/^20\d{4}$/.test(SSOCS.per)) return; try { await ssocLeer(); } catch (e) { toast(e.message, 'er'); } }
 function ssocAplicarSiesa(j, per, pie) {
     SSOCS.siesa = (j.emp || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], ibc: a[2], docs: a[3], cargo: a[4], estado: a[5], sal: a[6], ing: a[7], ret: a[8], cc: a[9], con: a[10] || {}, sA: a[11], p16: a[13] })); SSOCS.auto = !!j.auto; const F = j.filas || [], tS = F.reduce((x, a) => x + a[2], 0), tP = F.reduce((x, a) => x + a[3], 0), eS = SSOCS.nom.reduce((x, r) => x + (r.salud || 0), 0), eP = SSOCS.nom.reduce((x, r) => x + (r.pen || 0), 0);
     SSOCS.siesaMsg = F.length ? ssocPerTxt(per) + ' · SIESA descontó (por EPS/fondos): salud ' + ssocFm(tS) + ' · pensión ' + ssocFm(tP) + (SSOCS.nom.length ? ' | Excel: salud ' + ssocFm(eS) + ' (dif. ' + ssocFm(tS - eS) + ') · pensión empleado (4/16 del Excel) ' + ssocFm(eP / 4) + ' (dif. ' + ssocFm(tP - eP / 4) + ')' : ' | sin Excel cargado para comparar') + ' · IBC por empleado ESTIMADO desde la contabilidad de Siesa (' + SSOCS.siesa.length + ' empleados): puede diferir en retirados, aprendices, incapacidades y pagos de otros meses.' : 'SIESA no devolvió aportes de nómina para ' + ssocPerTxt(per) + '.';
@@ -4699,19 +4699,50 @@ function ssocAplicarSiesa(j, per, pie) {
   if (SSOCS.auto) SSOCS.siesaMsg = ssocPerTxt(per) + ' · Autoliquidación de SIESA (valores liquidados) · ' + SSOCS.siesa.length + ' empleados' + (pie ? ' · ' + pie : '');
   else if (!SSOCS.nom.length) SSOCS.siesaMsg += ' · ⚠️ Sin Excel de nómina de este mes: IBC estimado desde SIESA y salud (' + SSOCS.pS + '%) / pensión (' + SSOCS.pP + '%) calculados sobre ese IBC; no son valores liquidados.';
 }
+/* lo traído de SIESA por API (contabilidad) para compararlo con la autoliquidación / el Excel */
+function ssocApiMapear(j) {
+  const F = new Map(); (j.filas || []).forEach(a => { const c = ssocCed(a[0]); const o = F.get(c) || { s: 0, p: 0 }; o.s += +a[2] || 0; o.p += +a[3] || 0; F.set(c, o); });
+  return (j.emp || []).map(a => { const c = ssocCed(a[0]), f = F.get(c); return { ced: c, cedTxt: a[0], nombre: a[1], ibc: a[2], salud: f ? f.s : 0, pen: f ? f.p * 4 : 0, estado: a[5] }; });
+}
+function ssocApiRows() {
+  const tol = Number(SSOCS.tol) || 0, base = new Map();
+  if (SSOCS.auto && SSOCS.siesa) SSOCS.siesa.forEach(x => base.set(x.ced, { nombre: x.nombre, ibc: x.ibc, salud: x.sA, pen: x.p16 })); else SSOCS.nom.forEach(r => base.set(r.ced, { nombre: r.nombre, ibc: r.ibc, salud: r.salud, pen: r.pen }));
+  const api = new Map(); (SSOCS.api || []).forEach(x => api.set(x.ced, x));
+  const ceds = [...new Set([...base.keys(), ...api.keys()])];
+  return ceds.map(c => { const b = base.get(c), a = api.get(c), o = [];
+    const d = (x, y) => (b && a) ? ssocR2((x || 0) - (y || 0)) : '';
+    const r = { ced: (a && a.cedTxt) || c, nombre: (b && b.nombre) || (a && a.nombre) || '', bI: b ? b.ibc : '', bS: b ? b.salud : '', bP: b ? b.pen : '', aI: a ? a.ibc : '', aS: a ? a.salud : '', aP: a ? a.pen : '' };
+    r.dI = d(r.aI, r.bI); r.dS = d(r.aS, r.bS); r.dP = d(r.aP, r.bP);
+    if (!b && (a.ibc || 0) > 0) o.push('Solo en lo traído de SIESA'); else if (!a && b && (b.ibc || 0) > 0) o.push('No viene en lo traído de SIESA');
+    if (r.dI !== '' && Math.abs(r.dI) > 1) o.push('IBC distinto'); if (r.dS !== '' && Math.abs(r.dS) > tol) o.push('Salud distinta'); if (r.dP !== '' && Math.abs(r.dP) > tol) o.push('Pensión distinta');
+    r.obs = o.join('; '); return r; });
+}
+function ssocApiCols() {
+  const tol = Number(SSOCS.tol) || 0, bn = SSOCS.auto ? 'autoliq.' : 'Excel';
+  return [
+    { k: 'ced', t: 'Cédula', v: r => r.ced }, { k: 'nombre', t: 'Nombre', v: r => r.nombre },
+    { k: 'bI', t: 'IBC ' + bn, v: r => r.bI, num: true, sum: true, dec: true, h: r => ssocFm2(r.bI) }, { k: 'aI', t: 'IBC traído SIESA', v: r => r.aI, num: true, sum: true, dec: true, h: r => ssocFm2(r.aI) }, { k: 'dI', t: 'Dif. IBC', v: r => r.dI, num: true, dec: true, h: r => ssocDifH(r.dI, 1) },
+    { k: 'bS', t: 'Salud ' + bn, v: r => r.bS, num: true, sum: true, dec: true, h: r => ssocFm2(r.bS) }, { k: 'aS', t: 'Salud traída SIESA', v: r => r.aS, num: true, sum: true, dec: true, h: r => ssocFm2(r.aS) }, { k: 'dS', t: 'Dif. salud', v: r => r.dS, num: true, dec: true, h: r => ssocDifH(r.dS, tol) },
+    { k: 'bP', t: 'Pensión ' + bn, v: r => r.bP, num: true, sum: true, dec: true, h: r => ssocFm2(r.bP) }, { k: 'aP', t: 'Pensión traída SIESA', v: r => r.aP, num: true, sum: true, dec: true, h: r => ssocFm2(r.aP) }, { k: 'dP', t: 'Dif. pensión', v: r => r.dP, num: true, dec: true, h: r => ssocDifH(r.dP, tol) },
+    { k: 'obs', t: 'Revisar', v: r => r.obs || 'OK', wrap: true, h: r => r.obs ? '<span style="color:#dc2626;font-weight:600">' + ssocEsc(r.obs) + '</span>' : '<span style="color:#16a34a">OK</span>' }
+  ];
+}
 async function ssocTraerSiesa() {
   const per = SSOCS.per; SSOCS.siesaMsg = 'Consultando SIESA…'; ssocPintar();
   try {
     const j = await ssocApi('siesa', null, '&periodo=' + per); if (per !== SSOCS.per) return;
-    const cuando = new Date().toISOString(); ssocAplicarSiesa(j, per, '');
-    try { await ssocKvSet('siesa:' + per, { j, cuando, por: CU.nombre || CU.email }); SSOCS.siesaMsg += ' · 💾 Guardado ' + new Date(cuando).toLocaleString('es-CO') + ' (ya no hay que traerlo de nuevo; usa «Actualizar de SIESA» si quieres refrescarlo).'; }
+    const cuando = new Date().toISOString(); SSOCS.api = ssocApiMapear(j);
+    let old = null; try { old = await ssocKv('siesa:' + per); } catch (e) { }
+    const conAuto = old && old.j && old.j.auto;
+    if (!conAuto) ssocAplicarSiesa(j, per, ''); else SSOCS.siesaMsg = (SSOCS.siesaMsg || '') + ' · 🔄 Traído de SIESA: ' + new Date(cuando).toLocaleString('es-CO');
+    try { await ssocKvSet('siesa:' + per, conAuto ? Object.assign({}, old, { api: { j, cuando, por: CU.nombre || CU.email } }) : { j, cuando, por: CU.nombre || CU.email }); SSOCS.siesaMsg += ' · 💾 Guardado ' + new Date(cuando).toLocaleString('es-CO') + ' (ya no hay que traerlo de nuevo; usa «Actualizar de SIESA» si quieres refrescarlo).'; }
     catch (e) { SSOCS.siesaMsg += ' · ⚠️ No se pudo guardar: ' + e.message; }
   } catch (e) { SSOCS.siesa = null; SSOCS.siesaMsg = '⚠️ ' + e.message; }
   ssocPintar();
 }
 const ssocPerHoy = () => { const d = new Date(); return String(d.getFullYear()) + String(d.getMonth() + 1).padStart(2, '0'); };
 async function ssocSiesaGuardado(per) {
-  try { const v = await ssocKv('siesa:' + per); if (per !== SSOCS.per) return; if (!v || !v.j) { if (per < ssocPerHoy()) ssocTraerSiesa(); return; } ssocAplicarSiesa(v.j, per, '💾 Guardado ' + new Date(v.cuando).toLocaleString('es-CO') + (v.por ? ' por ' + v.por : '')); ssocPintar(); } catch (e) { }
+  try { const v = await ssocKv('siesa:' + per); if (per !== SSOCS.per) return; if (!v || !v.j) { if (per < ssocPerHoy()) ssocTraerSiesa(); return; } ssocAplicarSiesa(v.j, per, '💾 Guardado ' + new Date(v.cuando).toLocaleString('es-CO') + (v.por ? ' por ' + v.por : '')); SSOCS.api = v.j.auto ? (v.api && v.api.j ? ssocApiMapear(v.api.j) : null) : ssocApiMapear(v.j); ssocPintar(); } catch (e) { }
 }
 /* ---------- cálculo de la revisión ---------- */
 function ssocCalc() {
@@ -4808,10 +4839,11 @@ function ssocPintar() {
     + '<div style="font-size:11px;color:var(--mu);line-height:1.7">' + meta(nm, 'Nómina') + '<br>' + meta(pm, 'PILA') + (SSOCS.siesaMsg ? '<br><b>SIESA:</b> ' + ssocEsc(SSOCS.siesaMsg) : '') + '</div></div></div>'
     + ssocNav() + (SSOCS.vista === 'gen' ? '<div id="ssoc-gen"></div>' : SSOCS.vista === 'pre' ? '<div id="ssoc-pre"></div>' : SSOCS.nom.length || SSOCS.pila.length || (SSOCS.siesa && SSOCS.siesa.length) ? '<div class="sg" style="margin-bottom:12px">' + kp(SSOCS.nom.length || rows.length, SSOCS.nom.length ? 'Empleados en nómina' : 'Empleados (SIESA)', '', 'todos') + kp(ssocFm(sum('ibc')), 'IBC total', '', 'ibc') + kp(ssocFm(sum('salud')), 'Salud total', '', 'salud') + kp(ssocFm(sum('pen')), 'Pensión total', '', 'pen') + kp(con.length, 'Con observaciones', con.length ? 'var(--rd)' : 'var(--gr)', 'obs') + (SSOCS.pila.length ? kp(rows.filter(r => /PILA/.test(r.obs)).length, 'Diferencias con PILA', 'var(--or)', 'pila') : '') + '</div>'
       + '<div class="card" style="padding:0">' + ssocgBar('ssoc') + '<div class="tw" id="ssocg_ssoc" style="max-height:70vh;overflow:auto"></div></div>'
+      + (SSOCS.api && SSOCS.api.length ? '<div class="card" style="padding:0;margin-top:14px"><div class="ch"><div class="ct">🔎 Comparación con lo traído de SIESA (por API) · en rojo lo que difiere</div></div>' + ssocgBar('ssocapi') + '<div class="tw" id="ssocg_ssocapi" style="max-height:60vh;overflow:auto"></div></div>' : '<div class="arte-mu" style="margin-top:12px;font-size:11.5px">Pulsa «🔄 Traer de SIESA» para ver aquí, debajo, la comparación contra lo que trae SIESA por API.</div>')
       : '<div class="empty">Sube el Excel de nómina de Siesa de este periodo (el mismo formato de «Movimientos»).</div>');
   if (SSOCS.vista === 'gen') { ssocGenPintar(); return; }
   if (SSOCS.vista === 'pre') { ssocPrePintar(); return; }
-  if (SSOCS.nom.length || SSOCS.pila.length || (SSOCS.siesa && SSOCS.siesa.length)) { const hide = SSOCG.ssoc ? SSOCG.ssoc.hide : new Set(['suma']); ssocgInit('ssoc', ssocCols(), { rows, nombre: 'Seguridad_social_' + SSOCS.per, attr: r => r.obs ? ' class="dif"' : '' }); SSOCG.ssoc.hide = hide; ssocgPaint('ssoc'); }
+  if (SSOCS.nom.length || SSOCS.pila.length || (SSOCS.siesa && SSOCS.siesa.length)) { const hide = SSOCG.ssoc ? SSOCG.ssoc.hide : new Set(['suma']); ssocgInit('ssoc', ssocCols(), { rows, nombre: 'Seguridad_social_' + SSOCS.per, attr: r => r.obs ? ' class="dif"' : '' }); SSOCG.ssoc.hide = hide; ssocgPaint('ssoc'); if (SSOCS.api && SSOCS.api.length && $s('ssocg_ssocapi')) { const h2 = SSOCG.ssocapi ? SSOCG.ssocapi.hide : new Set(); ssocgInit('ssocapi', ssocApiCols(), { rows: ssocApiRows(), nombre: 'Comparacion_SIESA_API_' + SSOCS.per, attr: r => r.obs ? ' class="dif"' : '' }); SSOCG.ssocapi.hide = h2; ssocgPaint('ssocapi'); } }
 }
 /* ---------- lectura de archivos ---------- */
 function ssocLeerArchivo(file) {
@@ -4868,7 +4900,9 @@ async function ssocSubirAuto(inp) {
       const E = Object.entries(P[per].emp), rd = Math.round;
       const emp = E.map(([ced, o]) => [ced, o.n, rd(o.ibc || o.ibcA), 'Autoliquidación', o.car, o.ret ? 'Retirado' : 'Activo', rd(o.sal), '', '', o.cc, {}, rd(o.sa), rd(o.pe), rd(o.p16)]);
       const filas = [['AUTO', 'Autoliquidación SIESA (empleado)', rd(E.reduce((x, [, o]) => x + o.sa, 0)), rd(E.reduce((x, [, o]) => x + o.pe, 0)), rd(P[per].sol), 'Resumen Autoliquidación']];
-      await ssocKvSet('siesa:' + per, { j: { ok: true, periodo: per, filas, emp, auto: true }, cuando: new Date().toISOString(), por: (CU.nombre || CU.email) + ' · ' + f.name }); n++;
+      let old = null; try { old = await ssocKv('siesa:' + per); } catch (e) { }
+      const api = old && old.j ? (old.j.auto ? old.api || null : { j: old.j, cuando: old.cuando, por: old.por }) : null;
+      await ssocKvSet('siesa:' + per, Object.assign({ j: { ok: true, periodo: per, filas, emp, auto: true }, cuando: new Date().toISOString(), por: (CU.nombre || CU.email) + ' · ' + f.name }, api ? { api } : {})); n++;
     }
     toast('Autoliquidación guardada: ' + n + ' meses (' + ssocPerTxt(pers[0]) + ' a ' + ssocPerTxt(pers[pers.length - 1]) + ')', 'ok');
     SSOCS.siesa = null; await ssocLeer();
