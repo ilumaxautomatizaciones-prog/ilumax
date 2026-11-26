@@ -14989,7 +14989,88 @@ function artepasosInforme(){
   document.getElementById('mo-det-f').innerHTML = `<button class="btn btn-g" onclick="closeMo('mo-det')">Cerrar</button><button class="btn btn-gr" onclick="artepasosInformeExcel()">⬇ Excel (por orden y por referencia)</button>`;
   openMo('mo-det');
 }
-function artepasosInformeExcel(){
+async function artepasosInformeExcel(){
+  try{ await comprasCargarExcelJS(); }catch(e){ if(typeof toast==='function') toast('Excel con formato no disponible, bajo el básico','wa'); return artepasosInformeExcelBasico(); }
+  try{
+    const {N, ordenes, refs} = artepasosInformeDatos(), fd = d=>d ? d.toLocaleDateString('es-CO') : '', hoy = new Date();
+    const A = h=>{ let x = String(h).replace('#','').toUpperCase(); if(x.length===3) x = x[0]+x[0]+x[1]+x[1]+x[2]+x[2]; return 'FF'+x; }, fill = h=>({type:'pattern',pattern:'solid',fgColor:{argb:A(h)}});
+    const NAVY='0F172A', YEL='F5C518', GRIS='E2E8F0', ZEB='F8FAFC', AREA={'Abastecimiento':'2563EB','Calidad':'0F766E','Diseño':'7C3AED'};
+    const brd = {top:{style:'thin',color:{argb:A(GRIS)}},bottom:{style:'thin',color:{argb:A(GRIS)}},left:{style:'thin',color:{argb:A(GRIS)}},right:{style:'thin',color:{argb:A(GRIS)}}};
+    const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX'; wb.created = hoy; wb.calcProperties = {fullCalcOnLoad:true};
+    const tR = refs.length, cR = refs.filter(r=>r.completo).length, aR = refs.filter(r=>r.tarde).length, cO = ordenes.filter(o=>!o.falta).length;
+    const banner = (ws, ncol, tit, sub)=>{
+      ws.mergeCells(1,1,1,ncol); const c = ws.getCell(1,1); c.value = tit; c.font = {name:'Arial',size:16,bold:true,color:{argb:A('FFFFFF')}}; c.fill = fill(NAVY); c.alignment = {vertical:'middle',indent:1}; ws.getRow(1).height = 32;
+      ws.mergeCells(2,1,2,ncol); const d = ws.getCell(2,1); d.value = sub; d.font = {name:'Arial',size:10,italic:true,color:{argb:A('64748B')}}; d.fill = fill('FEF9C3'); d.alignment = {vertical:'middle',indent:1}; ws.getRow(2).height = 18;
+      for(let i=1;i<=ncol;i++){ ws.getCell(1,i).fill = fill(NAVY); ws.getCell(2,i).fill = fill('FEF9C3'); }
+    };
+    const cab = (ws, row, heads, colores)=>{ const r = ws.getRow(row); r.height = 44; heads.forEach((h,i)=>{ const c = r.getCell(i+1); c.value = h; c.font = {name:'Arial',size:9.5,bold:true,color:{argb:A('FFFFFF')}}; c.fill = fill((colores&&colores[i])||NAVY); c.alignment = {vertical:'middle',horizontal:i<2?'left':'center',wrapText:true}; c.border = {bottom:{style:'medium',color:{argb:A(YEL)}},left:{style:'thin',color:{argb:A('334155')}}}; }); };
+    const cel = (c, o)=>{ c.font = Object.assign({name:'Arial',size:10},o.font||{}); if(o.fill) c.fill = fill(o.fill); c.alignment = Object.assign({vertical:'middle'},o.al||{}); c.border = brd; if(o.nf) c.numFmt = o.nf; };
+    const sub = 'Generado el '+hoy.toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})+' · días hábiles = lunes a viernes, sin festivos';
+    // ── Resumen ──
+    const w0 = wb.addWorksheet('Resumen',{views:[{showGridLines:false}], properties:{tabColor:{argb:A(YEL)}}});
+    [16,16,16,16,16,16,16,16,16,16].forEach((w,i)=>w0.getColumn(i+1).width = w);
+    banner(w0,10,'📊  INFORME DE ARTES · ILUMAX',sub);
+    const tiles = [['ÓRDENES ACTIVAS',ordenes.length,'0F172A','E2E8F0'],['ARTE COMPLETO (ÓRDENES)',cO,'166534','DCFCE7'],['REFERENCIAS TERMINADAS',cR+' / '+tR,'166534','DCFCE7'],['FALTAN POR PASAR',tR-cR,'92400E','FEF3C7'],['ATRASADAS',aR,'991B1B','FEE2E2']];
+    tiles.forEach((t,i)=>{ const c0 = i*2+1; w0.mergeCells(4,c0,4,c0+1); w0.mergeCells(5,c0,5,c0+1); const l = w0.getCell(4,c0), v = w0.getCell(5,c0); l.value = t[0]; l.font = {name:'Arial',size:8.5,bold:true,color:{argb:A('64748B')}}; v.value = t[1]; v.font = {name:'Arial',size:22,bold:true,color:{argb:A(t[2])}}; [l,v].forEach(c=>{ c.fill = fill(t[3]); c.alignment = {horizontal:'center',vertical:'middle'}; }); w0.getCell(4,c0+1).fill = fill(t[3]); w0.getCell(5,c0+1).fill = fill(t[3]); });
+    w0.getRow(4).height = 20; w0.getRow(5).height = 40;
+    w0.getCell(7,1).value = 'Referencias por estado del arte'; w0.getCell(7,1).font = {name:'Arial',size:12,bold:true,color:{argb:A(NAVY)}};
+    cab(w0,8,['Estado','','Referencias','% del total']); w0.mergeCells(8,1,8,2); w0.getRow(8).height = 24;
+    const est = ARTE_ESTADOS.map(x=>({n:x.n,bg:x.bg.replace('#',''),fg:x.fg.replace('#',''),c:refs.filter(r=>r.est===x.id).length})).concat([{n:'Sin estado',bg:'F1F5F9',fg:'64748B',c:refs.filter(r=>!r.est).length}]);
+    est.forEach((x,i)=>{ const r = 9+i; w0.mergeCells(r,1,r,2); const c = w0.getCell(r,1); c.value = x.n; cel(c,{fill:x.bg,font:{bold:true,color:{argb:A(x.fg)}},al:{horizontal:'center'}}); w0.getCell(r,2).border = brd; const n = w0.getCell(r,3); n.value = x.c; cel(n,{al:{horizontal:'center'},fill:i%2?ZEB:'FFFFFF'}); const p = w0.getCell(r,4); p.value = {formula:'IF($C$'+(9+est.length)+'=0,0,C'+r+'/$C$'+(9+est.length)+')',result:tR?x.c/tR:0}; cel(p,{al:{horizontal:'center'},fill:i%2?ZEB:'FFFFFF',nf:'0%'}); });
+    const rt = 9+est.length; w0.mergeCells(rt,1,rt,2); cel(w0.getCell(rt,1),{fill:NAVY,font:{bold:true,color:{argb:A('FFFFFF')}},al:{horizontal:'center'}}); w0.getCell(rt,1).value = 'TOTAL'; w0.getCell(rt,2).border = brd;
+    const tc = w0.getCell(rt,3); tc.value = {formula:'SUM(C9:C'+(rt-1)+')',result:tR}; cel(tc,{fill:NAVY,font:{bold:true,color:{argb:A('FFFFFF')}},al:{horizontal:'center'}});
+    const rp = rt+3; w0.getCell(rp-1,1).value = 'Referencias esperando cada paso'; w0.getCell(rp-1,1).font = {name:'Arial',size:12,bold:true,color:{argb:A(NAVY)}};
+    cab(w0,rp,['Paso','','','Responsable','Referencias esperando']); w0.mergeCells(rp,1,rp,3); w0.mergeCells(rp,5,rp,6); w0.getRow(rp).height = 24;
+    const tot = ARTEPASOS_DEF.map((p,i)=>ordenes.reduce((a,o)=>a+o.porPaso[i],0)), mx = Math.max(1,...tot);
+    ARTEPASOS_DEF.forEach((p,i)=>{ const r = rp+1+i; w0.mergeCells(r,1,r,3); w0.mergeCells(r,5,r,6); const a = w0.getCell(r,1); a.value = p.n+'. '+p.t; cel(a,{fill:i%2?ZEB:'FFFFFF'}); [2,3].forEach(k=>w0.getCell(r,k).border = brd); const b = w0.getCell(r,4); b.value = p.area; cel(b,{fill:AREA[p.area]||'64748B',font:{bold:true,color:{argb:A('FFFFFF')}},al:{horizontal:'center'}}); const n = w0.getCell(r,5); n.value = tot[i]; const k = tot[i]/mx; cel(n,{al:{horizontal:'center'},font:{bold:!!tot[i]},fill:tot[i]?(k>.66?'BFDBFE':k>.33?'DBEAFE':'EFF6FF'):'FFFFFF'}); w0.getCell(r,6).border = brd; });
+    w0.pageSetup = {orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0};
+    // ── Por orden ──
+    const NC = 9+N, w1 = wb.addWorksheet('Por orden',{views:[{state:'frozen',xSplit:2,ySplit:3,showGridLines:false}]});
+    banner(w1,NC,'Estado de artes por orden de compra',sub);
+    const h1 = ['OC','Proveedor','Referencias','Listas','Faltan','Avance','Estado','Atrasadas','Días hábiles en artes'].concat(ARTEPASOS_DEF.map(p=>p.n+'. '+p.t));
+    cab(w1,3,h1,['0F172A','0F172A','0F172A','0F172A','0F172A','0F172A','0F172A','0F172A','0F172A'].concat(ARTEPASOS_DEF.map(p=>AREA[p.area]||'475569')));
+    [11,34,11,9,9,10,40,10,12].concat(ARTEPASOS_DEF.map(()=>13)).forEach((w,i)=>w1.getColumn(i+1).width = w);
+    ordenes.forEach((o,i)=>{ const r = 4+i, z = i%2?ZEB:'FFFFFF';
+      const v = [o.oc,o.prov,o.refs,o.compl,o.falta,null,o.estado,o.atras||0,o.dias==null?'':o.dias].concat(o.porPaso);
+      v.forEach((x,k)=>{ const c = w1.getCell(r,k+1); if(k!==5) c.value = x; cel(c,{fill:z,al:{horizontal:k<2||k===6?'left':'center',wrapText:k===6}}); });
+      w1.getCell(r,1).font = {name:'Arial',size:10,bold:true};
+      w1.getCell(r,4).font = {name:'Arial',size:10,bold:true,color:{argb:A('166534')}};
+      cel(w1.getCell(r,5),{fill:o.falta?'FEF3C7':'DCFCE7',font:{bold:true,color:{argb:A(o.falta?'92400E':'166534')}},al:{horizontal:'center'}});
+      const av = w1.getCell(r,6); av.value = {formula:'IF(C'+r+'=0,0,D'+r+'/C'+r+')',result:o.refs?o.compl/o.refs:0}; cel(av,{al:{horizontal:'center'},nf:'0%',fill:o.falta?'FFFFFF':'DCFCE7',font:{bold:true}});
+      if(!o.falta) cel(w1.getCell(r,7),{fill:'DCFCE7',font:{bold:true,color:{argb:A('166534')}},al:{horizontal:'left'}});
+      if(o.atras) cel(w1.getCell(r,8),{fill:'FEE2E2',font:{bold:true,color:{argb:A('991B1B')}},al:{horizontal:'center'}});
+      w1.getCell(r,9).numFmt = '0.0';
+      o.porPaso.forEach((n,k)=>{ const c = w1.getCell(r,10+k); if(n) cel(c,{fill:'DBEAFE',font:{bold:true,color:{argb:A('1E40AF')}},al:{horizontal:'center'}}); else { c.value = '·'; c.font = {name:'Arial',size:10,color:{argb:A('CBD5E1')}}; } });
+      w1.getRow(r).height = String(o.estado).length>40?30:20; });
+    const n1 = ordenes.length, rT = 4+n1; w1.getRow(rT).height = 22;
+    for(let k=1;k<=NC;k++){ const c = w1.getCell(rT,k); cel(c,{fill:NAVY,font:{bold:true,color:{argb:A('FFFFFF')}},al:{horizontal:k<3?'left':'center'}}); }
+    w1.getCell(rT,1).value = 'TOTAL';
+    const L = i=>{ let t='',n=i; while(n>0){ const m=(n-1)%26; t=String.fromCharCode(65+m)+t; n=Math.floor((n-1)/26);} return t; };
+    [3,4,5,8].concat(Array.from({length:N},(_,k)=>10+k)).forEach(k=>{ w1.getCell(rT,k).value = {formula:'SUM('+L(k)+'4:'+L(k)+(rT-1)+')'}; });
+    w1.getCell(rT,6).value = {formula:'IF(C'+rT+'=0,0,D'+rT+'/C'+rT+')'}; w1.getCell(rT,6).numFmt = '0%';
+    if(n1) w1.autoFilter = {from:{row:3,column:1},to:{row:3+n1,column:NC}};
+    w1.pageSetup = {orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0};
+    // ── Por referencia ──
+    const h2 = ['OC','Proveedor','Referencia','Descripción','Cantidad','Estado del arte','Pasos hechos','Estado','Paso actual','Responsable','Desde','Días hábiles en el paso','Atrasada','Días hábiles totales','Comentarios'], NR = h2.length;
+    const w2 = wb.addWorksheet('Por referencia',{views:[{state:'frozen',xSplit:3,ySplit:3,showGridLines:false}]});
+    banner(w2,NR,'Estado de artes por referencia',sub); cab(w2,3,h2);
+    [11,30,12,42,10,22,10,15,38,15,12,12,10,12,12].forEach((w,i)=>w2.getColumn(i+1).width = w);
+    refs.forEach((r,i)=>{ const x = 4+i, z = i%2?ZEB:'FFFFFF', E = ARTE_ESTADOS.find(e=>e.id===r.est);
+      const v = [r.oc,r.prov,r.ref,r.desc,r.cant,E?E.n:'',r.hechos+'/'+N,r.completo?'Arte completo':'En proceso',r.sig?r.sig.n+'. '+r.sig.t:'',r.sig?r.sig.area:'',r.desde||'',r.dias==null?'':r.dias,r.tarde?'Sí':'',r.tot==null?'':r.tot,r.ncom||''];
+      v.forEach((q,k)=>{ const c = w2.getCell(x,k+1); c.value = q; cel(c,{fill:z,al:{horizontal:[0,1,3,8].includes(k)?'left':'center',wrapText:k===3}}); });
+      w2.getCell(x,1).font = {name:'Arial',size:10,bold:true}; w2.getCell(x,5).numFmt = '#,##0'; w2.getCell(x,11).numFmt = 'dd/mm/yyyy'; w2.getCell(x,12).numFmt = '0.0'; w2.getCell(x,14).numFmt = '0.0';
+      if(E) cel(w2.getCell(x,6),{fill:E.bg.replace('#',''),font:{bold:true,color:{argb:A(E.fg)}},al:{horizontal:'center'}});
+      cel(w2.getCell(x,8),r.completo?{fill:'DCFCE7',font:{bold:true,color:{argb:A('166534')}},al:{horizontal:'center'}}:{fill:'FEF3C7',font:{color:{argb:A('92400E')}},al:{horizontal:'center'}});
+      if(r.sig) cel(w2.getCell(x,10),{fill:AREA[r.sig.area]||'64748B',font:{bold:true,color:{argb:A('FFFFFF')}},al:{horizontal:'center'}});
+      if(r.tarde) cel(w2.getCell(x,13),{fill:'FEE2E2',font:{bold:true,color:{argb:A('991B1B')}},al:{horizontal:'center'}});
+      w2.getRow(x).height = 20; });
+    if(refs.length) w2.autoFilter = {from:{row:3,column:1},to:{row:3+refs.length,column:NR}};
+    w2.pageSetup = {orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0};
+    const buf = await wb.xlsx.writeBuffer(), url = URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})), a = document.createElement('a');
+    a.href = url; a.download = 'Informe_Artes_'+new Date().toISOString().slice(0,10)+'.xlsx'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),4000);
+  }catch(e){ console.warn(e); if(typeof toast==='function') toast('No se pudo generar el Excel con formato ('+e.message+'), bajo el básico','wa'); artepasosInformeExcelBasico(); }
+}
+function artepasosInformeExcelBasico(){
   try{
     const {N, ordenes, refs} = artepasosInformeDatos(), f = d=>d ? d.toLocaleDateString('es-CO') : '';
     const h1 = ['OC','Proveedor','Referencias','Listas','Faltan','Estado','Atrasadas','Días hábiles en artes'].concat(ARTEPASOS_DEF.map(p=>'Esperan paso '+p.n+' ('+p.t+')'));
