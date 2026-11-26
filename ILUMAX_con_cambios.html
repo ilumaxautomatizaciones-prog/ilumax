@@ -11548,7 +11548,9 @@ async function reabastVerDetalleReferenciaPorCodigo(c){ const r = await reabastR
 async function reabastEditarReferenciaPorCodigo(c){ const r = await reabastRefConFoto(c); if(r) abrirModalReferencia(r); }
 
 // Asigna el número de orden a ítems nuevos para que la OC conserve siempre el orden de sus productos.
+function ocSkuOrdenar(arr){ return (arr||[]).map((it,i)=>({it,i})).sort((a,b)=>{ const x=String(a.it.referencia==null?'':a.it.referencia).trim(), y=String(b.it.referencia==null?'':b.it.referencia).trim(); const nx=/^\d+$/.test(x)?Number(x):Infinity, ny=/^\d+$/.test(y)?Number(y):Infinity; if(nx!==ny) return nx<ny?-1:1; return x<y?-1:x>y?1:a.i-b.i; }).map(z=>z.it); }
 function ocConOrden(filas, desde){
+  filas = ocSkuOrdenar(filas);
   if(!REABAST.itemsOrdenCol) return filas;
   return filas.map((f,i)=> f.orden!=null ? f : {...f, orden:(desde||0)+i+1});
 }
@@ -11574,6 +11576,7 @@ async function cargarOC(){
   // Orden de los productos: se conserva el de la OC (columna oc_items.orden; ver oc_items_orden.sql). Sin la columna, queda el orden de la base.
   REABAST.itemsOrdenCol = (itemsRows||[]).some(r=>r && Object.prototype.hasOwnProperty.call(r,'orden'));
   if(REABAST.itemsOrdenCol){ for(const k in REABAST.ocItems){ REABAST.ocItems[k] = REABAST.ocItems[k].map((it,i)=>({it,i})).sort((a,b)=>{ const x = a.it.orden==null?1e9:Number(a.it.orden), y = b.it.orden==null?1e9:Number(b.it.orden); return x-y || a.i-b.i; }).map(z=>z.it); } }
+  for(const k in REABAST.ocItems){ REABAST.ocItems[k] = ocSkuOrdenar(REABAST.ocItems[k]); }   // siempre de menor a mayor por código SKU
   REABAST.proveedores = proveedores||[];
   REABAST.fichasTecnicas = {}; (fichasRows||[]).forEach(f => { REABAST.fichasTecnicas[f.referencia] = f.datos||{}; });
   REABAST.referenciasMaestro = {}; (refsRows||[]).forEach(r => { REABAST.referenciasMaestro[r.referencia] = r; });
@@ -17978,7 +17981,7 @@ async function ceCrearItemsRama(oc, nuevos, lote){
       costo_unitario_cop: t.costo_unitario_cop!=null?t.costo_unitario_cop:null, precio_venta_cop: t.precio_venta_cop!=null?t.precio_venta_cop:null, margen_pct: t.margen_pct!=null?t.margen_pct:null,
       lote: lote||null, observacion: nota + (t.precio_fob_usd==null ? ' · SIN precio FOB: completar' : ''), sku_nuevo:false}; });
   const creados = await sbReabast.post('oc_items', pciUniformar(ocConOrden(filas, ocSiguienteOrden(oc.id)-1)));
-  REABAST.ocItems[oc.id] = (REABAST.ocItems[oc.id]||[]).concat(creados||[]);
+  REABAST.ocItems[oc.id] = ocSkuOrdenar((REABAST.ocItems[oc.id]||[]).concat(creados||[]));
 }
 // Ajusta una rama que ya existe: cantidades al enviado del archivo y ítems que faltan.
 async function ceSincItems(oc, sync){
@@ -21919,7 +21922,7 @@ async function ocdAgregarItem(ocId){
   if(REABAST.itemsOrdenCol) payload.orden = ocSiguienteOrden(ocId);
   try{
     const nuevo = await sbReabast.post('oc_items', payload);
-    REABAST.ocItems[ocId] = (REABAST.ocItems[ocId]||[]).concat(nuevo||[payload]);
+    REABAST.ocItems[ocId] = ocSkuOrdenar((REABAST.ocItems[ocId]||[]).concat(nuevo||[payload]));
     ocnAgregar(ocId, [{tipo:'referencia', ref:referencia, campo:'Referencia agregada', antes:'—', despues:reabastFmtN(cantidad)+' und', motivo:'Agregada a la OC', impacto_usd: fob ? Math.round(cantidad*fob*100)/100 : null, origen:'edición en la OC'}]).catch(()=>{});
     if(typeof toast==='function') toast('Ítem agregado a la OC','ok');
     reabastAbrirDetalleOC(ocId);
