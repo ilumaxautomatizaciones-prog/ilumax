@@ -22636,24 +22636,116 @@ async function ftmExcelMatriz() {
   } catch (e) { msg('<span style="color:var(--rd)">No se pudo descargar: ' + ftmE(e.message) + '</span>'); }
 }
 
+/* ===== Evaluar producto (RETILAP): requisitos por categoría ===== */
+const FTM_CATS = {
+  bombillo:{n:'1. Bombillos de estado sólido',ef:['>=',70],vida:['>=',15000],pf:['>=',0.5],base:1},
+  tubo:{n:'2. Tubos LED',ef:['>=',85],vida:['>=',20000],pf:['>=',0.5],thdi:['<',60],espera:0.5},
+  bombdec:{n:'3. Bombillos de estado sólido decorativos',ef:['>=',70],vida:['>=',15000],base:1,espera:0.5},
+  cinta:{n:'4. Cintas LED',ef:['>=',70],vida:['>=',20000],ficha:'cinta'},
+  emerg:{n:'5. Luminarias de iluminación de emergencia',lum:1,sinirc:1,ciclos:['>',400],aut:['>=',1],bat:1},
+  downlight:{n:'6. Luminarias tipo Downlight',lum:1,ef:['>',65],vida:['>=',20000],thdi:['<=',20],tc:1},
+  track:{n:'7. Luminarias tipo Tracklight',lum:1,ef:['>',65],vida:['>=',20000],thdi:['<=',20]},
+  panel:{n:'8. Paneles LED',lum:1,efP:1,vidaP:[25000,30000],thdi:['<=',20]},
+  hermetica:{n:'9. Luminarias herméticas',lum:1,ef:['>',80],vidaH:1,pf:['>=',0.9],thdi:['<=',20]},
+  highbay:{n:'10. Luminarias High Bay',lum:1,ef:['>',100],vida:['>=',30000],pf:['>=',0.9],thdi:['<=',20]},
+  lineal:{n:'11. Luminarias lineales',lum:1,ef:['>',75],vida:['>=',30000],thdi:['<=',20]},
+  solar:{n:'14. Luminarias con generación fotovoltaica',lum:1,ext:1,sinirc:1,ikmin:8,aut:['>=',36],mppt:1,sol:1},
+  proyector:{n:'15. Proyectores para iluminación',lum:1,ext:1,sinirc:1,ef:['>',100],vida:['>=',50000],ipmin:65,ikmin:8},
+  incrustar:{n:'22. Luminarias de incrustar a piso (interior)',lum:1,ef:['>=',70],vida:['>=',20000],thdi:['<=',20],tc:1},
+  sensor:{n:'Accesorios eléctricos y electrónicos – Sensores',sens:1}
+};
+function ftmNum(v) { if (v == null) return null; const m = String(v).replace(/,/g, '.').match(/-?\d+(?:\.\d+)?/); return m ? parseFloat(m[0]) : null; }
+function ftmNumMil(v) { if (v == null) return null; const s = String(v).trim().replace(/\s/g, ''); const m = s.match(/\d[\d.,]*/); if (!m) return null; let t = m[0]; if (/^\d{1,3}([.,]\d{3})+$/.test(t)) t = t.replace(/[.,]/g, ''); else t = t.replace(',', '.'); return parseFloat(t); }
+function ftmEvaluar(catKey, V) {
+  const C = FTM_CATS[catKey], R = [];
+  const add = (grupo, req, k, estado, valor, nota) => R.push({ grupo, req, campo: k, estado, valor: valor == null ? '' : valor, nota: nota || '' });
+  const txt = k => { const x = V[k]; return x == null || String(x).trim() === '' ? null : String(x).trim(); };
+  const cmp = (op, a, b) => op === '>=' ? a >= b : op === '>' ? a > b : op === '<=' ? a <= b : a < b;
+  const num = (grupo, req, k, op, lim, mil) => { const t = txt(k); if (t == null) return add(grupo, req, k, 'falta', '', 'Falta el dato'); const n = mil ? ftmNumMil(t) : ftmNum(t); if (n == null) return add(grupo, req, k, 'falta', t, 'No se pudo leer un número'); add(grupo, req, k, cmp(op, n, lim) ? 'ok' : 'no', t, cmp(op, n, lim) ? '' : 'Debe ser ' + op + ' ' + lim); };
+  const decl = (grupo, req, k) => { const t = txt(k); add(grupo, req, k, t ? 'ok' : 'falta', t || '', t ? '' : 'Debe declararse'); };
+  const pot = ftmNum(txt('potencia_nominal_w'));
+  // ficha técnica: datos básicos
+  decl('Ficha técnica', 'Marca', 'marca'); decl('Ficha técnica', 'Modelo o referencia', 'referencia_ilumax');
+  decl('Ficha técnica', 'Potencia nominal [W]', 'potencia_nominal_w'); decl('Ficha técnica', 'Tensión / frecuencia', 'voltaje_v_frecuencia_hz');
+  if (!C.sens) { decl('Ficha técnica', 'Flujo luminoso inicial [lm]', 'flujo_luminoso_lm'); if (!C.sinirc || catKey === 'solar' || catKey === 'proyector') decl('Ficha técnica', 'Temperatura de color [K]', 'temperatura_de_color_k'); }
+  if (!C.sens && !C.ficha) decl('Ficha técnica', 'Factor de potencia', 'factor_de_potencia');
+  if (C.lum || C.sens) decl('Ficha técnica', 'Ta: rango de temperatura ambiente', 'ta_rango_temp_ambiente_c');
+  if (C.lum) { decl('Ficha técnica', 'Clase de aislamiento eléctrico', 'clase_de_aislamiento_i_ii_o_'); decl('Ficha técnica', 'Requiere accesorios eléctricos o electrónicos', 'requiere_accesorios_electric'); decl('Ficha técnica', 'Características del driver', 'tipo_de_driver'); }
+  if (C.base) decl('Ficha técnica', 'Tipo de base / socket', 'base_socket_puerto_de_carga');
+  if (C.tc) decl('Ficha técnica', 'Tc: temperatura máxima del producto', 'tc_temp_maxima_del_producto_');
+  // requisitos con límite
+  if (C.lum || C.ef || C.efP) { decl('Declarar', 'Grado de protección IP o NEMA', 'ip'); decl('Declarar', 'Resistencia al impacto IK', 'ik'); }
+  if (C.lum && !C.sinirc) num('Requisito', 'IRC (CRI) mínimo 80', 'irc', '>=', 80);
+  else if (!C.sens && !C.lum) decl('Ficha técnica', 'Índice de reproducción cromática', 'irc');
+  if (C.ipmin) num('Requisito', 'IP mínimo 65', 'ip', '>=', C.ipmin);
+  if (C.ikmin) num('Requisito', 'IK mínimo 08', 'ik', '>=', C.ikmin);
+  if (C.ef) num('Requisito', 'Eficacia luminosa ' + C.ef[0] + ' ' + C.ef[1] + ' lm/W', 'eficacia_luminosa_lm_w', C.ef[0], C.ef[1]);
+  if (C.efP) { if (pot == null) add('Requisito', 'Eficacia: ≥30 W > 80 lm/W; <30 W > 65 lm/W', 'eficacia_luminosa_lm_w', 'falta', '', 'Falta la potencia'); else num('Requisito', 'Eficacia ' + (pot >= 30 ? '> 80' : '> 65') + ' lm/W (' + pot + ' W)', 'eficacia_luminosa_lm_w', '>', pot >= 30 ? 80 : 65); }
+  if (C.vida) num('Requisito', 'Vida útil ' + C.vida[0] + ' ' + C.vida[1] + ' h @L70', 'vida_util_l70_h', C.vida[0], C.vida[1], 1);
+  if (C.vidaP) { if (pot == null) add('Requisito', 'Vida útil: <30 W ≥ 25000 h; ≥30 W ≥ 30000 h', 'vida_util_l70_h', 'falta', '', 'Falta la potencia'); else num('Requisito', 'Vida útil ≥ ' + (pot >= 30 ? C.vidaP[1] : C.vidaP[0]) + ' h (' + pot + ' W)', 'vida_util_l70_h', '>=', pot >= 30 ? C.vidaP[1] : C.vidaP[0], 1); }
+  if (C.vidaH) { if (pot == null) add('Requisito', 'Vida útil: <30 W ≥ 25000 h; ≥30 W ≥ 30000 h', 'vida_util_l70_h', 'falta', '', 'Falta la potencia'); else num('Requisito', 'Vida útil ≥ ' + (pot >= 30 ? 30000 : 25000) + ' h (' + pot + ' W)', 'vida_util_l70_h', '>=', pot >= 30 ? 30000 : 25000, 1); }
+  if (C.pf) num('Requisito', 'Factor de potencia ' + C.pf[0] + ' ' + C.pf[1], 'factor_de_potencia', C.pf[0], C.pf[1]);
+  if (C.thdi) num('Requisito', 'THDi ' + C.thdi[0] + ' ' + C.thdi[1] + ' %', 'thdi', C.thdi[0], C.thdi[1]);
+  if (C.espera != null) { const t = txt('potencia_en_modo_de_espera_w'); if (t == null) add('Requisito', 'Potencia en espera ≤ ' + C.espera + ' W', 'potencia_en_modo_de_espera_w', 'falta', '', 'Falta el dato'); else num('Requisito', 'Potencia en espera ≤ ' + C.espera + ' W', 'potencia_en_modo_de_espera_w', '<=', C.espera); }
+  if (C.ciclos) num('Requisito', 'Ciclos de carga/descarga > 400', 'ciclos_de_carga_descarga', '>', 400, 1);
+  if (C.aut) num('Requisito', 'Autonomía ≥ ' + C.aut[1] + ' h', 'autonomia_h', '>=', C.aut[1]);
+  if (C.bat) { decl('Ficha técnica', 'Tipo de batería', 'tipo_de_bateria'); decl('Ficha técnica', 'Voltaje / capacidad de la batería', 'voltaje_vdc_capacidad_mah'); }
+  if (C.mppt) { const t = txt('tipo_de_controlador_solar'); add('Requisito', 'Controlador tipo MPPT o similar', 'tipo_de_controlador_solar', t == null ? 'falta' : (/mppt/i.test(t) ? 'ok' : 'no'), t || '', t == null ? 'Falta el dato' : (/mppt/i.test(t) ? '' : 'Debe ser MPPT o tecnología similar')); }
+  if (C.sol) { decl('Ficha técnica', 'Tipo de panel solar', 'tipo_de_panel_solar'); decl('Ficha técnica', 'Características eléctricas del panel', 'potencia_w_voltaje_del_panel'); }
+  if (C.sens) { decl('Requisito', 'Ángulo de detección en la ficha técnica', 'angulo_de_deteccion'); decl('Requisito', 'Tiempo de apagado ajustable', 'tiempo_de_retardo_ajustable'); decl('Requisito', 'Nivel de luz diurna ajustable', 'umbral_de_luz_ambiente_ajust'); }
+  return R;
+}
+function ftmLeerFormato(A) {
+  // Busca etiquetas de la matriz (FTM_CAMPOS.mx) en cualquier celda y toma el valor de la derecha (o de abajo)
+  const V = {}, campos = FTM_CAMPOS.filter(c => c.mx);
+  for (let i = 0; i < A.length; i++) for (let j = 0; j < (A[i] || []).length; j++) {
+    const t = A[i][j]; if (t == null || typeof t === 'object') continue; const s = String(t).trim().toUpperCase(); if (!s || s.length > 90) continue;
+    campos.forEach(c => {
+      if (V[c.k] != null || !new RegExp(c.mx, 'i').test(s)) return;
+      let v = null; for (let d = 1; d <= 3 && v == null; d++) { const x = (A[i] || [])[j + d]; if (x != null && String(x).trim() !== '') v = x; }
+      if (v == null) for (let d = 1; d <= 2 && v == null; d++) { const x = (A[i + d] || [])[j]; if (x != null && String(x).trim() !== '') v = x; }
+      if (v != null) V[c.k] = String(v).trim();
+    });
+  }
+  return V;
+}
 function ftmEvalProdAbrir() {
   let m = document.getElementById('ftm-evalprod'); if (m) m.remove();
   m = document.createElement('div'); m.id = 'ftm-evalprod';
-  m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:40px 10px;overflow:auto';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:30px 10px;overflow:auto';
   m.onclick = e => { if (e.target === m) m.remove(); };
-  m.innerHTML = '<div style="background:#fff;border-radius:14px;max-width:560px;width:100%;padding:18px">' +
-    '<div style="display:flex;align-items:center;margin-bottom:10px"><b style="font-size:15px;flex:1">🧪 Evaluar producto</b><span style="cursor:pointer" onclick="document.getElementById(\'ftm-evalprod\').remove()">✕</span></div>' +
+  m.innerHTML = '<div style="background:#fff;border-radius:14px;max-width:820px;width:100%;padding:18px">' +
+    '<div style="display:flex;align-items:center;margin-bottom:10px"><b style="font-size:15px;flex:1">🧪 Evaluar producto (RETILAP)</b><span style="cursor:pointer;font-size:16px" onclick="document.getElementById(\'ftm-evalprod\').remove()">✕</span></div>' +
     '<label style="font-size:11px;font-weight:700;color:var(--mu)">TIPO DE PRODUCTO</label>' +
-    '<select class="inp" id="ftm-ep-cat"><option value="">— Selecciona la categoría —</option></select>' +
-    '<label style="font-size:11px;font-weight:700;color:var(--mu);display:block;margin-top:10px">FORMATO DE DESARROLLO (Excel)</label>' +
-    '<input type="file" accept=".xlsx,.xls" class="inp" id="ftm-ep-file">' +
-    '<div class="alert" style="margin-top:12px;font-size:12px">Falta cargar los requisitos (reglamento) de cada categoría y un formato de desarrollo de ejemplo para activar la comparación. Cuando estén, aquí saldrá la tabla Cumple / No cumple / Falta dato y tú decides si aceptas, corriges o lo dejas pendiente de revisión antes de escribir a la matriz.</div>' +
-    '<div style="text-align:right;margin-top:12px"><button class="btn btn-g btn-sm" onclick="document.getElementById(\'ftm-evalprod\').remove()">Cerrar</button></div></div>';
+    '<select class="inp" id="ftm-ep-cat"><option value="">— Selecciona la categoría —</option>' + Object.keys(FTM_CATS).map(k => '<option value="' + k + '">' + FTM_CATS[k].n + '</option>').join('') + '</select>' +
+    '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-top:10px">' +
+    '<div><label style="font-size:11px;font-weight:700;color:var(--mu)">FORMATO DE DESARROLLO (Excel)</label><input type="file" accept=".xlsx,.xls" class="inp" id="ftm-ep-file"></div>' +
+    '<div><label style="font-size:11px;font-weight:700;color:var(--mu)">o REFERENCIA DE LA MATRIZ</label><input class="inp" id="ftm-ep-ref" placeholder="Ej. 2194" value="' + String(FTM.sel || '').replace(/"/g, '') + '"></div></div>' +
+    '<div style="text-align:right;margin-top:12px"><button class="btn btn-p" onclick="ftmEvalProdCorrer()">Evaluar producto</button></div>' +
+    '<div id="ftm-ep-res" style="margin-top:12px"></div></div>';
   document.body.appendChild(m);
+}
+async function ftmEvalProdCorrer() {
+  const cat = document.getElementById('ftm-ep-cat').value, out = document.getElementById('ftm-ep-res'), f = document.getElementById('ftm-ep-file').files[0], ref = document.getElementById('ftm-ep-ref').value.trim();
+  if (!cat) return toast('Elige el tipo de producto', 'wa');
+  let V = {}, origen = '';
   try {
-    const cats = [...new Set(Object.values(FTM.mx || FTM.matriz || {}).map(r => (r && (r.categoria || r.cat)) || '').filter(Boolean))].sort();
-    document.getElementById('ftm-ep-cat').innerHTML += cats.map(c => '<option>' + String(c).replace(/</g, '&lt;') + '</option>').join('');
-  } catch (e) {}
+    if (f) { const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' }); wb.SheetNames.forEach(n => { const v = ftmLeerFormato(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null, raw: false })); Object.keys(v).forEach(k => { if (V[k] == null) V[k] = v[k]; }); }); origen = 'formato «' + f.name + '»'; }
+    else if (ref) { await ftmCargar(); const ev = ftmEval(ftmK(ref)); if (!ev) return toast('La referencia no está en la matriz', 'wa'); Object.keys(ev.vals).forEach(k => { if (ev.vals[k].v != null) V[k] = ev.vals[k].v; }); origen = 'matriz, referencia ' + ref; }
+    else return toast('Sube el formato de desarrollo o escribe una referencia', 'wa');
+  } catch (e) { return toast('No pude leer el archivo: ' + e.message, 'er'); }
+  const R = ftmEvaluar(cat, V); FTM.epR = R; FTM.epCat = cat;
+  const n = { ok: 0, no: 0, falta: 0 }; R.forEach(r => n[r.estado]++);
+  const col = { ok: ['#dcfce7', '#166534', '✅ Cumple'], no: ['#fee2e2', '#991b1b', '❌ No cumple'], falta: ['#fef3c7', '#92400e', '⚠️ Falta dato'] };
+  out.innerHTML = '<div style="font-size:12px;margin-bottom:8px"><b>' + FTM_CATS[cat].n + '</b> · fuente: ' + origen + '<br><span style="color:#166534">' + n.ok + ' cumplen</span> · <span style="color:#991b1b">' + n.no + ' no cumplen</span> · <span style="color:#92400e">' + n.falta + ' faltan</span></div>' +
+    '<div style="overflow:auto;max-height:50vh"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:5px 8px">Requisito</th><th>Valor encontrado</th><th>Resultado</th></tr>' +
+    R.sort((a, b) => ({ no: 0, falta: 1, ok: 2 })[a.estado] - ({ no: 0, falta: 1, ok: 2 })[b.estado]).map(r => '<tr style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px">' + r.req + '</td><td>' + String(r.valor).replace(/</g, '&lt;') + '</td><td style="background:' + col[r.estado][0] + ';color:' + col[r.estado][1] + ';font-weight:700;padding:4px 8px">' + col[r.estado][2] + (r.nota ? '<div style="font-weight:400;font-size:11px">' + r.nota + '</div>' : '') + '</td></tr>').join('') + '</table></div>' +
+    '<div style="margin-top:8px"><button class="btn btn-sm" onclick="ftmEvalProdExcel()">⬇️ Descargar resultado (Excel)</button></div>';
+}
+function ftmEvalProdExcel() {
+  const R = FTM.epR || []; if (!R.length) return;
+  const ws = XLSX.utils.aoa_to_sheet([['Grupo', 'Requisito', 'Valor encontrado', 'Resultado', 'Observación']].concat(R.map(r => [r.grupo, r.req, r.valor, { ok: 'Cumple', no: 'No cumple', falta: 'Falta dato' }[r.estado], r.nota]))), wb = XLSX.utils.book_new();
+  ws['!cols'] = [{ wch: 14 }, { wch: 55 }, { wch: 28 }, { wch: 14 }, { wch: 32 }]; XLSX.utils.book_append_sheet(wb, ws, 'Evaluación'); XLSX.writeFile(wb, 'Evaluacion_producto_' + (FTM_CATS[FTM.epCat] || {}).n.replace(/[^\w]+/g, '_') + '.xlsx');
 }
 async function ftmSubir(inp) {
   const f = inp.files && inp.files[0]; if (!f) return; const msg = t => { FTM.msg = t; const m = document.getElementById('ftm-msg'); if (m) m.innerHTML = t; };
