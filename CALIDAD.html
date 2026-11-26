@@ -22654,18 +22654,17 @@ const FTM_CATS = {
   incrustar:{n:'22. Luminarias de incrustar a piso (interior)',lum:1,ef:['>=',70],vida:['>=',20000],thdi:['<=',20],tc:1},
   sensor:{n:'Accesorios eléctricos y electrónicos – Sensores',sens:1}
 };
-function ftmNum(v) { if (v == null) return null; const m = String(v).replace(/,/g, '.').match(/-?\d+(?:\.\d+)?/); return m ? parseFloat(m[0]) : null; }
+function ftmNum(v) { if (v == null) return null; const t = String(v).trim(); if (/^[\/\-–]+$/.test(t)) return null; const m = t.replace(/,/g, '.').match(/-?\d+(?:\.\d+)?/); if (!m) return null; let n = parseFloat(m[0]); if (/^[>≥]/.test(t)) n += 0.0001; else if (/^[<≤]/.test(t)) n -= 0.0001; return n; }
 function ftmNumMil(v) { if (v == null) return null; const s = String(v).trim().replace(/\s/g, ''); const m = s.match(/\d[\d.,]*/); if (!m) return null; let t = m[0]; if (/^\d{1,3}([.,]\d{3})+$/.test(t)) t = t.replace(/[.,]/g, ''); else t = t.replace(',', '.'); return parseFloat(t); }
 function ftmEvaluar(catKey, V) {
   const C = FTM_CATS[catKey], R = [];
   const add = (grupo, req, k, estado, valor, nota) => R.push({ grupo, req, campo: k, estado, valor: valor == null ? '' : valor, nota: nota || '' });
-  const txt = k => { const x = V[k]; return x == null || String(x).trim() === '' ? null : String(x).trim(); };
+  const txt = k => { const x = V[k]; if (x == null) return null; const t = String(x).trim(); return t === '' || /^[\/\-–]+$|^n\/?a$/i.test(t) ? null : t; };
   const cmp = (op, a, b) => op === '>=' ? a >= b : op === '>' ? a > b : op === '<=' ? a <= b : a < b;
   const num = (grupo, req, k, op, lim, mil) => { const t = txt(k); if (t == null) return add(grupo, req, k, 'falta', '', 'Falta el dato'); const n = mil ? ftmNumMil(t) : ftmNum(t); if (n == null) return add(grupo, req, k, 'falta', t, 'No se pudo leer un número'); add(grupo, req, k, cmp(op, n, lim) ? 'ok' : 'no', t, cmp(op, n, lim) ? '' : 'Debe ser ' + op + ' ' + lim); };
   const decl = (grupo, req, k) => { const t = txt(k); add(grupo, req, k, t ? 'ok' : 'falta', t || '', t ? '' : 'Debe declararse'); };
   const pot = ftmNum(txt('potencia_nominal_w'));
   // ficha técnica: datos básicos
-  decl('Ficha técnica', 'Marca', 'marca'); decl('Ficha técnica', 'Modelo o referencia', 'referencia_ilumax');
   decl('Ficha técnica', 'Potencia nominal [W]', 'potencia_nominal_w'); decl('Ficha técnica', 'Tensión / frecuencia', 'voltaje_v_frecuencia_hz');
   if (!C.sens) { decl('Ficha técnica', 'Flujo luminoso inicial [lm]', 'flujo_luminoso_lm'); if (!C.sinirc || catKey === 'solar' || catKey === 'proyector') decl('Ficha técnica', 'Temperatura de color [K]', 'temperatura_de_color_k'); }
   if (!C.sens && !C.ficha) decl('Ficha técnica', 'Factor de potencia', 'factor_de_potencia');
@@ -22696,18 +22695,29 @@ function ftmEvaluar(catKey, V) {
   return R;
 }
 function ftmLeerFormato(A) {
-  // Busca etiquetas de la matriz (FTM_CAMPOS.mx) en cualquier celda y toma el valor de la derecha (o de abajo)
-  const V = {}, campos = FTM_CAMPOS.filter(c => c.mx);
+  // Formato de desarrollo: col A = español, col B = inglés, col C = respuesta del proveedor
+  const V = {}, mapa = new Map(); FTM_CAMPOS.forEach(c => { mapa.set(ftmNorm(c.es), c.k); mapa.set(ftmNorm(c.en), c.k); });
+  let n = 0, tipo = null;
+  for (let i = 0; i < A.length; i++) {
+    const r = A[i] || [], k = mapa.get(ftmNorm(r[0])) || mapa.get(ftmNorm(r[1]));
+    if (/^tipo de producto$/i.test(String(r[0] || '').trim()) || /^product type$/i.test(String(r[1] || '').trim())) tipo = r[2];
+    if (!k || r[2] == null || V[k] != null) continue; const v = String(r[2]).trim(); if (v === '' || ftmNorm(r[2]) === ftmNorm(r[0]) || ftmNorm(r[2]) === ftmNorm(r[1])) continue; V[k] = v; n++;
+  }
+  { let vo = null, fr = null; A.forEach(r => { r = r || []; const a = ftmNorm(r[0]); if (r[2] != null && /^voltaje \[v\]$/.test(a)) vo = String(r[2]).trim(); if (r[2] != null && /^frecuencia \[hz\]$/.test(a)) fr = String(r[2]).trim(); });
+    if (vo && !V.voltaje_v_frecuencia_hz) V.voltaje_v_frecuencia_hz = vo + (fr && !/^[\/\-]+$/.test(fr) ? ' / ' + fr : ''); }
+  if (tipo) V._tipo = String(tipo).trim();
+  if (n >= 5) return V;
+  const campos = FTM_CAMPOS.filter(c => c.mx);
   for (let i = 0; i < A.length; i++) for (let j = 0; j < (A[i] || []).length; j++) {
     const t = A[i][j]; if (t == null || typeof t === 'object') continue; const s = String(t).trim().toUpperCase(); if (!s || s.length > 90) continue;
-    campos.forEach(c => {
-      if (V[c.k] != null || !new RegExp(c.mx, 'i').test(s)) return;
-      let v = null; for (let d = 1; d <= 3 && v == null; d++) { const x = (A[i] || [])[j + d]; if (x != null && String(x).trim() !== '') v = x; }
-      if (v == null) for (let d = 1; d <= 2 && v == null; d++) { const x = (A[i + d] || [])[j]; if (x != null && String(x).trim() !== '') v = x; }
-      if (v != null) V[c.k] = String(v).trim();
-    });
+    campos.forEach(c => { if (V[c.k] != null || !new RegExp(c.mx, 'i').test(s)) return; let v = null; for (let d = 1; d <= 3 && v == null; d++) { const x = (A[i] || [])[j + d]; if (x != null && String(x).trim() !== '') v = x; } if (v != null) V[c.k] = String(v).trim(); });
   }
   return V;
+}
+function ftmDetectarCat(t) {
+  const s = ftmNorm(t); if (!s) return '';
+  const T = [[/emergen/, 'emerg'], [/solar|fotovolt|photovolt/, 'solar'], [/sensor/, 'sensor'], [/high ?bay|campana|industrial/, 'highbay'], [/flood|proyector|reflector|spot ?light/, 'proyector'], [/panel/, 'panel'], [/down ?light/, 'downlight'], [/track|riel/, 'track'], [/tri-?proof|hermetic|vapor|waterproof/, 'hermetica'], [/batten|linear|lineal/, 'lineal'], [/tube|tubo/, 'tubo'], [/strip|cinta|tira/, 'cinta'], [/decorativ|filament|candle|vela/, 'bombdec'], [/bulb|bombill|lamp/, 'bombillo'], [/incrust|in-?ground|recessed floor|piso/, 'incrustar']];
+  const x = T.find(p => p[0].test(s)); return x ? x[1] : '';
 }
 function ftmEvalProdAbrir() {
   let m = document.getElementById('ftm-evalprod'); if (m) m.remove();
@@ -22717,7 +22727,7 @@ function ftmEvalProdAbrir() {
   m.innerHTML = '<div style="background:#fff;border-radius:14px;max-width:820px;width:100%;padding:18px">' +
     '<div style="display:flex;align-items:center;margin-bottom:10px"><b style="font-size:15px;flex:1">🧪 Evaluar producto (RETILAP)</b><span style="cursor:pointer;font-size:16px" onclick="document.getElementById(\'ftm-evalprod\').remove()">✕</span></div>' +
     '<label style="font-size:11px;font-weight:700;color:var(--mu)">TIPO DE PRODUCTO</label>' +
-    '<select class="inp" id="ftm-ep-cat"><option value="">— Selecciona la categoría —</option>' + Object.keys(FTM_CATS).map(k => '<option value="' + k + '">' + FTM_CATS[k].n + '</option>').join('') + '</select>' +
+    '<select class="inp" id="ftm-ep-cat"><option value="">— Automática (según «Tipo de producto») —</option>' + Object.keys(FTM_CATS).map(k => '<option value="' + k + '">' + FTM_CATS[k].n + '</option>').join('') + '</select>' +
     '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-top:10px">' +
     '<div><label style="font-size:11px;font-weight:700;color:var(--mu)">FORMATO DE DESARROLLO (Excel)</label><input type="file" accept=".xlsx,.xls" class="inp" id="ftm-ep-file"></div>' +
     '<div><label style="font-size:11px;font-weight:700;color:var(--mu)">o REFERENCIA DE LA MATRIZ</label><input class="inp" id="ftm-ep-ref" placeholder="Ej. 2194" value="' + String(FTM.sel || '').replace(/"/g, '') + '"></div></div>' +
@@ -22726,18 +22736,20 @@ function ftmEvalProdAbrir() {
   document.body.appendChild(m);
 }
 async function ftmEvalProdCorrer() {
-  const cat = document.getElementById('ftm-ep-cat').value, out = document.getElementById('ftm-ep-res'), f = document.getElementById('ftm-ep-file').files[0], ref = document.getElementById('ftm-ep-ref').value.trim();
-  if (!cat) return toast('Elige el tipo de producto', 'wa');
+  let cat = document.getElementById('ftm-ep-cat').value; const out = document.getElementById('ftm-ep-res'), f = document.getElementById('ftm-ep-file').files[0], ref = document.getElementById('ftm-ep-ref').value.trim();
   let V = {}, origen = '';
   try {
     if (f) { const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' }); wb.SheetNames.forEach(n => { const v = ftmLeerFormato(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null, raw: false })); Object.keys(v).forEach(k => { if (V[k] == null) V[k] = v[k]; }); }); origen = 'formato «' + f.name + '»'; }
     else if (ref) { await ftmCargar(); const ev = ftmEval(ftmK(ref)); if (!ev) return toast('La referencia no está en la matriz', 'wa'); Object.keys(ev.vals).forEach(k => { if (ev.vals[k].v != null) V[k] = ev.vals[k].v; }); origen = 'matriz, referencia ' + ref; }
     else return toast('Sube el formato de desarrollo o escribe una referencia', 'wa');
   } catch (e) { return toast('No pude leer el archivo: ' + e.message, 'er'); }
+  let aut = '';
+  if (!cat && V._tipo) { cat = ftmDetectarCat(V._tipo); if (cat) { document.getElementById('ftm-ep-cat').value = cat; aut = ' (categoría detectada de «' + V._tipo + '»)'; } }
+  if (!cat) return toast('No pude saber la categoría' + (V._tipo ? ' de «' + V._tipo + '»' : '') + ': elígela en la lista', 'wa');
   const R = ftmEvaluar(cat, V); FTM.epR = R; FTM.epCat = cat;
   const n = { ok: 0, no: 0, falta: 0 }; R.forEach(r => n[r.estado]++);
   const col = { ok: ['#dcfce7', '#166534', '✅ Cumple'], no: ['#fee2e2', '#991b1b', '❌ No cumple'], falta: ['#fef3c7', '#92400e', '⚠️ Falta dato'] };
-  out.innerHTML = '<div style="font-size:12px;margin-bottom:8px"><b>' + FTM_CATS[cat].n + '</b> · fuente: ' + origen + '<br><span style="color:#166534">' + n.ok + ' cumplen</span> · <span style="color:#991b1b">' + n.no + ' no cumplen</span> · <span style="color:#92400e">' + n.falta + ' faltan</span></div>' +
+  out.innerHTML = '<div style="font-size:12px;margin-bottom:8px"><b>' + FTM_CATS[cat].n + '</b>' + aut + ' · fuente: ' + origen + '<br><span style="color:#166534">' + n.ok + ' cumplen</span> · <span style="color:#991b1b">' + n.no + ' no cumplen</span> · <span style="color:#92400e">' + n.falta + ' faltan</span></div>' +
     '<div style="overflow:auto;max-height:50vh"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:5px 8px">Requisito</th><th>Valor encontrado</th><th>Resultado</th></tr>' +
     R.sort((a, b) => ({ no: 0, falta: 1, ok: 2 })[a.estado] - ({ no: 0, falta: 1, ok: 2 })[b.estado]).map(r => '<tr style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px">' + r.req + '</td><td>' + String(r.valor).replace(/</g, '&lt;') + '</td><td style="background:' + col[r.estado][0] + ';color:' + col[r.estado][1] + ';font-weight:700;padding:4px 8px">' + col[r.estado][2] + (r.nota ? '<div style="font-weight:400;font-size:11px">' + r.nota + '</div>' : '') + '</td></tr>').join('') + '</table></div>' +
     '<div style="margin-top:8px"><button class="btn btn-sm" onclick="ftmEvalProdExcel()">⬇️ Descargar resultado (Excel)</button></div>';
