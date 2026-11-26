@@ -22654,12 +22654,14 @@ const FTM_CATS = {
   incrustar:{n:'22. Luminarias de incrustar a piso (interior)',lum:1,ef:['>=',70],vida:['>=',20000],thdi:['<=',20],tc:1},
   sensor:{n:'Accesorios eléctricos y electrónicos – Sensores',sens:1}
 };
+const FTM_VACIO = /^(?:[\s\/\\|\-–—_.,:;?*xX]+|n\s*[\/.]?\s*a\.?|n\.a\.?|n\/d|nd|no\s*aplica|no\s*applicable|not\s*applicable|not\s*available|no\s*disponible|none|null|nil|ninguno|ninguna|tbd|tba|pendiente|pending|por\s*definir|sin\s*dato|sin\s*informaci[oó]n|no\s*data|-+\s*\/\s*-+)$/i;
+const ftmVacio = v => { if (v == null) return true; const t = String(v).trim(); if (t === '') return true; return FTM_VACIO.test(t) || FTM_VACIO.test(t.replace(/[\s\/\\|]+/g, ' ').trim()); };
 function ftmNum(v) { if (v == null) return null; const t = String(v).trim(); if (/^[\/\-–]+$/.test(t)) return null; const m = t.replace(/,/g, '.').match(/-?\d+(?:\.\d+)?/); if (!m) return null; let n = parseFloat(m[0]); if (/^[>≥]/.test(t)) n += 0.0001; else if (/^[<≤]/.test(t)) n -= 0.0001; return n; }
 function ftmNumMil(v) { if (v == null) return null; const s = String(v).trim().replace(/\s/g, ''); const m = s.match(/\d[\d.,]*/); if (!m) return null; let t = m[0]; if (/^\d{1,3}([.,]\d{3})+$/.test(t)) t = t.replace(/[.,]/g, ''); else t = t.replace(',', '.'); return parseFloat(t); }
 function ftmEvaluar(catKey, V) {
   const C = FTM_CATS[catKey], R = [];
   const add = (grupo, req, k, estado, valor, nota) => R.push({ grupo, req, campo: k, estado, valor: valor == null ? '' : valor, nota: nota || '' });
-  const txt = k => { const x = V[k]; if (x == null) return null; const t = String(x).trim(); return t === '' || /^[\/\-–]+$|^n\/?a$/i.test(t) ? null : t; };
+  const txt = k => { const x = V[k]; if (x == null) return null; const t = String(x).trim(); return ftmVacio(t) ? null : t; };
   const cmp = (op, a, b) => op === '>=' ? a >= b : op === '>' ? a > b : op === '<=' ? a <= b : a < b;
   const num = (grupo, req, k, op, lim, mil) => { const t = txt(k); if (t == null) return add(grupo, req, k, 'falta', '', 'Falta el dato'); const n = mil ? ftmNumMil(t) : ftmNum(t); if (n == null) return add(grupo, req, k, 'falta', t, 'No se pudo leer un número'); add(grupo, req, k, cmp(op, n, lim) ? 'ok' : 'no', t, cmp(op, n, lim) ? '' : 'Debe ser ' + op + ' ' + lim); };
   const decl = (grupo, req, k) => { const t = txt(k); add(grupo, req, k, t ? 'ok' : 'falta', t || '', t ? '' : 'Debe declararse'); };
@@ -22709,7 +22711,7 @@ function ftmLeerFormato(A) {
       if (b && ftmNorm(b) === ftmNorm(r[2]) ) { sec = a; return; }
       if (!/^\*/.test(String(r[3] == null ? '' : r[3]).trim()) && !mapa.has(ftmNorm(a))) return;
       const raw = r[2] == null ? '' : String(r[2]).trim(), n = ftmNorm(raw);
-      const est = raw === '' ? 'blanco' : (/^[\/\\\-–_.]+$/.test(raw) || n === '') ? 'slash' : 'ok';
+      const est = raw === '' ? 'blanco' : (ftmVacio(raw) || n === '') ? 'slash' : 'ok';
       fil.push({ sec, k: mapa.get(ftmNorm(a)) || mapa.get(ftmNorm(b)) || '', campo: a.replace(/\s+/g, ' '), en: b, valor: raw, estado: est }); }); V._filas = fil; }
   if (tipo) V._tipo = String(tipo).trim();
   if (n >= 5) return V;
@@ -22757,7 +22759,7 @@ async function ftmEvalProdCorrer() {
 }
 function ftmEpSet(k, v) {
   v = String(v).trim(); FTM.epV[k] = v; FTM.epEd[k] = 1;
-  (FTM.epF || []).forEach(f => { if (f.k === k) { f.valor = v; f.estado = v === '' ? 'blanco' : (/^[\/\\\-–_.]+$|^n\/?a$/i.test(v) ? 'slash' : 'ok'); } });
+  (FTM.epF || []).forEach(f => { if (f.k === k) { f.valor = v; f.estado = v === '' ? 'blanco' : (ftmVacio(v) ? 'slash' : 'ok'); } });
   ftmEpPintar();
 }
 function ftmEpPintar() {
@@ -22773,8 +22775,8 @@ function ftmEpPintar() {
     let tot = 0, filas = '';
     Object.keys(bySec).forEach(sc => { const L = bySec[sc], vac = L.filter(f => f.estado !== 'ok');
       if (/sensor/i.test(sc) && vac.length === L.length) { filas += '<tr style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px" colspan="4"><b>' + sc + '</b>: toda la sección sin diligenciar (solo aplica si el producto trae sensor)</td></tr>'; return; }
-      vac.forEach(f => { tot++; filas += '<tr style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px;color:#64748b">' + sc + '</td><td>' + esc(f.campo) + (exigidos.has(f.k) ? ' <span style="background:#991b1b;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:700">EXIGIDO POR LA NORMA</span>' : '') + '</td><td style="background:' + (exigidos.has(f.k) ? '#fecaca;color:#7f1d1d' : '#fef3c7;color:#92400e') + ';font-weight:700;padding:4px 8px">' + (f.estado === 'blanco' ? 'En blanco' : 'Puso «' + esc(f.valor) + '» (no aplica)') + '</td><td>' + (f.k ? inp(f.k, f.estado === 'ok' ? f.valor : '') : '') + '</td></tr>'; }); });
-    vacios = '<div style="margin-top:14px;font-size:12px"><b>📋 Campos del formato no diligenciados</b> (se pidan o no en la categoría): ' + tot + '</div>' + (filas ? '<div style="overflow:auto;max-height:40vh;margin-top:6px"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:5px 8px">Sección</th><th>Campo</th><th>Qué pasó</th><th>Completar</th></tr>' + filas + '</table></div>' : '<div style="color:#166534;font-size:12px">Todos los campos fueron diligenciados.</div>');
+      vac.forEach(f => { tot++; filas += '<tr style="border-top:1px solid #e2e8f0"><td style="padding:4px 8px;color:#64748b">' + sc + '</td><td>' + esc(f.campo) + (exigidos.has(f.k) ? ' <span style="background:#991b1b;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:700">EXIGIDO POR LA NORMA</span>' : '') + '</td><td style="background:' + (exigidos.has(f.k) ? '#fecaca;color:#7f1d1d' : '#fef3c7;color:#92400e') + ';font-weight:700;padding:4px 8px">' + (f.estado === 'blanco' ? 'En blanco' : 'Puso «' + esc(f.valor) + '» (dato no suministrado)') + '</td><td>' + (f.k ? inp(f.k, f.estado === 'ok' ? f.valor : '') : '') + '</td></tr>'; }); });
+    vacios = '<div style="margin-top:14px;font-size:12px"><b>📋 Datos no completados por el proveedor</b> (vacíos, «/», «-», «NA»… se pidan o no en la categoría): ' + tot + '</div>' + (filas ? '<div style="overflow:auto;max-height:40vh;margin-top:6px"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:5px 8px">Sección</th><th>Campo</th><th>Qué pasó</th><th>Completar</th></tr>' + filas + '</table></div>' : '<div style="color:#166534;font-size:12px">Todos los campos fueron diligenciados.</div>');
   }
   const ord = { no: 0, falta: 1, ok: 2 }, ed = Object.keys(FTM.epEd).length;
   const guardar = ftmRolDe() === 'edit' ? '<div style="margin-top:14px;border:2px solid #0f172a;border-radius:10px;padding:12px"><b style="font-size:13px">💾 Pasar a la base de datos (matriz)</b>' +
@@ -22798,7 +22800,7 @@ async function ftmEpGuardar() {
     msg('Verificando…'); await ftmCargar(true);
     const id = ord + '-' + cod; if (FTM.rows.some(r => r.id === id)) throw new Error('Ya existe un registro de la orden «' + ord + '» para la referencia ' + cod + '. No se sobrescribe: usa una orden nueva.');
     const chk = await sbReabast.get('ficha_matriz', 'id=eq.' + encodeURIComponent(id) + '&select=id'); if (chk && chk.length) throw new Error('Ya existe el registro ' + id + ' en la base de datos. No se sobrescribe.');
-    const d = {}; Object.keys(FTM.epV).forEach(k => { if (k[0] === '_' || k === 'foto_del_producto') return; const v = String(FTM.epV[k] == null ? '' : FTM.epV[k]).replace(/\s+/g, ' ').trim(); if (v === '' || /^[\/\\\-–_.]+$|^n\/?a$/i.test(v)) return; d[k] = v; });
+    const d = {}; Object.keys(FTM.epV).forEach(k => { if (k[0] === '_' || k === 'foto_del_producto') return; const v = String(FTM.epV[k] == null ? '' : FTM.epV[k]).replace(/\s+/g, ' ').trim(); if (ftmVacio(v)) return; d[k] = v; });
     const nd = Object.keys(d).length; if (!nd) throw new Error('No hay datos con valor para guardar');
     const prev = FTM.rows.filter(r => ftmK(r.codigo) === ftmK(cod)); d._seq = Math.max(0, ...prev.map(r => Number((r.datos || {})._seq) || 0)) + 1;
     if (!confirm('Se creará un registro NUEVO:\n\nReferencia: ' + cod + '\nOrden: ' + ord + '\nCampos: ' + nd + (prev.length ? '' : '\n\n⚠️ Esta referencia no tiene registros previos en la matriz.') + '\n\nNo se modifica ninguna orden anterior. ¿Guardar?')) return msg('');
