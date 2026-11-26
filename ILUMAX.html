@@ -16022,6 +16022,34 @@ async function refchkTodas(ocId, colId, on, ev){
 
 // ── Paso a paso del arte por referencia (8 pasos, días hábiles) ──
 const ARTEPASOS = { datos:{}, abiertos:new Set() };
+// Estado del arte de cada referencia (7 estados que debe admitir; se guarda en d._e junto a los pasos)
+const ARTE_ESTADOS = [
+  {id:'RETI5',   n:'RETI5',                         bg:'#c084fc', fg:'#fff'},
+  {id:'RETI3',   n:'RETI3',                         bg:'#f5d0fe', fg:'#581c87'},
+  {id:'NO RETI', n:'NO RETI',                       bg:'#9ca3af', fg:'#111827'},
+  {id:'V0',      n:'V0',                            bg:'#fef9c3', fg:'#713f12'},
+  {id:'NUEVO',   n:'NUEVO',                         bg:'#0ea5e9', fg:'#fff'},
+  {id:'CP',      n:'CP · cambio proveedor',         bg:'#a3e635', fg:'#14532d'},
+  {id:'ESTD',    n:'ESTD · Estandarizada',          bg:'#22e55c', fg:'#064e3b'}
+];
+function arteEstadoDe(ocId, it){ const e = (artepasosDe(ocId,it)||{})._e; return (e && e.v) || ''; }
+function arteEstadoSel(o, it, ix){
+  const v = arteEstadoDe(o.id,it), E = ARTE_ESTADOS.find(x=>x.id===v), puede = reabastEsAdmin() || ARTEPASOS_DEF.some(p=>artepasosPuede(p));
+  const st = E ? `background:${E.bg};color:${E.fg};border:1.5px solid ${E.bg};` : 'background:var(--s1);color:var(--mu);border:1.5px dashed var(--b2);';
+  return `<select ${puede?'':'disabled'} title="Estado del arte${E?': '+E.n:' (sin definir)'}" style="${st}font-size:10px;font-weight:800;border-radius:10px;padding:1px 4px;margin-top:3px;max-width:96px;cursor:pointer;" onclick="event.stopPropagation()" onchange="arteEstadoSet('${o.id}',${ix},this.value,event)"><option value="">Estado…</option>${ARTE_ESTADOS.map(x=>`<option value="${x.id}" ${x.id===v?'selected':''}>${x.id}</option>`).join('')}</select>`;
+}
+async function arteEstadoSet(ocId, ix, v, ev){
+  if(ev) ev.stopPropagation();
+  const it = (REABAST.ocItems[ocId]||[])[ix]; if(!it) return;
+  const k = refchkKey(it), quien = (CU && CU.nombre) || '', t = new Date().toISOString();
+  const aplicar = d => { d[ocId] = d[ocId]||{}; d[ocId][k] = d[ocId][k]||{}; if(v) d[ocId][k]._e = {v, t, q:quien}; else delete d[ocId][k]._e; };
+  aplicar(ARTEPASOS.datos); reabastPintar();
+  try{
+    let remoto = {}; try{ const r = await sb.get('configuracion','clave=eq.oc_arte_pasos'); if(r && r[0] && r[0].valor) remoto = JSON.parse(r[0].valor)||{}; }catch(e){}
+    aplicar(remoto); ARTEPASOS.datos = remoto;
+    await sb.upsert('configuracion', {clave:'oc_arte_pasos', valor:JSON.stringify(remoto), tipo:'json'}, 'clave');
+  }catch(e){ if(typeof toast==='function') toast('No se pudo guardar el estado: '+e.message,'er'); }
+}
 const ARTEPASOS_DEF = [
   {n:1, t:'Envío de información técnica a Calidad', area:'Abastecimiento', quien:['compras','abastecimiento'], dias:1, det:'Abastecimiento envía a Calidad: OC + PI, paquete de troqueles (die-cuts), fotos HD del producto y el formato de desarrollo con la información técnica.'},
   {n:2, t:'Envío de información a Diseño', area:'Calidad', quien:['calidad'], dias:1, det:'El responsable de Calidad revisa la información técnica y la envía a Diseño (pide lo que falte antes).'},
@@ -16122,7 +16150,7 @@ function artepasosInformeDatos(){
       const t1 = d[1] ? new Date(d[1].t) : null, tN = d[N] ? new Date(d[N].t) : null;
       if(t1 && (!primero || t1<primero)) primero = t1; if(tN && (!ultimo || tN>ultimo)) ultimo = tN;
       if(completo) compl++; else { porPaso[sig.n-1]++; if(tarde) atras++; }
-      refs.push({oc:o.numero_oc, prov:o.proveedor||'', ref:String(it.referencia||''), desc:String(it.descripcion||''), cant:Number(it.cantidad)||0, hechos, completo, sig, desde, tarde,
+      refs.push({est:(d._e&&d._e.v)||'', oc:o.numero_oc, prov:o.proveedor||'', ref:String(it.referencia||''), desc:String(it.descripcion||''), cant:Number(it.cantidad)||0, hechos, completo, sig, desde, tarde,
         dias: desde ? Math.round(ocDiasHabilesEntre(desde,hoy)*10)/10 : null, tot: t1 ? Math.round(ocDiasHabilesEntre(t1, completo&&tN?tN:hoy)*10)/10 : null, ncom: Object.values(d._c||{}).reduce((a,l)=>a+l.length,0)});
     });
     const falta = its.length-compl, pend = ARTEPASOS_DEF.find((p,i)=>porPaso[i]>0);
@@ -16138,6 +16166,7 @@ function artepasosInforme(){
   const filas = ordenes.map(o=>`<tr><td><b>${E(o.oc)}</b></td><td>${E(o.prov)}</td><td style="text-align:right;">${o.refs}</td><td style="text-align:right;color:#16a34a;font-weight:700;">${o.compl}</td><td style="text-align:right;font-weight:800;color:${o.falta?'#b45309':'#16a34a'};">${o.falta}</td><td style="font-size:11px;">${E(o.estado)}</td>${o.porPaso.map(n=>`<td style="text-align:center;${n?'font-weight:800;background:#eff6ff;':'color:var(--mu);'}">${n||'·'}</td>`).join('')}<td style="text-align:right;color:${o.atras?'#b91c1c':'var(--mu)'};font-weight:700;">${o.atras||'·'}</td><td style="text-align:right;">${o.dias==null?'—':o.dias}</td></tr>`).join('');
   document.getElementById('mo-det-t').textContent = '📊 Informe de Artes';
   document.getElementById('mo-det-b').innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;"><span class="bdg bdg-azul">${ordenes.length} órdenes · ${cO} con arte completo</span><span class="bdg bdg-verde">${cR}/${tR} referencias terminadas</span><span class="bdg bdg-amarillo">${tR-cR} faltan por pasar</span><span class="bdg bdg-rojo">${aR} atrasadas</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center;"><span class="arte-mu" style="font-size:10.5px;font-weight:700;">Estado del arte:</span>${ARTE_ESTADOS.map(x=>`<span style="background:${x.bg};color:${x.fg};font-size:10.5px;font-weight:800;padding:2px 9px;border-radius:10px;" title="${E(x.n)}">${E(x.id)} · ${refs.filter(r=>r.est===x.id).length}</span>`).join('')}<span class="bdg bdg-gris">Sin estado · ${refs.filter(r=>!r.est).length}</span></div>
     <div class="arte-mu" style="font-size:10.5px;margin-bottom:6px;">Las columnas 1–${N} cuentan cuántas referencias están esperando ese paso. Los días son hábiles (lunes a viernes, sin festivos).</div>
     <div class="tw"><table style="font-size:11.5px;"><thead><tr><th>OC</th><th>Proveedor</th><th style="text-align:right;">Refs</th><th style="text-align:right;">Listas</th><th style="text-align:right;">Faltan</th><th>Estado</th>${th}<th style="text-align:right;">Atrasadas</th><th style="text-align:right;">Días háb.</th></tr></thead><tbody>${filas||'<tr><td colspan="30" class="empty">No hay órdenes activas con referencias.</td></tr>'}</tbody></table></div>`;
   document.getElementById('mo-det-f').innerHTML = `<button class="btn btn-g" onclick="closeMo('mo-det')">Cerrar</button><button class="btn btn-gr" onclick="artepasosInformeExcel()">⬇ Excel (por orden y por referencia)</button>`;
@@ -16148,8 +16177,8 @@ function artepasosInformeExcel(){
     const {N, ordenes, refs} = artepasosInformeDatos(), f = d=>d ? d.toLocaleDateString('es-CO') : '';
     const h1 = ['OC','Proveedor','Referencias','Listas','Faltan','Estado','Atrasadas','Días hábiles en artes'].concat(ARTEPASOS_DEF.map(p=>'Esperan paso '+p.n+' ('+p.t+')'));
     const a1 = [h1].concat(ordenes.map(o=>[o.oc,o.prov,o.refs,o.compl,o.falta,o.estado,o.atras,o.dias==null?'':o.dias].concat(o.porPaso)));
-    const h2 = ['OC','Proveedor','Referencia','Descripción','Cantidad','Pasos hechos','Estado','Paso actual','Responsable','Desde','Días háb. en el paso','Atrasada','Días háb. totales','Comentarios'];
-    const a2 = [h2].concat(refs.map(r=>[r.oc,r.prov,r.ref,r.desc,r.cant,r.hechos+'/'+N,r.completo?'Arte completo':'En proceso',r.sig?r.sig.n+'. '+r.sig.t:'',r.sig?r.sig.area:'',f(r.desde),r.dias==null?'':r.dias,r.tarde?'Sí':'',r.tot==null?'':r.tot,r.ncom||'']));
+    const h2 = ['OC','Proveedor','Referencia','Descripción','Cantidad','Estado del arte','Pasos hechos','Estado','Paso actual','Responsable','Desde','Días háb. en el paso','Atrasada','Días háb. totales','Comentarios'];
+    const a2 = [h2].concat(refs.map(r=>[r.oc,r.prov,r.ref,r.desc,r.cant,r.est,r.hechos+'/'+N,r.completo?'Arte completo':'En proceso',r.sig?r.sig.n+'. '+r.sig.t:'',r.sig?r.sig.area:'',f(r.desde),r.dias==null?'':r.dias,r.tarde?'Sí':'',r.tot==null?'':r.tot,r.ncom||'']));
     const wb = XLSX.utils.book_new();
     [['Por orden',a1],['Por referencia',a2]].forEach(([n,a])=>{ const ws = XLSX.utils.aoa_to_sheet(a); ws['!autofilter'] = {ref: XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:a.length-1, c:a[0].length-1}})}; ws['!cols'] = a[0].map((_,i)=>({wch: i<2?22:(i===5||i===3?34:14)})); XLSX.utils.book_append_sheet(wb, ws, n); });
     XLSX.writeFile(wb, 'Informe_Artes_'+new Date().toISOString().slice(0,10)+'.xlsx');
@@ -16487,7 +16516,7 @@ function segHtmlItemsFila(o){
       <td style="padding:3px 8px;font-size:10.5px;white-space:normal;min-width:190px;">${(()=>{ try{ const rr = String(it.referencia||it.sku||it.codigo||''); const k = ceRefKey(rr), on = ceNum(o.numero_oc); const ls = (CE.bls||[]).filter(x=>ceRefKey(x.r)===k && ceNum(x.oc)===on);
         if(!ls.length) return '<span class="arte-mu">—</span>'; const m = new Map(); ls.forEach(x=>{ const kk = x.bl||'sin BL'; const g = m.get(kk)||{c:0,d2:x.d2,f:x.f}; g.c += x.c; m.set(kk,g); });
         return [...m.entries()].map(([bl,g])=>`<div>${g.f===9?'✅':'🚢'} <b style="font-family:monospace;">${reabastEsc(bl)}</b>: ${Number(g.c).toLocaleString('es-CO')}${g.d2?' · ETA '+segDM(g.d2+'T12:00:00'):''}</div>`).join(''); }catch(e){ return ''; } })()}</td>
-      <td style="padding:3px 8px;text-align:center;white-space:nowrap;" onclick="artepasosToggleAbrir('${o.id}',${ix},event)"><span style="cursor:pointer;font-weight:800;font-size:10.5px;padding:2px 9px;border-radius:10px;border:1.5px solid ${pA===100?'#16a34a':pA?'#2563eb':'var(--b2)'};background:${pA===100?'linear-gradient(90deg,#86efac 100%,#86efac 100%)':pA?'linear-gradient(90deg,#93c5fd '+pA+'%,#eff6ff '+pA+'%)':'transparent'};color:${pA===100?'#14532d':pA?'#1e3a8a':'var(--mu)'};" title="Arte de esta referencia: ${nA}/7 pasos (${pA}%) · clic para ver el paso a paso">🎨 ${pA}% · ${nA}/7 ${abierto?'▴':'▾'}</span></td>
+      <td style="padding:3px 8px;text-align:center;white-space:nowrap;" onclick="artepasosToggleAbrir('${o.id}',${ix},event)"><span style="cursor:pointer;font-weight:800;font-size:10.5px;padding:2px 9px;border-radius:10px;border:1.5px solid ${pA===100?'#16a34a':pA?'#2563eb':'var(--b2)'};background:${pA===100?'linear-gradient(90deg,#86efac 100%,#86efac 100%)':pA?'linear-gradient(90deg,#93c5fd '+pA+'%,#eff6ff '+pA+'%)':'transparent'};color:${pA===100?'#14532d':pA?'#1e3a8a':'var(--mu)'};" title="Arte de esta referencia: ${nA}/7 pasos (${pA}%) · clic para ver el paso a paso">🎨 ${pA}% · ${nA}/7 ${abierto?'▴':'▾'}</span><br>${arteEstadoSel(o,it,ix)}</td>
       <td style="padding:3px 8px;text-align:center;white-space:nowrap;" onclick="insppToggleAbrir('${o.id}',${ix},event)"><span style="cursor:pointer;font-weight:800;font-size:10.5px;padding:2px 9px;border-radius:10px;border:1.5px solid ${pI===100?'#16a34a':pI?'#2563eb':'var(--b2)'};background:${pI===100?'#86efac':pI?'linear-gradient(90deg,#93c5fd '+pI+'%,#eff6ff '+pI+'%)':'transparent'};color:${pI===100?'#14532d':pI?'#1e3a8a':'var(--mu)'};" title="Inspección de esta referencia: ${nI}/2 pasos (${pI}%) · clic para ver el paso a paso">🔍 ${pI}% · ${nI}/2 ${abiertoI?'▴':'▾'}</span></td>
       ${REFCHK.cols.map(c=>{ const st = refchkEstado(o,it,c.id); const tip = st.todo ? 'Etapa terminada para toda la OC' : st.x ? 'Confirmada '+new Date(st.x.t).toLocaleString('es-CO')+(st.x.q?' · '+st.x.q:'') : 'Marcar como confirmada para esta referencia';
         return `<td style="padding:3px 8px;text-align:center;" onclick="event.stopPropagation()"><input type="checkbox" ${st.on?'checked':''} ${st.todo?'disabled':''} title="${reabastEsc(tip)}" style="width:15px;height:15px;cursor:pointer;accent-color:#16a34a;" onclick="event.stopPropagation()" onchange="refchkToggle('${o.id}',${ix},'${c.id}',this.checked,event)"></td>`; }).join('')}
