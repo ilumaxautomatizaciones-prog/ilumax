@@ -4517,7 +4517,7 @@ function ssocgView(id) {
 }
 const ssocgOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !== '' && f.max != null));
 function ssocgQ(id, v) { SSOCG[id].q = v; ssocgPaint(id); }
-function ssocgBar(id) { return '<div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;padding:10px 14px"><input id="ssocgq_' + id + '" placeholder="🔎 Buscar en la tabla…" value="' + ssocEsc((SSOCG[id] && SSOCG[id].q) || '') + '" oninput="ssocgQ(\'' + id + '\',this.value)" style="min-width:240px"><button class="btn btn-g btn-sm" onclick="ssocgCols(event,\'' + id + '\')">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="ssocgLimpiar(\'' + id + '\')">✖ Quitar filtros y orden</button><button class="btn btn-g btn-sm" onclick="ssocgExcel(\'' + id + '\')">⬇ Excel de esta vista</button></div>'; }
+function ssocgBar(id) { return '<div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;padding:10px 14px"><input id="ssocgq_' + id + '" placeholder="🔎 Buscar en la tabla…" value="' + ssocEsc((SSOCG[id] && SSOCG[id].q) || '') + '" oninput="ssocgQ(\'' + id + '\',this.value)" style="min-width:240px"><button class="btn btn-g btn-sm" onclick="ssocgCols(event,\'' + id + '\')">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="ssocgLimpiar(\'' + id + '\')">✖ Quitar filtros y orden</button><button class="btn btn-g btn-sm" onclick="ssocgExcel(\'' + id + '\')">⬇ Excel de esta vista</button>' + (id === 'ssoc' ? '<button class="btn btn-gr btn-sm" onclick="ssocExcelMov()" title="Mismo formato del Excel de Movimientos de SIESA, con fórmulas vivas">⬇ Excel de movimientos (con fórmulas)</button>' : '') + '</div>'; }
 function ssocgPaint(id) {
   const g = SSOCG[id], box = $s('ssocg_' + id); if (!box) return; if (!g.fix) g.fix = new Set(g.cols.some(c => c.k === 'nombre') ? ['nombre'] : []); const V = ssocgView(id), cols = g.cols.filter(c => !g.hide.has(c.k));
   const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="ssocgh" style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '"><span style="cursor:pointer" onclick="ssocgSort(\'' + id + '\',\'' + c.k + '\')">' + ssocEsc(c.t) + s + '</span><button class="ssocgb' + (ssocgOn(g.f[c.k]) ? ' on' : '') + '" onclick="ssocgMenu(event,\'' + id + '\',\'' + c.k + '\')">▾</button></th>'; }).join('');
@@ -4579,6 +4579,46 @@ function ssocgAplicar() {
   if (ssocgOn(f)) g.f[SSOCGM.k] = f; else delete g.f[SSOCGM.k]; const id = SSOCGM.id; ssocgCerrar(); ssocgPaint(id);
 }
 function ssocgQuitar() { const id = SSOCGM.id; delete SSOCG[id].f[SSOCGM.k]; ssocgCerrar(); ssocgPaint(id); }
+async function ssocExcelMov() {
+  if (!SSOCS.nom.length) { toast('Este mes no tiene el Excel de movimientos cargado (pestaña Revisión → subir nómina).', 'wa'); return; }
+  try {
+    await ppCargarExcelJS();
+    const rows = SSOCS.nom.slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+    const keys = [...new Set(rows.flatMap(r => Object.keys(r.con || {})))].sort((a, b) => (parseInt(a) || 9e9) - (parseInt(b) || 9e9) || a.localeCompare(b));
+    const nC = keys.length, col = n => { let t = '', x = n; while (x > 0) { const m = (x - 1) % 26; t = String.fromCharCode(65 + m) + t; x = Math.floor((x - 1) / 26); } return t; };
+    const cI = 6, cF = 5 + nC, cIBC = cF + 1, cEPS = cF + 2, cPEN = cF + 3, cAI = cF + 4, cAS = cF + 5, cAP = cF + 6, cDI = cF + 7, cDS = cF + 8, cDP = cF + 9, cOK = cF + 10, last = cOK;
+    const wb = new ExcelJS.Workbook(); wb.creator = 'ILUMAX'; wb.calcProperties = { fullCalcOnLoad: true };
+    const ws = wb.addWorksheet('Movimientos ' + SSOCS.per, { views: [{ state: 'frozen', xSplit: 4, ySplit: 2 }] });
+    const sm = new Map(); if (SSOCS.siesa && SSOCS.auto) SSOCS.siesa.forEach(x => sm.set(x.ced, x));
+    const H1 = ['', '', '', '', ''], H2 = ['Periodo', 'Cargo', 'Empleado', 'Nombre del Empleado', 'Estado'];
+    keys.forEach(k => { const i = k.indexOf(' · '); H2.push(i > 0 ? k.slice(0, i) : ''); H1.push(i > 0 ? k.slice(i + 3) : k); });
+    H1.push('VALOR TOTAL IBC', 'VALOR EPS', 'VALOR PENSION', 'IBC AUTOLIQ. SIESA', 'SALUD AUTOLIQ. SIESA', 'PENSIÓN AUTOLIQ. SIESA', 'DIF. IBC', 'DIF. SALUD', 'DIF. PENSIÓN', 'REVISIÓN'); H2.push('', '4 %', '16 %', '', '', '', '', '', '', '');
+    ws.addRow(H1); ws.addRow(H2);
+    const r0 = 3, rN = r0 + rows.length - 1;
+    rows.forEach((r, i) => {
+      const n = r0 + i, x = sm.get(r.ced), v = [SSOCS.per, r.cargo, r.cedTxt, r.nombre, r.estado]; keys.forEach(k => v.push(r.con[k] || 0));
+      v.push({ formula: `SUM(${col(cI)}${n}:${col(cF)}${n})` }, { formula: `${col(cIBC)}${n}*4%` }, { formula: `${col(cIBC)}${n}*16%` }, x ? x.ibc : null, x ? x.sA : null, x ? x.p16 : null,
+        { formula: `IF(${col(cAI)}${n}="","",${col(cIBC)}${n}-${col(cAI)}${n})` }, { formula: `IF(${col(cAS)}${n}="","",ROUND(${col(cEPS)}${n}-${col(cAS)}${n},0))` }, { formula: `IF(${col(cAP)}${n}="","",ROUND(${col(cPEN)}${n}-${col(cAP)}${n},0))` },
+        { formula: `IF(${col(cAI)}${n}="","Sin autoliq.",IF(OR(ABS(${col(cDI)}${n})>1,ABS(${col(cDS)}${n})>100,ABS(${col(cDP)}${n})>100),"REVISAR","OK"))` });
+      ws.addRow(v);
+    });
+    const tr = rN + 2, T = ws.getRow(tr); T.getCell(4).value = 'TOTAL FILTRADO'; T.getCell(3).value = { formula: `SUBTOTAL(103,C${r0}:C${rN})` };
+    for (let c = cI; c <= cAP; c++) T.getCell(c).value = { formula: `SUBTOTAL(109,${col(c)}${r0}:${col(c)}${rN})` };
+    for (let c = cDI; c <= cDP; c++) T.getCell(c).value = { formula: `SUBTOTAL(109,${col(c)}${r0}:${col(c)}${rN})` };
+    const T2 = ws.getRow(tr + 1); T2.getCell(4).value = 'TOTAL GENERAL'; T2.getCell(3).value = { formula: `COUNTA(C${r0}:C${rN})` };
+    for (let c = cI; c <= cAP; c++) T2.getCell(c).value = { formula: `SUM(${col(c)}${r0}:${col(c)}${rN})` };
+    for (let c = 1; c <= last; c++) { ws.getRow(1).getCell(c).font = { bold: true, name: 'Calibri' }; ws.getRow(1).getCell(c).alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' }; const h = ws.getRow(2).getCell(c); h.font = { bold: true, color: { argb: 'FFFFFFFF' } }; h.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } }; h.alignment = { horizontal: 'center' }; }
+    ws.getRow(1).height = 48;
+    for (let c = cI; c <= cDP; c++) { ws.getColumn(c).width = c >= cIBC ? 16 : 13; ws.getColumn(c).numFmt = '#,##0'; }
+    ws.getColumn(1).width = 9; ws.getColumn(2).width = 28; ws.getColumn(3).width = 13; ws.getColumn(4).width = 38; ws.getColumn(5).width = 9; ws.getColumn(cOK).width = 14;
+    [cIBC, cEPS, cPEN].forEach(c => { for (let n = 1; n <= 2; n++) ws.getRow(n).getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: n === 2 ? 'FF1D4ED8' : 'FFDBEAFE' } }; });
+    [tr, tr + 1].forEach((n, i) => { for (let c = 1; c <= cDP; c++) { const k = ws.getRow(n).getCell(c); k.font = { bold: true, color: { argb: 'FFFFFFFF' } }; k.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: i ? 'FF64748B' : 'FF0F172A' } }; if (c >= cI) k.numFmt = '#,##0'; } });
+    ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: rN, column: last } };
+    ws.addConditionalFormatting({ ref: `${col(cOK)}${r0}:${col(cOK)}${rN}`, rules: [{ type: 'containsText', operator: 'containsText', text: 'REVISAR', style: { font: { bold: true, color: { argb: 'FF991B1B' } }, fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFEE2E2' } } } }, { type: 'containsText', operator: 'containsText', text: 'OK', style: { font: { color: { argb: 'FF166534' } } } }] });
+    const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'application/octet-stream' })); a.download = 'Movimientos_' + SSOCS.per + '.xlsx'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+    toast('Excel de movimientos generado ✅', 'ok');
+  } catch (e) { toast('No se pudo generar el Excel: ' + e.message, 'er'); }
+}
 function ssocgExcel(id) {
   const g = SSOCG[id], V = ssocgView(id), cols = g.cols.filter(c => !g.hide.has(c.k)); if (!V.length) { toast('No hay filas para exportar.','wa'); return; }
   const ws = XLSX.utils.json_to_sheet(V.map(r => { const o = {}; cols.forEach(c => { const v = ssocgV(c, r); o[c.t] = c.num && v !== '' ? Number(v) : v; }); return o; })), wb = XLSX.utils.book_new();
