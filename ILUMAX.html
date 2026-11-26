@@ -4540,6 +4540,12 @@ function ssocgFijar(box, cols, g) {
 }
 function ssocgFix(id, k, btn) { const g = SSOCG[id]; if (!g.fix) g.fix = new Set(); if (g.fix.has(k)) g.fix.delete(k); else g.fix.add(k); if (btn) { btn.textContent = g.fix.has(k) ? '📌 Fija' : '📍 Fijar'; btn.style.opacity = g.fix.has(k) ? '1' : '.55'; } ssocgPaint(id); }
 function ssocgSort(id, k) { const g = SSOCG[id]; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; ssocgPaint(id); }
+function ssocKpi(t) {
+  const g = SSOCG.ssoc; if (!g) return; g.f = {}; g.sort = null; g.q = '';
+  if (t === 'ibc' || t === 'salud' || t === 'pen') g.sort = { k: t, dir: -1 };
+  else if (t === 'obs' || t === 'pila') { const oc = g.cols.find(c => c.k === 'obs'); const vs = new Set(g.rows.map(r => String(ssocgV(oc, r))).filter(v => v !== 'OK' && (t === 'obs' || /PILA/.test(v)))); g.f.obs = { sel: vs }; }
+  ssocgPaint('ssoc'); const b = $s('ssocg_ssoc'); if (b) b.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 function ssocgLimpiar(id) { const g = SSOCG[id]; g.f = {}; g.sort = null; g.q = ''; const i = $s('ssocgq_' + id); if (i) i.value = ''; ssocgPaint(id); }
 function ssocgCerrar() { const m = $s('ssocgm'); if (m) m.remove(); }
 document.addEventListener('click', ssocgCerrar);
@@ -4733,7 +4739,7 @@ function ssocPintar() {
   const rows = ssocCalc(), nm = SSOCS.metas.find(m => m.periodo === SSOCS.per && m.tipo === 'nomina'), pm = SSOCS.metas.find(m => m.periodo === SSOCS.per && m.tipo === 'pila');
   const meta = (m, t) => m ? '<b>' + t + ':</b> ' + ssocEsc(m.archivo || '') + ' · ' + m.filas + ' filas · ' + ssocEsc(m.cargado_por || '') + ' · ' + new Date(m.cargado_en).toLocaleString('es-CO') : '<b>' + t + ':</b> <span style="color:var(--rd)">sin cargar</span>';
   const con = rows.filter(r => r.obs), sum = k => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
-  const kp = (v, l, c) => '<div class="sc"><div class="sv"' + (c ? ' style="color:' + c + '"' : '') + '>' + v + '</div><div class="sl">' + l + '</div></div>';
+  const kp = (v, l, c, a) => '<div class="sc" role="button" tabindex="0" title="Clic para ver el detalle" style="cursor:pointer" onclick="ssocKpi(\'' + a + '\')" onkeydown="if(event.key===\'Enter\')ssocKpi(\'' + a + '\')"><div class="sv"' + (c ? ' style="color:' + c + '"' : '') + '>' + v + '</div><div class="sl">' + l + ' ↓</div></div>';
   w.innerHTML = '<div class="card"><div class="ch"><div class="ct">🛡️ Revisión de seguridad social · ' + ssocEsc(ssocPerTxt(SSOCS.per)) + '</div></div><div class="cb">'
     + '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">'
     + '<div class="fg" style="margin:0"><div class="fl">Periodo</div><select class="inp" id="ssoc-per" onchange="ssocCambiarPer(this.value)" style="min-width:230px">' + ssocOpcionesPer() + '</select></div>'
@@ -4745,7 +4751,7 @@ function ssocPintar() {
     + '<button class="btn btn-gr btn-sm" onclick="ssocTraerSiesa()">🔄 Traer de SIESA</button>' + (nm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'nomina\')">🗑 Quitar nómina</button>' : '') + (pm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'pila\')">🗑 Quitar PILA</button>' : '') + '</div>'
     + '<input type="file" id="ssoc-f-nom" accept=".xlsx,.xls,.csv" style="display:none" onchange="ssocSubirNomina(this)"><input type="file" id="ssoc-f-pila" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="ssocSubirPila(this)">'
     + '<div style="font-size:11px;color:var(--mu);line-height:1.7">' + meta(nm, 'Nómina') + '<br>' + meta(pm, 'PILA') + (SSOCS.siesaMsg ? '<br><b>SIESA:</b> ' + ssocEsc(SSOCS.siesaMsg) : '') + '</div></div></div>'
-    + ssocNav() + (SSOCS.vista === 'gen' ? '<div id="ssoc-gen"></div>' : SSOCS.nom.length || SSOCS.pila.length || (SSOCS.siesa && SSOCS.siesa.length) ? '<div class="sg" style="margin-bottom:12px">' + kp(SSOCS.nom.length, 'Empleados en nómina') + kp(ssocFm(sum('ibc')), 'IBC total') + kp(ssocFm(sum('salud')), 'Salud total') + kp(ssocFm(sum('pen')), 'Pensión total') + kp(con.length, 'Con observaciones', con.length ? 'var(--rd)' : 'var(--gr)') + (SSOCS.pila.length ? kp(rows.filter(r => /PILA/.test(r.obs)).length, 'Diferencias con PILA', 'var(--or)') : '') + '</div>'
+    + ssocNav() + (SSOCS.vista === 'gen' ? '<div id="ssoc-gen"></div>' : SSOCS.nom.length || SSOCS.pila.length || (SSOCS.siesa && SSOCS.siesa.length) ? '<div class="sg" style="margin-bottom:12px">' + kp(SSOCS.nom.length, 'Empleados en nómina', '', 'todos') + kp(ssocFm(sum('ibc')), 'IBC total', '', 'ibc') + kp(ssocFm(sum('salud')), 'Salud total', '', 'salud') + kp(ssocFm(sum('pen')), 'Pensión total', '', 'pen') + kp(con.length, 'Con observaciones', con.length ? 'var(--rd)' : 'var(--gr)', 'obs') + (SSOCS.pila.length ? kp(rows.filter(r => /PILA/.test(r.obs)).length, 'Diferencias con PILA', 'var(--or)', 'pila') : '') + '</div>'
       + '<div class="card" style="padding:0">' + ssocgBar('ssoc') + '<div class="tw" id="ssocg_ssoc" style="max-height:70vh;overflow:auto"></div></div>'
       : '<div class="empty">Sube el Excel de nómina de Siesa de este periodo (el mismo formato de «Movimientos»).</div>');
   if (SSOCS.vista === 'gen') { ssocGenPintar(); return; }
