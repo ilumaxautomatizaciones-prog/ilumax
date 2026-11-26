@@ -4640,7 +4640,7 @@ async function ssocInit() {
   if (!ssocPermitido()) { w.innerHTML = '<div class="empty">⛔ No tienes acceso a esta sección.</div>'; return; }
   w.innerHTML = '<div class="empty">Cargando…</div>';
   try {
-    const j = await ssocApi('periodos'); SSOCS.metas = j.meta || [];
+    const j = await ssocApi('periodos'); SSOCS.metas = j.meta || []; SSOCS.kvs = {}; (j.kv || []).forEach(a => { SSOCS.kvs[a[0]] = a[1]; });
     if (!SSOCS.per) { const u = SSOCS.metas.map(m => m.periodo).sort().pop(); SSOCS.per = u || (new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 7).replace('-', '')); }
     await ssocLeer();
   } catch (e) { w.innerHTML = '<div class="empty">⚠️ ' + ssocEsc(e.message) + '<br><button class="btn btn-p btn-sm" style="margin-top:10px" onclick="ssocInit()">Reintentar</button></div>'; }
@@ -4743,8 +4743,9 @@ function ssocOpcionesPer() {
   for (let k = -1; k < 14; k++) { const d = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth() - k, 1)); set.add(d.getUTCFullYear() + String(d.getUTCMonth() + 1).padStart(2, '0')); }
   (SSOCS.metas || []).forEach(m => set.add(m.periodo));
   return [...set].sort().reverse().map(p => {
-    const n = (SSOCS.metas || []).some(m => m.periodo === p && m.tipo === 'nomina'), l = (SSOCS.metas || []).some(m => m.periodo === p && m.tipo === 'pila');
-    return '<option value="' + p + '"' + (p === SSOCS.per ? ' selected' : '') + '>' + ssocPerTxt(p) + (n || l ? ' · ' + (n ? '✓ nómina' : '') + (n && l ? ' ' : '') + (l ? '✓ PILA' : '') : '') + '</option>';
+    const n = (SSOCS.metas || []).some(m => m.periodo === p && m.tipo === 'nomina'), l = (SSOCS.metas || []).some(m => m.periodo === p && m.tipo === 'pila'), K = SSOCS.kvs || {}, au = K['siesa:' + p] === 1, co = ('consol:' + p) in K;
+    const m = [n ? '✓ nómina' : '', au ? '✓ autoliq.' : '', co ? '✓ consol.' : '', l ? '✓ PILA' : ''].filter(Boolean).join(' ');
+    return '<option value="' + p + '"' + (p === SSOCS.per ? ' selected' : '') + '>' + ssocPerTxt(p) + (m ? ' · ' + m : '') + '</option>';
   }).join('');
 }
 function ssocPintar() {
@@ -5013,16 +5014,20 @@ function ssocProponer(r, m) {
 const ssocApDef = { razon: 'ILUMAX SA', tdoc: 'NI', nit: '900053261', dv: '8', tplan: 'E', forma: 'U', arl: '14-7', taport: '01', operador: '00', nitArl: '860002503', dvArl: '2' };
 const ssocAp = () => Object.assign({}, ssocApDef, SSOCS.ap || {}, { smmlv: SSOCS.smmlv });
 const ssocKv = async c => (await ssocApi('kv', null, '&clave=' + encodeURIComponent(c))).valor;
-const ssocKvSet = (c, v) => ssocApi('kvset', { clave: c, valor: v, quien: CU.nombre || CU.email });
+const ssocKvSet = (c, v) => ssocApi('kvset', { clave: c, valor: v, quien: CU.nombre || CU.email }).then(r => { if (/^(siesa|consol):/.test(c)) { (SSOCS.kvs = SSOCS.kvs || {})[c] = v && v.j && v.j.auto ? 1 : 0; const e = $s('ssoc-per'); if (e) e.innerHTML = ssocOpcionesPer(); } return r; });
 const ssocNav = () => { const b = (v, t) => '<button class="btn ' + (SSOCS.vista === v ? 'btn-p' : 'btn-g') + ' btn-sm" onclick="SSOCS.vista=\'' + v + '\';ssocPintar()">' + t + '</button>'; return '<div style="display:flex;gap:7px;margin-bottom:12px">' + b('rev', '📋 Revisión') + b('gen', '📄 Generar planilla (TXT)') + b('pre', '🏦 Prestaciones (consolidación)') + '</div>'; };
 async function ssocGenCargar() {
   if (SSOCS.genPer === SSOCS.per && SSOCS.maestro) return;
   const [m, a, t] = await Promise.all([ssocKv('maestro'), ssocKv('aportante'), ssocKv('tramos:' + SSOCS.per)]);
   SSOCS.maestro = m || {}; SSOCS.ap = a || null; SSOCS.tramos = t || {}; SSOCS.genPer = SSOCS.per;
 }
+function ssocGenFuente() {
+  if (SSOCS.nom.length) return SSOCS.nom;
+  return (SSOCS.siesa || []).filter(x => x.ibc > 0).map(x => ({ ced: x.ced, cedTxt: x.cedTxt, nombre: x.nombre, ibc: x.ibc, salud: SSOCS.auto ? (x.sA || 0) : ssocR2(x.ibc * SSOCS.pS / 100), pen: SSOCS.auto ? (x.p16 || 0) : ssocR2(x.ibc * SSOCS.pP / 100), con: {} }));
+}
 function ssocGenData() {
   const M = SSOCS.maestro || {}, byC = {};
-  SSOCS.nom.forEach(r => { const e = byC[r.ced] || (byC[r.ced] = { ced: r.ced, cedTxt: r.cedTxt, nombre: r.nombre, ibc: 0, salud: 0, pen: 0, con: {} }); e.ibc += r.ibc; e.salud += r.salud; e.pen += r.pen; Object.entries(r.con || {}).forEach(([k, v]) => { e.con[k] = (e.con[k] || 0) + v; }); });
+  ssocGenFuente().forEach(r => { const e = byC[r.ced] || (byC[r.ced] = { ced: r.ced, cedTxt: r.cedTxt, nombre: r.nombre, ibc: 0, salud: 0, pen: 0, con: {} }); e.ibc += r.ibc; e.salud += r.salud; e.pen += r.pen; Object.entries(r.con || {}).forEach(([k, v]) => { e.con[k] = (e.con[k] || 0) + v; }); });
   const emps = Object.values(byC), tr = {}, av = {};
   emps.forEach(e => { const m = M[e.ced], pr = ssocProponer(e, m); tr[e.ced] = SSOCS.tramos && SSOCS.tramos[e.ced] ? SSOCS.tramos[e.ced] : pr.tramos; av[e.ced] = SSOCS.tramos && SSOCS.tramos[e.ced] ? [] : pr.avisos; if (!m && SSOCS.tramos && SSOCS.tramos[e.ced]) av[e.ced].push('persona sin datos fijos (maestro)'); });
   const out = ssocArmar(SSOCS.per, M, tr, ssocAp(), emps.map(e => e.ced)), agg = {};
@@ -5049,8 +5054,10 @@ function ssocGenCols() {
 }
 async function ssocGenPintar() {
   const box = $s('ssoc-gen'); if (!box) return;
-  if (!SSOCS.nom.length) { box.innerHTML = '<div class="empty">Primero sube la nómina de Siesa de este periodo (pestaña Revisión).</div>'; return; }
   box.innerHTML = '<div class="empty">Cargando…</div>';
+  const per0 = SSOCS.per;
+  if (!SSOCS.nom.length && !SSOCS.siesa) { try { const v = await ssocKv('siesa:' + per0); if (per0 !== SSOCS.per) return; if (v && v.j) ssocAplicarSiesa(v.j, per0, '💾 Guardado'); } catch (e) { } }
+  if (!ssocGenFuente().length) { box.innerHTML = '<div class="empty">No hay datos de este periodo. Sube el Excel de nómina (pestaña Revisión) o la autoliquidación de SIESA (📊), o usa «Traer de SIESA».</div>'; return; }
   try { await ssocGenCargar(); } catch (e) { box.innerHTML = '<div class="empty">⚠️ ' + ssocEsc(e.message) + '</div>'; return; }
   const inpMae = '<input type="file" id="ssoc-f-mae" accept=".txt" style="display:none" onchange="ssocSubirMaestro(this)">';
   if (!Object.keys(SSOCS.maestro).length) { box.innerHTML = '<div class="card"><div class="cb"><b>Falta cargar los datos fijos de las personas</b> (tipo de documento, apellidos y nombres, AFP, EPS, caja, riesgo, salario).<br><span style="font-size:11px;color:var(--mu)">Sube una vez el TXT de una planilla anterior (por ejemplo el de septiembre); de ahí se toman automáticamente.</span><div style="margin-top:10px"><button class="btn btn-p btn-sm" onclick="$s(\'ssoc-f-mae\').click()">📂 Subir TXT de una planilla anterior</button></div>' + inpMae + '</div></div>'; return; }
