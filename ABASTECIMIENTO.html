@@ -22453,13 +22453,20 @@ function ftmCfPanel() {
     '<div style="max-height:220px;overflow:auto">' + (list.map((v, i) => '<label style="display:flex;gap:6px;align-items:center;font-size:12px;padding:3px 2px;cursor:pointer"><input type="checkbox"' + (!f || f.has(v) ? ' checked' : '') + ' onchange="ftmCfTog(' + i + ')"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + ftmE(v) + '</span></label>').join('') || '<div class="empty">Sin resultados</div>') + '</div>' +
     '<div style="display:flex;gap:6px;justify-content:space-between;margin-top:6px"><button class="btn btn-sm" onclick="ftmCfLimpiar()">Quitar filtro</button><button class="btn btn-sm" style="background:var(--acc);font-weight:700" onclick="ftmCfAplicar()">Aceptar</button></div></div>';
 }
+// Órdenes de compra asociadas a cada referencia: las de la matriz + las OC del módulo de Compras
+function ftmOrdMapa() {
+  const M = new Map(); const add = (k, o) => { o = String(o || '').trim(); if (!o) return; if (!M.has(k)) M.set(k, new Set()); M.get(k).add(o); };
+  FTM.sku.forEach((s, k) => s.rows.forEach(r => add(k, r.orden)));
+  try { (REABAST.ordenesCompra || []).forEach(o => { if (o.estado_general === 'cancelada') return; (REABAST.ocItems[o.id] || []).forEach(it => add(ftmK(it.referencia), o.numero_oc)); }); } catch (e) { }
+  FTM._ord = M; return M;
+}
 function ftmLista(skip) {
-  const q = FTM.q.trim().toLowerCase(), out = [];
+  const q = FTM.q.trim().toLowerCase(), out = [], OM = q ? ftmOrdMapa() : null;
   FTM.sku.forEach((s, k) => { const e = ftmEval(k); if (!e) return;
     const bus = !!q; // al buscar por código/descripción se ignoran los filtros de estado y descontinuados
     if (!bus && FTM.desc === 'no' && e.descont) return; if (!bus && FTM.desc === 'solo' && !e.descont) return;
     if (!bus && FTM.est === 'inc' && (e.pct >= 100 && s.rows.length)) return; if (!bus && FTM.est === 'ok' && !(e.pct >= 100 && s.rows.length)) return; if (!bus && FTM.est === 'sin' && s.rows.length) return;
-    if (q && (String(s.cod) + ' ' + e.desc).toLowerCase().indexOf(q) < 0) return; const it = { k, s, e };
+    if (q && (String(s.cod) + ' ' + e.desc + ' ' + [...(OM.get(k) || [])].join(' ')).toLowerCase().indexOf(q) < 0) return; const it = { k, s, e };
     for (const c in FTM.cf) { if (c !== skip && FTM.cf[c] && !FTM.cf[c].has(FTM_COLV[c](it))) return; } out.push(it); });
   const so = FTM.sort; if (so) { out.sort((a, b) => { const x = so.k === 'pct' ? (a.s.rows.length ? a.e.pct : 0) : FTM_COLV[so.k](a), y = so.k === 'pct' ? (b.s.rows.length ? b.e.pct : 0) : FTM_COLV[so.k](b); const r = so.k === 'pct' ? x - y : String(x).localeCompare(String(y), 'es', { numeric: true }); return (r || String(a.s.cod).localeCompare(String(b.s.cod), 'es', { numeric: true })) * so.d; }); return out; }
   out.sort((a, b) => FTM.est === 'ok' ? String(a.s.cod).localeCompare(String(b.s.cod), 'es', { numeric: true }) : (a.e.pct - b.e.pct) || String(a.s.cod).localeCompare(String(b.s.cod), 'es', { numeric: true }));
@@ -22472,7 +22479,7 @@ function ftmMas() { FTM.max += 120; ftmPintar(); }
 function ftmFila(x) {
   const sel = FTM.sel === x.k, e = x.e, n = x.s.rows.length;
   return '<div onclick="ftmSel(\'' + ftmE(x.k).replace(/'/g, '') + '\')" style="display:grid;grid-template-columns:84px 1fr 88px;gap:8px;align-items:center;padding:7px 8px;border-radius:9px;cursor:pointer;border:1.5px solid ' + (sel ? 'var(--bl)' : 'transparent') + ';' + (sel ? 'background:var(--bld)' : '') + '">' +
-    '<b style="font-size:12.5px">' + ftmE(x.s.cod) + '</b><div style="min-width:0"><div style="font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + ftmE(e.desc || '—') + '</div><div style="font-size:10px;color:var(--mu)">' + (n ? (e.tot - e.ok) + ' campos por llenar · ' + ftmE(e.orden) : 'Sin ficha en la matriz') + (e.descont ? ' · <b style="color:#b45309">descontinuado</b>' : '') + '</div></div>' +
+    '<b style="font-size:12.5px">' + ftmE(x.s.cod) + '</b><div style="min-width:0"><div style="font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + ftmE(e.desc || '—') + '</div><div style="font-size:10px;color:var(--mu)">' + (n ? (e.tot - e.ok) + ' campos por llenar · ' + ftmE(e.orden) : 'Sin ficha en la matriz') + (FTM.q.trim() && FTM._ord && FTM._ord.get(x.k) ? ' · OC: ' + ftmE([...FTM._ord.get(x.k)].slice(0, 4).join(', ')) : '') + (e.descont ? ' · <b style="color:#b45309">descontinuado</b>' : '') + '</div></div>' +
     '<div><div style="font-size:10.5px;text-align:right;font-weight:700">' + (n ? e.pct + '%' : '0%') + '</div>' + ftmBarra(n ? e.pct : 0) + '</div></div>';
 }
 
@@ -22563,7 +22570,7 @@ function ftmPintar() {
     '<div id="ftm-msg" style="font-size:11.5px;margin-bottom:8px">' + FTM.msg + '</div>' +
     '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">' + op('inc', FTM.est, 'Incompletas') + op('ok', FTM.est, 'Completas') + op('sin', FTM.est, 'Sin ficha') + op('todas', FTM.est, 'Todas') +
     '<select class="inp" style="width:auto;padding:4px 8px" onchange="ftmSet(\'desc\',this.value)"><option value="no"' + (FTM.desc === 'no' ? ' selected' : '') + '>Sin descontinuados</option><option value="todos"' + (FTM.desc === 'todos' ? ' selected' : '') + '>Con descontinuados</option><option value="solo"' + (FTM.desc === 'solo' ? ' selected' : '') + '>Solo descontinuados</option></select>' +
-    '<input class="inp" id="ftm-q" style="width:200px;padding:4px 8px" placeholder="Buscar código o descripción…" value="' + ftmE(FTM.q) + '" oninput="ftmSet(\'q\',this.value)"></div>' +
+    '<input class="inp" id="ftm-q" style="width:250px;padding:4px 8px" placeholder="Buscar código, descripción u orden…" value="' + ftmE(FTM.q) + '" oninput="ftmSet(\'q\',this.value)"></div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;align-items:start"><div style="position:relative"><div style="font-size:11px;color:var(--mu);margin-bottom:4px">' + L.length + ' ítems' + (Object.keys(FTM.cf).length ? ' · <a href="#" onclick="FTM.cf={};ftmPintar();return false">quitar filtros de columna</a>' : '') + '</div>' + ftmCabLista() + '<div style="max-height:62vh;overflow:auto">' + (vis.map(ftmFila).join('') || '<div class="empty">Nada para mostrar con ese filtro.</div>') + (L.length > vis.length ? '<div style="text-align:center;padding:8px"><button class="btn" onclick="ftmMas()">Mostrar más</button></div>' : '') + '</div></div><div style="max-height:70vh;overflow:auto">' + ftmDetalle() + '</div></div></div></div>';
 }
 async function ftmEditar(k, campo, v) {
