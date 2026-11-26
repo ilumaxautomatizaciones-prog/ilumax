@@ -4653,10 +4653,11 @@ async function ssocLeer() {
 }
 async function ssocCambiarPer(v) { SSOCS.siesa = null; SSOCS.siesaMsg = ''; SSOCS.per = String(v || '').replace('-', ''); if (!/^20\d{4}$/.test(SSOCS.per)) return; try { await ssocLeer(); } catch (e) { toast(e.message, 'er'); } }
 function ssocAplicarSiesa(j, per, pie) {
-    SSOCS.siesa = (j.emp || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], ibc: a[2], docs: a[3], cargo: a[4], estado: a[5], sal: a[6], ing: a[7], ret: a[8], cc: a[9], con: a[10] || {} })); const F = j.filas || [], tS = F.reduce((x, a) => x + a[2], 0), tP = F.reduce((x, a) => x + a[3], 0), eS = SSOCS.nom.reduce((x, r) => x + (r.salud || 0), 0), eP = SSOCS.nom.reduce((x, r) => x + (r.pen || 0), 0);
+    SSOCS.siesa = (j.emp || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], ibc: a[2], docs: a[3], cargo: a[4], estado: a[5], sal: a[6], ing: a[7], ret: a[8], cc: a[9], con: a[10] || {}, sA: a[11], p16: a[13] })); SSOCS.auto = !!j.auto; const F = j.filas || [], tS = F.reduce((x, a) => x + a[2], 0), tP = F.reduce((x, a) => x + a[3], 0), eS = SSOCS.nom.reduce((x, r) => x + (r.salud || 0), 0), eP = SSOCS.nom.reduce((x, r) => x + (r.pen || 0), 0);
     SSOCS.siesaMsg = F.length ? ssocPerTxt(per) + ' · SIESA descontó (por EPS/fondos): salud ' + ssocFm(tS) + ' · pensión ' + ssocFm(tP) + (SSOCS.nom.length ? ' | Excel: salud ' + ssocFm(eS) + ' (dif. ' + ssocFm(tS - eS) + ') · pensión empleado (4/16 del Excel) ' + ssocFm(eP / 4) + ' (dif. ' + ssocFm(tP - eP / 4) + ')' : ' | sin Excel cargado para comparar') + ' · IBC por empleado ESTIMADO desde la contabilidad de Siesa (' + SSOCS.siesa.length + ' empleados): puede diferir en retirados, aprendices, incapacidades y pagos de otros meses.' : 'SIESA no devolvió aportes de nómina para ' + ssocPerTxt(per) + '.';
   if (pie) SSOCS.siesaMsg += ' · ' + pie;
-  if (!SSOCS.nom.length) SSOCS.siesaMsg += ' · ⚠️ Sin Excel de nómina de este mes: IBC estimado desde SIESA y salud (' + SSOCS.pS + '%) / pensión (' + SSOCS.pP + '%) calculados sobre ese IBC; no son valores liquidados.';
+  if (SSOCS.auto) SSOCS.siesaMsg = ssocPerTxt(per) + ' · Autoliquidación de SIESA (valores liquidados) · ' + SSOCS.siesa.length + ' empleados' + (pie ? ' · ' + pie : '');
+  else if (!SSOCS.nom.length) SSOCS.siesaMsg += ' · ⚠️ Sin Excel de nómina de este mes: IBC estimado desde SIESA y salud (' + SSOCS.pS + '%) / pensión (' + SSOCS.pP + '%) calculados sobre ese IBC; no son valores liquidados.';
 }
 async function ssocTraerSiesa() {
   const per = SSOCS.per; SSOCS.siesaMsg = 'Consultando SIESA…'; ssocPintar();
@@ -4687,11 +4688,11 @@ function ssocCalc() {
     if (cnt[r.ced] > 1) o.push('Cédula repetida');
     if (/activo/i.test(r.estado) && r.ibc <= 0) o.push('IBC en cero');
     else if (/activo/i.test(r.estado) && r.ibc < SSOCS.smmlv - 1) o.push('IBC menor al SMMLV');
-    const row = { ced: r.cedTxt, nombre: r.nombre, cargo: r.cargo, estado: r.estado, suma, ibc: r.ibc, dI, salud: r.salud, sEsp, dS, pen: r.pen, pEsp, dP, pI: '', pSa: '', pPe: '', xI: '', xS: '', xP: '', iS: '', zI: '', sal: '', ing: '', ret: '', ccs: '', conS: '', enNom: true };
+    const row = { ced: r.cedTxt, nombre: r.nombre, cargo: r.cargo, estado: r.estado, suma, ibc: r.ibc, dI, salud: r.salud, sEsp, dS, pen: r.pen, pEsp, dP, pI: '', pSa: '', pPe: '', xI: '', xS: '', xP: '', iS: '', zI: '', sA: '', pA: '', zS: '', zP: '', sal: '', ing: '', ret: '', ccs: '', conS: '', enNom: true };
     if (hayS) {
       const x = sm.get(r.ced);
       if (!x) { if (r.ibc > 0) o.push('No está en SIESA'); }
-      else { usS.add(r.ced); row.iS = x.ibc; row.zI = ssocR2(x.ibc - r.ibc); if (Math.abs(row.zI) > 1) o.push('IBC SIESA (est.) ≠ Excel'); row.sal = x.sal; row.ing = x.ing; row.ret = x.ret; row.ccs = x.cc; row.conS = ssocConTxt(x.con); if (!row.nombre) row.nombre = x.nombre; if (!row.cargo) row.cargo = x.cargo; if (!row.estado) row.estado = x.estado; else if (x.estado && ssocNz(row.estado) !== ssocNz(x.estado)) o.push('Estado Excel «' + row.estado + '» ≠ SIESA «' + x.estado + '»'); }
+      else { usS.add(r.ced); row.iS = x.ibc; row.zI = ssocR2(x.ibc - r.ibc); if (SSOCS.auto) { row.sA = x.sA; row.pA = x.p16; row.zS = ssocR2(x.sA - r.salud); row.zP = ssocR2(x.p16 - r.pen); if (Math.abs(row.zS) > 1) o.push('Salud ≠ autoliquidación SIESA'); if (Math.abs(row.zP) > 1) o.push('Pensión ≠ autoliquidación SIESA'); } if (Math.abs(row.zI) > 1) o.push('IBC SIESA (est.) ≠ Excel'); row.sal = x.sal; row.ing = x.ing; row.ret = x.ret; row.ccs = x.cc; row.conS = ssocConTxt(x.con); if (!row.nombre) row.nombre = x.nombre; if (!row.cargo) row.cargo = x.cargo; if (!row.estado) row.estado = x.estado; else if (x.estado && ssocNz(row.estado) !== ssocNz(x.estado)) o.push('Estado Excel «' + row.estado + '» ≠ SIESA «' + x.estado + '»'); }
     }
     if (hayPila) {
       const p = pm.get(r.ced);
@@ -4704,7 +4705,7 @@ function ssocCalc() {
     row.obs = o.join('; '); return row;
   });
   if (hayPila) SSOCS.pila.forEach(p => { if (!usados.has(p.ced)) rows.push({ ced: p.cedTxt, nombre: p.nombre, cargo: '', estado: '', suma: '', ibc: '', dI: '', salud: '', sEsp: '', dS: '', pen: '', pEsp: '', dP: '', pI: p.ibc, pSa: p.salud, pPe: p.pen, xI: '', xS: '', xP: '', enNom: false, enPila: true, obs: 'Solo en la PILA (no está en la nómina)' }); });
-  if (hayS) SSOCS.siesa.forEach(x => { if (!usS.has(x.ced)) rows.push({ est: !SSOCS.nom.length, ced: x.cedTxt, nombre: x.nombre || '(sin nombre en SIESA)', cargo: x.cargo || '', estado: x.estado || '', suma: '', ibc: SSOCS.nom.length ? '' : x.ibc, dI: '', salud: SSOCS.nom.length ? '' : ssocR2(x.ibc * pS), sEsp: SSOCS.nom.length ? '' : ssocR2(x.ibc * pS), dS: '', pen: SSOCS.nom.length ? '' : ssocR2(x.ibc * pP), pEsp: SSOCS.nom.length ? '' : ssocR2(x.ibc * pP), dP: '', pI: '', pSa: '', pPe: '', xI: '', xS: '', xP: '', iS: x.ibc, zI: '', sal: x.sal, ing: x.ing, ret: x.ret, ccs: x.cc, conS: ssocConTxt(x.con), enNom: false, obs: !SSOCS.nom.length ? '' : x.ibc ? 'Solo en SIESA (no está en el Excel de nómina)' : 'Contrato activo en SIESA sin pagos de nómina en el mes' }); });
+  if (hayS) SSOCS.siesa.forEach(x => { if (!usS.has(x.ced)) rows.push({ est: !SSOCS.nom.length && !SSOCS.auto, ced: x.cedTxt, nombre: x.nombre || '(sin nombre en SIESA)', cargo: x.cargo || '', estado: x.estado || '', suma: '', ibc: SSOCS.nom.length ? '' : x.ibc, dI: '', salud: SSOCS.nom.length ? '' : SSOCS.auto ? x.sA : ssocR2(x.ibc * pS), sEsp: SSOCS.nom.length ? '' : ssocR2(x.ibc * pS), dS: '', pen: SSOCS.nom.length ? '' : SSOCS.auto ? x.p16 : ssocR2(x.ibc * pP), pEsp: SSOCS.nom.length ? '' : ssocR2(x.ibc * pP), dP: '', sA: SSOCS.auto ? x.sA : '', pA: SSOCS.auto ? x.p16 : '', pI: '', pSa: '', pPe: '', xI: '', xS: '', xP: '', iS: x.ibc, zI: '', sal: x.sal, ing: x.ing, ret: x.ret, ccs: x.cc, conS: ssocConTxt(x.con), enNom: false, obs: !SSOCS.nom.length ? '' : x.ibc ? 'Solo en SIESA (no está en el Excel de nómina)' : 'Contrato activo en SIESA sin pagos de nómina en el mes' }); });
   return rows;
 }
 const ssocConTxt = c => Object.entries(c || {}).filter(([k, v]) => v).map(([k, v]) => k + ' ' + ssocFm(v)).join(' · ');
@@ -4728,7 +4729,8 @@ function ssocCols() {
     { k: 'xI', t: 'PILA − nómina IBC', v: r => r.xI, num: true, dec: true, h: r => ssocDifH(r.xI, 1) },
     { k: 'xS', t: 'PILA − nómina salud', v: r => r.xS, num: true, dec: true, h: r => ssocDifH(r.xS, tol) },
     { k: 'xP', t: 'PILA − nómina pensión', v: r => r.xP, num: true, dec: true, h: r => ssocDifH(r.xP, tol) },
-    { k: 'iS', t: 'IBC SIESA (est.)', v: r => r.iS, num: true, sum: true, dec: true, h: r => ssocFm2(r.iS) },
+    { k: 'iS', t: SSOCS.auto ? 'IBC SIESA (autoliq.)' : 'IBC SIESA (est.)', v: r => r.iS, num: true, sum: true, dec: true, h: r => ssocFm2(r.iS) },
+    ...(SSOCS.auto ? [{ k: 'sA', t: 'Salud SIESA (autoliq.)', v: r => r.sA, num: true, sum: true, dec: true, h: r => ssocFm2(r.sA) }, { k: 'zS', t: 'SIESA − Excel salud', v: r => r.zS, num: true, dec: true, h: r => ssocDifH(r.zS, 1) }, { k: 'pA', t: 'Pensión SIESA 16% (autoliq.)', v: r => r.pA, num: true, sum: true, dec: true, h: r => ssocFm2(r.pA) }, { k: 'zP', t: 'SIESA − Excel pensión', v: r => r.zP, num: true, dec: true, h: r => ssocDifH(r.zP, 1) }] : []),
     { k: 'zI', t: 'SIESA − Excel IBC', v: r => r.zI, num: true, dec: true, h: r => ssocDifH(r.zI, 1) },
     { k: 'conS', t: 'Conceptos SIESA', v: r => r.conS, wrap: true },
     { k: 'sal', t: 'Salario contrato (SIESA)', v: r => r.sal, num: true, sum: false },
@@ -4759,8 +4761,8 @@ function ssocPintar() {
     + '<div class="fg" style="margin:0"><div class="fl">SMMLV</div><input class="inp" style="width:110px" value="' + SSOCS.smmlv + '" onchange="SSOCS.smmlv=ssocNum(this.value);ssocPintar()"></div>'
     + '<div class="fg" style="margin:0"><div class="fl">Tolerancia PILA ($)</div><input class="inp" style="width:90px" value="' + SSOCS.tol + '" onchange="SSOCS.tol=ssocNum(this.value);ssocPintar()"></div></div>'
     + '<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px"><button class="btn btn-p btn-sm" onclick="$s(\'ssoc-f-nom\').click()">📤 Subir nómina Siesa (Excel)</button><button class="btn btn-bl btn-sm" onclick="$s(\'ssoc-f-pila\').click()">📥 Subir planilla PILA</button>'
-    + '<button class="btn btn-gr btn-sm" onclick="ssocTraerSiesa()">' + (SSOCS.siesa ? '🔄 Actualizar de SIESA' : '🔄 Traer de SIESA') + '</button>' + (nm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'nomina\')">🗑 Quitar nómina</button>' : '') + (pm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'pila\')">🗑 Quitar PILA</button>' : '') + '</div>'
-    + '<input type="file" id="ssoc-f-nom" accept=".xlsx,.xls,.csv" style="display:none" onchange="ssocSubirNomina(this)"><input type="file" id="ssoc-f-pila" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="ssocSubirPila(this)">'
+    + '<button class="btn btn-or btn-sm" onclick="$s(\'ssoc-f-auto\').click()">📊 Subir autoliquidación SIESA (Excel)</button><button class="btn btn-gr btn-sm" onclick="ssocTraerSiesa()">' + (SSOCS.siesa ? '🔄 Actualizar de SIESA' : '🔄 Traer de SIESA') + '</button>' + (nm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'nomina\')">🗑 Quitar nómina</button>' : '') + (pm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'pila\')">🗑 Quitar PILA</button>' : '') + '</div>'
+    + '<input type="file" id="ssoc-f-auto" accept=".xlsx,.xls" style="display:none" onchange="ssocSubirAuto(this)"><input type="file" id="ssoc-f-nom" accept=".xlsx,.xls,.csv" style="display:none" onchange="ssocSubirNomina(this)"><input type="file" id="ssoc-f-pila" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="ssocSubirPila(this)">'
     + '<div style="font-size:11px;color:var(--mu);line-height:1.7">' + meta(nm, 'Nómina') + '<br>' + meta(pm, 'PILA') + (SSOCS.siesaMsg ? '<br><b>SIESA:</b> ' + ssocEsc(SSOCS.siesaMsg) : '') + '</div></div></div>'
     + ssocNav() + (SSOCS.vista === 'gen' ? '<div id="ssoc-gen"></div>' : SSOCS.nom.length || SSOCS.pila.length || (SSOCS.siesa && SSOCS.siesa.length) ? '<div class="sg" style="margin-bottom:12px">' + kp(SSOCS.nom.length || rows.length, SSOCS.nom.length ? 'Empleados en nómina' : 'Empleados (SIESA)', '', 'todos') + kp(ssocFm(sum('ibc')), 'IBC total', '', 'ibc') + kp(ssocFm(sum('salud')), 'Salud total', '', 'salud') + kp(ssocFm(sum('pen')), 'Pensión total', '', 'pen') + kp(con.length, 'Con observaciones', con.length ? 'var(--rd)' : 'var(--gr)', 'obs') + (SSOCS.pila.length ? kp(rows.filter(r => /PILA/.test(r.obs)).length, 'Diferencias con PILA', 'var(--or)', 'pila') : '') + '</div>'
       + '<div class="card" style="padding:0">' + ssocgBar('ssoc') + '<div class="tw" id="ssocg_ssoc" style="max-height:70vh;overflow:auto"></div></div>'
@@ -4800,6 +4802,33 @@ async function ssocSubirNomina(inp) {
     if (SSOCS.metas.some(m => m.periodo === per && m.tipo === 'nomina') && !confirm('Ya hay nómina cargada para ' + ssocPerTxt(per) + '. ¿Reemplazarla?')) return;
     const j = await ssocApi('guardar', { periodo: per, tipo: 'nomina', archivo: f.name, quien: CU.nombre || CU.email, filas: P.filas });
     SSOCS.per = per; toast('Nómina guardada: ' + j.meta.filas + ' empleados', 'ok'); await ssocInit();
+  } catch (e) { toast(e.message, 'er'); }
+}
+async function ssocSubirAuto(inp) {
+  const f = inp.files[0]; inp.value = ''; if (!f) return;
+  try {
+    toast('Leyendo autoliquidación…', 'inf');
+    const wb = await new Promise((ok, no) => { const fr = new FileReader(); fr.onerror = () => no(new Error('No se pudo leer el archivo')); fr.onload = () => { try { ok(XLSX.read(fr.result, { type: 'array', sheets: undefined })); } catch (e) { no(new Error('Archivo no válido')); } }; fr.readAsArrayBuffer(f); });
+    let A = null; for (const n of wb.SheetNames) { const a = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' }); const h = (a[0] || []).map(x => String(x).trim()); if (h.includes('Tipo de Entidad') && h.includes('IBC') && h.includes('Periodo')) { A = a; break; } }
+    if (!A) throw new Error('No encuentro la hoja de autoliquidación (columnas Tipo de Entidad, IBC, Periodo). Descarga «Resumen Autoliquidacion» de SIESA.');
+    const h = A[0].map(x => String(x).trim()), c = n => h.indexOf(n), iE = c('Empleado'), iN = c('Nombre'), iT = c('Tipo de Entidad'), iI = c('IBC'), iP = c('Periodo'), iC = c('Valor aporte cotiz empleado'), iA = c('Valor Aporte Cotizacion'), iCar = c('Cargo'), iCc = c('Ccostos'), iSb = c('Sueldo basico'), iS1 = c('Vlr aporte fondo Solidaridad'), iS2 = c('Vlr aporte fondo solid L797');
+    const P = {};
+    for (let r = 1; r < A.length; r++) {
+      const R = A[r], per = String(R[iP] || '').replace(/\D/g, ''), ced = String(R[iE] || '').trim(), t = String(R[iT] || '').trim(); if (!/^20\d{4}$/.test(per) || !ced) continue;
+      const Q = P[per] || (P[per] = { emp: {}, sol: 0 }); const o = Q.emp[ced] || (Q.emp[ced] = { n: String(R[iN] || '').replace(/\s+/g, ' ').trim(), ibc: 0, sa: 0, pe: 0, p16: 0, car: String(R[iCar] || '').trim(), cc: String(R[iCc] || '').trim(), sal: 0 });
+      if (t === 'EPS') { o.ibc += ssocNum(R[iI]); o.sa += ssocNum(R[iC]); o.sal = Math.max(o.sal, ssocNum(R[iSb])); Q.sol += ssocNum(R[iS1]) + ssocNum(R[iS2]); }
+      else if (t === 'AFP') { o.pe += ssocNum(R[iC]); o.p16 += ssocNum(R[iA]); if (!o.ibc) o.ibc = ssocNum(R[iI]); }
+    }
+    const pers = Object.keys(P).sort(); if (!pers.length) throw new Error('El archivo no trae periodos');
+    let n = 0;
+    for (const per of pers) {
+      const E = Object.entries(P[per].emp), rd = Math.round;
+      const emp = E.map(([ced, o]) => [ced, o.n, rd(o.ibc), 'Autoliquidación', o.car, 'Activo', rd(o.sal), '', '', o.cc, {}, rd(o.sa), rd(o.pe), rd(o.p16)]);
+      const filas = [['AUTO', 'Autoliquidación SIESA (empleado)', rd(E.reduce((x, [, o]) => x + o.sa, 0)), rd(E.reduce((x, [, o]) => x + o.pe, 0)), rd(P[per].sol), 'Resumen Autoliquidación']];
+      await ssocKvSet('siesa:' + per, { j: { ok: true, periodo: per, filas, emp, auto: true }, cuando: new Date().toISOString(), por: (CU.nombre || CU.email) + ' · ' + f.name }); n++;
+    }
+    toast('Autoliquidación guardada: ' + n + ' meses (' + ssocPerTxt(pers[0]) + ' a ' + ssocPerTxt(pers[pers.length - 1]) + ')', 'ok');
+    SSOCS.siesa = null; await ssocLeer();
   } catch (e) { toast(e.message, 'er'); }
 }
 let SSOCP = null;
