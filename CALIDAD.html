@@ -22652,6 +22652,12 @@ const FTM_CATS = {
   solar:{n:'14. Luminarias con generación fotovoltaica',lum:1,ext:1,sinirc:1,ikmin:8,aut:['>=',36],mppt:1,sol:1},
   proyector:{n:'15. Proyectores para iluminación',lum:1,ext:1,sinirc:1,ef:['>',100],vida:['>=',50000],ipmin:65,ikmin:8},
   incrustar:{n:'22. Luminarias de incrustar a piso (interior)',lum:1,ef:['>=',70],vida:['>=',20000],thdi:['<=',20],tc:1},
+  aplique:{n:'12. Apliques de pared para exterior',lum:1,ext:1,sinirc:1,ef:['>',50],vida:['>=',50000],ipmin:65,ikmin:8},
+  bolardo:{n:'13. Bolardos para iluminación',lum:1,ext:1,sinirc:1,ipmin:65,ikmin:9,exc10:1,thdi:['<=',20]},
+  deco:{n:'18. Productos para iluminación decorativa',deco:1},
+  guirnalda:{n:'19. Luminarias tipo guirnalda',deco:1},
+  port:{n:'20. Portabombillas, portalámparas y sockets',port:1},
+  exterior:{n:'21. Luminarias para exterior (alumbrado público)',lum:1,ext:1,sinirc:1,ikmin:8,thdi:['<=',20]},
   sensor:{n:'Accesorios eléctricos y electrónicos – Sensores',sens:1}
 };
 const FTM_VACIO = /^(?:[\s\/\\|\-–—_.,:;?*xX]+|n\s*[\/.]?\s*a\.?|n\.a\.?|n\/d|nd|no\s*aplica|no\s*applicable|not\s*applicable|not\s*available|no\s*disponible|none|null|nil|ninguno|ninguna|tbd|tba|pendiente|pending|por\s*definir|sin\s*dato|sin\s*informaci[oó]n|no\s*data|-+\s*\/\s*-+)$/i;
@@ -22668,18 +22674,23 @@ function ftmEvaluar(catKey, V) {
   const pot = ftmNum(txt('potencia_nominal_w'));
   // ficha técnica: datos básicos
   decl('Ficha técnica', 'Potencia nominal [W]', 'potencia_nominal_w'); decl('Ficha técnica', 'Tensión / frecuencia', 'voltaje_v_frecuencia_hz');
-  if (!C.sens) { decl('Ficha técnica', 'Flujo luminoso inicial [lm]', 'flujo_luminoso_lm'); if (!C.sinirc || catKey === 'solar' || catKey === 'proyector') decl('Ficha técnica', 'Temperatura de color [K]', 'temperatura_de_color_k'); }
-  if (!C.sens && !C.ficha) decl('Ficha técnica', 'Factor de potencia', 'factor_de_potencia');
-  if (C.lum || C.sens) decl('Ficha técnica', 'Ta: rango de temperatura ambiente', 'ta_rango_temp_ambiente_c');
+  if (!C.sens && !C.deco && !C.port) { decl('Ficha técnica', 'Flujo luminoso inicial [lm]', 'flujo_luminoso_lm'); if (!C.sinirc || catKey === 'solar' || catKey === 'proyector') decl('Ficha técnica', 'Temperatura de color [K]', 'temperatura_de_color_k'); }
+  if (!C.sens && !C.ficha && !C.deco && !C.port) decl('Ficha técnica', 'Factor de potencia', 'factor_de_potencia');
+  if (C.lum || C.sens || C.deco || C.port) decl('Ficha técnica', 'Ta: rango de temperatura ambiente', 'ta_rango_temp_ambiente_c');
+  if (C.deco || C.port) decl('Ficha técnica', 'Requiere accesorios / modo de conexión', 'requiere_accesorios_electric');
   if (C.lum) { decl('Ficha técnica', 'Clase de aislamiento eléctrico', 'clase_de_aislamiento_i_ii_o_'); decl('Ficha técnica', 'Requiere accesorios eléctricos o electrónicos', 'requiere_accesorios_electric'); decl('Ficha técnica', 'Características del driver', 'tipo_de_driver'); }
   if (C.base) decl('Ficha técnica', 'Tipo de base / socket', 'base_socket_puerto_de_carga');
   if (C.tc) decl('Ficha técnica', 'Tc: temperatura máxima del producto', 'tc_temp_maxima_del_producto_');
   // requisitos con límite
   if (C.lum || C.ef || C.efP) { decl('Declarar', 'Grado de protección IP o NEMA', 'ip'); decl('Declarar', 'Resistencia al impacto IK', 'ik'); }
+  if (C.deco || C.port) decl('Declarar', 'Grado de protección IP o NEMA', 'ip');
   if (C.lum && !C.sinirc) num('Requisito', 'IRC (CRI) mínimo 80', 'irc', '>=', 80);
-  else if (!C.sens && !C.lum) decl('Ficha técnica', 'Índice de reproducción cromática', 'irc');
-  if (C.ipmin) num('Requisito', 'IP mínimo 65', 'ip', '>=', C.ipmin);
-  if (C.ikmin) num('Requisito', 'IK mínimo 08', 'ik', '>=', C.ikmin);
+  else if (C.lum && C.ext && catKey !== 'solar') decl('Ficha técnica', 'Índice de reproducción cromática (CRI)', 'irc');
+  else if (!C.sens && !C.lum && !C.deco && !C.port) decl('Ficha técnica', 'Índice de reproducción cromática', 'irc');
+  const exc = C.exc10 && pot != null && pot < 10;
+  if (C.exc10 && pot != null && pot < 10) add('Requisito', 'Bolardo < 10 W: exceptuado de IP 65 / IK 09', 'potencia_nominal_w', 'ok', pot + ' W', 'Exceptuado por la norma');
+  if (C.ipmin && !exc) num('Requisito', 'IP mínimo ' + C.ipmin, 'ip', '>=', C.ipmin);
+  if (C.ikmin && !exc) num('Requisito', 'IK mínimo ' + String(C.ikmin).padStart(2, '0'), 'ik', '>=', C.ikmin);
   if (C.ef) num('Requisito', 'Eficacia luminosa ' + C.ef[0] + ' ' + C.ef[1] + ' lm/W', 'eficacia_luminosa_lm_w', C.ef[0], C.ef[1]);
   if (C.efP) { if (pot == null) add('Requisito', 'Eficacia: ≥30 W > 80 lm/W; <30 W > 65 lm/W', 'eficacia_luminosa_lm_w', 'falta', '', 'Falta la potencia'); else num('Requisito', 'Eficacia ' + (pot >= 30 ? '> 80' : '> 65') + ' lm/W (' + pot + ' W)', 'eficacia_luminosa_lm_w', '>', pot >= 30 ? 80 : 65); }
   if (C.vida) num('Requisito', 'Vida útil ' + C.vida[0] + ' ' + C.vida[1] + ' h @L70', 'vida_util_l70_h', C.vida[0], C.vida[1], 1);
@@ -22724,7 +22735,7 @@ function ftmLeerFormato(A) {
 }
 function ftmDetectarCat(t) {
   const s = ftmNorm(t); if (!s) return '';
-  const T = [[/emergen/, 'emerg'], [/solar|fotovolt|photovolt/, 'solar'], [/sensor/, 'sensor'], [/high ?bay|campana|industrial/, 'highbay'], [/flood|proyector|reflector|spot ?light/, 'proyector'], [/panel/, 'panel'], [/down ?light/, 'downlight'], [/track|riel/, 'track'], [/tri-?proof|hermetic|vapor|waterproof/, 'hermetica'], [/batten|linear|lineal/, 'lineal'], [/tube|tubo/, 'tubo'], [/strip|cinta|tira/, 'cinta'], [/decorativ|filament|candle|vela/, 'bombdec'], [/bulb|bombill|lamp/, 'bombillo'], [/incrust|in-?ground|recessed floor|piso/, 'incrustar']];
+  const T = [[/emergen/, 'emerg'], [/guirnalda|garland|string light|fairy light|christmas|navide/, 'guirnalda'], [/bolardo|bollard/, 'bolardo'], [/aplique|wall (lamp|light)|sconce/, 'aplique'], [/portabombill|portalamp|lamp ?holder|socket/, 'port'], [/street|alumbrado|public lighting|outdoor luminaire|luminaria.*exterior/, 'exterior'], [/solar|fotovolt|photovolt/, 'solar'], [/sensor/, 'sensor'], [/high ?bay|campana|industrial/, 'highbay'], [/flood|proyector|reflector|spot ?light/, 'proyector'], [/panel/, 'panel'], [/down ?light/, 'downlight'], [/track|riel/, 'track'], [/tri-?proof|hermetic|vapor|waterproof/, 'hermetica'], [/batten|linear|lineal/, 'lineal'], [/tube|tubo/, 'tubo'], [/strip|cinta|tira/, 'cinta'], [/decorativ.*(bulb|bombill)|(bulb|bombill).*decorativ|filament|candle|vela/, 'bombdec'], [/decorativ|decorative/, 'deco'], [/bulb|bombill|lamp/, 'bombillo'], [/incrust|in-?ground|recessed floor|piso/, 'incrustar']];
   const x = T.find(p => p[0].test(s)); return x ? x[1] : '';
 }
 function ftmEvalProdAbrir() {
