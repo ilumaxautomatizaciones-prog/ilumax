@@ -12058,18 +12058,18 @@ const OC_ETAPAS_TEMPLATE = [
   // Paso 2: la PI se confirma cuando la OCI ya salió al proveedor.
   {id:'pi_confirmada',          nombre:'Confirmar PI (sello ILUMAX TRADING)', dias:5, habiles:true, area:'Compras', independiente:true, dependeDe:'oc_creada'},
   // Camino corto: SKU existente sin actualización reciente — se pide la reimpresión directo al proveedor.
-  {id:'arte_reimpresion_solicitada', nombre:'Solicitud de reimpresión al proveedor', dias:5, area:'Compras', independiente:true, soloSi:'existente'},
-  {id:'arte_preprensa_corta',   nombre:'Preprensa recibida del proveedor', dias:1,  area:'Compras',   independiente:true, dependeDe:'arte_reimpresion_solicitada', requiereAdjunto:false, soloSi:'existente'},
+  {id:'arte_reimpresion_solicitada', nombre:'Solicitud de reimpresión al proveedor', dias:5, habiles:true, area:'Compras', independiente:true, soloSi:'existente'},
+  {id:'arte_preprensa_corta',   nombre:'Preprensa recibida del proveedor', dias:1,  habiles:true, area:'Compras',   independiente:true, dependeDe:'arte_reimpresion_solicitada', requiereAdjunto:false, soloSi:'existente'},
   // Camino largo: SKU nuevo — pasa por Calidad y Diseño antes de ir al proveedor.
-  {id:'arte_solicitud_calidad', nombre:'Solicitud de arte a Calidad',    dias:1,    area:'Compras',   independiente:true, soloSi:'nuevo'},
-  {id:'arte_revision_calidad',  nombre:'Revisión de Calidad (pide info si falta)', dias:2, area:'Calidad', independiente:true, dependeDe:'arte_solicitud_calidad', soloSi:'nuevo'},
-  {id:'arte_diseno_elaborado',  nombre:'Diseño elabora el arte y comparte el link', dias:6, area:'Diseño', independiente:true, dependeDe:'arte_revision_calidad', requiereAdjunto:true, soloSi:'nuevo'},
+  {id:'arte_solicitud_calidad', nombre:'Solicitud de arte a Calidad',    dias:1,    habiles:true, area:'Compras',   independiente:true, soloSi:'nuevo'},
+  {id:'arte_revision_calidad',  nombre:'Revisión de Calidad (pide info si falta)', dias:2, habiles:true, area:'Calidad', independiente:true, dependeDe:'arte_solicitud_calidad', soloSi:'nuevo'},
+  {id:'arte_diseno_elaborado',  nombre:'Diseño elabora el arte y comparte el link', dias:6, habiles:true, area:'Diseño', independiente:true, dependeDe:'arte_revision_calidad', requiereAdjunto:true, soloSi:'nuevo'},
   // Calidad revisa y aprueba el arte que hizo Diseño; Diseño lo entrega a Abastecimiento (Compras) y este lo envía al proveedor.
-  {id:'arte_aprobacion_calidad',nombre:'Calidad revisa y aprueba el arte', dias:2,    area:'Calidad',   independiente:true, dependeDe:'arte_diseno_elaborado', soloSi:'nuevo'},
+  {id:'arte_aprobacion_calidad',nombre:'Calidad revisa y aprueba el arte', dias:2,    habiles:true, area:'Calidad',   independiente:true, dependeDe:'arte_diseno_elaborado', soloSi:'nuevo'},
   // dependeDeAlt: las OC creadas antes de existir la etapa anterior siguen avanzando desde Diseño.
-  {id:'arte_enviado_proveedor', nombre:'Abastecimiento envía el arte al proveedor', dias:1, area:'Compras', independiente:true, dependeDe:'arte_aprobacion_calidad', dependeDeAlt:'arte_diseno_elaborado', soloSi:'nuevo'},
-  {id:'arte_aprobado_proveedor',nombre:'Proveedor aprueba o pide cambios', dias:3,  area:'Compras',   independiente:true, dependeDe:'arte_enviado_proveedor', soloSi:'nuevo'},
-  {id:'arte_preprensa_larga',   nombre:'Preprensa del proveedor · último OK de Diseño', dias:1, area:'Diseño', independiente:true, dependeDe:'arte_aprobado_proveedor', requiereAdjunto:false, soloSi:'nuevo'},
+  {id:'arte_enviado_proveedor', nombre:'Abastecimiento envía el arte al proveedor', dias:1, habiles:true, area:'Compras', independiente:true, dependeDe:'arte_aprobacion_calidad', dependeDeAlt:'arte_diseno_elaborado', soloSi:'nuevo'},
+  {id:'arte_aprobado_proveedor',nombre:'Proveedor aprueba o pide cambios', dias:3,  habiles:true, area:'Compras',   independiente:true, dependeDe:'arte_enviado_proveedor', soloSi:'nuevo'},
+  {id:'arte_preprensa_larga',   nombre:'Preprensa del proveedor · último OK de Diseño', dias:1, habiles:true, area:'Diseño', independiente:true, dependeDe:'arte_aprobado_proveedor', requiereAdjunto:false, soloSi:'nuevo'},
   {id:'anticipo_pagado',        nombre:'Pago de anticipo',               dias:7,    habiles:true, desdePI:true, area:'Cartera',   independiente:true, requiereAdjunto:true, tienePago:true},
   {id:'produccion',             nombre:'Producción',                     dias:45,   area:'Compras',  requiere:['arte_preprensa_corta','arte_preprensa_larga','anticipo_pagado','pi_confirmada']},
   {id:'inspeccion_calidad',     nombre:'Inspección de calidad',          dias:3,    habiles:true, area:'Calidad',   dependeDe:'produccion'},
@@ -15853,16 +15853,17 @@ async function refchkTodas(ocId, colId, on, ev){
   await refchkSincEtapa(ocId, colId);
 }
 
-// ── Paso a paso del arte por referencia (7 pasos) ──
+// ── Paso a paso del arte por referencia (8 pasos, días hábiles) ──
 const ARTEPASOS = { datos:{}, abiertos:new Set() };
 const ARTEPASOS_DEF = [
   {n:1, t:'Envío de información técnica a Calidad', area:'Abastecimiento', quien:['compras','abastecimiento'], dias:1, det:'Abastecimiento envía a Calidad: OC + PI, paquete de troqueles (die-cuts), fotos HD del producto y el formato de desarrollo con la información técnica.'},
-  {n:2, t:'Revisión y aprobación', area:'Diseño', quien:['diseño','diseno'], dias:2, det:'Diseño revisa la información técnica recibida y la aprueba, o la devuelve con observaciones.'},
-  {n:3, t:'Elaboración del arte', area:'Calidad', quien:['calidad'], dias:2, det:'Calidad elabora el arte con la información técnica ya aprobada (pide lo que falte antes de empezar).'},
-  {n:4, t:'Aprobación del arte', area:'Calidad', quien:['calidad'], dias:2, det:'Calidad da el visto bueno final del arte revisado por Diseño.'},
-  {n:5, t:'Arte en curvas', area:'Diseño', quien:['diseño','diseno'], dias:2, det:'Diseño convierte el arte aprobado a curvas (archivo final para el proveedor).'},
-  {n:6, t:'Envío al proveedor', area:'Abastecimiento', quien:['compras','abastecimiento'], dias:1, det:'Abastecimiento envía el arte en curvas al proveedor y espera su preprensa.'},
-  {n:7, t:'Aprobación de preprensa', area:'Diseño', quien:['diseño','diseno'], dias:1, det:'Diseño revisa la preprensa del proveedor y da el último OK. Con este paso la referencia queda con el arte terminado.'}
+  {n:2, t:'Envío de información a Diseño', area:'Calidad', quien:['calidad'], dias:1, det:'El responsable de Calidad revisa la información técnica y la envía a Diseño (pide lo que falte antes).'},
+  {n:3, t:'Desarrollo y envío del arte a Calidad', area:'Diseño', quien:['diseño','diseno'], dias:2, det:'Diseño desarrolla el arte con la información recibida y lo envía a Calidad.'},
+  {n:4, t:'Revisión y aprobación del arte', area:'Calidad', quien:['calidad'], dias:2, det:'Calidad revisa el arte de Diseño y lo aprueba, o lo devuelve con observaciones.'},
+  {n:5, t:'Envío de artes en curvas a Abastecimiento', area:'Diseño', quien:['diseño','diseno'], dias:2, det:'Diseño convierte el arte aprobado a curvas y lo envía a Abastecimiento.'},
+  {n:6, t:'Envío de artes al proveedor', area:'Abastecimiento', quien:['compras','abastecimiento'], dias:1, det:'Abastecimiento envía el arte en curvas al proveedor y espera su preprensa.'},
+  {n:7, t:'Envío de preprensa a Diseño', area:'Abastecimiento', quien:['compras','abastecimiento'], dias:1, det:'Abastecimiento recibe la preprensa del proveedor y la envía a Diseño.'},
+  {n:8, t:'Aprobación de preprensa', area:'Diseño', quien:['diseño','diseno'], dias:1, det:'Diseño revisa la preprensa del proveedor y da el último OK. Con este paso la referencia queda con el arte terminado.'}
 ];
 async function artepasosCargar(){
   try{ const r = await sb.get('configuracion','clave=eq.oc_arte_pasos'); ARTEPASOS.datos = (r && r[0] && r[0].valor) ? (JSON.parse(r[0].valor)||{}) : {}; }
@@ -15871,7 +15872,7 @@ async function artepasosCargar(){
 function artepasosDe(ocId, it){ return ((ARTEPASOS.datos[ocId]||{})[refchkKey(it)]||{}); }
 function artepasosListos(ocId, it){ const d = artepasosDe(ocId, it); return ARTEPASOS_DEF.filter(p=>d[p.n]).length; }
 // avance del arte de una referencia (0-100): 7 pasos, o 100 si ya está chuleada en la columna Artes
-function artepasosPct(o, it){ try{ if(refchkEstado(o,it,'arte').on) return 100; return Math.round(artepasosListos(o.id,it)*100/7); }catch(e){ return 0; } }
+function artepasosPct(o, it){ try{ if(refchkEstado(o,it,'arte').on) return 100; return Math.round(artepasosListos(o.id,it)*100/ARTEPASOS_DEF.length); }catch(e){ return 0; } }
 function artepasosPctOC(o){ const its = REABAST.ocItems[o.id]||[]; if(!its.length) return null; return Math.round(its.reduce((a,it)=>a+artepasosPct(o,it),0)/its.length); }
 function artepasosPuede(p){ if(reabastEsAdmin()) return true; const a = String((CU && CU.area)||'').toLowerCase(); return p.quien.some(q=>a.includes(q)); }
 function artepasosToggleAbrir(ocId, ix, ev){ if(ev) ev.stopPropagation(); const k = ocId+'|'+ix; if(ARTEPASOS.abiertos.has(k)) ARTEPASOS.abiertos.delete(k); else ARTEPASOS.abiertos.add(k); reabastPintar(); }
@@ -15881,8 +15882,8 @@ async function artepasosMarcar(ocId, ix, n, on, ev, fechaManual){
   const k = refchkKey(it), quien = (CU && CU.nombre) || '';
   const t = fechaManual ? new Date(fechaManual).toISOString() : new Date().toISOString();
   const aplicar = d => { d[ocId] = d[ocId]||{}; d[ocId][k] = d[ocId][k]||{};
-    if(on){ d[ocId][k][n] = {t, q:quien}; } else { for(let i=n;i<=7;i++) delete d[ocId][k][i]; } };   // quitar un paso reabre los siguientes
-  const habia7 = !!(((ARTEPASOS.datos[ocId]||{})[k]||{})[7]);
+    if(on){ d[ocId][k][n] = {t, q:quien}; } else { for(let i=n;i<=ARTEPASOS_DEF.length;i++) delete d[ocId][k][i]; } };   // quitar un paso reabre los siguientes
+  const habia7 = !!(((ARTEPASOS.datos[ocId]||{})[k]||{})[ARTEPASOS_DEF.length]);
   aplicar(ARTEPASOS.datos); reabastPintar();
   try{
     let remoto = {}; try{ const r = await sb.get('configuracion','clave=eq.oc_arte_pasos'); if(r && r[0] && r[0].valor) remoto = JSON.parse(r[0].valor)||{}; }catch(e){}
@@ -15890,7 +15891,7 @@ async function artepasosMarcar(ocId, ix, n, on, ev, fechaManual){
     await sb.upsert('configuracion', {clave:'oc_arte_pasos', valor:JSON.stringify(remoto), tipo:'json'}, 'clave');
   }catch(e){ if(typeof toast==='function') toast('No se pudo guardar el paso: '+e.message,'er'); return; }
   // el último paso (preprensa aprobada) deja la referencia con Artes confirmado; quitarlo la desconfirma
-  if(on && n===7){ try{ await refchkToggle(ocId, ix, 'arte', true, null, t); }catch(e){} }
+  if(on && n===ARTEPASOS_DEF.length){ try{ await refchkToggle(ocId, ix, 'arte', true, null, t); }catch(e){} }
   else if(!on && habia7){ try{ await refchkToggle(ocId, ix, 'arte', false, null, null); }catch(e){} }
 }
 function artepasosHtml(o, it, ix){
@@ -15899,20 +15900,92 @@ function artepasosHtml(o, it, ix){
     const x = d[p.n], prevOk = i===0 || d[ARTEPASOS_DEF[i-1].n];
     const actual = !x && prevOk, puede = artepasosPuede(p) && (x || prevOk);
     const ant = i>0 && d[ARTEPASOS_DEF[i-1].n] ? new Date(d[ARTEPASOS_DEF[i-1].n].t) : null;
-    const prev = !x && ant ? new Date(ant.getTime()+p.dias*86400000) : null;
-    const dur = x && ant ? Math.max(0,(new Date(x.t)-ant)/86400000) : null;
+    const prev = !x && ant ? ocSumarHabiles(ant, p.dias) : null;
+    const dur = x && ant ? Math.max(0, ocDiasHabilesEntre(ant, new Date(x.t))) : null;
     const tarde = actual && prev && prev < hoy;
     const bg = x ? '#f0fdf4' : actual ? (tarde?'#fef2f2':'#eff6ff') : 'var(--s1)', bd = x ? '#86efac' : actual ? (tarde?'#fca5a5':'#93c5fd') : 'var(--b2)';
     const inputFecha = x && reabastEsAdmin() ? `<input type="datetime-local" value="${(()=>{ const q=new Date(x.t), z=n=>String(n).padStart(2,'0'); return q.getFullYear()+'-'+z(q.getMonth()+1)+'-'+z(q.getDate())+'T'+z(q.getHours())+':'+z(q.getMinutes()); })()}" title="Administrador: corregir la fecha de este paso" style="font-size:10px;margin-top:3px;" onclick="event.stopPropagation()" onchange="artepasosMarcar('${o.id}',${ix},${p.n},true,event,this.value)">` : '';
+    const nCom = ((d._c||{})[p.n]||[]).length, btnCom = `<div style="margin-top:4px;"><button class="btn btn-g btn-xs" style="font-size:10px;padding:1px 7px;" onclick="artepasosComentar('${o.id}',${ix},${p.n},event)">💬 ${nCom||'Comentar'}</button></div>`;
     return `<div style="flex:1 1 150px;min-width:150px;max-width:210px;border:1.5px solid ${bd};background:${bg};border-radius:8px;padding:7px 8px;opacity:${x||actual?1:.72};white-space:normal;overflow-wrap:anywhere;box-sizing:border-box;overflow:hidden;">
       <div style="display:flex;align-items:flex-start;gap:6px;">
         <input type="checkbox" ${x?'checked':''} ${puede?'':'disabled'} title="${puede?(x?'Quitar (reabre los siguientes pasos)':'Marcar paso terminado'):(i>0&&!prevOk?'Primero debe terminarse el paso anterior':'Solo '+p.area+' o un administrador')}" style="width:15px;height:15px;margin-top:1px;accent-color:#16a34a;cursor:pointer;" onclick="event.stopPropagation()" onchange="artepasosMarcar('${o.id}',${ix},${p.n},this.checked,event)">
         <div style="font-size:11px;font-weight:800;line-height:1.2;white-space:normal;overflow-wrap:anywhere;min-width:0;flex:1;">${p.n}. ${reabastEsc(p.t)}</div></div>
-      <div style="font-size:10px;font-weight:700;color:var(--bl);margin:3px 0 2px;white-space:normal;">👤 ${p.area} · objetivo ${p.dias} d</div>
+      <div style="font-size:10px;font-weight:700;color:var(--bl);margin:3px 0 2px;white-space:normal;">👤 ${p.area} · objetivo ${p.dias} d háb.</div>
       <div class="arte-mu" style="font-size:9.5px;line-height:1.3;white-space:normal;">${reabastEsc(p.det)}</div>
-      <div style="white-space:normal;font-size:10px;margin-top:4px;font-weight:700;color:${x?'#15803d':tarde?'#b91c1c':actual?'#1d4ed8':'var(--mu)'};">${x ? '✓ '+new Date(x.t).toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})+(dur!=null?' · '+reabastFmtDuracion(dur):'')+(x.q?'<br><span style="font-weight:500;">'+reabastEsc(x.q)+'</span>':'') : actual ? (prev ? (tarde?'⏰ debió ser ':'⏳ debe quedar ')+segDM(prev) : '⏳ paso actual') : 'pendiente'}</div>${inputFecha}</div>`;
+      <div style="white-space:normal;font-size:10px;margin-top:4px;font-weight:700;color:${x?'#15803d':tarde?'#b91c1c':actual?'#1d4ed8':'var(--mu)'};">${x ? '✓ '+new Date(x.t).toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})+(dur!=null?' · '+reabastFmtDuracion(dur)+' háb.':'')+(x.q?'<br><span style="font-weight:500;">'+reabastEsc(x.q)+'</span>':'') : actual ? (prev ? (tarde?'⏰ debió ser ':'⏳ debe quedar ')+segDM(prev) : '⏳ paso actual') : 'pendiente'}</div>${inputFecha}${btnCom}</div>`;
   }).join('<div style="align-self:center;color:var(--mu);">›</div>');
-  return `<tr class="seg-exp-row" onclick="event.stopPropagation()"><td colspan="15" style="background:var(--s1);padding:8px 12px 12px 40px;"><div style="font-size:11px;font-weight:800;margin-bottom:6px;">🎨 Arte de la referencia ${reabastEsc(it.referencia||'')} · ${artepasosListos(o.id,it)}/7 pasos</div><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;">${filas}</div></td></tr>`;
+  return `<tr class="seg-exp-row" onclick="event.stopPropagation()"><td colspan="15" style="background:var(--s1);padding:8px 12px 12px 40px;"><div style="font-size:11px;font-weight:800;margin-bottom:6px;">🎨 Arte de la referencia ${reabastEsc(it.referencia||'')} · ${artepasosListos(o.id,it)}/${ARTEPASOS_DEF.length} pasos</div><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;">${filas}</div></td></tr>`;
+}
+
+
+// ── Comentarios por paso del arte (se guardan en d._c[n] = [{t,q,x}]) ──
+function artepasosComentar(ocId, ix, n, ev){
+  if(ev) ev.stopPropagation();
+  const it = (REABAST.ocItems[ocId]||[])[ix]; if(!it) return;
+  const p = ARTEPASOS_DEF.find(x=>x.n===n), E = reabastEsc, lista = ((artepasosDe(ocId,it)._c||{})[n]||[]);
+  document.getElementById('mo-det-t').textContent = '💬 Paso '+n+': '+p.t+' · ref '+(it.referencia||'');
+  document.getElementById('mo-det-b').innerHTML = (lista.length ? lista.map(c=>`<div style="border:1px solid var(--b2);border-radius:8px;padding:6px 9px;margin-bottom:6px;background:var(--s1);"><div class="arte-mu" style="font-size:10px;font-weight:700;">${E(c.q||'')} · ${new Date(c.t).toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div><div style="font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;">${E(c.x||'')}</div></div>`).join('') : '<div class="arte-mu" style="margin-bottom:8px;">Aún no hay comentarios en este paso.</div>')
+    + '<textarea id="ap-com-t" class="inp" rows="3" placeholder="Escribe un comentario…" style="width:100%;"></textarea>';
+  document.getElementById('mo-det-f').innerHTML = `<button class="btn btn-g" onclick="closeMo('mo-det')">Cerrar</button><button class="btn btn-p" onclick="artepasosComentarGuardar('${ocId}',${ix},${n})">Guardar comentario</button>`;
+  openMo('mo-det');
+}
+async function artepasosComentarGuardar(ocId, ix, n){
+  const it = (REABAST.ocItems[ocId]||[])[ix]; const ta = document.getElementById('ap-com-t'); const x = ta ? ta.value.trim() : ''; if(!it || !x) return;
+  const k = refchkKey(it), q = (CU && CU.nombre) || '', t = new Date().toISOString();
+  const aplicar = d => { d[ocId] = d[ocId]||{}; d[ocId][k] = d[ocId][k]||{}; const c = d[ocId][k]._c = d[ocId][k]._c||{}; (c[n] = c[n]||[]).push({t, q, x}); };
+  aplicar(ARTEPASOS.datos);
+  try{
+    let remoto = {}; try{ const r = await sb.get('configuracion','clave=eq.oc_arte_pasos'); if(r && r[0] && r[0].valor) remoto = JSON.parse(r[0].valor)||{}; }catch(e){}
+    aplicar(remoto); ARTEPASOS.datos = remoto;
+    await sb.upsert('configuracion', {clave:'oc_arte_pasos', valor:JSON.stringify(remoto), tipo:'json'}, 'clave');
+  }catch(e){ if(typeof toast==='function') toast('No se pudo guardar el comentario: '+e.message,'er'); return; }
+  artepasosComentar(ocId, ix, n); reabastPintar();
+}
+// ── Informe de Artes: estado de cada orden y cuántas referencias faltan por pasar (días hábiles) ──
+function artepasosInformeDatos(){
+  const N = ARTEPASOS_DEF.length, hoy = new Date(), ordenes = [], refs = [];
+  (REABAST.ordenesCompra||[]).filter(o=>(o.estado_general||'activa')==='activa').forEach(o=>{
+    const its = REABAST.ocItems[o.id]||[]; if(!its.length) return;
+    const porPaso = Array(N).fill(0); let compl = 0, atras = 0, primero = null, ultimo = null;
+    its.forEach(it=>{
+      const d = artepasosDe(o.id,it); let on = false; try{ on = refchkEstado(o,it,'arte').on; }catch(e){}
+      const hechos = ARTEPASOS_DEF.filter(p=>d[p.n]).length, completo = on || hechos===N, sig = completo ? null : ARTEPASOS_DEF.find(p=>!d[p.n]);
+      const desde = sig && sig.n>1 && d[sig.n-1] ? new Date(d[sig.n-1].t) : null, lim = desde ? ocSumarHabiles(desde, sig.dias) : null, tarde = !!(lim && lim < hoy);
+      const t1 = d[1] ? new Date(d[1].t) : null, tN = d[N] ? new Date(d[N].t) : null;
+      if(t1 && (!primero || t1<primero)) primero = t1; if(tN && (!ultimo || tN>ultimo)) ultimo = tN;
+      if(completo) compl++; else { porPaso[sig.n-1]++; if(tarde) atras++; }
+      refs.push({oc:o.numero_oc, prov:o.proveedor||'', ref:String(it.referencia||''), desc:String(it.descripcion||''), cant:Number(it.cantidad)||0, hechos, completo, sig, desde, tarde,
+        dias: desde ? Math.round(ocDiasHabilesEntre(desde,hoy)*10)/10 : null, tot: t1 ? Math.round(ocDiasHabilesEntre(t1, completo&&tN?tN:hoy)*10)/10 : null, ncom: Object.values(d._c||{}).reduce((a,l)=>a+l.length,0)});
+    });
+    const falta = its.length-compl, pend = ARTEPASOS_DEF.find((p,i)=>porPaso[i]>0);
+    ordenes.push({oc:o.numero_oc, prov:o.proveedor||'', refs:its.length, compl, falta, porPaso, atras, pend,
+      estado: !falta ? 'Arte completo' : (pend ? 'Paso '+pend.n+'/'+N+': '+pend.t+' ('+pend.area+')' : ''), dias: primero ? Math.round(ocDiasHabilesEntre(primero, !falta&&ultimo?ultimo:hoy)*10)/10 : null});
+  });
+  return {N, ordenes, refs};
+}
+function artepasosInforme(){
+  const E = reabastEsc, {N, ordenes, refs} = artepasosInformeDatos();
+  const tR = refs.length, cR = refs.filter(r=>r.completo).length, aR = refs.filter(r=>r.tarde).length, cO = ordenes.filter(o=>!o.falta).length;
+  const th = ARTEPASOS_DEF.map(p=>`<th style="text-align:center;font-size:9.5px;max-width:70px;white-space:normal;" title="${E(p.area+': '+p.t)}">${p.n}. ${E(p.t)}</th>`).join('');
+  const filas = ordenes.map(o=>`<tr><td><b>${E(o.oc)}</b></td><td>${E(o.prov)}</td><td style="text-align:right;">${o.refs}</td><td style="text-align:right;color:#16a34a;font-weight:700;">${o.compl}</td><td style="text-align:right;font-weight:800;color:${o.falta?'#b45309':'#16a34a'};">${o.falta}</td><td style="font-size:11px;">${E(o.estado)}</td>${o.porPaso.map(n=>`<td style="text-align:center;${n?'font-weight:800;background:#eff6ff;':'color:var(--mu);'}">${n||'·'}</td>`).join('')}<td style="text-align:right;color:${o.atras?'#b91c1c':'var(--mu)'};font-weight:700;">${o.atras||'·'}</td><td style="text-align:right;">${o.dias==null?'—':o.dias}</td></tr>`).join('');
+  document.getElementById('mo-det-t').textContent = '📊 Informe de Artes';
+  document.getElementById('mo-det-b').innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;"><span class="bdg bdg-azul">${ordenes.length} órdenes · ${cO} con arte completo</span><span class="bdg bdg-verde">${cR}/${tR} referencias terminadas</span><span class="bdg bdg-amarillo">${tR-cR} faltan por pasar</span><span class="bdg bdg-rojo">${aR} atrasadas</span></div>
+    <div class="arte-mu" style="font-size:10.5px;margin-bottom:6px;">Las columnas 1–${N} cuentan cuántas referencias están esperando ese paso. Los días son hábiles (lunes a viernes, sin festivos).</div>
+    <div class="tw"><table style="font-size:11.5px;"><thead><tr><th>OC</th><th>Proveedor</th><th style="text-align:right;">Refs</th><th style="text-align:right;">Listas</th><th style="text-align:right;">Faltan</th><th>Estado</th>${th}<th style="text-align:right;">Atrasadas</th><th style="text-align:right;">Días háb.</th></tr></thead><tbody>${filas||'<tr><td colspan="30" class="empty">No hay órdenes activas con referencias.</td></tr>'}</tbody></table></div>`;
+  document.getElementById('mo-det-f').innerHTML = `<button class="btn btn-g" onclick="closeMo('mo-det')">Cerrar</button><button class="btn btn-gr" onclick="artepasosInformeExcel()">⬇ Excel (por orden y por referencia)</button>`;
+  openMo('mo-det');
+}
+function artepasosInformeExcel(){
+  try{
+    const {N, ordenes, refs} = artepasosInformeDatos(), f = d=>d ? d.toLocaleDateString('es-CO') : '';
+    const h1 = ['OC','Proveedor','Referencias','Listas','Faltan','Estado','Atrasadas','Días hábiles en artes'].concat(ARTEPASOS_DEF.map(p=>'Esperan paso '+p.n+' ('+p.t+')'));
+    const a1 = [h1].concat(ordenes.map(o=>[o.oc,o.prov,o.refs,o.compl,o.falta,o.estado,o.atras,o.dias==null?'':o.dias].concat(o.porPaso)));
+    const h2 = ['OC','Proveedor','Referencia','Descripción','Cantidad','Pasos hechos','Estado','Paso actual','Responsable','Desde','Días háb. en el paso','Atrasada','Días háb. totales','Comentarios'];
+    const a2 = [h2].concat(refs.map(r=>[r.oc,r.prov,r.ref,r.desc,r.cant,r.hechos+'/'+N,r.completo?'Arte completo':'En proceso',r.sig?r.sig.n+'. '+r.sig.t:'',r.sig?r.sig.area:'',f(r.desde),r.dias==null?'':r.dias,r.tarde?'Sí':'',r.tot==null?'':r.tot,r.ncom||'']));
+    const wb = XLSX.utils.book_new();
+    [['Por orden',a1],['Por referencia',a2]].forEach(([n,a])=>{ const ws = XLSX.utils.aoa_to_sheet(a); ws['!autofilter'] = {ref: XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:a.length-1, c:a[0].length-1}})}; ws['!cols'] = a[0].map((_,i)=>({wch: i<2?22:(i===5||i===3?34:14)})); XLSX.utils.book_append_sheet(wb, ws, n); });
+    XLSX.writeFile(wb, 'Informe_Artes_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  }catch(e){ if(typeof toast==='function') toast('No se pudo generar el Excel: '+e.message,'er'); }
 }
 
 // ── Inspección por referencia (2 pasos, como Artes): Abastecimiento envía a Calidad → Calidad responde ──
@@ -16634,7 +16707,7 @@ function segEstadoArteHtml(o){
     const pasos = Object.keys(cnt).map(Number).sort((a,b)=>a-b);
     if(!pasos.length) return '<div class="arte-mu" style="font-size:10.5px;margin-top:2px;">🎨 <span style="color:var(--gr);font-weight:700;">✓ Arte completo</span></div>';
     const p0 = ARTEPASOS_DEF.find(p=>p.n===pasos[0]);
-    return '<div class="arte-mu" style="font-size:10.5px;margin-top:2px;">🎨 '+listas+'/'+its.length+' refs · paso '+p0.n+'/7: '+reabastEsc(p0.t)+' ('+reabastEsc(p0.area)+')</div>';
+    return '<div class="arte-mu" style="font-size:10.5px;margin-top:2px;">🎨 '+listas+'/'+its.length+' refs · paso '+p0.n+'/'+ARTEPASOS_DEF.length+': '+reabastEsc(p0.t)+' ('+reabastEsc(p0.area)+')</div>';
   }catch(e){ return ''; }
 }
 // Desplegable de ítems de una OC (resumido): referencia con foto, descripción, cantidad y valor en US$
@@ -17496,14 +17569,14 @@ function comprasTabArtes(L){
   const E = reabastEsc, ed = reabastEsAdmin(); if(!L.length) return '<div class="empty">No hay órdenes activas con ese filtro.</div>';
   const pend = L.filter(o=>{ const k = refchkConteo(o,'arte'); return k.t && k.n<k.t && !refchkEtapaOk(o,'arte'); });
   const th = ARTEPASOS_DEF.map(p=>`<th style="text-align:center;font-size:10px;max-width:84px;white-space:normal;" title="${E(p.area+': '+p.det)}">${p.n}. ${E(p.t)}<div class="arte-mu" style="font-size:9px;">${E(p.area)}</div></th>`).join('');
-  return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">${ed?`<button class="btn btn-gr btn-sm" ${pend.length?'':'disabled'} onclick="comprasArtesTodas()">✔ Confirmar todas las artes de las OC visibles (${pend.length})</button>`:''}<span class="arte-mu" style="font-size:11px;">Cada referencia pasa por los 7 pasos del arte (en orden). El paso 7 deja la referencia con el arte terminado; al quedar todas, la etapa de Artes de la OC se termina sola.</span></div>`
+  return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">${ed?`<button class="btn btn-gr btn-sm" ${pend.length?'':'disabled'} onclick="comprasArtesTodas()">✔ Confirmar todas las artes de las OC visibles (${pend.length})</button>`:''}<button class="btn btn-bl btn-sm" onclick="artepasosInforme()">📊 Informe de Artes</button><span class="arte-mu" style="font-size:11px;">Cada referencia pasa por los ${ARTEPASOS_DEF.length} pasos del arte (en orden, con días hábiles). El último paso deja la referencia con el arte terminado; al quedar todas, la etapa de Artes de la OC se termina sola.</span></div>`
   + L.map(o=>{ const k = refchkConteo(o,'arte'), todo = refchkEtapaOk(o,'arte'), its = REABAST.ocItems[o.id]||[];
     const head = `<span style="font-weight:700;color:${k.n===k.t&&k.t?'#16a34a':'var(--mu)'};">${k.n}/${k.t} artes</span>` + (ed&&!todo&&k.t&&k.n<k.t?`<button class="btn btn-gr btn-xs" style="margin-left:auto;" onclick="refchkTodas('${o.id}','arte',true,event)">✔ Seleccionar todas</button>`:'');
     const rows = its.map((it,ix)=>{ if(!comprasItemOk(o,it)) return ''; const d = artepasosDe(o.id,it), st = refchkEstado(o,it,'arte');
       const cel = ARTEPASOS_DEF.map((p,i)=>{ const x = d[p.n], ok = !!x || st.on, prevOk = i===0 || !!d[ARTEPASOS_DEF[i-1].n] || st.on, dis = (!x && !prevOk) || !artepasosPuede(p) || st.todo || (st.on && !x);
-        return `<td style="text-align:center;" title="${x?E((x.q||'')+' · '+new Date(x.t).toLocaleDateString('es-CO')):''}"><input type="checkbox" ${ok?'checked':''} ${dis?'disabled':''} style="width:16px;height:16px;accent-color:#16a34a;cursor:pointer;" onchange="artepasosMarcar('${o.id}',${ix},${p.n},this.checked,event)"></td>`; }).join('');
-      const hechos = ARTEPASOS_DEF.filter(p=>d[p.n]).length, sig = ARTEPASOS_DEF.find(p=>!d[p.n]), puede = hechos===7 ? false : (sig && artepasosPuede(sig));
-      const bt = hechos===7||(st.on&&!hechos) ? '<span class="arte-mu">✅</span>' : puede ? `<button class="btn btn-gr btn-xs" style="white-space:nowrap;" onclick="comprasArteItem('${o.id}',${ix},true)">✔ Seleccionar todas</button>` : '';
+        return `<td style="text-align:center;" title="${x?E((x.q||'')+' · '+new Date(x.t).toLocaleDateString('es-CO')):''}"><input type="checkbox" ${ok?'checked':''} ${dis?'disabled':''} style="width:16px;height:16px;accent-color:#16a34a;cursor:pointer;" onchange="artepasosMarcar('${o.id}',${ix},${p.n},this.checked,event)"><br><span style="cursor:pointer;font-size:10px;color:var(--bl);" title="Comentarios de este paso" onclick="artepasosComentar('${o.id}',${ix},${p.n},event)">💬${((d._c||{})[p.n]||[]).length||''}</span></td>`; }).join('');
+      const hechos = ARTEPASOS_DEF.filter(p=>d[p.n]).length, sig = ARTEPASOS_DEF.find(p=>!d[p.n]), puede = hechos===ARTEPASOS_DEF.length ? false : (sig && artepasosPuede(sig));
+      const bt = hechos===ARTEPASOS_DEF.length||(st.on&&!hechos) ? '<span class="arte-mu">✅</span>' : puede ? `<button class="btn btn-gr btn-xs" style="white-space:nowrap;" onclick="comprasArteItem('${o.id}',${ix},true)">✔ Seleccionar todas</button>` : '';
       return `<tr><td style="font-family:monospace;"><b>${E(it.referencia||'')}</b></td><td>${E(it.descripcion||'')}</td><td style="text-align:right;">${infFmt(it.cantidad)}</td>${cel}<td style="text-align:center;">${bt}</td></tr>`; }).join('');
     return comprasOCBloque(o, head, `<th>Referencia</th><th>Descripción</th><th style="text-align:right;">Cantidad</th>${th}<th style="text-align:center;font-size:10px;">Todos los pasos<div class="arte-mu" style="font-size:9px;">de la referencia</div></th>`, rows); }).join('');
 }
@@ -17520,7 +17593,7 @@ async function comprasArteItem(ocId, ix, on){
     aplicar(remoto); ARTEPASOS.datos = remoto;
     await sb.upsert('configuracion', {clave:'oc_arte_pasos', valor:JSON.stringify(remoto), tipo:'json'}, 'clave');
   }catch(e){ if(typeof toast==='function') toast('No se pudo guardar: '+e.message,'er'); return; }
-  if(lista.includes(7)){ try{ await refchkToggle(ocId, ix, 'arte', true, null, t); }catch(e){} }
+  if(lista.includes(ARTEPASOS_DEF.length)){ try{ await refchkToggle(ocId, ix, 'arte', true, null, t); }catch(e){} }
 }
 // ── Deshacer (Módulo de compras): cada acción guarda cómo estaba la OC antes y se puede revertir ──
 COMP.undo = null; COMP._d = 0;
