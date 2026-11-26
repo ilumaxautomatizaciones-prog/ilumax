@@ -4580,10 +4580,13 @@ function ssocgAplicar() {
 }
 function ssocgQuitar() { const id = SSOCGM.id; delete SSOCG[id].f[SSOCGM.k]; ssocgCerrar(); ssocgPaint(id); }
 async function ssocExcelMov() {
-  if (!SSOCS.nom.length) { toast('Este mes no tiene el Excel de movimientos cargado (pestaña Revisión → subir nómina).', 'wa'); return; }
+  let fuente = SSOCS.nom;
+  if (!fuente.length && SSOCS.api && SSOCS.api.length) fuente = SSOCS.api.filter(x => x.ibc > 0 || Object.keys(x.con || {}).length).map(x => ({ ced: x.ced, cedTxt: x.cedTxt, nombre: x.nombre, cargo: x.cargo || '', estado: x.estado || '', con: x.con || {} }));
+  else if (!fuente.length && SSOCS.siesa && SSOCS.siesa.length) fuente = SSOCS.siesa.filter(x => x.ibc > 0).map(x => ({ ced: x.ced, cedTxt: x.cedTxt, nombre: x.nombre, cargo: x.cargo || '', estado: x.estado || '', con: { 'IBC (autoliquidación SIESA)': x.ibc } }));
+  if (!fuente.length) { toast('No hay datos de este mes: pulsa «Actualizar de SIESA» o sube la autoliquidación.', 'wa'); return; }
   try {
     await ppCargarExcelJS();
-    const rows = SSOCS.nom.slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+    const rows = fuente.slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
     const keys = [...new Set(rows.flatMap(r => Object.keys(r.con || {})))].sort((a, b) => (parseInt(a) || 9e9) - (parseInt(b) || 9e9) || a.localeCompare(b));
     const nC = keys.length, col = n => { let t = '', x = n; while (x > 0) { const m = (x - 1) % 26; t = String.fromCharCode(65 + m) + t; x = Math.floor((x - 1) / 26); } return t; };
     const cI = 6, cF = 5 + nC, cIBC = cF + 1, cEPS = cF + 2, cPEN = cF + 3, cAI = cF + 4, cAS = cF + 5, cAP = cF + 6, cDI = cF + 7, cDS = cF + 8, cDP = cF + 9, cOK = cF + 10, last = cOK;
@@ -4702,7 +4705,7 @@ function ssocAplicarSiesa(j, per, pie) {
 /* lo traído de SIESA por API (contabilidad) para compararlo con la autoliquidación / el Excel */
 function ssocApiMapear(j) {
   const F = new Map(); (j.filas || []).forEach(a => { const c = ssocCed(a[0]); const o = F.get(c) || { s: 0, p: 0 }; o.s += +a[2] || 0; o.p += +a[3] || 0; F.set(c, o); });
-  return (j.emp || []).map(a => { const c = ssocCed(a[0]), f = F.get(c); return { ced: c, cedTxt: a[0], nombre: a[1], ibc: a[2], salud: f ? f.s : 0, pen: f ? f.p * 4 : 0, estado: a[5] }; });
+  return (j.emp || []).map(a => { const c = ssocCed(a[0]), f = F.get(c); return { ced: c, cedTxt: a[0], nombre: a[1], ibc: a[2], salud: f ? f.s : 0, pen: f ? f.p * 4 : 0, estado: a[5], cargo: a[4], con: a[10] || {} }; });
 }
 function ssocApiRows() {
   const tol = Number(SSOCS.tol) || 0, base = new Map();
