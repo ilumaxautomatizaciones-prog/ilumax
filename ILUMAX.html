@@ -4499,7 +4499,7 @@ function getPrio(p) {
 /* ===== RRHH · Seguridad social ===== */
 /* ===== Rejilla tipo Excel: ordenar y filtrar desde el encabezado, elegir columnas ===== */
 const SSOCG = {};
-function ssocgInit(id, cols, opt) { const g = SSOCG[id] || (SSOCG[id] = { sort: null, f: {}, hide: new Set(), rows: [], limit: 600 }); g.cols = cols; Object.assign(g, opt || {}); return g; }
+function ssocgInit(id, cols, opt) { const g = SSOCG[id] || (SSOCG[id] = { sort: null, f: {}, hide: new Set(), rows: [], limit: 600, fix: null }); g.cols = cols; Object.assign(g, opt || {}); return g; }
 const ssocgV = (c, r) => { const v = c.v(r); return v == null ? '' : v; };
 function ssocgView(id) {
   const g = SSOCG[id], q = g.q ? g.q.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim() : '';
@@ -4519,13 +4519,26 @@ const ssocgOn = f => f && (f.sel || (f.min !== '' && f.min != null) || (f.max !=
 function ssocgQ(id, v) { SSOCG[id].q = v; ssocgPaint(id); }
 function ssocgBar(id) { return '<div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;padding:10px 14px"><input id="ssocgq_' + id + '" placeholder="🔎 Buscar en la tabla…" value="' + ssocEsc((SSOCG[id] && SSOCG[id].q) || '') + '" oninput="ssocgQ(\'' + id + '\',this.value)" style="min-width:240px"><button class="btn btn-g btn-sm" onclick="ssocgCols(event,\'' + id + '\')">▦ Columnas</button><button class="btn btn-g btn-sm" onclick="ssocgLimpiar(\'' + id + '\')">✖ Quitar filtros y orden</button><button class="btn btn-g btn-sm" onclick="ssocgExcel(\'' + id + '\')">⬇ Excel de esta vista</button></div>'; }
 function ssocgPaint(id) {
-  const g = SSOCG[id], box = $s('ssocg_' + id); if (!box) return; const V = ssocgView(id), cols = g.cols.filter(c => !g.hide.has(c.k));
+  const g = SSOCG[id], box = $s('ssocg_' + id); if (!box) return; if (!g.fix) g.fix = new Set(g.cols.some(c => c.k === 'nombre') ? ['nombre'] : []); const V = ssocgView(id), cols = g.cols.filter(c => !g.hide.has(c.k));
   const th = cols.map(c => { const s = g.sort && g.sort.k === c.k ? (g.sort.dir > 0 ? ' ▲' : ' ▼') : ''; return '<th class="ssocgh" style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '"><span style="cursor:pointer" onclick="ssocgSort(\'' + id + '\',\'' + c.k + '\')">' + ssocEsc(c.t) + s + '</span><button class="ssocgb' + (ssocgOn(g.f[c.k]) ? ' on' : '') + '" onclick="ssocgMenu(event,\'' + id + '\',\'' + c.k + '\')">▾</button></th>'; }).join('');
   const rows = V.slice(0, g.limit).map(r => '<tr' + (g.attr ? g.attr(r) : '') + '>' + cols.map(c => '<td style="text-align:' + (c.num && !c.al ? 'right' : 'left') + (c.wrap ? ';white-space:normal;min-width:150px;max-width:280px;overflow-wrap:anywhere' : '') + '">' + (c.h ? c.h(r) : c.num ? (c.dec ? ssocFm2 : ssocFm)(ssocgV(c, r)) : ssocEsc(ssocgV(c, r))) + '</td>').join('') + '</tr>').join('');
   const tot = '<tr class="tot">' + cols.map((c, i) => '<td style="text-align:' + (c.num && !c.al ? 'right' : 'left') + '">' + (i === 0 ? V.length + ' filas' : c.totf ? c.totf(V) : c.sum ? (c.dec ? ssocFm2 : ssocFm)(V.reduce((s, r) => s + (Number(ssocgV(c, r)) || 0), 0)) : '') + '</td>').join('') + '</tr>';
   box.innerHTML = '<table><thead><tr>' + th + '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + cols.length + '" class="empty">Sin resultados</td></tr>') + '</tbody><tfoot>' + tot + '</tfoot></table>' + (V.length > g.limit ? '<div style="padding:8px 14px;font-size:11px;color:var(--mu)">Se muestran ' + g.limit + ' de ' + V.length + '; filtra para ver el resto (el Excel trae todas).</div>' : '');
+  ssocgFijar(box, cols, g);
   if (g.after) g.after(box);
 }
+function ssocgFijar(box, cols, g) {
+  const idx = []; cols.forEach((c, i) => { if (g.fix && g.fix.has(c.k)) idx.push(i); }); if (!idx.length) return;
+  const tb = box.querySelector('table'); if (!tb || !tb.tHead) return;
+  const hc = tb.tHead.rows[0].cells; let left = 0; const off = {};
+  idx.forEach(i => { off[i] = left; left += hc[i].getBoundingClientRect().width; });
+  const last = idx[idx.length - 1];
+  [...tb.rows].forEach(tr => { if (tr.cells.length !== cols.length) return; const sec = tr.parentNode.tagName;
+    idx.forEach(i => { const td = tr.cells[i]; td.style.position = 'sticky'; td.style.left = off[i] + 'px'; td.style.zIndex = sec === 'THEAD' ? 4 : 3;
+      if (sec === 'TBODY') { const bg = getComputedStyle(tr).backgroundColor; td.style.background = (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') ? '#fff' : bg; }
+      if (i === last) td.style.boxShadow = '2px 0 0 #94a3b8'; }); });
+}
+function ssocgFix(id, k, btn) { const g = SSOCG[id]; if (!g.fix) g.fix = new Set(); if (g.fix.has(k)) g.fix.delete(k); else g.fix.add(k); if (btn) { btn.textContent = g.fix.has(k) ? '📌 Fija' : '📍 Fijar'; btn.style.opacity = g.fix.has(k) ? '1' : '.55'; } ssocgPaint(id); }
 function ssocgSort(id, k) { const g = SSOCG[id]; g.sort = !g.sort || g.sort.k !== k ? { k, dir: 1 } : g.sort.dir > 0 ? { k, dir: -1 } : null; ssocgPaint(id); }
 function ssocgLimpiar(id) { const g = SSOCG[id]; g.f = {}; g.sort = null; g.q = ''; const i = $s('ssocgq_' + id); if (i) i.value = ''; ssocgPaint(id); }
 function ssocgCerrar() { const m = $s('ssocgm'); if (m) m.remove(); }
@@ -4533,7 +4546,7 @@ document.addEventListener('click', ssocgCerrar);
 function ssocgPos(d, ev) { const b = ev.currentTarget.getBoundingClientRect(); d.style.top = Math.max(8, Math.min(b.bottom + 4, innerHeight - 440)) + 'px'; d.style.left = Math.max(8, Math.min(b.left - 120, innerWidth - 280)) + 'px'; }
 function ssocgCols(ev, id) {
   ev.stopPropagation(); ssocgCerrar(); const g = SSOCG[id], d = document.createElement('div'); d.id = 'ssocgm'; d.className = 'ssocgm'; d.onclick = e => e.stopPropagation(); ssocgPos(d, ev);
-  d.innerHTML = '<b>Columnas visibles</b><div class="li" style="max-height:300px">' + g.cols.map((c, i) => '<label><input type="checkbox" ' + (g.hide.has(c.k) ? '' : 'checked') + ' onchange="ssocgToggle(\'' + id + '\',' + i + ',this.checked)"> ' + ssocEsc(c.t) + '</label>').join('') + '</div>';
+  d.innerHTML = '<b>Columnas visibles y fijas</b><div style="font-size:10px;color:#64748b;margin:2px 0 4px">📌 = queda fija al desplazarte a la derecha</div><div class="li" style="max-height:300px">' + g.cols.map((c, i) => { const fx = g.fix && g.fix.has(c.k); return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><label style="flex:1"><input type="checkbox" ' + (g.hide.has(c.k) ? '' : 'checked') + ' onchange="ssocgToggle(\'' + id + '\',' + i + ',this.checked)"> ' + ssocEsc(c.t) + '</label><button class="btn btn-g btn-xs" style="opacity:' + (fx ? 1 : .55) + '" onclick="ssocgFix(\'' + id + '\',\'' + c.k + '\',this)">' + (fx ? '📌 Fija' : '📍 Fijar') + '</button></div>'; }).join('') + '</div>';
   document.body.appendChild(d);
 }
 function ssocgToggle(id, i, on) { const g = SSOCG[id], k = g.cols[i].k; if (on) g.hide.delete(k); else g.hide.add(k); ssocgPaint(id); }
@@ -4637,7 +4650,7 @@ async function ssocTraerSiesa() {
   const per = SSOCS.per; SSOCS.siesaMsg = 'Consultando SIESA…'; ssocPintar();
   try {
     const j = await ssocApi('siesa', null, '&periodo=' + per); if (per !== SSOCS.per) return;
-    SSOCS.siesa = (j.emp || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], ibc: a[2], docs: a[3] })); const F = j.filas || [], tS = F.reduce((x, a) => x + a[2], 0), tP = F.reduce((x, a) => x + a[3], 0), eS = SSOCS.nom.reduce((x, r) => x + (r.salud || 0), 0), eP = SSOCS.nom.reduce((x, r) => x + (r.pen || 0), 0);
+    SSOCS.siesa = (j.emp || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], ibc: a[2], docs: a[3], cargo: a[4], estado: a[5], sal: a[6], ing: a[7], ret: a[8], cc: a[9], con: a[10] || {} })); const F = j.filas || [], tS = F.reduce((x, a) => x + a[2], 0), tP = F.reduce((x, a) => x + a[3], 0), eS = SSOCS.nom.reduce((x, r) => x + (r.salud || 0), 0), eP = SSOCS.nom.reduce((x, r) => x + (r.pen || 0), 0);
     SSOCS.siesaMsg = F.length ? ssocPerTxt(per) + ' · SIESA descontó (por EPS/fondos): salud ' + ssocFm(tS) + ' · pensión ' + ssocFm(tP) + (SSOCS.nom.length ? ' | Excel: salud ' + ssocFm(eS) + ' (dif. ' + ssocFm(tS - eS) + ') · pensión empleado (4/16 del Excel) ' + ssocFm(eP / 4) + ' (dif. ' + ssocFm(tP - eP / 4) + ')' : ' | sin Excel cargado para comparar') + ' · IBC por empleado ESTIMADO desde la contabilidad de Siesa (' + SSOCS.siesa.length + ' empleados): puede diferir en retirados, aprendices, incapacidades y pagos de otros meses.' : 'SIESA no devolvió aportes de nómina para ' + ssocPerTxt(per) + '.';
   } catch (e) { SSOCS.siesa = null; SSOCS.siesaMsg = '⚠️ ' + e.message; }
   ssocPintar();
@@ -4657,11 +4670,11 @@ function ssocCalc() {
     if (cnt[r.ced] > 1) o.push('Cédula repetida');
     if (/activo/i.test(r.estado) && r.ibc <= 0) o.push('IBC en cero');
     else if (/activo/i.test(r.estado) && r.ibc < SSOCS.smmlv - 1) o.push('IBC menor al SMMLV');
-    const row = { ced: r.cedTxt, nombre: r.nombre, cargo: r.cargo, estado: r.estado, suma, ibc: r.ibc, dI, salud: r.salud, sEsp, dS, pen: r.pen, pEsp, dP, pI: '', pSa: '', pPe: '', xI: '', xS: '', xP: '', iS: '', zI: '', enNom: true };
+    const row = { ced: r.cedTxt, nombre: r.nombre, cargo: r.cargo, estado: r.estado, suma, ibc: r.ibc, dI, salud: r.salud, sEsp, dS, pen: r.pen, pEsp, dP, pI: '', pSa: '', pPe: '', xI: '', xS: '', xP: '', iS: '', zI: '', sal: '', ing: '', ret: '', ccs: '', conS: '', enNom: true };
     if (hayS) {
       const x = sm.get(r.ced);
       if (!x) { if (r.ibc > 0) o.push('No está en SIESA'); }
-      else { usS.add(r.ced); row.iS = x.ibc; row.zI = ssocR2(x.ibc - r.ibc); if (Math.abs(row.zI) > 1) o.push('IBC SIESA (est.) ≠ Excel'); }
+      else { usS.add(r.ced); row.iS = x.ibc; row.zI = ssocR2(x.ibc - r.ibc); if (Math.abs(row.zI) > 1) o.push('IBC SIESA (est.) ≠ Excel'); row.sal = x.sal; row.ing = x.ing; row.ret = x.ret; row.ccs = x.cc; row.conS = ssocConTxt(x.con); if (!row.nombre) row.nombre = x.nombre; if (!row.cargo) row.cargo = x.cargo; if (!row.estado) row.estado = x.estado; else if (x.estado && ssocNz(row.estado) !== ssocNz(x.estado)) o.push('Estado Excel «' + row.estado + '» ≠ SIESA «' + x.estado + '»'); }
     }
     if (hayPila) {
       const p = pm.get(r.ced);
@@ -4674,9 +4687,10 @@ function ssocCalc() {
     row.obs = o.join('; '); return row;
   });
   if (hayPila) SSOCS.pila.forEach(p => { if (!usados.has(p.ced)) rows.push({ ced: p.cedTxt, nombre: p.nombre, cargo: '', estado: '', suma: '', ibc: '', dI: '', salud: '', sEsp: '', dS: '', pen: '', pEsp: '', dP: '', pI: p.ibc, pSa: p.salud, pPe: p.pen, xI: '', xS: '', xP: '', enNom: false, enPila: true, obs: 'Solo en la PILA (no está en la nómina)' }); });
-  if (hayS) SSOCS.siesa.forEach(x => { if (!usS.has(x.ced)) rows.push({ ced: x.cedTxt, nombre: x.nombre, cargo: '', estado: '', suma: '', ibc: '', dI: '', salud: '', sEsp: '', dS: '', pen: '', pEsp: '', dP: '', pI: '', pSa: '', pPe: '', xI: '', xS: '', xP: '', iS: x.ibc, zI: '', enNom: false, obs: 'Solo en SIESA (no está en el Excel de nómina)' }); });
+  if (hayS) SSOCS.siesa.forEach(x => { if (!usS.has(x.ced)) rows.push({ ced: x.cedTxt, nombre: x.nombre || '(sin nombre en SIESA)', cargo: x.cargo || '', estado: x.estado || '', suma: '', ibc: '', dI: '', salud: '', sEsp: '', dS: '', pen: '', pEsp: '', dP: '', pI: '', pSa: '', pPe: '', xI: '', xS: '', xP: '', iS: x.ibc, zI: '', sal: x.sal, ing: x.ing, ret: x.ret, ccs: x.cc, conS: ssocConTxt(x.con), enNom: false, obs: x.ibc ? 'Solo en SIESA (no está en el Excel de nómina)' : 'Contrato activo en SIESA sin pagos de nómina en el mes' }); });
   return rows;
 }
+const ssocConTxt = c => Object.entries(c || {}).filter(([k, v]) => v).map(([k, v]) => k + ' ' + ssocFm(v)).join(' · ');
 const ssocDifH = (v, t) => v === '' ? '' : (Math.abs(v) > (t == null ? 1 : t) ? '<b style="color:#dc2626">' + ssocFm2(v) + '</b>' : '<span style="color:#16a34a">' + ssocFm2(v) + '</span>');
 function ssocCols() {
   const tol = Number(SSOCS.tol) || 0;
@@ -4699,6 +4713,9 @@ function ssocCols() {
     { k: 'xP', t: 'PILA − nómina pensión', v: r => r.xP, num: true, dec: true, h: r => ssocDifH(r.xP, tol) },
     { k: 'iS', t: 'IBC SIESA (est.)', v: r => r.iS, num: true, sum: true, dec: true, h: r => ssocFm2(r.iS) },
     { k: 'zI', t: 'SIESA − Excel IBC', v: r => r.zI, num: true, dec: true, h: r => ssocDifH(r.zI, 1) },
+    { k: 'conS', t: 'Conceptos SIESA', v: r => r.conS, wrap: true },
+    { k: 'sal', t: 'Salario contrato (SIESA)', v: r => r.sal, num: true, sum: false },
+    { k: 'ing', t: 'Ingreso (SIESA)', v: r => r.ing }, { k: 'ret', t: 'Retiro (SIESA)', v: r => r.ret }, { k: 'ccs', t: 'Centro de costo (SIESA)', v: r => r.ccs },
     { k: 'obs', t: 'Observación', v: r => r.obs || 'OK', wrap: true, h: r => r.obs ? '<span style="color:#dc2626;font-weight:600">' + ssocEsc(r.obs) + '</span>' : '<span style="color:#16a34a">OK</span>' }
   ];
 }
