@@ -4649,17 +4649,26 @@ async function ssocLeer() {
   const j = await ssocApi('leer', null, '&periodo=' + SSOCS.per);
   SSOCS.nom = (j.nomina || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], cargo: a[2], estado: a[3], ibc: a[4], salud: a[5], pen: a[6], total: a[7], con: a[8] || {} }));
   SSOCS.pila = (j.pila || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], ibc: a[2], salud: a[3], pen: a[4] }));
-  SSOCS.cargado = true; ssocPintar();
+  SSOCS.cargado = true; ssocPintar(); if (!SSOCS.siesa) ssocSiesaGuardado(SSOCS.per);
 }
 async function ssocCambiarPer(v) { SSOCS.siesa = null; SSOCS.siesaMsg = ''; SSOCS.per = String(v || '').replace('-', ''); if (!/^20\d{4}$/.test(SSOCS.per)) return; try { await ssocLeer(); } catch (e) { toast(e.message, 'er'); } }
+function ssocAplicarSiesa(j, per, pie) {
+    SSOCS.siesa = (j.emp || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], ibc: a[2], docs: a[3], cargo: a[4], estado: a[5], sal: a[6], ing: a[7], ret: a[8], cc: a[9], con: a[10] || {} })); const F = j.filas || [], tS = F.reduce((x, a) => x + a[2], 0), tP = F.reduce((x, a) => x + a[3], 0), eS = SSOCS.nom.reduce((x, r) => x + (r.salud || 0), 0), eP = SSOCS.nom.reduce((x, r) => x + (r.pen || 0), 0);
+    SSOCS.siesaMsg = F.length ? ssocPerTxt(per) + ' · SIESA descontó (por EPS/fondos): salud ' + ssocFm(tS) + ' · pensión ' + ssocFm(tP) + (SSOCS.nom.length ? ' | Excel: salud ' + ssocFm(eS) + ' (dif. ' + ssocFm(tS - eS) + ') · pensión empleado (4/16 del Excel) ' + ssocFm(eP / 4) + ' (dif. ' + ssocFm(tP - eP / 4) + ')' : ' | sin Excel cargado para comparar') + ' · IBC por empleado ESTIMADO desde la contabilidad de Siesa (' + SSOCS.siesa.length + ' empleados): puede diferir en retirados, aprendices, incapacidades y pagos de otros meses.' : 'SIESA no devolvió aportes de nómina para ' + ssocPerTxt(per) + '.';
+  if (pie) SSOCS.siesaMsg += ' · ' + pie;
+}
 async function ssocTraerSiesa() {
   const per = SSOCS.per; SSOCS.siesaMsg = 'Consultando SIESA…'; ssocPintar();
   try {
     const j = await ssocApi('siesa', null, '&periodo=' + per); if (per !== SSOCS.per) return;
-    SSOCS.siesa = (j.emp || []).map(a => ({ ced: ssocCed(a[0]), cedTxt: a[0], nombre: a[1], ibc: a[2], docs: a[3], cargo: a[4], estado: a[5], sal: a[6], ing: a[7], ret: a[8], cc: a[9], con: a[10] || {} })); const F = j.filas || [], tS = F.reduce((x, a) => x + a[2], 0), tP = F.reduce((x, a) => x + a[3], 0), eS = SSOCS.nom.reduce((x, r) => x + (r.salud || 0), 0), eP = SSOCS.nom.reduce((x, r) => x + (r.pen || 0), 0);
-    SSOCS.siesaMsg = F.length ? ssocPerTxt(per) + ' · SIESA descontó (por EPS/fondos): salud ' + ssocFm(tS) + ' · pensión ' + ssocFm(tP) + (SSOCS.nom.length ? ' | Excel: salud ' + ssocFm(eS) + ' (dif. ' + ssocFm(tS - eS) + ') · pensión empleado (4/16 del Excel) ' + ssocFm(eP / 4) + ' (dif. ' + ssocFm(tP - eP / 4) + ')' : ' | sin Excel cargado para comparar') + ' · IBC por empleado ESTIMADO desde la contabilidad de Siesa (' + SSOCS.siesa.length + ' empleados): puede diferir en retirados, aprendices, incapacidades y pagos de otros meses.' : 'SIESA no devolvió aportes de nómina para ' + ssocPerTxt(per) + '.';
+    const cuando = new Date().toISOString(); ssocAplicarSiesa(j, per, '');
+    try { await ssocKvSet('siesa:' + per, { j, cuando, por: CU.nombre || CU.email }); SSOCS.siesaMsg += ' · 💾 Guardado ' + new Date(cuando).toLocaleString('es-CO') + ' (ya no hay que traerlo de nuevo; usa «Actualizar de SIESA» si quieres refrescarlo).'; }
+    catch (e) { SSOCS.siesaMsg += ' · ⚠️ No se pudo guardar: ' + e.message; }
   } catch (e) { SSOCS.siesa = null; SSOCS.siesaMsg = '⚠️ ' + e.message; }
   ssocPintar();
+}
+async function ssocSiesaGuardado(per) {
+  try { const v = await ssocKv('siesa:' + per); if (per !== SSOCS.per || !v || !v.j) return; ssocAplicarSiesa(v.j, per, '💾 Guardado ' + new Date(v.cuando).toLocaleString('es-CO') + (v.por ? ' por ' + v.por : '')); ssocPintar(); } catch (e) { }
 }
 /* ---------- cálculo de la revisión ---------- */
 function ssocCalc() {
@@ -4748,7 +4757,7 @@ function ssocPintar() {
     + '<div class="fg" style="margin:0"><div class="fl">SMMLV</div><input class="inp" style="width:110px" value="' + SSOCS.smmlv + '" onchange="SSOCS.smmlv=ssocNum(this.value);ssocPintar()"></div>'
     + '<div class="fg" style="margin:0"><div class="fl">Tolerancia PILA ($)</div><input class="inp" style="width:90px" value="' + SSOCS.tol + '" onchange="SSOCS.tol=ssocNum(this.value);ssocPintar()"></div></div>'
     + '<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px"><button class="btn btn-p btn-sm" onclick="$s(\'ssoc-f-nom\').click()">📤 Subir nómina Siesa (Excel)</button><button class="btn btn-bl btn-sm" onclick="$s(\'ssoc-f-pila\').click()">📥 Subir planilla PILA</button>'
-    + '<button class="btn btn-gr btn-sm" onclick="ssocTraerSiesa()">🔄 Traer de SIESA</button>' + (nm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'nomina\')">🗑 Quitar nómina</button>' : '') + (pm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'pila\')">🗑 Quitar PILA</button>' : '') + '</div>'
+    + '<button class="btn btn-gr btn-sm" onclick="ssocTraerSiesa()">' + (SSOCS.siesa ? '🔄 Actualizar de SIESA' : '🔄 Traer de SIESA') + '</button>' + (nm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'nomina\')">🗑 Quitar nómina</button>' : '') + (pm ? '<button class="btn btn-rd btn-sm" onclick="ssocBorrar(\'pila\')">🗑 Quitar PILA</button>' : '') + '</div>'
     + '<input type="file" id="ssoc-f-nom" accept=".xlsx,.xls,.csv" style="display:none" onchange="ssocSubirNomina(this)"><input type="file" id="ssoc-f-pila" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="ssocSubirPila(this)">'
     + '<div style="font-size:11px;color:var(--mu);line-height:1.7">' + meta(nm, 'Nómina') + '<br>' + meta(pm, 'PILA') + (SSOCS.siesaMsg ? '<br><b>SIESA:</b> ' + ssocEsc(SSOCS.siesaMsg) : '') + '</div></div></div>'
     + ssocNav() + (SSOCS.vista === 'gen' ? '<div id="ssoc-gen"></div>' : SSOCS.nom.length || SSOCS.pila.length || (SSOCS.siesa && SSOCS.siesa.length) ? '<div class="sg" style="margin-bottom:12px">' + kp(SSOCS.nom.length, 'Empleados en nómina', '', 'todos') + kp(ssocFm(sum('ibc')), 'IBC total', '', 'ibc') + kp(ssocFm(sum('salud')), 'Salud total', '', 'salud') + kp(ssocFm(sum('pen')), 'Pensión total', '', 'pen') + kp(con.length, 'Con observaciones', con.length ? 'var(--rd)' : 'var(--gr)', 'obs') + (SSOCS.pila.length ? kp(rows.filter(r => /PILA/.test(r.obs)).length, 'Diferencias con PILA', 'var(--or)', 'pila') : '') + '</div>'
