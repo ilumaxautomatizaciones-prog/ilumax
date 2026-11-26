@@ -22810,7 +22810,7 @@ function ftmEpPintar() {
   }
   const ord = { no: 0, falta: 1, ok: 2 }, ed = Object.keys(FTM.epEd).length;
   const guardar = ftmRolDe() === 'edit' ? '<div style="margin-top:14px;border:2px solid #0f172a;border-radius:10px;padding:12px"><b style="font-size:13px">💾 Pasar a la base de datos (matriz)</b>' +
-    '<div style="font-size:11px;color:var(--mu);margin:4px 0 8px">Crea un registro NUEVO para esa referencia con la orden que indiques. Nunca modifica ni borra registros de órdenes anteriores. Solo se guardan los campos con valor.</div>' +
+    '<div style="font-size:11px;color:var(--mu);margin:4px 0 8px">Crea un registro NUEVO para esa referencia con la orden que indiques. Nunca modifica ni borra registros de órdenes anteriores. Solo se guardan los campos con valor que cumplen la norma: lo que no cumple queda vacío hasta que lo corrijas.</div>' +
     '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px"><div><label style="font-size:11px;font-weight:700;color:var(--mu)">REFERENCIA (CÓDIGO) *</label><input class="inp" id="ftm-ep-gcod" value="' + esc(document.getElementById('ftm-ep-gcod') ? document.getElementById('ftm-ep-gcod').value : (document.getElementById('ftm-ep-ref') ? document.getElementById('ftm-ep-ref').value : '')) + '"></div>' +
     '<div><label style="font-size:11px;font-weight:700;color:var(--mu)">ORDEN DE COMPRA * (ej. OCI 300)</label><input class="inp" id="ftm-ep-gord" value="' + esc(document.getElementById('ftm-ep-gord') ? document.getElementById('ftm-ep-gord').value : '') + '"></div></div>' +
     '<div style="text-align:right;margin-top:10px"><button class="btn btn-p" onclick="ftmEpGuardar()">💾 Guardar como nueva orden</button></div><div id="ftm-ep-gmsg" style="font-size:12px;margin-top:6px"></div></div>' : '';
@@ -22831,12 +22831,13 @@ async function ftmEpGuardar() {
     msg('Verificando…'); await ftmCargar(true);
     const id = ord + '-' + cod; if (FTM.rows.some(r => r.id === id)) throw new Error('Ya existe un registro de la orden «' + ord + '» para la referencia ' + cod + '. No se sobrescribe: usa una orden nueva.');
     const chk = await sbReabast.get('ficha_matriz', 'id=eq.' + encodeURIComponent(id) + '&select=id'); if (chk && chk.length) throw new Error('Ya existe el registro ' + id + ' en la base de datos. No se sobrescribe.');
-    const d = {}; Object.keys(FTM.epV).forEach(k => { if (k[0] === '_' || k === 'foto_del_producto') return; const v = String(FTM.epV[k] == null ? '' : FTM.epV[k]).replace(/\s+/g, ' ').trim(); if (ftmVacio(v)) return; d[k] = v; });
+    const malK = new Set((FTM.epR || []).filter(r => r.estado === 'no').map(r => r.campo));
+    const d = {}; Object.keys(FTM.epV).forEach(k => { if (k[0] === '_' || k === 'foto_del_producto') return; const v = String(FTM.epV[k] == null ? '' : FTM.epV[k]).replace(/\s+/g, ' ').trim(); if (ftmVacio(v)) return; if (malK.has(k)) return; d[k] = v; });
     const nd = Object.keys(d).length; if (!nd) throw new Error('No hay datos con valor para guardar');
     const prev = FTM.rows.filter(r => ftmK(r.codigo) === ftmK(cod)); d._seq = Math.max(0, ...prev.map(r => Number((r.datos || {})._seq) || 0)) + 1;
     const malos = (FTM.epR || []).filter(r => r.estado === 'no'), faltan = (FTM.epR || []).filter(r => r.estado === 'falta');
-    const avisoN = (malos.length ? '\n\n❌ NO CUMPLEN la norma y SE GUARDARÁN tal cual:\n• ' + malos.map(r => r.req + ' (declaró «' + r.valor + '»)').join('\n• ') : '') + (faltan.length ? '\n\n🚨 Exigidos por la norma y sin dato:\n• ' + faltan.map(r => r.req).join('\n• ') : '');
-    if (!confirm('Se creará un registro NUEVO:\n\nReferencia: ' + cod + '\nOrden: ' + ord + '\nCampos: ' + nd + (prev.length ? '' : '\n\n⚠️ Esta referencia no tiene registros previos en la matriz.') + avisoN + '\n\nNo se modifica ninguna orden anterior. ¿Guardar?')) return msg('');
+    const avisoN = (malos.length ? '\n\n❌ NO CUMPLEN la norma: NO se envían a la ficha (quedan vacíos):\n• ' + malos.map(r => r.req + ' (declaró «' + r.valor + '»)').join('\n• ') : '') + (faltan.length ? '\n\n🚨 Exigidos por la norma y sin dato:\n• ' + faltan.map(r => r.req).join('\n• ') : '');
+    if (!confirm('Se creará un registro NUEVO (solo con datos que cumplen):\n\nReferencia: ' + cod + '\nOrden: ' + ord + '\nCampos: ' + nd + (prev.length ? '' : '\n\n⚠️ Esta referencia no tiene registros previos en la matriz.') + avisoN + '\n\nNo se modifica ninguna orden anterior. ¿Guardar?')) return msg('');
     const r = await fetch(SB_REABAST_URL + '/rest/v1/ficha_matriz', { method: 'POST', headers: Object.assign({}, sbReabast.headers, { Prefer: 'return=minimal' }), body: JSON.stringify([{ id, orden: ord, codigo: cod, datos: d, actualizado: new Date().toISOString(), actualizado_por: (CU && CU.nombre) || '' }]) });
     if (!r.ok) throw new Error(await r.text());
     await ftmCargar(true); try { ftmPintar(); } catch (e) {}
