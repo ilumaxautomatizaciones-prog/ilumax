@@ -3465,7 +3465,7 @@ async function ocSubirAdjunto(file){
   if(!r.ok) throw new Error(await r.text());
   return `${SB_REABAST_URL}/storage/v1/object/public/oc-adjuntos/${nombre}`;
 }
-const REF_COLS_LIVIANAS = 'id,referencia,descripcion_en,temperatura_color,fob_usd,tipo_empaque,horas,tipo_tapa,marca_caja,ean13,master_packaging,ean14_master,internal_packaging,ean14_internal,observaciones,actualizado,categoria,referencia_ilumax,cbm,proveedor_predeterminado,nombre_comercial,ficha_tecnica_compra_url,moq,canal,clasificacion_abc_manual,fecha_creacion,fecha_inicio_ventas,quantity,amount,ean14_adicionales,potencia,potencia_cod,linea,linea_cod,categoria_cod,subcategoria,subcategoria_cod,marca_producto,marca_producto_cod,activo,tiene_bateria';
+const REF_COLS_LIVIANAS = 'estado_arte,id,referencia,descripcion_en,temperatura_color,fob_usd,tipo_empaque,horas,tipo_tapa,marca_caja,ean13,master_packaging,ean14_master,internal_packaging,ean14_internal,observaciones,actualizado,categoria,referencia_ilumax,cbm,proveedor_predeterminado,nombre_comercial,ficha_tecnica_compra_url,moq,canal,clasificacion_abc_manual,fecha_creacion,fecha_inicio_ventas,quantity,amount,ean14_adicionales,potencia,potencia_cod,linea,linea_cod,categoria_cod,subcategoria,subcategoria_cod,marca_producto,marca_producto_cod,activo,tiene_bateria';
 const REF_FOTOS = { cache:{}, cargando:null, timer:null };
 async function reabastCargarRefsLiviano(){
   const rows = await sbReabast.get('referencias_maestro', 'select='+REF_COLS_LIVIANAS+'&order=referencia.asc&limit=10000');
@@ -13024,6 +13024,7 @@ const TABLA_REF_COLUMNAS = [
   {campo:'cbm',                     th:'CBM',                       num:true},
   {campo:'canal',                   th:'Canal',                     compacta:true},
   {campo:'clasificacion_abc_manual',th:'Clasificación ABC',         compacta:true},
+  {campo:'estado_arte',              th:'Estado de artes',           compacta:true},
   {campo:'fecha_creacion',          th:'Fecha Creación',            fecha:true},
   {campo:'fecha_inicio_ventas',     th:'Fecha Inicio de Ventas',    fecha:true},
   {campo:'categoria',               th:'Categoría *',               compacta:true},
@@ -13113,6 +13114,7 @@ const REF_FILTROS_CAMPO = [
   {campo:'proveedor_predeterminado',   lbl:'Proveedor',       opciones:()=>[...new Set((REABAST.proveedores||[]).map(p=>p.nombre).filter(Boolean))].sort()},
   {campo:'canal',                       lbl:'Canal',           opciones:()=>CANALES_REFERENCIA},
   {campo:'clasificacion_abc_manual',   lbl:'Clasificación ABC', opciones:()=>['A','B','C']},
+  {campo:'estado_arte',                lbl:'Estado de artes',   opciones:()=>REF_ARTE_ESTADOS.map(x=>x.v)},
 ];
 const REF_ORDEN_OPCIONES = [
   {campo:'referencia', lbl:'Referencia'},
@@ -13396,7 +13398,7 @@ function reabastActualizarTbodyReferencias(){
     const filaTds = cols.map(c=>{
       let val = c.campo==='nombre_comercial' ? refNombre(r) : r[c.campo];
       if(c.fecha) val = val ? new Date(val).toLocaleDateString('es-CO') : null;
-      const txt = (val!=null && val!=='') ? reabastEsc(val) : '<span style="color:var(--mu);">—</span>';
+      const txt = c.campo==='estado_arte' && val ? refArteChip(val) : (val!=null && val!=='') ? reabastEsc(val) : '<span style="color:var(--mu);">—</span>';
       const anchoCss = c.ancho ? 'max-width:280px;white-space:normal;word-break:break-word;' : 'white-space:nowrap;';
       return `<td style="${c.mono?'font-family:monospace;':''}${c.num?'text-align:right;':''}${anchoCss}${activo?'':'opacity:.5;'}">${txt}</td>`;
     }).join('');
@@ -13540,6 +13542,7 @@ function reabastPintarDetalleReferencia(r){
         ${campo('Estado', activo?'Activo':'Inactivo')}
         ${campo('Canal', r.canal)}
         ${campo('Clasificación ABC', r.clasificacion_abc_manual)}
+        <div class="rd-campo"><div style="font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.03em;">Estado de artes</div><div class="rd-val">${refArteChip(r.estado_arte) || '—'}</div></div>
         ${campo('Categoría', r.categoria)}
       </div>
     </div>
@@ -13607,6 +13610,11 @@ const MARCAS_PRODUCTO_ILUMAX = ["ILUMAX", "ILUMAX PRO", "ILUMAX ECO", "PLUSLITE"
 const MARCAS_PRODUCTO_ILUMAX_COD = {"ILUMAX": "0001", "ILUMAX PRO": "0002", "ILUMAX ECO": "0003", "PLUSLITE": "0004", "ESSENTIAL": "0005", "ALKOSTO": "0006", "BIA": "0007", "CLARK": "0008", "COLSUBSIDIO": "0009", "ENERGYLITE": "0010", "GALAXY": "0011", "GOLDEN": "0012", "LUMINUS": "0013", "MAKRO": "0014", "OLIMPICA": "0015", "TCP": "0016", "AMPM": "0017", "GERMISEP": "0018", "VETO": "0019", "NOVA": "0020", "S/C": "0021", "ARO": "0022", "CARREFOUR": "0023", "OLIMPO": "0024", "ÉXITO": "0025", "CARULLA": "0026", "TASCHIBRA": "0027", "DISNEY": "0028", "KLEINE": "0029", "KUIDEX": "0030", "YEP": "0031", "DESCONTINUADO": "0032", "CAUTIVIA": "0033", "MATERIAL POP": "0034"};
 const CANALES_REFERENCIA = ['Ferroeléctrico','Mixto','Distribuidores','Institucional','Home Center','Ara','Proyectos','Especializado','Online','Hard Discount','Canal Moderno','Constructoras','Empleados','MULTICANAL'];
 let REFERENCIA_EDIT_ID = null;
+const REF_ARTE_ESTADOS = ARTE_ESTADOS.map(x=>({v:x.id, n:x.n, bg:x.bg, fg:x.fg})); // mismos estados y colores que el paso a paso del arte
+function refArteColorSel(el){ if(!el) return; const o = REF_ARTE_ESTADOS.find(x=>x.v===el.value); el.style.background = o ? o.bg : ''; el.style.color = o ? o.fg : ''; el.style.fontWeight = o ? '800' : ''; }
+document.addEventListener('change', e=>{ if(e.target && e.target.id==='rf-estado-arte') refArteColorSel(e.target); });
+new MutationObserver(()=>{ const el = document.getElementById('rf-estado-arte'); if(el && !el.dataset.col){ el.dataset.col='1'; refArteColorSel(el); } }).observe(document.documentElement,{childList:true,subtree:true});
+function refArteChip(v){ if(!v) return ''; const o = REF_ARTE_ESTADOS.find(x=>x.v===v) || {bg:'#e2e8f0', fg:'#334155'}; return '<span style="display:inline-block;background:'+o.bg+';color:'+o.fg+';border-radius:6px;padding:1px 8px;font-size:11px;font-weight:800;white-space:nowrap">'+String(v).replace(/[&<>"]/g,'')+'</span>'; }
 const REFERENCIA_CAMPOS = [
   {id:'rf-referencia',        campo:'referencia',              label:'Referencia (código / SKU)', req:true, clave:true, ayuda:'El identificador único de este producto en todo el sistema — con este código se busca en las OC, el inventario y las ventas.'},
   {id:'rf-nombre-comercial',  campo:'nombre_comercial',         label:'Nombre comercial'},
@@ -13633,6 +13641,7 @@ const REFERENCIA_CAMPOS = [
   {id:'rf-ficha-compra',      campo:'ficha_tecnica_compra_url', label:'Ficha técnica de compra (link)'},
   {id:'rf-moq',                campo:'moq',                      label:'MOQ (mínima cantidad de orden)', tipo:'number', ayuda:'Cantidad mínima que exige el proveedor por pedido — se usa para no sugerir una cantidad menor a esa al armar la OC.'},
   {id:'rf-canal',              campo:'canal',                    label:'Canal', tipo:'select', opciones:CANALES_REFERENCIA},
+  {id:'rf-estado-arte',       campo:'estado_arte',              label:'Estado de artes', tipo:'select', opciones:REF_ARTE_ESTADOS.map(x=>x.v), ayuda:'Dice rápido si el arte ya se puede mandar al proveedor o si hay que modificarlo: RETI5, RETI3, NO RETI, V0, NUEVO, CP (cambio de proveedor) o ESTD (estandarizada). Cada uno tiene su color.'},
   {id:'rf-abc-manual',        campo:'clasificacion_abc_manual', label:'Clasificación ABC', tipo:'select', opciones:['A','B','C'], ayuda:'Si lo dejas vacío, se calcula solo según la rotación de ventas — solo llénalo si quieres forzar una clasificación distinta.'},
 ];
 (function(){
@@ -13675,6 +13684,7 @@ const REFERENCIA_SECCIONES = [
     ['rf-master-pack','rf-ean14-master'],
     ['__CBM__'],
     ['rf-abc-manual','rf-canal'],
+    ['rf-estado-arte'],
     ['__EAN14_ADICIONALES__'],
   ]},
   {titulo:'2. Árbol de producto', filas:[
@@ -14216,6 +14226,7 @@ async function refImportarExcel(input){
       'CBM':'cbm',
       'CANAL':'canal',
       'CLASIFICACION ABC':'clasificacion_abc_manual',
+      'ESTADO DE ARTES':'estado_arte', 'ESTADO ARTE':'estado_arte',
       'FEHCA CREACION':'fecha_creacion', 'FECHA CREACION':'fecha_creacion',
       'FECHA INICIO DE VENTAS':'fecha_inicio_ventas',
       'NOMBRE COMERCIAL':'nombre_comercial',
@@ -22808,7 +22819,7 @@ function calOcPintar() {
   box.innerHTML = os.slice(0, 150).map(o => {
     const its = REABAST.ocItems[o.id] || [], ab = CALOC.abiertas.has(o.id) || (q && os.length <= 5), tot = its.reduce((s, i) => s + (Number(i.cantidad) || 0), 0);
     let h = '<div style="border:1px solid var(--b1);border-radius:10px;margin-bottom:8px;background:#fff"><div style="display:flex;gap:10px;align-items:center;padding:9px 12px;cursor:pointer" onclick="calOcTog(\'' + o.id + '\')"><b style="font-size:14px">' + ftmE(o.numero_oc) + '</b><span style="font-size:12px;color:var(--mu);flex:1">' + ftmE(o.proveedor || '') + ' · ' + its.length + ' referencia(s) · ' + tot.toLocaleString('es-CO') + ' uds' + (o.fecha_orden ? ' · ' + ftmE(String(o.fecha_orden).slice(0, 10)) : '') + '</span><span class="bdg bdg-gris">' + ftmE(o.estado_general || '') + '</span><span>' + (ab ? '▾' : '▸') + '</span></div>';
-    if (ab) h += '<div style="padding:0 12px 10px;overflow:auto"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:6px 8px">Referencia</th><th>Descripción</th><th>Nombre comercial</th><th>Lote</th><th style="text-align:right">Cant.</th><th style="text-align:right">FOB US$</th><th>EAN 13</th><th></th></tr>' + its.map((i, n) => { const rm = (REABAST.referenciasMaestro || {})[i.referencia] || (REABAST.referenciasMaestro || []).find && (REABAST.referenciasMaestro || []).find(r => String(r.referencia) === String(i.referencia)) || {}, c = ftmE(i.referencia).replace(/'/g, ''); return '<tr style="border-top:1px solid #e2e8f0;background:' + (n % 2 ? '#eff6ff' : '#fff') + '"><td style="padding:5px 8px">' + (ed ? '<a href="javascript:void(0)" style="font-family:monospace;font-weight:800;color:#1d4ed8" title="Editar la referencia" onclick="reabastEditarReferenciaPorCodigo(\'' + c + '\')">' + ftmE(i.referencia) + '</a>' : '<b style="font-family:monospace">' + ftmE(i.referencia) + '</b>') + '</td><td>' + ftmE(i.descripcion || rm.descripcion_en || '') + '</td><td>' + ftmE(rm.nombre_comercial || '') + '</td><td>' + ftmE(i.lote || '') + '</td><td style="text-align:right">' + (Number(i.cantidad) || 0).toLocaleString('es-CO') + '</td><td style="text-align:right">' + (i.precio_fob_usd != null ? ftmE(i.precio_fob_usd) : '') + '</td><td>' + ftmE(rm.ean13 || '') + '</td><td style="white-space:nowrap">' + (ed ? '<button class="btn btn-sm" onclick="reabastEditarReferenciaPorCodigo(\'' + c + '\')">✏️ Editar</button> ' : '') + '<button class="btn btn-sm" onclick="ftmIrA(\'' + c + '\')">📄 Ficha</button></td></tr>'; }).join('') + '</table><div style="font-size:11px;color:var(--mu);margin-top:4px">' + (ed ? 'Toca la referencia o ✏️ Editar: lo que guardes queda en el catálogo de referencias y lo ve todo el sistema.' : 'Solo lectura: editan Sebastián, Giovanni y el administrador.') + '</div></div>';
+    if (ab) h += '<div style="padding:0 12px 10px;overflow:auto"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr style="background:#0f172a;color:#fff;text-align:left"><th style="padding:6px 8px">Referencia</th><th>Descripción</th><th>Nombre comercial</th><th>Estado de artes</th><th>Lote</th><th style="text-align:right">Cant.</th><th style="text-align:right">FOB US$</th><th>EAN 13</th><th></th></tr>' + its.map((i, n) => { const rm = (REABAST.referenciasMaestro || {})[i.referencia] || (REABAST.referenciasMaestro || []).find && (REABAST.referenciasMaestro || []).find(r => String(r.referencia) === String(i.referencia)) || {}, c = ftmE(i.referencia).replace(/'/g, ''); return '<tr style="border-top:1px solid #e2e8f0;background:' + (n % 2 ? '#eff6ff' : '#fff') + '"><td style="padding:5px 8px">' + (ed ? '<a href="javascript:void(0)" style="font-family:monospace;font-weight:800;color:#1d4ed8" title="Editar la referencia" onclick="reabastEditarReferenciaPorCodigo(\'' + c + '\')">' + ftmE(i.referencia) + '</a>' : '<b style="font-family:monospace">' + ftmE(i.referencia) + '</b>') + '</td><td>' + ftmE(i.descripcion || rm.descripcion_en || '') + '</td><td>' + ftmE(rm.nombre_comercial || '') + '</td><td>' + (refArteChip(rm.estado_arte) || '<span style="color:#94a3b8">—</span>') + '</td><td>' + ftmE(i.lote || '') + '</td><td style="text-align:right">' + (Number(i.cantidad) || 0).toLocaleString('es-CO') + '</td><td style="text-align:right">' + (i.precio_fob_usd != null ? ftmE(i.precio_fob_usd) : '') + '</td><td>' + ftmE(rm.ean13 || '') + '</td><td style="white-space:nowrap">' + (ed ? '<button class="btn btn-sm" onclick="reabastEditarReferenciaPorCodigo(\'' + c + '\')">✏️ Editar</button> ' : '') + '<button class="btn btn-sm" onclick="ftmIrA(\'' + c + '\')">📄 Ficha</button></td></tr>'; }).join('') + '</table><div style="font-size:11px;color:var(--mu);margin-top:4px">' + (ed ? 'Toca la referencia o ✏️ Editar: lo que guardes queda en el catálogo de referencias y lo ve todo el sistema.' : 'Solo lectura: editan Sebastián, Giovanni y el administrador.') + '</div></div>';
     return h + '</div>';
   }).join('') + (os.length > 150 ? '<div class="arte-mu" style="font-size:11px">Se muestran 150 de ' + os.length + '; filtra para ver el resto.</div>' : '');
 }
