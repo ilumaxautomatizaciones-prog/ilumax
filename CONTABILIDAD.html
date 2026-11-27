@@ -697,7 +697,7 @@ function infHtml() {
     + '<button class="btn" ' + (INF.busy ? 'disabled' : '') + ' onclick="infGenerar()">' + (INF.busy ? '⏳ Actualizando…' : infBtnTxt()) + '</button>' + (INF.data ? '<button class="btn g" onclick="infDescargar()">⬇ Descargar Excel (' + INF.data.d + ' a ' + INF.data.h + ')</button>' : '') + '</div>'
     + '<div class="n" style="padding:2px 14px 0;color:#0f766e;font-weight:600" id="inf_info">' + esc(INF.info) + '</div>'
     + '<div class="n" id="inf_msg" style="padding:8px 14px">' + esc(INF.msg) + '</div>'
-    + '<div class="n" style="padding:0 14px 12px;color:#64748b">Todo está con fórmulas (SUMIFS sobre la hoja BD). Hojas: BD, Por Linea, Por Tipo Dcto, Por Cliente, Hoja1, Hoja2, Sodimac y Vta Bogota. Datos directos de Siesa (facturas + notas crédito/débito). La <b>línea</b> es la que tiene cada referencia en Siesa (criterio LINEA del ítem, se consulta al generar) y la <b>ciudad</b> sale de las facturas de Excel ya cargadas («SIN CIUDAD» si no hay); en el Excel, un clic en «NO APLICA» lleva a la hoja <i>Refs sin linea</i> con las referencias por corregir y sus documentos. Elige la <b>fecha inicial y final</b>. Si el rango son meses completos (del día 1 al último día, o hasta hoy en el mes en curso) el informe queda <b>guardado en la base por mes</b> y se carga al instante; «Actualizar desde Siesa» solo cambia lo que cambió. Si el rango es parcial (p. ej. del 5 al 20) se consulta directo en Siesa con «Consultar en Siesa» y no se guarda.</div></div>';
+    + '<div class="n" style="padding:0 14px 12px;color:#64748b">Mismo formato del informe de Siesa: hoja BD (encabezado en la fila 6) y tablas con fórmulas SUMIFS cuyos filtros «(Todas)» (periodo, ciudad, cliente) se pueden cambiar como en una tabla dinámica. Hojas: BD, Por Linea, Por Tipo Dcto, Por Cliente, Hoja1, Hoja2, Sodimac y Vta Bogota (con el cuadro Bruto / Descuento / Devolución / Venta neta). Datos directos de Siesa (facturas + notas crédito/débito). La <b>línea</b> es la que tiene cada referencia en Siesa (criterio LINEA del ítem, se consulta al generar) y la <b>ciudad</b> sale del listado de clientes por sucursal («SIN CIUDAD» si no está); en el Excel, un clic en «NO APLICA» lleva a la hoja <i>Refs sin linea</i> con las referencias por corregir y sus documentos. Elige la <b>fecha inicial y final</b>. Si el rango son meses completos (del día 1 al último día, o hasta hoy en el mes en curso) el informe queda <b>guardado en la base por mes</b> y se carga al instante; «Actualizar desde Siesa» solo cambia lo que cambió. Si el rango es parcial (p. ej. del 5 al 20) se consulta directo en Siesa con «Consultar en Siesa» y no se guarda.</div></div>';
   if (INF.data) {
     const nsl = INF.data.SL.length, nrf = new Set(INF.data.SL.map(x => x[6] || '(sin referencia)')).size, gid = 'inf' + INF.vista;
     h += '<div class="card"><div class="tabs" style="padding:0 14px 8px;flex-wrap:wrap">' + [['bd', '📋 Ventas por cliente (' + INF.data.F.length + ' filas)'], ['lin', '📚 Por línea'], ['tip', '🧾 Por tipo Dcto'], ['cli', '👥 Por cliente'], ['h1', '🔀 Canal × línea'], ['sod', '🏬 Sodimac'], ['bog', '📍 Vta Bogotá'], ['rsl', '⚠️ Referencias sin línea (' + nrf + ')'], ['sl', '📄 Sin línea · detalle (' + nsl + ' líneas)']].map(t => '<div class="tab ' + (INF.vista === t[0] ? 'on' : '') + '" onclick="INF.vista=\'' + t[0] + '\';pintar()">' + t[1] + '</div>').join('') + '</div>' + xgBar(gid) + '<div class="tw" id="xg_' + gid + '" style="max-height:68vh;overflow:auto"></div></div>';
@@ -818,51 +818,87 @@ function infPaint() {
   xgPaint(id);
 }
 function infExcel(F, CAN, d, h, nLin, SL) {
-  const per = [...new Set(F.map(f => f[0]))].sort(), cn = c => CAN[c] || (c ? 'CANAL ' + c : 'SIN CANAL');
-  const NB = F.length + 1, RG = c => 'BD!$' + c + '$2:$' + c + '$' + NB;
+  const per = [...new Set(F.map(f => f[0]))].sort();
+  const CNX = Object.assign({}, CAN, { '0011': 'MODERNO', '0012': 'CANAL MIXTO', '0013': 'CANAL HOMECENTER', '0014': 'HARD DISCOUNT', '0015': 'RETAIL', '0021': 'ESPECIALIZADO', '0040': 'ONLINE', '0042': 'EMPLEADOS', '998': 'DONACION', '0998': 'DONACION' });
+  const cn = c => CNX[c] || (c ? 'CANAL ' + c : 'SIN CANAL');
+  const LC = { 'ILUMINACION INTERIOR': '0001', 'MATERIAL POP': '0002', 'ILUMINACION DECORATIVA': '0003', 'ILUMINACION EXTERIOR': '0004', 'ELECTRICOS': '0005', 'ASEO PERSONAL': '0006', 'ILUMINACION SUMERGIBLE': '0008', 'PRODUCTO DE CONSUMO': '0009', 'NO APLICA': '0010' };
+  const MN = '#,##0;[Red]-#,##0;-', NB = F.length + 6, RG = c => 'BD!$' + c + '$7:$' + c + '$' + NB;
   const L = i => { let t = ''; i++; while (i > 0) { const m = (i - 1) % 26; t = String.fromCharCode(65 + m) + t; i = Math.floor((i - 1) / 26); } return t; };
-  const sh = (aoa, w) => { const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = (w || []).map(x => ({ wch: x })); return ws; };
-  const setF = (ws, r, c, f, v) => { ws[L(c) + (r + 1)] = { t: 'n', f, v: v || 0, z: '#,##0' }; };
-  const money = (ws, desde) => { Object.keys(ws).forEach(a => { if (a[0] === '!') return; const m = /^([A-Z]+)(\d+)$/.exec(a); if (m && +m[2] > 1 && ws[a].t === 'n' && !ws[a].z && m[1].length + 0 >= 1 && (desde == null || colN(m[1]) >= desde)) ws[a].z = '#,##0'; }); };
   const colN = t => { let n = 0; for (const ch of t) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; };
+  const sh = (aoa, w) => { const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = (w || []).map(x => ({ wch: x })); return ws; };
+  const setF = (ws, r, c, f, v) => { ws[L(c) + (r + 1)] = { t: 'n', f, v: v || 0, z: MN }; };
+  const put = (ws, r, c, v) => { ws[L(c) + (r + 1)] = typeof v === 'number' ? { t: 'n', v, z: MN } : { t: 's', v: String(v) }; };
+  const fin = (ws, w) => { let mr = 1, mc = 1; Object.keys(ws).forEach(k => { if (k[0] === '!') return; const m = /^([A-Z]+)(\d+)$/.exec(k); if (m) { mr = Math.max(mr, +m[2]); mc = Math.max(mc, colN(m[1]) + 1); } }); ws['!ref'] = 'A1:' + L(mc - 1) + mr; ws['!cols'] = (w || []).map(x => ({ wch: x })); return ws; };
+  const money = (ws, desde) => { Object.keys(ws).forEach(a => { if (a[0] === '!') return; const m = /^([A-Z]+)(\d+)$/.exec(a); if (m && +m[2] > 1 && ws[a].t === 'n' && !ws[a].z && (desde == null || colN(m[1]) >= desde)) ws[a].z = MN; }); };
   const wb = XLSX.utils.book_new(); wb.Workbook = { CalcPr: { fullCalcOnLoad: true } };
-  // BD
-  const bd = F.slice().sort((a, b) => a[0].localeCompare(b[0]) || a[2].localeCompare(b[2]) || a[6].localeCompare(b[6]));
-  const wsBD = sh([['Periodo', 'Cliente', 'Nombre', 'Ciudad', 'Canal', 'Nombre canal', 'Línea', 'Tipo Dcto', 'Valor_sub_local', 'Valor_dscto_local', 'Valor_imp_docto', 'Valor_neto_local', 'Valor Bruto'], ...bd.map(f => [Number(f[0]), f[1], f[2], f[3], f[4], cn(f[4]), f[5], f[6], f[7], f[8], f[9], 0, f[11]])], [9, 14, 38, 18, 8, 16, 24, 9, 16, 16, 16, 16, 16]);
-  bd.forEach((f, i) => setF(wsBD, i + 1, 11, 'I' + (i + 2) + '+K' + (i + 2), f[10]));
-  wsBD['!autofilter'] = { ref: 'A1:M' + NB }; money(wsBD, 8); XLSX.utils.book_append_sheet(wb, wsBD, 'BD');
-  // Pivotes con SUMIFS sobre BD
-  const pivot = (filas, kf, tit, cols, extra, w, sumCol) => {
-    const m = new Map(); filas.forEach(f => { const k = kf(f), kk = k.join('\u0001'); let o = m.get(kk); if (!o) { o = { k, v: {} }; m.set(kk, o); } o.v[f[0]] = (o.v[f[0]] || 0) + f[7]; });
-    const tt = o => Object.values(o.v).reduce((a, b) => a + b, 0), rows = [...m.values()].sort((a, b) => tt(b) - tt(a)), nk = tit.length;
-    const aoa = [[...tit, ...per.map(Number), 'TOTAL'], ...rows.map(o => [...o.k, ...per.map(() => 0), 0]), ['TOTAL', ...tit.slice(1).map(() => ''), ...per.map(() => 0), 0]];
-    const ws = sh(aoa, w || [34, ...tit.slice(1).map(() => 22), ...per.map(() => 16), 18]), n = rows.length;
-    rows.forEach((o, i) => {
-      const r = i + 2; per.forEach((p, j) => setF(ws, i + 1, nk + j, 'SUMIFS(' + RG(sumCol || 'I') + ',' + cols.map((c, x) => RG(c) + ',$' + L(x) + r).join(',') + ',' + RG('A') + ',' + L(nk + j) + '$1' + (extra || '') + ')', o.v[p] || 0));
-      setF(ws, i + 1, nk + per.length, 'SUM(' + L(nk) + r + ':' + L(nk + per.length - 1) + r + ')', tt(o));
+  // ===== BD: mismas columnas y filas que el informe de Siesa (encabezado en la fila 6, datos desde la fila 7) =====
+  const bd = F.slice().sort((a, b) => a[0].localeCompare(b[0]) || a[2].localeCompare(b[2]) || a[6].localeCompare(b[6]) || a[5].localeCompare(b[5]));
+  const wsBD = sh([['LAPSO INICIAL', Number(per[0])], ['LAPSO', Number(per[per.length - 1])], ['TIPOS DEV.'], [], [],
+    ['Periodo', 'Cliente_factura', 'Nombre Cliente_factura', 'Desc Ciudad  Cliente_factura', 'Id_mayor_cli_1', 'Mayor_cli_1', 'Criterio_mayor_item_2', 'Desc_criterio_mayor_item_2', 'Tipo de Documento', 'Valor_sub_local', 'Valor_dscto_local', 'Valor_imp_docto', 'Valor_neto_local', 'Valor Bruto'],
+    ...bd.map(f => [Number(f[0]), f[1], f[2], f[3], f[4], cn(f[4]), LC[f[5]] || '', f[5], f[6], f[7], f[8], f[9], 0, 0])], [10, 14, 40, 24, 10, 20, 12, 28, 10, 15, 15, 15, 15, 15]);
+  bd.forEach((f, i) => { const r = 6 + i, x = r + 1; setF(wsBD, r, 12, 'J' + x + '+L' + x, f[10]); setF(wsBD, r, 13, 'J' + x + '+K' + x, f[11]); [9, 10, 11].forEach(c => { wsBD[L(c) + x].z = MN; }); });
+  wsBD['!autofilter'] = { ref: 'A6:N' + NB }; wsBD['!freeze'] = { ySplit: 6 }; XLSX.utils.book_append_sheet(wb, wsBD, 'BD');
+  // ===== Tablas con fórmulas SUMIFS sobre BD; las celdas «(Todas)» funcionan como el filtro de una tabla dinámica =====
+  const VD = { bruto: { c: 'N', i: 11, t: 'Valor Bruto' }, dscto: { c: 'K', i: 8, t: 'Valor_dscto_local' }, sub: { c: 'J', i: 7, t: 'Valor_sub_local' } };
+  const FLT = (cell, col, num) => RG(col) + ',IF(' + cell + '="(Todas)",' + (num ? '"<>"' : '"*"') + ',' + cell + ')';
+  const agg = (A, kf) => { const m = new Map(); A.forEach(f => { const k = kf(f), kk = k.join('\u0001'); let o = m.get(kk); if (!o) { o = { k, f: [] }; m.set(kk, o); } o.f.push(f); }); return [...m.values()]; };
+  const sumI = (A, i) => A.reduce((a, f) => a + f[i], 0);
+  const tipoOrd = t => { const i = ['VE', 'VM', 'VN', 'VZ'].indexOf(t); return i < 0 ? 9 : i; };
+  // o: {filt:[{r,lab,val,col,num}], hr, keys:[col BD], hdr:[...], vo:['bruto','dscto','sub'], rows:[{k,f}], sub:bool, datos:{r,c}}
+  const PV = (ws, o) => {
+    (o.filt || []).forEach(x => { put(ws, x.r, 0, x.lab); put(ws, x.r, 1, x.val); });
+    if (o.datos) put(ws, o.datos.r, o.datos.c, 'Datos');
+    o.hdr.forEach((t, j) => put(ws, o.hr, j, t));
+    const nk = o.keys.length, fl = (o.filt || []).map(x => FLT('$B$' + (x.r + 1), x.col, x.num)).join(','), vs = o.vo.map(k => VD[k]);
+    let r = o.hr + 1; const subR = [], grp = o.sub ? [...new Set(o.rows.map(x => x.k[0]))] : [null];
+    grp.forEach(g => {
+      const rs = o.sub ? o.rows.filter(x => x.k[0] === g) : o.rows, first = r;
+      rs.forEach(x => { x.k.forEach((v, j) => put(ws, r, j, v)); vs.forEach((v, j) => setF(ws, r, nk + j, 'SUMIFS(' + RG(v.c) + ',' + o.keys.map((c, q) => RG(c) + ',$' + L(q) + (r + 1)).join(',') + (fl ? ',' + fl : '') + ')', sumI(x.f, v.i))); r++; });
+      if (o.sub && rs.length) { put(ws, r, 0, 'Total ' + g); vs.forEach((v, j) => setF(ws, r, nk + j, 'SUM(' + L(nk + j) + (first + 1) + ':' + L(nk + j) + r + ')', rs.reduce((a, x) => a + sumI(x.f, v.i), 0))); subR.push(r); r++; }
     });
-    per.concat(['T']).forEach((p, j) => { const c = nk + j, v = p === 'T' ? rows.reduce((a, o) => a + tt(o), 0) : rows.reduce((a, o) => a + (o.v[p] || 0), 0); setF(ws, n + 1, c, 'SUM(' + L(c) + '2:' + L(c) + (n + 1) + ')', v); });
-    ws['!freeze'] = { ySplit: 1 }; return { ws, rows };
+    put(ws, r, 0, 'Total general');
+    vs.forEach((v, j) => setF(ws, r, nk + j, o.rows.length ? (o.sub ? 'SUM(' + subR.map(q => L(nk + j) + (q + 1)).join(',') + ')' : 'SUM(' + L(nk + j) + (o.hr + 2) + ':' + L(nk + j) + r + ')') : '0', o.rows.reduce((a, x) => a + sumI(x.f, v.i), 0)));
+    return { tot: r, nk, vs, fl };
   };
-  const nL = F.some(f => f[5] === 'NO APLICA');
-  const pl = pivot(F, f => [f[5]], ['Línea'], ['G']);
-  if (nL) { const ix = pl.rows.findIndex(o => o.k[0] === 'NO APLICA'); if (ix >= 0) { const a = 'A' + (ix + 2); pl.ws[a].l = { Target: "#'Refs sin linea'!A1", Tooltip: 'Ver qué referencias no tienen línea' }; pl.ws[L(per.length + 2) + (ix + 2)] = { t: 's', v: '← clic en NO APLICA para ver las referencias sin línea' }; } }
-  XLSX.utils.book_append_sheet(wb, pl.ws, 'Por Linea');
-  XLSX.utils.book_append_sheet(wb, pivot(F, f => [f[6]], ['Tipo Dcto'], ['H']).ws, 'Por Tipo Dcto');
-  XLSX.utils.book_append_sheet(wb, pivot(F, f => [f[1], f[2], f[3], cn(f[4])], ['NIT', 'Cliente', 'Ciudad', 'Canal'], ['B'], '', [14, 38, 18, 16, ...per.map(() => 16), 18]).ws, 'Por Cliente');
-  XLSX.utils.book_append_sheet(wb, pivot(F, f => [cn(f[4]), f[5]], ['Canal', 'Línea'], ['F', 'G']).ws, 'Hoja1');
-  const lst = [...new Set(F.map(f => f[5]))].sort(), tps = [...new Set(F.map(f => f[6]))].sort(), cns = [...new Set(F.map(f => f[4]))].sort(), cds = [...new Set(F.map(f => f[3]))].sort();
-  const n2 = Math.max(lst.length, tps.length, cns.length, cds.length), h2 = [['Línea', 'Tipo Dcto', 'Canal', 'Nombre canal', 'Ciudad']]; for (let i = 0; i < n2; i++) h2.push([lst[i] || '', tps[i] || '', cns[i] || '', cns[i] ? cn(cns[i]) : '', cds[i] || '']);
-  XLSX.utils.book_append_sheet(wb, sh(h2, [26, 10, 10, 18, 22]), 'Hoja2');
-  const sod = F.filter(f => /SODIMAC/i.test(f[2])), bog = F.filter(f => /BOGOT/i.test(f[3]));
-  XLSX.utils.book_append_sheet(wb, sod.length ? pivot(sod, f => [f[5]], ['Línea (Sodimac)'], ['G'], ',' + RG('C') + ',"*SODIMAC*"').ws : sh([['Sin ventas de Sodimac en el rango']]), 'Sodimac');
-  XLSX.utils.book_append_sheet(wb, bog.length ? pivot(bog, f => [f[2]], ['Cliente (Bogotá)'], ['C'], ',' + RG('D') + ',"*Bogot*"').ws : sh([['Sin ventas en Bogotá en el rango (la ciudad sale de las facturas de Excel cargadas)']]), 'Vta Bogota');
+  const PIV = (A, kf, sortF) => agg(A, kf).sort(sortF || ((a, b) => String(a.k[0]).localeCompare(String(b.k[0]), 'es')));
+  const hdr3 = (t, ord) => [t, ...ord.map(k => ' ' + VD[k].t)];
+  const ORD = ['bruto', 'dscto', 'sub'];
+  const tp = (nombre, filt, hr, datos, keys, t, rows, w) => { const ws = {}; PV(ws, { filt, hr, datos, keys, hdr: hdr3(t, ORD), vo: ORD, rows }); XLSX.utils.book_append_sheet(wb, fin(ws, w || [38, 18, 20, 18]), nombre); };
+  tp('Por Linea', [{ r: 5, lab: 'Periodo', val: '(Todas)', col: 'A', num: 1 }, { r: 6, lab: 'Desc Ciudad  Cliente_factura', val: '(Todas)', col: 'D' }], 9, { r: 8, c: 1 }, ['H'], 'Desc_criterio_mayor_item_2', PIV(F, f => [f[5]]));
+  tp('Por Tipo Dcto', [{ r: 1, lab: 'Periodo', val: '(Todas)', col: 'A', num: 1 }, { r: 2, lab: 'Desc Ciudad  Cliente_factura', val: '(Todas)', col: 'D' }], 5, { r: 4, c: 1 }, ['I'], 'Tipo de Documento', PIV(F, f => [f[6]]));
+  tp('Por Cliente', [{ r: 1, lab: 'Periodo', val: '(Todas)', col: 'A', num: 1 }, { r: 2, lab: 'Desc Ciudad  Cliente_factura', val: '(Todas)', col: 'D' }], 5, { r: 4, c: 1 }, ['C'], 'Nombre Cliente_factura', PIV(F, f => [f[2]]), [44, 18, 20, 18]);
+  { const ws = {}; PV(ws, { filt: [{ r: 0, lab: 'Periodo', val: '(Todas)', col: 'A', num: 1 }], hr: 2, keys: ['F', 'H'], hdr: ['Canal', 'Línea', ...ORD.map(k => ' ' + VD[k].t)], vo: ORD, rows: PIV(F, f => [cn(f[4]), f[5]], (a, b) => a.k[0].localeCompare(b.k[0], 'es') || a.k[1].localeCompare(b.k[1], 'es')) }); XLSX.utils.book_append_sheet(wb, fin(ws, [22, 30, 18, 20, 18]), 'Hoja1'); }
+  { const lst = [...new Set(F.map(f => f[5]))].sort(), tps = [...new Set(F.map(f => f[6]))].sort(), cns = [...new Set(F.map(f => f[4]))].sort(), cds = [...new Set(F.map(f => f[3]))].sort();
+    const n2 = Math.max(lst.length, tps.length, cns.length, cds.length), h2 = [['Criterio_mayor_item_2', 'Desc_criterio_mayor_item_2', 'Tipo de Documento', 'Id_mayor_cli_1', 'Mayor_cli_1', 'Desc Ciudad  Cliente_factura']];
+    for (let i = 0; i < n2; i++) h2.push([lst[i] ? LC[lst[i]] || '' : '', lst[i] || '', tps[i] || '', cns[i] || '', cns[i] ? cn(cns[i]) : '', cds[i] || '']);
+    XLSX.utils.book_append_sheet(wb, sh(h2, [20, 28, 18, 14, 22, 24]), 'Hoja2'); }
+  // ===== Sodimac y Bogotá: mismo formato de las hojas del informe de Siesa, con el cuadro Bruto / Descuento / Devolución / Venta neta =====
+  const tdl = A => PIV(A, f => [f[6], f[5]], (a, b) => tipoOrd(a.k[0]) - tipoOrd(b.k[0]) || a.k[0].localeCompare(b.k[0]) || a.k[1].localeCompare(b.k[1], 'es'));
+  const cuadro = (ws, p, F2, r0) => { // fórmulas independientes de la tabla, sobre los mismos filtros
+    const f1 = (c, extra) => 'SUMIFS(' + RG(c) + (p.fl ? ',' + p.fl : '') + (extra ? ',' + extra : '') + ')', nV = RG('I') + ',"<>VN"', vN = RG('I') + ',"VN"';
+    const br = sumI(F2.filter(f => f[6] !== 'VN'), 11), ds = sumI(F2, 8), dv = sumI(F2.filter(f => f[6] === 'VN'), 11);
+    return { f1, nV, vN, br, ds, dv };
+  };
+  const sodN = (F.find(f => /SODIMAC/i.test(f[2])) || [])[2] || 'SODIMAC COLOMBIA S A';
+  { const Fs = F.filter(f => f[2] === sodN), ws = {}, o = { filt: [{ r: 0, lab: 'Periodo', val: '(Todas)', col: 'A', num: 1 }, { r: 1, lab: 'Nombre Cliente_factura', val: sodN, col: 'C' }, { r: 2, lab: 'Desc Ciudad  Cliente_factura', val: '(Todas)', col: 'D' }], hr: 5, keys: ['I', 'H'], hdr: ['Tipo de Documento', 'Desc_criterio_mayor_item_2', 'Suma de Valor_dscto_local', 'Suma de Valor_sub_local', 'Suma de Valor Bruto'], vo: ['dscto', 'sub', 'bruto'], rows: tdl(Fs), sub: true, datos: { r: 4, c: 2 } };
+    const p = PV(ws, o), c = cuadro(ws, p, Fs);
+    put(ws, 6, 6, 'Bruto '); setF(ws, 6, 7, c.f1('N', c.nV), c.br); put(ws, 7, 6, 'Descuento'); setF(ws, 7, 7, '-' + c.f1('K'), -c.ds); put(ws, 8, 6, 'Devolucion'); setF(ws, 8, 7, c.f1('N', c.vN), c.dv);
+    put(ws, 9, 6, 'Venta neta '); setF(ws, 9, 7, 'SUM(H7:H9)', c.br - c.ds + c.dv); put(ws, 11, 6, 'Control: venta neta - Total general (debe ser 0)'); setF(ws, 11, 7, 'H10-D' + (p.tot + 1), 0);
+    XLSX.utils.book_append_sheet(wb, fin(ws, [20, 28, 24, 24, 22, 3, 38, 18]), 'Sodimac'); }
+  const bogN = (F.find(f => f[3] === 'Bogotá, D.C.') || F.find(f => /BOGOT/i.test(f[3])) || [])[3] || 'Bogotá, D.C.';
+  { const Fb = F.filter(f => f[3] === bogN), ws = {}, o = { filt: [{ r: 0, lab: 'Periodo', val: '(Todas)', col: 'A', num: 1 }, { r: 1, lab: 'Nombre Cliente_factura', val: '(Todas)', col: 'C' }, { r: 2, lab: 'Desc Ciudad  Cliente_factura', val: bogN, col: 'D' }], hr: 5, keys: ['I', 'H'], hdr: ['Tipo de Documento', 'Desc_criterio_mayor_item_2', 'Suma de Valor Bruto', 'Suma de Valor_dscto_local', 'Suma de Valor_sub_local'], vo: ['bruto', 'dscto', 'sub'], rows: tdl(Fb), datos: { r: 4, c: 2 } };
+    const p = PV(ws, o), c = cuadro(ws, p, Fb);
+    setF(ws, 11, 6, c.f1('N', c.nV), c.br); put(ws, 11, 7, 'BRUTO'); setF(ws, 15, 6, '-' + c.f1('K'), -c.ds); put(ws, 15, 7, 'DESCUENTO'); setF(ws, 16, 6, c.f1('N', c.vN), c.dv); put(ws, 16, 7, 'DEVOLUCION');
+    setF(ws, 17, 6, 'SUM(G12:G17)', c.br - c.ds + c.dv); put(ws, 20, 6, 'MENOS FLETES'); put(ws, 20, 7, 0); put(ws, 22, 6, 'NETO DE VENTA'); setF(ws, 22, 7, 'G18-H21', c.br - c.ds + c.dv);
+    put(ws, 25, 6, 'CCIAL'); setF(ws, 25, 7, 'E' + (p.tot + 1), sumI(Fb, 7)); put(ws, 27, 6, '(-) FLETES'); setF(ws, 27, 7, 'H21', 0); put(ws, 28, 6, 'VR A BASE DE VENTA'); setF(ws, 28, 7, 'H26-H27-H28', sumI(Fb, 7));
+    put(ws, 30, 6, 'Control: neto de venta - base de venta (debe ser 0)'); setF(ws, 30, 7, 'H23-H29', 0);
+    XLSX.utils.book_append_sheet(wb, fin(ws, [20, 28, 22, 24, 22, 3, 30, 18]), 'Vta Bogota'); }
   // Resumen
   const nota = f => /^(VN|ND)/i.test(f[6]), fa = F.filter(f => !nota(f)), no = F.filter(nota), sm = (A, i) => A.reduce((a, f) => a + f[i], 0);
-  const NS = '"<>VN",' + RG('H') + ',"<>ND"';
+  const NS = '"<>VN",' + RG('I') + ',"<>ND"';
   const rs = [['Concepto', 'Valor'], ['Ventas brutas (facturas)', 0], ['Descuentos', 0], ['Ventas netas facturas (subtotal)', 0], ['Notas crédito/débito (subtotal)', 0], ['VENTA NETA TOTAL (subtotal)', 0]], wr = sh(rs, [38, 20]);
-  setF(wr, 1, 1, 'SUMIFS(' + RG('M') + ',' + RG('H') + ',' + NS + ')', sm(fa, 11)); setF(wr, 2, 1, '-SUMIFS(' + RG('J') + ',' + RG('H') + ',' + NS + ')', -sm(fa, 8)); setF(wr, 3, 1, 'SUMIFS(' + RG('I') + ',' + RG('H') + ',' + NS + ')', sm(fa, 7));
-  setF(wr, 4, 1, 'SUM(' + RG('I') + ')-B4', sm(no, 7)); setF(wr, 5, 1, 'SUM(' + RG('I') + ')', sm(F, 7)); XLSX.utils.book_append_sheet(wb, wr, 'Resumen');
+  setF(wr, 1, 1, 'SUMIFS(' + RG('N') + ',' + RG('I') + ',' + NS + ')', sm(fa, 11)); setF(wr, 2, 1, '-SUMIFS(' + RG('K') + ',' + RG('I') + ',' + NS + ')', -sm(fa, 8)); setF(wr, 3, 1, 'SUMIFS(' + RG('J') + ',' + RG('I') + ',' + NS + ')', sm(fa, 7));
+  setF(wr, 4, 1, 'SUM(' + RG('J') + ')-B4', sm(no, 7)); setF(wr, 5, 1, 'SUM(' + RG('J') + ')', sm(F, 7)); XLSX.utils.book_append_sheet(wb, wr, 'Resumen');
   // Referencias sin línea (para corregir referencias mal creadas)
   const SLn = (SL || []).map(x => { const r = x.slice(); r[6] = r[6] || '(sin referencia)'; return r; }).sort((a, b) => a[6].localeCompare(b[6], 'es', { numeric: true }) || a[1].localeCompare(b[1]));
   if (!SLn.length) { XLSX.utils.book_append_sheet(wb, sh([['Todas las referencias vendidas tienen línea asignada']]), 'Refs sin linea'); }
