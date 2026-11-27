@@ -1808,7 +1808,24 @@ async function girFabOk(id) {
 }
 /* ===== Clientes: cupo, aprobado, bloqueos y reportados (Siesa API_v2_Clientes + cartera abierta) ===== */
 const CCL_API = 'https://vgjsfbudhrytvcgptdij.supabase.co/functions/v1/cartera-clientes';
-let CCL = { rows: null, act: '', msg: '', cargando: false, q: '', fk: '' };
+let CCL = { rows: null, act: '', msg: '', cargando: false, q: '', fk: '', mes: '', pagMsg: '' };
+const cclCorr = r => r._solo ? 0 : Math.round(((r.saldo || 0) - (r.venc || 0)) * 100) / 100;
+const cclNit = v => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
+// «Pagado en el mes»: suma de lo que entró al banco (extracto) por NIT en el mes elegido; se muestra en la primera sucursal de cada cliente para no duplicar totales
+async function cclPagos() {
+  if (!CCL.rows) return; if (!CCL.mes) CCL.mes = ((D && D.hoy) || new Date().toISOString().slice(0, 10)).slice(0, 7);
+  CCL.pagMsg = 'Trayendo lo pagado en ' + CCL.mes + ' del extracto…'; const e0 = $('cclpm'); if (e0) e0.textContent = CCL.pagMsg;
+  try {
+    const R = await extCargarMes(CCL.mes), M = new Map(); let n = 0, sin = 0;
+    R.forEach(r => { const m = Number(r.monto) || 0; if (m <= 0 || r._arr) return; const k = cclNit(r.nit || (EXT.cidx && EXT.cidx.get(String(r.ref_cliente)) || {}).nit); if (!k) { sin += m; return; } M.set(k, (M.get(k) || 0) + m); n++; });
+    const vistos = new Set(); CCL.rows.forEach(r => { const k = cclNit(r.nit); r._pag = 0; if (k && M.has(k) && !vistos.has(k)) { r._pag = M.get(k); vistos.add(k); } });
+    CCL.pagTot = [...M.values()].reduce((a, b) => a + b, 0); CCL.pagSin = sin; CCL.pagFuera = [...M.keys()].filter(k => !vistos.has(k)).length;
+    CCL.pagMsg = 'Extracto de ' + CCL.mes + ': ' + fm(CCL.pagTot) + ' pagados por ' + vistos.size + ' clientes' + (sin ? ' · ' + fm(sin) + ' aún sin identificar' : '') + (CCL.pagFuera ? ' · ' + CCL.pagFuera + ' NIT del extracto no están en esta lista' : '');
+  } catch (e) { CCL.pagMsg = 'No se pudo traer el extracto: ' + e.message; }
+  const e = $('cclpm'); if (e) e.textContent = CCL.pagMsg; if ($('xg_ccl')) cclRefrescar();
+}
+function cclMes(v) { CCL.mes = v; cclPagos(); }
+function cclMesesOpt() { const hoy = ((D && D.hoy) || new Date().toISOString().slice(0, 10)), y = +hoy.slice(0, 4), m = +hoy.slice(5, 7), o = []; for (let i = 0; i < 12; i++) { const d = new Date(Date.UTC(y, m - 1 - i, 1)), v = d.toISOString().slice(0, 7); o.push('<option value="' + v + '"' + (v === CCL.mes ? ' selected' : '') + '>' + v + '</option>'); } return o.join(''); }
 const cclApi = async b => { try { const r = await fetch(CCL_API + '?k=' + encodeURIComponent(token()), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(b || {}) }); return await r.json(); } catch (e) { return { error: 'Sin conexión' }; } };
 const cclBloq = r => [r.blq ? 'Bloqueado' : '', r.bcupo ? 'Bloqueo por cupo' : '', r.bmora ? 'Bloqueo por mora' : ''].filter(Boolean).join(' · ') || 'Sin bloqueo';
 const CCL_COLS = [
@@ -1819,8 +1836,10 @@ const CCL_COLS = [
   { k: 'saldo', t: 'Saldo cartera', num: 1, sum: 1, v: r => r.saldo, h: r => fm(r.saldo) },
   { k: 'disp', t: 'Cupo disponible', num: 1, sum: 1, v: r => Math.round(r.cupo - r.saldo), h: r => '<b style="color:' + (r.cupo - r.saldo < 0 ? '#b91c1c' : '#15803d') + '">' + fm(r.cupo - r.saldo) + '</b>' },
   { k: 'uso', t: '% cupo usado', num: 1, v: r => r.cupo > 0 ? Math.round(r.saldo / r.cupo * 100) : (r.saldo > 0 ? 999 : 0), h: r => r.cupo > 0 ? Math.round(r.saldo / r.cupo * 100) + '%' : (r.saldo > 0 ? 'Sin cupo' : '–') },
-  { k: 'venc', t: 'Vencido', num: 1, sum: 1, v: r => r.venc, h: r => r.venc ? '<span style="color:#b91c1c">' + fm(r.venc) + '</span>' : '–' },
-  { k: 'mora', t: 'Mora máx. (días)', num: 1, v: r => r.mora, h: r => r.mora ? r.mora : '–' },
+  { k: 'venc', t: 'Cartera vencida', num: 1, sum: 1, v: r => r.venc, h: r => r.venc ? '<span style="color:#b91c1c">' + fm(r.venc) + '</span>' : '–' },
+  { k: 'corr', t: 'Cartera corriente', num: 1, sum: 1, v: cclCorr, h: r => cclCorr(r) ? fm(cclCorr(r)) : '–' },
+  { k: 'mora', t: 'Días en mora', num: 1, v: r => r.mora, h: r => r.mora ? '<b style="color:#b91c1c">' + r.mora + '</b>' : '–' },
+  { k: 'pag', t: 'Pagado en el mes', num: 1, sum: 1, v: r => Math.round(r._pag || 0), h: r => r._pag ? '<b style="color:#15803d">' + fm(r._pag) + '</b>' : '–' },
   { k: 'est', t: 'Estado', v: r => r._solo ? '—' : (r.act ? 'Activo' : 'Inactivo') },
   { k: 'bloq', t: 'Bloqueo', v: cclBloq, h: r => { const t = cclBloq(r); return t === 'Sin bloqueo' ? '<span class="n">' + t + '</span>' : '<b style="color:#b91c1c">' + esc(t) + '</b>' + (r.mot ? ' <span class="n">' + esc(r.mot) + '</span>' : ''); } },
   { k: 'rep', t: 'Reportado', v: r => r.rep ? 'Sí' : 'No', h: r => '<span style="cursor:pointer" title="' + esc((r.orep || '') + (r.urep ? ' · ' + usrNom(r.urep) : '')) + '" onclick="cclRep(\'' + esc(r.nit) + '\')">' + (r.rep ? '<b style="color:#b91c1c">🚩 Sí</b>' : '<span class="n">No · marcar</span>') + '</span>' },
@@ -1840,7 +1859,7 @@ const CCL_COLS = [
 ];
 async function cclVista() {
   if (!CCL.rows && !CCL.cargando) { CCL.cargando = true; $('cont').innerHTML = cargaHtml('Cargando clientes'); const j = await cclApi({ accion: 'listar' }); CCL.cargando = false; if (j && j.ok) { CCL.rows = j.rows; CCL.act = j.actualizado || ''; await cclCesLeer(); } else { $('cont').innerHTML = '<div class="err">' + esc((j && j.error) || 'No se pudo cargar') + '</div>'; return; } }
-  cclPintar();
+  cclPintar(); if (!CCL.pagMsg) cclPagos();
 }
 const cclSobre = r => r.saldo > r.cupo && r.saldo > 0, cclBlq = r => !!(r.blq || r.bcupo || r.bmora);
 function cclCx(r) { return r._solo ? 'Sin cruce Siesa' : !r.ce ? 'Sin Cesce' : ({ exacto: 'NIT exacto', dv: 'NIT sin dígito verif.', nombre: 'Por nombre' }[r.ce.tipo_match] || 'NIT exacto'); }
@@ -1893,7 +1912,8 @@ async function cclCesSubir(inp) {
 }
 function cclPintar() {
   $('cont').innerHTML = '<div class="card"><h2>🪪 Clientes · cupo aprobado, cartera y reportados</h2><div style="padding:0 14px 8px;font-size:12px;color:#64748b">Cupo, fecha de aprobación, calificación y bloqueos vienen del maestro de clientes de Siesa (una fila por cliente y sucursal). Cupo disponible = cupo aprobado − saldo de cartera. «Reportado» lo marcas tú (clic en la celda) y queda guardado con fecha y observación. Clic en un cuadro de abajo para ver solo esos clientes (otro clic lo quita). El Excel de Cesce (cartera asegurada) se sube cada semana: se cruza por NIT, sin el dígito de verificación o por nombre, y lo que cambió de NIT queda marcado en amarillo/naranja.</div>'
-    + '<div class="bar" style="padding:0 14px 8px;gap:8px;flex-wrap:wrap"><input id="cclq" type="search" placeholder="🔍 Buscar NIT, cliente, sucursal o vendedor…" value="' + esc(CCL.q || '') + '" oninput="cclBuscar(this.value)" style="min-width:280px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit"><button class="btn" onclick="cclActualizar()">🔄 Actualizar desde Siesa</button><button class="btn" onclick="document.getElementById(\'cclfile\').click()" title="Excel «Portfolio» (totalidad de la cartera) de Cesce">📥 Subir Excel de Cesce</button><input type="file" id="cclfile" accept=".xlsx,.xls" style="display:none" onchange="cclCesSubir(this)"><span id="cclmsg" style="font-size:12px">' + (CCL.msg || ((CCL.act ? 'Datos de Siesa al ' + esc(CCL.act) : 'Aún no se han traído los clientes de Siesa: pulsa Actualizar.') + (CCL.cesAct ? ' · Cesce cargado el ' + esc(CCL.cesAct.split(' ')[0].slice(0, 10)) : ''))) + '</span></div>'
+    + '<div class="bar" style="padding:0 14px 8px;gap:8px;flex-wrap:wrap"><input id="cclq" type="search" placeholder="🔍 Buscar NIT, cliente, sucursal o vendedor…" value="' + esc(CCL.q || '') + '" oninput="cclBuscar(this.value)" style="min-width:280px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit"><button class="btn" onclick="cclActualizar()">🔄 Actualizar desde Siesa</button><button class="btn" onclick="document.getElementById(\'cclfile\').click()" title="Excel «Portfolio» (totalidad de la cartera) de Cesce">📥 Subir Excel de Cesce</button><input type="file" id="cclfile" accept=".xlsx,.xls" style="display:none" onchange="cclCesSubir(this)"><label class="n" style="display:flex;align-items:center;gap:6px">Pagado en el mes <select onchange="cclMes(this.value)" style="padding:7px;border:1px solid #cbd5e1;border-radius:8px">' + cclMesesOpt() + '</select></label><span id="cclmsg" style="font-size:12px">' + (CCL.msg || ((CCL.act ? 'Datos de Siesa al ' + esc(CCL.act) : 'Aún no se han traído los clientes de Siesa: pulsa Actualizar.') + (CCL.cesAct ? ' · Cesce cargado el ' + esc(CCL.cesAct.split(' ')[0].slice(0, 10)) : ''))) + '</span></div>'
+    + '<div id="cclpm" class="n" style="padding:0 14px 6px;color:#0f766e;font-weight:600">' + esc(CCL.pagMsg || '') + '</div>'
     + '<div class="kpis" id="cclk" style="padding:0 14px 8px"></div>'
     + xgBar('ccl') + '<div class="tw" id="xg_ccl"></div></div>';
   cclRefrescar();
@@ -1901,7 +1921,7 @@ function cclPintar() {
 async function cclActualizar() {
   CCL.msg = 'Trayendo clientes de Siesa… (puede tardar hasta un minuto)'; cclPintar(); const j = await cclApi({ accion: 'actualizar' });
   if (!j || !j.ok) { CCL.msg = 'No se pudo iniciar: ' + ((j && j.error) || ''); cclPintar(); return; }
-  const a0 = CCL.act; let t = 0; const iv = setInterval(async () => { t++; const x = await cclApi({ accion: 'listar' }); if (x && x.ok && (x.actualizado !== a0 || x.rows.length !== (CCL.rows || []).length || t > 12)) { clearInterval(iv); CCL.rows = x.rows; CCL.act = x.actualizado || ''; CCL.msg = t > 12 && x.actualizado === a0 ? 'Siesa no respondió a tiempo; vuelve a intentar.' : ''; if (TAB === 'ccl') cclPintar(); } }, 8000);
+  const a0 = CCL.act; let t = 0; const iv = setInterval(async () => { t++; const x = await cclApi({ accion: 'listar' }); if (x && x.ok && (x.actualizado !== a0 || x.rows.length !== (CCL.rows || []).length || t > 12)) { clearInterval(iv); CCL.rows = x.rows; CCL.act = x.actualizado || ''; CCL.msg = t > 12 && x.actualizado === a0 ? 'Siesa no respondió a tiempo; vuelve a intentar.' : ''; if (TAB === 'ccl') cclPintar(); cclPagos(); } }, 8000);
 }
 async function cclRep(nit) {
   const r = (CCL.rows || []).find(x => x.nit === nit); if (!r) return;
