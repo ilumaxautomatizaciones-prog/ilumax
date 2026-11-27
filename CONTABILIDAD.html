@@ -556,10 +556,15 @@ async function icaCalcular() {
 }
 function icaCalc(F, G, ps) {
   const ciu = new Map(), get = c => { let o = ciu.get(c); if (!o) { o = { ciu: c, bru: 0, dsc: 0, dev: 0, conf: 0, mb: 0, md: 0, mv: 0 }; ciu.set(c, o); } return o; };
-  const aj = ICA_AJ.map(a => ({ nit: a.nit, n: a.n, bru: 0, dsc: 0, dev: 0 }));
+  const aj = ICA_AJ.map(a => ({ nit: a.nit, n: a.n, bru: 0, dsc: 0, dev: 0 })), z = () => ({ bru: 0, dsc: 0, dev: 0 }), X = { bB: z(), bA: z(), J: z(), C: z(), S: { all: z(), bB: z(), bA: z() } };
   F.forEach(f => {
     const dev = /^VN/i.test(f[6]), o = get(f[3] || 'SIN CIUDAD'), b = dev ? 0 : f[11], d = dev ? 0 : f[8], v = dev ? -f[7] : 0;
     o.bru += b; o.dsc += d; o.dev += v;
+    const as = /ASEO/i.test(f[5]), add = t => { t.bru += b; t.dsc += d; t.dev += v; };
+    if (icaBog(f[3])) add(as ? X.bA : X.bB);
+    if (f[1] === '900480569' && !icaBog(f[3])) add(X.J);
+    if (f[1] === '860007336' && f[3] === 'Madrid') add(X.C);
+    if (f[1] === '800242106') { add(X.S.all); if (icaBog(f[3])) add(as ? X.S.bA : X.S.bB); }
     ICA_AJ.forEach((a, i) => { if (f[1] === a.nit && (!a.ci || a.ci.includes(f[3])) && !icaBog(f[3])) { aj[i].bru += b; aj[i].dsc += d; aj[i].dev += v; o.mb += b; o.md += d; o.mv += v; } });
   });
   G.forEach(g => { get(g[5] || 'SIN CIUDAD').conf += g[6]; });
@@ -571,7 +576,7 @@ function icaCalc(F, G, ps) {
   const B = [...ciu.values()].filter(o => icaBog(o.ciu)), s = k => B.reduce((a, o) => a + o[k], 0);
   const liq = { bru: s('bru'), dsc: s('dsc'), dev: s('dev'), conf: s('conf'), ajBru: ajT.bru, ajDsc: ajT.dsc, ajDev: ajT.dev };
   liq.base = liq.bru + liq.ajBru - liq.dsc - liq.ajDsc - liq.conf - liq.dev - liq.ajDev;
-  return { rows, aj: aj.map(a => ({ n: a.n, nit: a.nit, bru: Math.round(a.bru), dsc: Math.round(a.dsc), dev: Math.round(a.dev), net: Math.round(a.bru - a.dsc - a.dev) })), G, liq, rango: ps[0].ini + ' a ' + ps[ps.length - 1].fin, per: ps.map(x => x.p).join('-') };
+  return { rows, aj: aj.map(a => ({ n: a.n, nit: a.nit, bru: Math.round(a.bru), dsc: Math.round(a.dsc), dev: Math.round(a.dev), net: Math.round(a.bru - a.dsc - a.dev) })), G, liq, rango: ps[0].ini + ' a ' + ps[ps.length - 1].fin, per: ps.map(x => x.p).join('-'), ps, X, confTot: G.reduce((a, g) => a + g[6], 0) };
 }
 function icaPaint() {
   const D = ICA.D; if (!D || !$('xg_ica' + ICA.vista)) return; const c = (k, t, o) => Object.assign({ k, t, v: r => r[k] }, o || {}), n = (k, t) => c(k, t, { num: true, h: r => fm(r[k]), sum: true }), id = 'ica' + ICA.vista;
@@ -580,27 +585,68 @@ function icaPaint() {
   else xgInit(id, [c('per', 'Periodo'), c('cta', 'Cuenta'), c('ncta', 'Nombre cuenta', { wrap: true }), c('nit', 'NIT'), c('ter', 'Tercero', { wrap: true }), c('ciu', 'Ciudad'), n('val', 'Valor')], { rows: D.G.map(g => ({ per: g[0], cta: g[1], ncta: g[2], nit: g[3], ter: g[4], ciu: g[5], val: g[6] })), nombre: 'ICA_descuentos_confidenciales_' + D.per });
   xgPaint(id);
 }
-function icaExcel() {
-  const D = ICA.D; if (!D) return; const L = D.liq, wb = XLSX.utils.book_new(); wb.Workbook = { CalcPr: { fullCalcOnLoad: true } };
-  const F = (ws, a, f, v) => { ws[a] = { t: 'n', f, v: v || 0, z: '#,##0' }; };
-  const ws = XLSX.utils.aoa_to_sheet([['LIQUIDACIÓN ICA · BOGOTÁ'], ['Periodo: ' + D.rango], [], ['Concepto', 'Valor'],
-    ['Ventas brutas Bogotá', Math.round(L.bru)], ['(+) Ajuste de conciliación (Jerónimo, Sodimac, Colsubsidio Madrid, Rizoma)', Math.round(L.ajBru)], ['Total ingresos brutos Bogotá', 0],
-    ['(−) Descuentos comerciales', Math.round(L.dsc + L.ajDsc)], ['(−) Descuentos confidenciales (Siesa)', Math.round(L.conf)], ['(−) Devoluciones', Math.round(L.dev + L.ajDev)], ['Total descuentos y devoluciones', 0],
-    ['BASE GRAVABLE BOGOTÁ', 0], ['Tarifa por mil', ICA.tarifa], ['ICA estimado', 0]]);
-  ws['!cols'] = [{ wch: 70 }, { wch: 20 }];
-  for (let r = 5; r <= 10; r++) if (ws['B' + r] && ws['B' + r].t === 'n') ws['B' + r].z = '#,##0';
-  F(ws, 'B7', 'B5+B6', L.bru + L.ajBru); F(ws, 'B11', 'SUM(B8:B10)', L.dsc + L.ajDsc + L.conf + L.dev + L.ajDev); F(ws, 'B12', 'B7-B11', L.base); F(ws, 'B14', 'B12*B13/1000', L.base * ICA.tarifa / 1000);
-  XLSX.utils.book_append_sheet(wb, ws, 'LIQUIDACION');
-  const tabla = (nombre, enc, filas, w, totDesde) => {
-    const w2 = XLSX.utils.aoa_to_sheet([enc].concat(filas)); w2['!cols'] = w.map(x => ({ wch: x })); const n = filas.length + 1;
-    filas.forEach((f, i) => f.forEach((v, c) => { if (typeof v === 'number') { const a = XLSX.utils.encode_cell({ r: i + 1, c }); w2[a].z = '#,##0'; } }));
-    if (totDesde != null) { const t = n + 1; w2['A' + (t + 1)] = { t: 's', v: 'TOTAL' }; for (let c = totDesde; c < enc.length; c++) { const col = String.fromCharCode(65 + c); w2[col + (t + 1)] = { t: 'n', f: 'SUM(' + col + '2:' + col + n + ')', v: filas.reduce((a, f) => a + (f[c] || 0), 0), z: '#,##0' }; } w2['!ref'] = 'A1:' + String.fromCharCode(64 + enc.length) + (t + 1); }
-    w2['!autofilter'] = { ref: 'A1:' + String.fromCharCode(64 + enc.length) + n }; XLSX.utils.book_append_sheet(wb, w2, nombre);
-  };
-  tabla('Por ciudad', ['Ciudad', 'Ventas brutas', 'Descuentos comerciales', 'Devoluciones', 'Desc. confidenciales', 'Ajuste de conciliación', 'Neta a declarar'], D.rows.map(r => [r.ciu, r.bru, r.dsc, r.dev, r.conf, r.mov, r.net]), [26, 18, 20, 16, 20, 20, 18], 1);
-  tabla('Ajuste conciliacion', ['Cliente', 'NIT', 'Ventas brutas fuera de Bogotá', 'Descuentos', 'Devoluciones', 'Neto a sumar en Bogotá'], D.aj.map(a => [a.n, a.nit, a.bru, a.dsc, a.dev, a.net]), [44, 14, 26, 16, 16, 24], 2);
-  tabla('Desc confidenciales', ['Periodo', 'Cuenta', 'Nombre cuenta', 'NIT', 'Tercero', 'Ciudad', 'Valor'], D.G.map(g => [g[0], g[1], g[2], g[3], g[4], g[5], g[6]]), [9, 11, 36, 14, 40, 24, 16], 6);
-  XLSX.writeFile(wb, 'LIQUIDACION_ICA_' + D.per + '.xlsx');
+function icaLlenar(wb, I) {
+  const L = wb.getWorksheet('LIQUIDACION '), Cn = wb.getWorksheet('Conciliacion'), C4 = wb.getWorksheet('Cuenta 4'), R = wb.getWorksheet('Retencionenlafuente');
+  const rd = x => Math.round(x || 0), r2 = x => Math.round((x || 0) * 100) / 100, aviso = { sinFila: [], ret: 0 };
+  L.getCell('B9').value = 'AÑO GRAVABLE ' + I.anio; L.getCell('B10').value = I.texto; L.getCell('B12').value = 'Fecha de vencimiento: ';
+  const v = I.v;
+  L.getCell('C16').value = rd(v.bruB); L.getCell('C18').value = rd(v.bruA); L.getCell('C47').value = rd(v.dscB); L.getCell('C49').value = rd(v.dscA);
+  L.getCell('C50').value = rd(v.conf); L.getCell('F50').value = { formula: rd(v.confTot) + '-C50', result: rd(v.confTot) - rd(v.conf) };
+  L.getCell('C52').value = rd(v.devB); L.getCell('C54').value = rd(v.devA); L.getCell('C70').value = I.tarifa;
+  ['M68', 'K72', 'F73', 'H73', 'F74', 'M43'].forEach(a => { L.getCell(a).value = null; });
+  L.getCell('C97').value = { formula: 'C16-C47-C52', result: rd(v.bruB) - rd(v.dscB) - rd(v.devB) };
+  // Conciliación
+  const put = (a, x) => { Cn.getCell(a).value = rd(x); };
+  put('C14', I.J.bru); put('D14', I.J.dsc); put('E14', I.J.dev); put('C16', I.C.bru); put('D16', I.C.dsc); put('E16', I.C.dev);
+  put('C19', I.S.all.bru); put('D19', I.S.all.dsc); put('E19', I.S.all.dev);
+  put('C64', I.S.bB.bru); put('D64', I.S.bB.dev); put('E64', I.S.bB.dsc); put('C65', I.S.bA.bru); put('D65', I.S.bA.dev); put('E65', I.S.bA.dsc);
+  Cn.getCell('B62').value = 'Ventas Bogota Sodimac  ' + I.texto + ' ' + I.anio;
+  // Retención en la fuente (reteica Bogotá)
+  const ret = (I.ret || []).filter(x => x[2] > 0).slice(0, 60), n = ret.length || 1, tot = R.getCell('C9'), st = { a: R.getCell('A2').style, b: R.getCell('B2').style, c: R.getCell('C2').style, t: Object.assign({}, tot.style) };
+  tot.value = null; for (let r = 2; r <= Math.max(9, n + 2); r++) ['A', 'B', 'C'].forEach(c => { R.getCell(c + r).value = null; });
+  ret.forEach((x, i) => { const r = i + 2; R.getCell('A' + r).value = /^\d+$/.test(x[0]) ? Number(x[0]) : x[0]; R.getCell('B' + r).value = x[1]; R.getCell('C' + r).value = rd(x[2]); R.getCell('A' + r).style = st.a; R.getCell('B' + r).style = st.b; R.getCell('C' + r).style = st.c; });
+  const tr = n + 2, sum = ret.reduce((a, x) => a + rd(x[2]), 0); R.getCell('C' + tr).value = { formula: 'SUM(C2:C' + (n + 1) + ')', result: sum }; R.getCell('C' + tr).style = st.t;
+  L.getCell('C82').value = { formula: '+Retencionenlafuente!C' + tr, result: sum };
+  const rm = new Map(ret.map(x => [x[0], rd(x[2])])); [['D6', '900480569'], ['D7', '800242106'], ['D8', '860007336'], ['D9', '830069115']].forEach(([a, nit]) => { Cn.getCell(a).value = rm.get(nit) || 0; });
+  // Cuenta 4 (Estado de resultados integral · NIIF)
+  if (I.c4) {
+    const ps = I.ps, mk = p => { const m = new Map(); (I.c4 || []).forEach(f => { if (f[3] === p && !/^421020/.test(f[0])) m.set(f[0], (m.get(f[0]) || 0) + f[2]); }); (I.g || []).forEach(g => { if (g[0] === p) m.set(g[1], (m.get(g[1]) || 0) + g[6]); }); return m; };
+    const maps = [mk(ps[0].p), ps[1] ? mk(ps[1].p) : new Map()], rows = [];
+    for (let r = 11; r <= 90; r++) { const a = C4.getCell('A' + r).value, code = a == null ? '' : String(a).trim(); if (/^\d+$/.test(code)) rows.push({ r, code }); }
+    const leaf = rows.filter(x => x.code.length >= 8), leafCodes = new Set(leaf.map(x => x.code));
+    rows.forEach((x, i) => {
+      [['G', 0], ['H', 1]].forEach(([c, k]) => {
+        let s = 0;
+        if (x.code.length >= 8) s = maps[k].get(x.code) || 0;
+        else for (let q = i + 1; q < rows.length && rows[q].code.length > x.code.length; q++) if (rows[q].code.length >= 8) s += maps[k].get(rows[q].code) || 0;
+        C4.getCell(c + x.r).value = r2(s);
+      });
+    });
+    maps.forEach(m => m.forEach((val, acc) => { if (Math.abs(val) >= 1 && !leafCodes.has(acc)) aviso.sinFila.push(acc + ' ' + Math.round(val)); }));
+    const f = p => p.slice(0, 4) + '/' + p.slice(4); C4.getCell('G10').value = f(ps[0].p) + '-' + f(ps[0].p); C4.getCell('H10').value = ps[1] ? f(ps[1].p) + '-' + f(ps[1].p) : null;
+    C4.getCell('I9').value = ps[1] ? 'TOTAL BIMESTRE ' : 'TOTAL MES ';
+  }
+  wb.calcProperties = Object.assign(wb.calcProperties || {}, { fullCalcOnLoad: true });
+  return aviso;
+}
+function icaCargarExcelJS() { return window.ExcelJS ? Promise.resolve() : new Promise((ok, no) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js'; s.onload = ok; s.onerror = () => no(new Error('No cargó ExcelJS (revisa internet)')); document.head.appendChild(s); }); }
+async function icaExcel() {
+  const D = ICA.D; if (!D) return;
+  try {
+    icaMsg('Armando el Excel con el formato de la liquidación…'); await icaCargarExcelJS();
+    const tp = await fetch('ICA_plantilla.xlsx?v=1'); if (!tp.ok) throw new Error('No se encontró ICA_plantilla.xlsx junto a esta página (súbelo a GitHub con CONTABILIDAD.html)');
+    const buf = await tp.arrayBuffer();
+    if (!D.c4) { const c4 = []; for (const p of D.ps) { icaMsg('Siesa: estado de resultados NIIF ' + p.p + '…'); const r = await api('contabilidad-ica', { accion: 'cuenta4', periodo: p.p }); if (!r || !r.ok) throw new Error((r && r.error) || 'Siesa no respondió (cuenta 4)'); r.filas.forEach(f => c4.push([f[0], f[1], f[2], p.p])); } D.c4 = c4; }
+    if (!D.ret) { icaMsg('Siesa: retenciones de ICA Bogotá…'); const r = await api('contabilidad-ica', { accion: 'retencion', p1: D.ps[0].p, p2: D.ps[D.ps.length - 1].p }); if (!r || !r.ok) throw new Error((r && r.error) || 'Siesa no respondió (retenciones)'); D.ret = r.filas; }
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf); const m = p => +p.p.slice(4) - 1, X = D.X, L = D.liq;
+    const texto = D.ps.length > 1 ? INF_MES[m(D.ps[0])] + '-' + INF_MES[m(D.ps[1])] : INF_MES[m(D.ps[0])];
+    const av = icaLlenar(wb, { anio: D.ps[0].p.slice(0, 4), texto, ps: D.ps, tarifa: ICA.tarifa / 1000, c4: D.c4, g: D.G, ret: D.ret,
+      v: { bruB: X.bB.bru, bruA: X.bA.bru, dscB: X.bB.dsc, dscA: X.bA.dsc, devB: X.bB.dev, devA: X.bA.dev, conf: L.conf, confTot: D.confTot }, J: X.J, C: X.C, S: X.S });
+    const out = await wb.xlsx.writeBuffer(), a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'LIQ_IMPUESTO_ICA_' + texto + '_' + D.ps[0].p.slice(0, 4) + '.xlsx'; a.click();
+    const dc = D.c4.filter(f => /^421020/.test(f[0])).reduce((t, f) => t + f[2], 0);
+    ICA.msg = '✅ Excel descargado.' + (Math.abs(dc) >= 1 ? ' Diferencia en cambio (42102005, ' + fm(Math.round(dc)) + ') está en Siesa pero no se incluye, igual que en tu Cuenta 4 NIIF.' : '') + (av.sinFila.length ? ' Cuentas de Siesa sin fila en la hoja Cuenta 4: ' + av.sinFila.join(', ') + '.' : '') + ' La hoja Retencionenlafuente lleva lo contabilizado en Siesa (13551821): cámbialo por el valor enviado por cada cliente si difiere.';
+  } catch (e) { if (String(e.message) !== 'auth') ICA.msg = 'No se pudo armar el Excel: ' + e.message; }
+  pintar();
 }
 
 /* ===== Informe de ventas por cliente (Excel con todas las hojas) ===== */
