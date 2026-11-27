@@ -502,19 +502,20 @@ function pintar() {
   const tabs = '<div class="tabs" style="padding:0 0 12px">' + [['conf', '📄 Descuentos confidenciales (CPR)'], ['rev', '↩️ Reversos / cruce de cuentas'], ['inv', '📦 Inventario por corte (Siesa)'], ['inf', '📊 Informe de ventas (Excel)'], ['reve', '👥 Reversos cruce de cuentas · empleados']].map(t => '<div class="tab ' + (S.vista === t[0] ? 'on' : '') + '" onclick="S.vista=\'' + t[0] + '\';try{localStorage.setItem(\'ca_vista\',S.vista)}catch(e){};if(S.vista===\'reve\')revTodos();else if(S.vista===\'inv\')ivInicio();else pintar();scrollTo(0,0)">' + t[1] + '</div>').join('') + '</div>';
   $('app').innerHTML = tabs + (S.vista === 'inf' ? infHtml() : S.vista === 'inv' ? ivHtml() : S.vista === 'rev' || S.vista === 'reve' ? revHtml() : h);
   if (S.vista === 'inv') { if (IV.cortes === null) { IV.cortes = []; ivCortes(); } ivPaint(); }
-  if (S.vista === 'inf') infPaint();
+  if (S.vista === 'inf') { infPaint(); if (!INF.auto) { INF.auto = true; infCargar(); } }
 }
 
 /* ===== Informe de ventas por cliente (Excel con todas las hojas) ===== */
-const INF = { desde: '', hasta: '', busy: false, msg: '', res: null, data: null, vista: 'bd' };
+const INF = { desde: '', hasta: '', busy: false, msg: '', res: null, data: null, vista: 'bd', anio: '', per: '', auto: false, info: '' };
 function infHtml() {
-  if (!INF.hasta) { const h = new Date(Date.now() - 5 * 3600e3), y = h.getUTCFullYear(), m = h.getUTCMonth(); INF.hasta = h.toISOString().slice(0, 10); INF.desde = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10); }
+  if (!INF.per) { const h = new Date(Date.now() - 5 * 3600e3); INF.anio = String(h.getUTCFullYear()); INF.per = 'b' + (Math.floor(h.getUTCMonth() / 2) + 1); }
   let h = '<div class="card"><h2>📊 Informe de ventas por cliente</h2><div class="bar" style="flex-wrap:wrap;gap:10px;align-items:end">'
-    + '<label class="n">Desde<br><input type="date" id="inf_d" value="' + INF.desde + '" style="padding:7px;border:1px solid #cbd5e1;border-radius:8px"></label>'
-    + '<label class="n">Hasta<br><input type="date" id="inf_h" value="' + INF.hasta + '" style="padding:7px;border:1px solid #cbd5e1;border-radius:8px"></label>'
-    + '<button class="btn" ' + (INF.busy ? 'disabled' : '') + ' onclick="infGenerar()">' + (INF.busy ? '⏳ Generando…' : '🔎 Ver informe') + '</button>' + (INF.data ? '<button class="btn g" onclick="infDescargar()">⬇ Descargar Excel (' + INF.data.d + ' a ' + INF.data.h + ')</button>' : '') + '</div>'
+    + '<label class="n">Año<br><select id="inf_a" onchange="infSel()" style="padding:7px;border:1px solid #cbd5e1;border-radius:8px">' + [0, 1, 2].map(o => { const y = String(new Date(Date.now() - 5 * 3600e3).getUTCFullYear() - o); return '<option' + (y === INF.anio ? ' selected' : '') + '>' + y + '</option>'; }).join('') + '</select></label>'
+    + '<label class="n">Periodo<br><select id="inf_p" onchange="infSel()" style="padding:7px;border:1px solid #cbd5e1;border-radius:8px">' + [1, 2, 3, 4, 5, 6].map(b => '<option value="b' + b + '"' + ('b' + b === INF.per ? ' selected' : '') + '>Bimestre ' + b + ' (' + INF_MES[b * 2 - 2].slice(0, 3) + '–' + INF_MES[b * 2 - 1].slice(0, 3) + ')</option>').join('') + INF_MES.map((m, i) => '<option value="m' + (i + 1) + '"' + ('m' + (i + 1) === INF.per ? ' selected' : '') + '>Mes: ' + m + '</option>').join('') + '</select></label>'
+    + '<button class="btn" ' + (INF.busy ? 'disabled' : '') + ' onclick="infGenerar()">' + (INF.busy ? '⏳ Actualizando…' : '🔄 Actualizar desde Siesa') + '</button>' + (INF.data ? '<button class="btn g" onclick="infDescargar()">⬇ Descargar Excel (' + INF.data.d + ' a ' + INF.data.h + ')</button>' : '') + '</div>'
+    + '<div class="n" style="padding:2px 14px 0;color:#0f766e;font-weight:600" id="inf_info">' + esc(INF.info) + '</div>'
     + '<div class="n" id="inf_msg" style="padding:8px 14px">' + esc(INF.msg) + '</div>'
-    + '<div class="n" style="padding:0 14px 12px;color:#64748b">Todo está con fórmulas (SUMIFS sobre la hoja BD). Hojas: BD, Por Linea, Por Tipo Dcto, Por Cliente, Hoja1, Hoja2, Sodimac y Vta Bogota. Datos directos de Siesa (facturas + notas crédito/débito). La <b>línea</b> es la que tiene cada referencia en Siesa (criterio LINEA del ítem, se consulta al generar) y la <b>ciudad</b> sale de las facturas de Excel ya cargadas («SIN CIUDAD» si no hay); en el Excel, un clic en «NO APLICA» lleva a la hoja <i>Refs sin linea</i> con las referencias por corregir y sus documentos. Un rango largo (varios meses) puede tardar unos minutos.</div></div>';
+    + '<div class="n" style="padding:0 14px 12px;color:#64748b">Todo está con fórmulas (SUMIFS sobre la hoja BD). Hojas: BD, Por Linea, Por Tipo Dcto, Por Cliente, Hoja1, Hoja2, Sodimac y Vta Bogota. Datos directos de Siesa (facturas + notas crédito/débito). La <b>línea</b> es la que tiene cada referencia en Siesa (criterio LINEA del ítem, se consulta al generar) y la <b>ciudad</b> sale de las facturas de Excel ya cargadas («SIN CIUDAD» si no hay); en el Excel, un clic en «NO APLICA» lleva a la hoja <i>Refs sin linea</i> con las referencias por corregir y sus documentos. El informe queda <b>guardado en la base de datos por mes</b>: al elegir el periodo se carga al instante. «Actualizar desde Siesa» vuelve a consultar y solo cambia lo que cambió (nuevas, modificadas o eliminadas); el mes en curso se puede actualizar cuando quieras.</div></div>';
   if (INF.data) {
     const nsl = INF.data.SL.length, nrf = new Set(INF.data.SL.map(x => x[6] || '(sin referencia)')).size, gid = 'inf' + INF.vista;
     h += '<div class="card"><div class="tabs" style="padding:0 14px 8px;flex-wrap:wrap">' + [['bd', '📋 Ventas por cliente (' + INF.data.F.length + ' filas)'], ['lin', '📚 Por línea'], ['tip', '🧾 Por tipo Dcto'], ['cli', '👥 Por cliente'], ['h1', '🔀 Canal × línea'], ['sod', '🏬 Sodimac'], ['bog', '📍 Vta Bogotá'], ['rsl', '⚠️ Referencias sin línea (' + nrf + ')'], ['sl', '📄 Sin línea · detalle (' + nsl + ' líneas)']].map(t => '<div class="tab ' + (INF.vista === t[0] ? 'on' : '') + '" onclick="INF.vista=\'' + t[0] + '\';pintar()">' + t[1] + '</div>').join('') + '</div>' + xgBar(gid) + '<div class="tw" id="xg_' + gid + '" style="max-height:68vh;overflow:auto"></div></div>';
@@ -532,28 +533,57 @@ function infRangos(d, h) {
   }
   return out;
 }
-async function infGenerar() {
-  const d = $('inf_d').value, h = $('inf_h').value; INF.desde = d; INF.hasta = h;
-  if (!d || !h || h < d) { infMsg('Revisa las fechas: «Hasta» debe ser igual o posterior a «Desde».'); return; }
-  if ((new Date(h) - new Date(d)) / 86400000 > 400) { infMsg('El rango máximo es de 13 meses.'); return; }
-  INF.busy = true; const btn = document.querySelector('.card .btn[onclick="infGenerar()"]'); if (btn) { btn.disabled = true; btn.textContent = '⏳ Generando…'; }
+const INF_MES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+function infHoy() { return new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10); }
+function infPeriodos() {
+  const y = +INF.anio, t = INF.per, ms = t[0] === 'b' ? [(+t.slice(1)) * 2 - 1, (+t.slice(1)) * 2] : [+t.slice(1)], hoy = infHoy();
+  return ms.map(m => ({ p: y + String(m).padStart(2, '0'), ini: y + '-' + String(m).padStart(2, '0') + '-01', fin: new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) })).filter(x => x.ini <= hoy);
+}
+function infFecha(t) { if (!t) return ''; const d = new Date(new Date(t).getTime() - 5 * 3600e3); return d.toISOString().slice(0, 10) + ' ' + d.toISOString().slice(11, 16); }
+function infSel() { INF.anio = $('inf_a').value; INF.per = $('inf_p').value; INF.data = null; INF.res = null; INF.msg = ''; INF.info = ''; infCargar(); }
+async function infCargar() {
+  const ps = infPeriodos(); if (!ps.length) { INF.data = null; INF.msg = 'Ese periodo todavía no empieza.'; pintar(); return; }
+  INF.cargando = true; infMsg('Cargando datos guardados…');
   try {
-    const rs = infRangos(d, h), acc = new Map(), SL = []; let canales = {}, lin = 0;
+    const r = await api('contabilidad-informe', { accion: 'leer', periodos: ps.map(x => x.p).join(',') });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'No respondió');
+    const F = [], SL = []; let lin = 0, hasta = '', antiguo = '', sin = [];
+    r.periodos.forEach(x => { if (x.vacio) { sin.push(x.p); return; } x.filas.forEach(f => F.push(f)); (x.sinlinea || []).forEach(z => SL.push(z)); lin += x.lineas || 0; if (x.cubierto_hasta && x.cubierto_hasta > hasta) hasta = x.cubierto_hasta; if (!antiguo || x.actualizado < antiguo) antiguo = x.actualizado; });
+    const d = ps[0].ini; INF.info = antiguo ? 'Guardado en la base · última actualización: ' + infFecha(antiguo) + (hasta ? ' · datos hasta ' + hasta : '') + (sin.length ? ' · sin guardar: ' + sin.join(', ') : '') : '';
+    if (!F.length) { INF.data = null; INF.res = null; INF.msg = 'Este periodo todavía no está guardado. Pulsa «Actualizar desde Siesa» (la primera vez tarda unos minutos).'; }
+    else { INF.data = { F, canales: r.canales || {}, SL, d, h: hasta || ps[ps.length - 1].fin, nLin: lin }; INF.vista = 'bd'; INF.res = { rango: d + ' a ' + INF.data.h, t: infRes(F, SL) }; INF.msg = '✅ ' + F.length + ' filas cargadas de la base (' + lin + ' líneas de Siesa). Para descargar el Excel pulsa el botón verde.'; }
+  } catch (e) { if (String(e.message) !== 'auth') INF.msg = 'No se pudo cargar: ' + e.message; }
+  finally { INF.cargando = false; pintar(); }
+}
+async function infGenerar() {
+  const ps = infPeriodos(); if (!ps.length) { infMsg('Ese periodo todavía no empieza.'); return; }
+  const d = ps[0].ini, h = ps[ps.length - 1].fin < infHoy() ? ps[ps.length - 1].fin : infHoy();
+  INF.busy = true; const btn = document.querySelector('.card .btn[onclick="infGenerar()"]'); if (btn) { btn.disabled = true; btn.textContent = '⏳ Actualizando…'; }
+  try {
+    const rs = infRangos(d, h), acc = new Map(), SL = []; let lin = 0;
     const meter = f => { const k = f.slice(0, 7).join('|'); const o = acc.get(k); if (o) { for (let i = 7; i < 12; i++) o[i] += f[i]; } else acc.set(k, f.slice()); };
     for (let i = 0; i < rs.length; i++) {
-      infMsg('Facturas ' + (i + 1) + ' de ' + rs.length + ' (' + rs[i][0] + ' a ' + rs[i][1] + ')…');
+      infMsg('Siesa: facturas ' + (i + 1) + ' de ' + rs.length + ' (' + rs[i][0] + ' a ' + rs[i][1] + ')…');
       let r = null; for (let t = 0; t < 2 && !(r && r.ok); t++) r = await api('contabilidad-informe', { accion: 'facturas', desde: rs[i][0], hasta: rs[i][1] });
       if (!r || !r.ok) throw new Error((r && r.error) || 'Siesa no respondió');
-      canales = r.canales || canales; lin += r.lineas || 0; r.filas.forEach(meter); (r.sinlinea || []).forEach(x => SL.push(x));
+      lin += r.lineas || 0; r.filas.forEach(meter); (r.sinlinea || []).forEach(x => SL.push(x));
     }
-    infMsg('Notas crédito y débito…');
+    infMsg('Siesa: notas crédito y débito…');
     let r = null; for (let t = 0; t < 2 && !(r && r.ok); t++) r = await api('contabilidad-informe', { accion: 'notas', desde: d, hasta: h });
     if (!r || !r.ok) throw new Error((r && r.error) || 'Siesa no respondió (notas)');
     lin += r.lineas || 0; r.filas.forEach(meter); (r.sinlinea || []).forEach(x => SL.push(x));
-    const F = [...acc.values()]; if (!F.length) { infMsg('No hay ventas en ese rango.'); return; }
-    INF.data = { F, canales, SL, d, h, nLin: lin }; INF.vista = 'bd'; INF.res = { rango: d + ' a ' + h, t: infRes(F, SL) }; INF.msg = '✅ Listo: ' + F.length + ' filas (' + lin + ' líneas de Siesa). Revisa y filtra aquí; con «Descargar Excel» baja el archivo con todas las hojas.'; pintar();
-  } catch (e) { if (String(e.message) !== 'auth') infMsg('No se pudo generar: ' + e.message); }
-  finally { INF.busy = false; const b = document.querySelector('.card .btn[onclick="infGenerar()"]'); if (b) { b.disabled = false; b.textContent = '🔎 Ver informe'; } }
+    const F = [...acc.values()], tot = { nuevas: 0, cambiadas: 0, borradas: 0, iguales: 0 };
+    for (let i = 0; i < ps.length; i++) {
+      infMsg('Guardando ' + ps[i].p + ' en la base (solo lo diferente)…');
+      const fin = ps[i].fin < h ? ps[i].fin : h, fm = F.filter(f => f[0] === ps[i].p), sm = SL.filter(x => x[0] === ps[i].p);
+      const g = await api('contabilidad-informe', { accion: 'guardar' }, { periodo: ps[i].p, filas: fm, sinlinea: sm, lineas: fm.length ? Math.round(lin * fm.reduce((a, f) => a + Math.abs(f[7]), 0) / (F.reduce((a, f) => a + Math.abs(f[7]), 0) || 1)) : 0, cubierto_hasta: fin });
+      if (!g || !g.ok) throw new Error((g && g.error) || 'No se pudo guardar ' + ps[i].p);
+      ['nuevas', 'cambiadas', 'borradas', 'iguales'].forEach(k => { tot[k] += g.resumen[k] || 0; });
+    }
+    INF.busy = false; await infCargar();
+    INF.msg = '✅ Actualizado: ' + tot.nuevas + ' filas nuevas · ' + tot.cambiadas + ' modificadas · ' + tot.borradas + ' eliminadas · ' + tot.iguales + ' sin cambio.' + (INF.data ? '' : ' No hay ventas en el periodo.'); pintar();
+  } catch (e) { if (String(e.message) !== 'auth') infMsg('No se pudo actualizar: ' + e.message); }
+  finally { INF.busy = false; const b = document.querySelector('.card .btn[onclick="infGenerar()"]'); if (b) { b.disabled = false; b.textContent = '🔄 Actualizar desde Siesa'; } }
 }
 function infRes(F, SL) {
   const nota = f => /^(VN|ND)/i.test(f[6]), fa = F.filter(f => !nota(f)), no = F.filter(nota), sm = (A, i) => A.reduce((a, f) => a + f[i], 0);
