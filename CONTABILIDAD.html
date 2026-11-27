@@ -640,11 +640,25 @@ function icaLlenar(wb, I) {
       [['G', 0], ['H', 1]].forEach(([c, k]) => {
         let s = 0;
         if (x.code.length >= 8) s = maps[k].get(x.code) || 0;
-        else for (let q = i + 1; q < rows.length && rows[q].code.length > x.code.length; q++) if (rows[q].code.length >= 8) s += maps[k].get(rows[q].code) || 0;
+        else {
+          for (let q = i + 1; q < rows.length && rows[q].code.length > x.code.length; q++) if (rows[q].code.length >= 8) s += maps[k].get(rows[q].code) || 0;
+          maps[k].forEach((val, acc) => { if (!leafCodes.has(acc) && (acc.startsWith(x.code) || (/^5305/.test(acc) && ['417520', '4175', '41', '4'].includes(x.code)))) s += val; });
+        }
         C4.getCell(c + x.r).value = r2(s);
       });
     });
-    maps.forEach(m => m.forEach((val, acc) => { if (Math.abs(val) >= 1 && !leafCodes.has(acc)) aviso.sinFila.push(acc + ' ' + Math.round(val)); }));
+    const dsc = new Map(); (I.c4 || []).forEach(f => dsc.set(f[0], f[1])); (I.g || []).forEach(g => { if (!dsc.has(g[1])) dsc.set(g[1], g[2]); });
+    const extra = [...new Set(maps.flatMap(m => [...m.entries()].filter(([acc, val]) => !leafCodes.has(acc) && Math.abs(val) >= 1).map(([acc]) => acc)))].sort();
+    if (extra.length) {
+      // Cuentas con movimiento que la plantilla no trae: van debajo (filas 64+, sin mover las filas que usa LIQUIDACION) y ya están sumadas en los totales de arriba.
+      const stL = {}; ['A', 'B', 'G', 'H', 'I'].forEach(c => { stL[c] = C4.getCell(c + '59').style; });
+      C4.getCell('B63').value = 'Cuentas con movimiento que no tienen fila en la plantilla (ya incluidas en los totales de arriba)'; C4.getCell('B63').style = stL.B;
+      extra.forEach((acc, i) => { const r = 64 + i, g0 = r2(maps[0].get(acc) || 0), h0 = r2(maps[1].get(acc) || 0);
+        C4.getCell('A' + r).value = acc; C4.getCell('B' + r).value = String(dsc.get(acc) || '').trim(); C4.getCell('G' + r).value = g0; C4.getCell('H' + r).value = h0;
+        C4.getCell('I' + r).value = { formula: '+G' + r + '+H' + r, result: r2(g0 + h0) };
+        ['A', 'B', 'G', 'H', 'I'].forEach(c => { C4.getCell(c + r).style = stL[c]; }); });
+      aviso.sinFila = extra.map(acc => acc + ' ' + Math.round((maps[0].get(acc) || 0) + (maps[1].get(acc) || 0)));
+    }
     const f = p => p.slice(0, 4) + '/' + p.slice(4); C4.getCell('G10').value = f(ps[0].p) + '-' + f(ps[0].p); C4.getCell('H10').value = ps[1] ? f(ps[1].p) + '-' + f(ps[1].p) : null;
     C4.getCell('I9').value = ps[1] ? 'TOTAL BIMESTRE ' : 'TOTAL MES ';
   }
@@ -667,7 +681,7 @@ async function icaExcel() {
       v: { bruB: X.bB.bru, bruA: X.bA.bru, dscB: X.bB.dsc, dscA: X.bA.dsc, devB: X.bB.dev, devA: X.bA.dev, conf: L.conf, confTot: D.confTot }, J: X.J, C: X.C, S: X.S });
     const out = await wb.xlsx.writeBuffer(), a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = 'LIQ_IMPUESTO_ICA_' + texto + '_' + D.ps[0].p.slice(0, 4) + '.xlsx'; a.click();
     const dc = D.c4.filter(f => /^421020/.test(f[0])).reduce((t, f) => t + f[2], 0);
-    ICA.msg = '✅ Excel descargado.' + (Math.abs(dc) >= 1 ? ' Diferencia en cambio (42102005, ' + fm(Math.round(dc)) + ') está en Siesa pero no se incluye, igual que en tu Cuenta 4 NIIF.' : '') + (av.sinFila.length ? ' Cuentas de Siesa sin fila en la hoja Cuenta 4: ' + av.sinFila.join(', ') + '.' : '') + ' La hoja Retencionenlafuente lleva lo contabilizado en Siesa (13551821): cámbialo por el valor enviado por cada cliente si difiere.';
+    ICA.msg = '✅ Excel descargado.' + (Math.abs(dc) >= 1 ? ' Diferencia en cambio (42102005, ' + fm(Math.round(dc)) + ') está en Siesa pero no se incluye, igual que en tu Cuenta 4 NIIF.' : '') + (av.sinFila.length ? ' Cuentas sin fila en la plantilla, agregadas al final de la hoja Cuenta 4 (filas 64 en adelante) y ya sumadas en los totales: ' + av.sinFila.join(', ') + '.' : '') + ' La hoja Retencionenlafuente lleva lo contabilizado en Siesa (13551821): cámbialo por el valor enviado por cada cliente si difiere.';
   } catch (e) { if (String(e.message) !== 'auth') ICA.msg = 'No se pudo armar el Excel: ' + e.message; }
   pintar();
 }
