@@ -507,23 +507,32 @@ function pintar() {
 }
 
 /* ===== Liquidación ICA (ventas Bogotá + descuentos confidenciales de Siesa) ===== */
-const ICA = { anio: '', per: '', tarifa: 11.04, busy: false, msg: '', D: null, vista: 'ciu', auto: false };
+const ICA = { desde: '', hasta: '', tarifa: 11.04, busy: false, msg: '', D: null, vista: 'ciu', auto: false };
 const ICA_AJ = [{ nit: '900480569', n: 'JERONIMO MARTINS COLOMBIA' }, { nit: '800242106', n: 'SODIMAC COLOMBIA' }, { nit: '860007336', n: 'COLSUBSIDIO (solo Madrid)', ci: ['Madrid'] }, { nit: '830069115', n: 'RIZOMA EU' }];
 const icaBog = c => /^BOGOT/i.test(c || '');
+function icaAlin() { const d = ICA.desde, h = ICA.hasta, hoy = infHoy(); if (d.slice(8) !== '01') return false; const ult = new Date(Date.UTC(+h.slice(0, 4), +h.slice(5, 7), 0)).toISOString().slice(0, 10); return h === ult || (h >= hoy && h.slice(0, 7) === hoy.slice(0, 7)); }
 function icaMeses() {
-  const y = +ICA.anio, t = ICA.per, ms = t[0] === 'b' ? [(+t.slice(1)) * 2 - 1, (+t.slice(1)) * 2] : [+t.slice(1)], hoy = infHoy();
-  return ms.map(m => { const a = y + '-' + String(m).padStart(2, '0') + '-01', z = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); return { p: y + String(m).padStart(2, '0'), ini: a, fin: z > hoy ? hoy : z }; }).filter(x => x.ini <= hoy);
+  const hoy = infHoy(), d = ICA.desde, h = ICA.hasta < hoy ? ICA.hasta : hoy, out = []; if (!d || !h || h < d) return out;
+  let y = +d.slice(0, 4), m = +d.slice(5, 7); const yf = +h.slice(0, 4), mf = +h.slice(5, 7);
+  while (y < yf || (y === yf && m <= mf)) { const p = y + String(m).padStart(2, '0'), a = p.slice(0, 4) + '-' + p.slice(4) + '-01', z = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); out.push({ p, ini: a < d ? d : a, fin: z > h ? h : z }); m++; if (m > 12) { m = 1; y++; } }
+  return out;
+}
+function icaAtajo(v) {
+  if (!v) return; const hy = new Date(Date.now() - 5 * 3600e3), y = hy.getUTCFullYear(), mo = hy.getUTCMonth(), fin = (a, b) => new Date(Date.UTC(a, b + 1, 0)).toISOString().slice(0, 10), ini = (a, b) => new Date(Date.UTC(a, b, 1)).toISOString().slice(0, 10);
+  let d, h; if (v === 'm0') { d = ini(y, mo); h = fin(y, mo); } else if (v === 'm1') { d = ini(y, mo - 1); h = fin(y, mo - 1); } else if (v === 'b0') { const b = Math.floor(mo / 2) * 2; d = ini(y, b); h = fin(y, b + 1); } else if (v === 'b1') { const b = Math.floor(mo / 2) * 2 - 2; d = ini(y, b); h = fin(y, b + 1); } else { d = ini(y, 0); h = fin(y, 11); }
+  ICA.desde = d; ICA.hasta = h; icaSel(true);
 }
 function icaHtml() {
-  if (!ICA.per) { const h = new Date(Date.now() - 5 * 3600e3), m = h.getUTCMonth(); ICA.anio = String(m < 2 ? h.getUTCFullYear() - 1 : h.getUTCFullYear()); ICA.per = 'b' + (m < 2 ? 6 : Math.floor(m / 2)); }
+  if (!ICA.desde) { const h = new Date(Date.now() - 5 * 3600e3), m = Math.floor(h.getUTCMonth() / 2) * 2 - 2, y = m < 0 ? h.getUTCFullYear() - 1 : h.getUTCFullYear(), a = m < 0 ? m + 12 : m; ICA.desde = new Date(Date.UTC(y, a, 1)).toISOString().slice(0, 10); ICA.hasta = new Date(Date.UTC(y, a + 2, 0)).toISOString().slice(0, 10); }
   const sel = 'style="padding:7px;border:1px solid #cbd5e1;border-radius:8px"', D = ICA.D;
   let h = '<div class="card"><h2>🧾 Liquidación ICA</h2><div class="bar" style="flex-wrap:wrap;gap:10px;align-items:end">'
-    + '<label class="n">Año<br><select id="ica_a" onchange="icaSel()" ' + sel + '>' + [0, 1, 2].map(o => { const y = String(new Date(Date.now() - 5 * 3600e3).getUTCFullYear() - o); return '<option' + (y === ICA.anio ? ' selected' : '') + '>' + y + '</option>'; }).join('') + '</select></label>'
-    + '<label class="n">Periodo<br><select id="ica_p" onchange="icaSel()" ' + sel + '>' + [1, 2, 3, 4, 5, 6].map(b => '<option value="b' + b + '"' + ('b' + b === ICA.per ? ' selected' : '') + '>Bimestre ' + b + ' (' + INF_MES[b * 2 - 2].slice(0, 3) + '–' + INF_MES[b * 2 - 1].slice(0, 3) + ')</option>').join('') + INF_MES.map((m, i) => '<option value="m' + (i + 1) + '"' + ('m' + (i + 1) === ICA.per ? ' selected' : '') + '>Mes: ' + m + '</option>').join('') + '</select></label>'
+    + '<label class="n">Fecha inicial<br><input type="date" id="ica_d" value="' + ICA.desde + '" max="' + infHoy() + '" onchange="icaSel()" ' + sel + '></label>'
+    + '<label class="n">Fecha final<br><input type="date" id="ica_h" value="' + ICA.hasta + '" max="' + infHoy() + '" onchange="icaSel()" ' + sel + '></label>'
+    + '<label class="n">Atajo<br><select onchange="icaAtajo(this.value)" ' + sel + '><option value="">Elegir…</option><option value="m0">Mes actual</option><option value="m1">Mes anterior</option><option value="b0">Bimestre actual</option><option value="b1">Bimestre anterior</option><option value="a0">Año actual</option></select></label>'
     + '<label class="n">Tarifa (por mil)<br><input id="ica_t" type="number" step="0.01" value="' + ICA.tarifa + '" onchange="ICA.tarifa=parseFloat(this.value)||0;pintar()" style="width:90px;padding:7px;border:1px solid #cbd5e1;border-radius:8px"></label>'
     + '<button class="btn" ' + (ICA.busy ? 'disabled' : '') + ' onclick="icaCalcular()">' + (ICA.busy ? '⏳ Consultando…' : '🔄 Calcular desde Siesa') + '</button>' + (D ? '<button class="btn g" onclick="icaExcel()">⬇ Descargar Excel</button>' : '') + '</div>'
     + '<div class="n" id="ica_msg" style="padding:8px 14px">' + esc(ICA.msg) + '</div>'
-    + '<div class="n" style="padding:0 14px 12px;color:#64748b">Ventas, descuentos y devoluciones salen del <b>informe de ventas por cliente</b> guardado (el mes debe estar actualizado allí). Los <b>descuentos confidenciales</b> se leen de Siesa (cuentas 53053505, 10, 15, 30, 55, 36, 37, 56 y 70, solo documentos aprobados) por tercero y su ciudad. «Ajuste de conciliación»: lo que Jerónimo Martins, Sodimac, Colsubsidio (Madrid) y Rizoma vendieron <i>fuera</i> de Bogotá se suma a Bogotá y se resta de su ciudad.</div></div>';
+    + '<div class="n" style="padding:0 14px 12px;color:#64748b">Con meses completos, las ventas salen del <b>informe de ventas por cliente</b> guardado (el mes debe estar actualizado allí); con un rango parcial se consultan directo en Siesa. La Cuenta 4 y las retenciones del Excel se leen por mes contable (máximo 2 meses). Los <b>descuentos confidenciales</b> se leen de Siesa (cuentas 53053505, 10, 15, 30, 55, 36, 37, 56 y 70, solo documentos aprobados) por tercero y su ciudad. «Ajuste de conciliación»: lo que Jerónimo Martins, Sodimac, Colsubsidio (Madrid) y Rizoma vendieron <i>fuera</i> de Bogotá se suma a Bogotá y se resta de su ciudad.</div></div>';
   if (D) {
     const L = D.liq, row = (t, v, b) => '<tr' + (b ? ' style="font-weight:800;background:#f1f5f9"' : '') + '><td>' + t + '</td><td style="text-align:right">' + fm(v) + '</td></tr>';
     h += '<div class="card"><h2>Declaración Bogotá · ' + esc(D.rango) + '</h2><div class="tw"><table><tr><th>Concepto</th><th style="text-align:right">Valor</th></tr>'
@@ -535,17 +544,30 @@ function icaHtml() {
   return h;
 }
 function icaMsg(t) { ICA.msg = t; const e = $('ica_msg'); if (e) e.textContent = t; }
-function icaSel() { ICA.anio = $('ica_a').value; ICA.per = $('ica_p').value; ICA.D = null; ICA.msg = ''; pintar(); }
+function icaSel(a) { if (!a) { ICA.desde = $('ica_d').value || ICA.desde; ICA.hasta = $('ica_h').value || ICA.hasta; } const hoy = infHoy(); if (ICA.hasta > hoy) ICA.hasta = hoy; if (ICA.desde > ICA.hasta) ICA.desde = ICA.hasta; ICA.D = null; ICA.msg = ''; pintar(); }
 async function icaCalcular() {
   const ps = icaMeses(); if (!ps.length) { icaMsg('Ese periodo todavía no empieza.'); return; }
   ICA.busy = true; pintar(); ICA.msg = '';
   try {
-    icaMsg('Leyendo el informe de ventas guardado…');
-    const r = await api('contabilidad-informe', { accion: 'leer', periodos: ps.map(x => x.p).join(',') });
-    if (!r || !r.ok) throw new Error((r && r.error) || 'No respondió');
-    const falta = r.periodos.filter(x => x.vacio).map(x => x.periodo);
-    if (falta.length) { ICA.msg = 'Falta guardar el informe de ventas de ' + falta.join(', ') + '. Ve a «Informe de ventas (Excel)», elige ese mes completo y pulsa «Actualizar desde Siesa».'; return; }
-    const F = []; r.periodos.forEach(x => x.filas.forEach(f => F.push(f)));
+    const F = [];
+    if (icaAlin()) {
+      icaMsg('Leyendo el informe de ventas guardado…');
+      const r = await api('contabilidad-informe', { accion: 'leer', periodos: ps.map(x => x.p).join(',') });
+      if (!r || !r.ok) throw new Error((r && r.error) || 'No respondió');
+      const falta = r.periodos.filter(x => x.vacio).map(x => x.periodo);
+      if (falta.length) { ICA.msg = 'Falta guardar el informe de ventas de ' + falta.join(', ') + '. Ve a «Informe de ventas (Excel)», elige ese mes completo y pulsa «Actualizar desde Siesa».'; return; }
+      r.periodos.forEach(x => x.filas.forEach(f => F.push(f)));
+    } else {
+      const acc = new Map(), meter = f => { const k = f.slice(0, 7).join('|'), o = acc.get(k); if (o) { for (let i = 7; i < 12; i++) o[i] += f[i]; } else acc.set(k, f.slice()); }, rs = infRangos(ps[0].ini, ps[ps.length - 1].fin);
+      for (let i = 0; i < rs.length; i++) {
+        icaMsg('Siesa: facturas ' + (i + 1) + ' de ' + rs.length + ' (' + rs[i][0] + ' a ' + rs[i][1] + ')…');
+        let r = null; for (let t = 0; t < 2 && !(r && r.ok); t++) r = await api('contabilidad-informe', { accion: 'facturas', desde: rs[i][0], hasta: rs[i][1], refrescar: i === 0 ? '1' : '0' });
+        if (!r || !r.ok) throw new Error((r && r.error) || 'Siesa no respondió'); r.filas.forEach(meter);
+      }
+      icaMsg('Siesa: notas crédito y débito…');
+      let r = null; for (let t = 0; t < 2 && !(r && r.ok); t++) r = await api('contabilidad-informe', { accion: 'notas', desde: ps[0].ini, hasta: ps[ps.length - 1].fin });
+      if (!r || !r.ok) throw new Error((r && r.error) || 'Siesa no respondió (notas)'); r.filas.forEach(meter); acc.forEach(f => F.push(f));
+    }
     icaMsg('Siesa: descuentos confidenciales por tercero…');
     const g = await api('contabilidad-ica', { accion: 'gastos', desde: ps[0].ini, hasta: ps[ps.length - 1].fin });
     if (!g || !g.ok) throw new Error((g && g.error) || 'Siesa no respondió');
@@ -633,6 +655,7 @@ function icaCargarExcelJS() { return window.ExcelJS ? Promise.resolve() : new Pr
 async function icaExcel() {
   const D = ICA.D; if (!D) return;
   try {
+    if (D.ps.length > 2) { ICA.msg = 'El Excel de la liquidación admite 1 o 2 meses (tu plantilla tiene 2 columnas de mes). Elige un rango de hasta 2 meses.'; pintar(); return; }
     icaMsg('Armando el Excel con el formato de la liquidación…'); await icaCargarExcelJS();
     const tp = await fetch('ICA_plantilla.xlsx?v=1'); if (!tp.ok) throw new Error('No se encontró ICA_plantilla.xlsx junto a esta página (súbelo a GitHub con CONTABILIDAD.html)');
     const buf = await tp.arrayBuffer();
